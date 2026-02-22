@@ -16,3 +16,7 @@ mcpb/*.mcpb
 
 # Private docs (not for public repo)
 docs/private/
+
+# Build artifacts (distributed via GitHub Release)
+mcpb/server/*
+!mcpb/server/.gitkeep
