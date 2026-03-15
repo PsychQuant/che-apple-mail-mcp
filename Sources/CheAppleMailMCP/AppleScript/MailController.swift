@@ -252,34 +252,23 @@ actor MailController {
 
     /// Get email content by ID
     func getEmail(id: String, mailbox: String, accountName: String) throws -> [String: Any] {
-        let script = """
-        tell application "Mail"
-            set msg to message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
-            set msgSubject to subject of msg
-            set msgSender to sender of msg
-            set msgContent to content of msg
-            set msgDate to date received of msg as string
-            set msgRead to read status of msg
-            return {|subject|:msgSubject, |sender|:msgSender, |content|:msgContent, |date|:msgDate, |read|:msgRead}
-        end tell
-        """
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
 
-        // Get individual properties
         let subjectScript = """
         tell application "Mail"
-            get subject of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            get subject of \(ref)
         end tell
         """
 
         let senderScript = """
         tell application "Mail"
-            get sender of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            get sender of \(ref)
         end tell
         """
 
         let contentScript = """
         tell application "Mail"
-            get content of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            get content of \(ref)
         end tell
         """
 
@@ -375,9 +364,10 @@ actor MailController {
 
     /// Mark email as read/unread
     func markRead(id: String, mailbox: String, accountName: String, read: Bool) throws -> String {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
         let script = """
         tell application "Mail"
-            set read status of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" to \(read)
+            set read status of \(ref) to \(read)
             return "Email marked as \(read ? "read" : "unread")"
         end tell
         """
@@ -386,9 +376,10 @@ actor MailController {
 
     /// Flag email
     func flagEmail(id: String, mailbox: String, accountName: String, flagged: Bool) throws -> String {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
         let script = """
         tell application "Mail"
-            set flagged status of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" to \(flagged)
+            set flagged status of \(ref) to \(flagged)
             return "Email \(flagged ? "flagged" : "unflagged")"
         end tell
         """
@@ -397,9 +388,10 @@ actor MailController {
 
     /// Move email to another mailbox
     func moveEmail(id: String, fromMailbox: String, toMailbox: String, accountName: String) throws -> String {
+        let ref = msgRef(id, mailbox: fromMailbox, account: accountName)
         let script = """
         tell application "Mail"
-            set msg to message id \(id) of mailbox "\(escapeForAppleScript(fromMailbox))" of account "\(escapeForAppleScript(accountName))"
+            set msg to \(ref)
             move msg to mailbox "\(escapeForAppleScript(toMailbox))" of account "\(escapeForAppleScript(accountName))"
             return "Email moved to \(escapeForAppleScript(toMailbox))"
         end tell
@@ -409,9 +401,10 @@ actor MailController {
 
     /// Delete email (move to trash)
     func deleteEmail(id: String, mailbox: String, accountName: String) throws -> String {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
         let script = """
         tell application "Mail"
-            delete message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            delete \(ref)
             return "Email deleted"
         end tell
         """
@@ -463,9 +456,10 @@ actor MailController {
     /// Reply to an email
     func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false) throws -> String {
         let replyType = replyAll ? "reply all" : "reply"
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
         let script = """
         tell application "Mail"
-            set originalMsg to message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set originalMsg to \(ref)
             set replyMsg to \(replyType) originalMsg with opening window
             tell replyMsg
                 set content to "\(escapeForAppleScript(body))" & return & return & content
@@ -479,9 +473,10 @@ actor MailController {
 
     /// Forward an email
     func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil) throws -> String {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
         var script = """
         tell application "Mail"
-            set originalMsg to message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set originalMsg to \(ref)
             set fwdMsg to forward originalMsg with opening window
             tell fwdMsg
         """
@@ -553,9 +548,10 @@ actor MailController {
 
     /// List attachments of an email
     func listAttachments(id: String, mailbox: String, accountName: String) throws -> [[String: Any]] {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
         let script = """
         tell application "Mail"
-            set msg to message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set msg to \(ref)
             set attachmentList to {}
             repeat with att in mail attachments of msg
                 set attInfo to {|name|:name of att, |size|:file size of att}
@@ -567,7 +563,7 @@ actor MailController {
 
         let namesScript = """
         tell application "Mail"
-            get name of every mail attachment of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            get name of every mail attachment of \(ref)
         end tell
         """
 
@@ -580,9 +576,10 @@ actor MailController {
 
     /// Save attachment to disk
     func saveAttachment(id: String, mailbox: String, accountName: String, attachmentName: String, savePath: String) throws -> String {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
         let script = """
         tell application "Mail"
-            set msg to message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set msg to \(ref)
             repeat with att in mail attachments of msg
                 if name of att is "\(escapeForAppleScript(attachmentName))" then
                     save att in POSIX file "\(escapeForAppleScript(savePath))"
@@ -770,9 +767,10 @@ actor MailController {
 
     /// Copy email to another mailbox
     func copyEmail(id: String, fromMailbox: String, toMailbox: String, accountName: String) throws -> String {
+        let ref = msgRef(id, mailbox: fromMailbox, account: accountName)
         let script = """
         tell application "Mail"
-            set msg to message id \(id) of mailbox "\(escapeForAppleScript(fromMailbox))" of account "\(escapeForAppleScript(accountName))"
+            set msg to \(ref)
             duplicate msg to mailbox "\(escapeForAppleScript(toMailbox))" of account "\(escapeForAppleScript(accountName))"
             return "Email copied to \(escapeForAppleScript(toMailbox))"
         end tell
@@ -785,9 +783,10 @@ actor MailController {
         let colors = ["red", "orange", "yellow", "green", "blue", "purple", "gray"]
         let colorName = colorIndex >= 0 && colorIndex < colors.count ? colors[colorIndex] : "none"
 
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
         let script = """
         tell application "Mail"
-            set flag index of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" to \(colorIndex)
+            set flag index of \(ref) to \(colorIndex)
             return "Flag color set to \(colorName)"
         end tell
         """
@@ -797,9 +796,10 @@ actor MailController {
     /// Set email background color
     func setBackgroundColor(id: String, mailbox: String, accountName: String, color: String) throws -> String {
         // Valid colors: blue, gray, green, none, orange, purple, red, yellow
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
         let script = """
         tell application "Mail"
-            set background color of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" to \(color)
+            set background color of \(ref) to \(color)
             return "Background color set to \(color)"
         end tell
         """
@@ -808,9 +808,10 @@ actor MailController {
 
     /// Mark email as junk or not junk
     func markAsJunk(id: String, mailbox: String, accountName: String, isJunk: Bool) throws -> String {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
         let script = """
         tell application "Mail"
-            set junk mail status of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" to \(isJunk)
+            set junk mail status of \(ref) to \(isJunk)
             return "Email marked as \(isJunk ? "junk" : "not junk")"
         end tell
         """
@@ -819,9 +820,10 @@ actor MailController {
 
     /// Get all email headers
     func getEmailHeaders(id: String, mailbox: String, accountName: String) throws -> String {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
         let script = """
         tell application "Mail"
-            get all headers of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            get all headers of \(ref)
         end tell
         """
         return try runScript(script)
@@ -829,9 +831,10 @@ actor MailController {
 
     /// Get email source (raw message)
     func getEmailSource(id: String, mailbox: String, accountName: String) throws -> String {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
         let script = """
         tell application "Mail"
-            get source of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            get source of \(ref)
         end tell
         """
         return try runScript(script)
@@ -839,9 +842,10 @@ actor MailController {
 
     /// Redirect email (different from forward - keeps original sender)
     func redirectEmail(id: String, mailbox: String, accountName: String, to: [String]) throws -> String {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
         var script = """
         tell application "Mail"
-            set originalMsg to message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set originalMsg to \(ref)
             set redirectMsg to redirect originalMsg with opening window
             tell redirectMsg
         """
@@ -864,33 +868,35 @@ actor MailController {
 
     /// Get email metadata (was forwarded, replied to, redirected)
     func getEmailMetadata(id: String, mailbox: String, accountName: String) throws -> [String: Any] {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName)
+
         let forwardedScript = """
         tell application "Mail"
-            get was forwarded of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            get was forwarded of \(ref)
         end tell
         """
 
         let repliedScript = """
         tell application "Mail"
-            get was replied to of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            get was replied to of \(ref)
         end tell
         """
 
         let redirectedScript = """
         tell application "Mail"
-            get was redirected of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            get was redirected of \(ref)
         end tell
         """
 
         let messageIdScript = """
         tell application "Mail"
-            get message id of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            get message id of \(ref)
         end tell
         """
 
         let sizeScript = """
         tell application "Mail"
-            get message size of message id \(id) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            get message size of \(ref)
         end tell
         """
 
@@ -1115,6 +1121,14 @@ actor MailController {
     }
 
     // MARK: - Helpers
+
+    /// Generate AppleScript reference to find a message by its numeric id.
+    /// Apple Mail's `message id` refers to the RFC822 Message-ID (string),
+    /// but `id` is the internal numeric identifier returned by search/list.
+    /// We must use `first message ... whose id is N` instead of `message id N`.
+    private func msgRef(_ id: String, mailbox: String, account: String) -> String {
+        return "(first message of mailbox \"\(escapeForAppleScript(mailbox))\" of account \"\(escapeForAppleScript(account))\" whose id is \(id))"
+    }
 
     /// Escape special characters for AppleScript strings
     private func escapeForAppleScript(_ string: String) -> String {
