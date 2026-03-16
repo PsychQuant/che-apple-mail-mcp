@@ -119,7 +119,8 @@ class CheAppleMailMCPServer {
                         "query": .object(["type": .string("string"), "description": .string("Search query")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox to search in")]),
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
-                        "limit": .object(["type": .string("integer"), "description": .string("Maximum results (default: 20)")])
+                        "limit": .object(["type": .string("integer"), "description": .string("Maximum results (default: 20)")]),
+                        "sort": .object(["type": .string("string"), "description": .string("Sort order by date: 'desc' (newest first, default) or 'asc' (oldest first)")])
                     ]),
                     "required": .array([.string("query"), .string("mailbox"), .string("account_name")])
                 ])
@@ -666,7 +667,8 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("query, mailbox, and account_name are required")
             }
             let limit = arguments["limit"]?.intValue ?? 20
-            let results = try await mailController.searchEmails(query: query, mailbox: mailbox, accountName: accountName, limit: limit)
+            let sort = arguments["sort"]?.stringValue ?? "desc"
+            let results = try await mailController.searchEmails(query: query, mailbox: mailbox, accountName: accountName, limit: limit, sort: sort)
             return formatJSON(results)
 
         case "get_unread_count":

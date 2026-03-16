@@ -285,42 +285,86 @@ actor MailController {
     }
 
     /// Search emails
-    func searchEmails(query: String, mailbox: String, accountName: String, limit: Int = 20) throws -> [[String: Any]] {
-        let script = """
-        tell application "Mail"
-            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))" or content contains "\(escapeForAppleScript(query))")
-            set msgList to {}
-            set counter to 0
-            repeat with msg in foundMsgs
-                if counter ≥ \(limit) then exit repeat
-                set msgInfo to {|id|:id of msg as string, |subject|:subject of msg, |sender|:sender of msg}
-                set end of msgList to msgInfo
-                set counter to counter + 1
-            end repeat
-            return msgList
-        end tell
-        """
-
-        // Simplified: search by subject
-        let searchScript = """
+    func searchEmails(query: String, mailbox: String, accountName: String, limit: Int = 20, sort: String = "desc") throws -> [[String: Any]] {
+        // Fetch each field separately for reliability
+        let idsScript = """
         tell application "Mail"
             set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))")
-            set subjects to {}
+            set results to {}
             set counter to 0
             repeat with msg in foundMsgs
                 if counter ≥ \(limit) then exit repeat
-                set end of subjects to subject of msg
+                set end of results to id of msg as string
                 set counter to counter + 1
             end repeat
-            return subjects
+            return results
         end tell
         """
 
-        let subjects = try runScriptAsList(searchScript)
+        let subjectsScript = """
+        tell application "Mail"
+            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))")
+            set results to {}
+            set counter to 0
+            repeat with msg in foundMsgs
+                if counter ≥ \(limit) then exit repeat
+                set end of results to subject of msg
+                set counter to counter + 1
+            end repeat
+            return results
+        end tell
+        """
 
-        return subjects.map { subject in
-            ["subject": subject, "query": query]
+        let sendersScript = """
+        tell application "Mail"
+            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))")
+            set results to {}
+            set counter to 0
+            repeat with msg in foundMsgs
+                if counter ≥ \(limit) then exit repeat
+                set end of results to sender of msg
+                set counter to counter + 1
+            end repeat
+            return results
+        end tell
+        """
+
+        let datesScript = """
+        tell application "Mail"
+            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))")
+            set results to {}
+            set counter to 0
+            repeat with msg in foundMsgs
+                if counter ≥ \(limit) then exit repeat
+                set end of results to date received of msg as string
+                set counter to counter + 1
+            end repeat
+            return results
+        end tell
+        """
+
+        let ids = try runScriptAsList(idsScript)
+        let subjects = try runScriptAsList(subjectsScript)
+        let senders = try runScriptAsList(sendersScript)
+        let dates = try runScriptAsList(datesScript)
+
+        var emails: [[String: Any]] = []
+        for i in 0..<min(ids.count, subjects.count, senders.count, dates.count) {
+            emails.append([
+                "id": ids[i],
+                "subject": subjects[i],
+                "sender": senders[i],
+                "date_received": dates[i]
+            ])
         }
+
+        // Sort by date_received string (Apple Mail returns localized date strings)
+        if sort == "asc" {
+            emails.reverse()  // Apple Mail returns newest first, reverse for ascending
+        }
+        // "desc" (default) = newest first, which is Apple Mail's natural order
+
+        return emails
     }
 
     /// Get unread count
