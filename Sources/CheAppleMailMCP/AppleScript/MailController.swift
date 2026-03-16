@@ -251,7 +251,10 @@ actor MailController {
     }
 
     /// Get email content by ID
-    func getEmail(id: String, mailbox: String, accountName: String) throws -> [String: Any] {
+    /// - format: "html" (default) returns HTML body with links preserved;
+    ///           "text" returns plain text content;
+    ///           "source" returns full MIME source
+    func getEmail(id: String, mailbox: String, accountName: String, format: String = "html") throws -> [String: Any] {
         let ref = msgRef(id, mailbox: mailbox, account: accountName)
 
         let subjectScript = """
@@ -266,22 +269,143 @@ actor MailController {
         end tell
         """
 
-        let contentScript = """
+        let dateScript = """
         tell application "Mail"
-            get content of \(ref)
+            get date received of \(ref) as string
         end tell
         """
 
         let subject = try runScript(subjectScript)
         let sender = try runScript(senderScript)
-        let content = try runScript(contentScript)
+        let dateReceived = try runScript(dateScript)
+
+        let content: String
+        switch format {
+        case "text":
+            let contentScript = """
+            tell application "Mail"
+                get content of \(ref)
+            end tell
+            """
+            content = try runScript(contentScript)
+
+        case "source":
+            let sourceScript = """
+            tell application "Mail"
+                get source of \(ref)
+            end tell
+            """
+            content = try runScript(sourceScript)
+
+        default: // "html"
+            let sourceScript = """
+            tell application "Mail"
+                get source of \(ref)
+            end tell
+            """
+            let rawSource = try runScript(sourceScript)
+            content = extractHTMLBody(from: rawSource)
+        }
 
         return [
             "id": id,
             "subject": subject,
             "sender": sender,
+            "date_received": dateReceived,
+            "format": format,
             "content": content
         ]
+    }
+
+    /// Extract HTML body from MIME source, falling back to plain text content
+    private func extractHTMLBody(from mimeSource: String) -> String {
+        // Look for text/html part in multipart message
+        // Find the HTML content between Content-Type: text/html and the next boundary
+        let lines = mimeSource.components(separatedBy: "\n")
+        var inHTMLPart = false
+        var pastHTMLHeaders = false
+        var htmlLines: [String] = []
+        var boundary: String?
+
+        // Find boundary from Content-Type header
+        for line in lines {
+            if line.contains("boundary=") {
+                if let range = line.range(of: "boundary=\"") {
+                    let start = range.upperBound
+                    if let end = line[start...].firstIndex(of: "\"") {
+                        boundary = String(line[start..<end])
+                    }
+                } else if let range = line.range(of: "boundary=") {
+                    let start = range.upperBound
+                    boundary = line[start...].trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+        }
+
+        for line in lines {
+            if line.contains("Content-Type: text/html") {
+                inHTMLPart = true
+                pastHTMLHeaders = false
+                continue
+            }
+
+            if inHTMLPart && !pastHTMLHeaders {
+                // Skip headers until empty line
+                if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    pastHTMLHeaders = true
+                }
+                continue
+            }
+
+            if inHTMLPart && pastHTMLHeaders {
+                // Check for boundary end
+                if let b = boundary, line.contains(b) {
+                    break
+                }
+                htmlLines.append(line)
+            }
+        }
+
+        if htmlLines.isEmpty {
+            return mimeSource // Fallback: return raw source if no HTML found
+        }
+
+        var html = htmlLines.joined(separator: "\n")
+
+        // Decode quoted-printable encoding
+        html = decodeQuotedPrintable(html)
+
+        return html
+    }
+
+    /// Decode quoted-printable encoded string
+    private func decodeQuotedPrintable(_ input: String) -> String {
+        var result = input
+        // Remove soft line breaks (= at end of line)
+        result = result.replacingOccurrences(of: "=\r\n", with: "")
+        result = result.replacingOccurrences(of: "=\n", with: "")
+
+        // Decode =XX hex sequences
+        var output = ""
+        var i = result.startIndex
+        while i < result.endIndex {
+            if result[i] == "=" && result.distance(from: i, to: result.endIndex) >= 3 {
+                let hexStart = result.index(after: i)
+                let hexEnd = result.index(hexStart, offsetBy: 2)
+                let hex = String(result[hexStart..<hexEnd])
+                if let byte = UInt8(hex, radix: 16) {
+                    output.append(Character(Unicode.Scalar(byte)))
+                } else {
+                    output.append(result[i])
+                }
+                i = hexEnd
+            } else {
+                output.append(result[i])
+                i = result.index(after: i)
+            }
+        }
+
+        return output
     }
 
     /// Search emails

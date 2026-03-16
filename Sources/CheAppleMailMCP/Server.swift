@@ -99,13 +99,14 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "get_email",
-                description: "Get full content of a specific email",
+                description: "Get full content of a specific email. Returns HTML by default (preserving links), or plain text/raw source with format parameter.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")])
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "format": .object(["type": .string("string"), "description": .string("Content format: 'html' (default, preserves links), 'text' (plain text), 'source' (full MIME)")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name")])
                 ])
@@ -657,7 +658,8 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("id, mailbox, and account_name are required")
             }
-            let email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName)
+            let format = arguments["format"]?.stringValue ?? "html"
+            let email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName, format: format)
             return formatJSON(email)
 
         case "search_emails":
