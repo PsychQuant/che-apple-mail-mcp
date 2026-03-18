@@ -215,22 +215,46 @@ actor MailController {
         end tell
         """
 
-        // Simplified approach: get basic info
+        // Simplified approach: get basic info (clamp limit to actual message count)
         let subjectsScript = """
         tell application "Mail"
-            get subject of messages 1 thru \(limit) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set mb to mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set msgCount to count of messages of mb
+            if msgCount = 0 then return {}
+            if \(limit) < msgCount then
+                set actualLimit to \(limit)
+            else
+                set actualLimit to msgCount
+            end if
+            get subject of messages 1 thru actualLimit of mb
         end tell
         """
 
         let sendersScript = """
         tell application "Mail"
-            get sender of messages 1 thru \(limit) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set mb to mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set msgCount to count of messages of mb
+            if msgCount = 0 then return {}
+            if \(limit) < msgCount then
+                set actualLimit to \(limit)
+            else
+                set actualLimit to msgCount
+            end if
+            get sender of messages 1 thru actualLimit of mb
         end tell
         """
 
         let idsScript = """
         tell application "Mail"
-            get id of messages 1 thru \(limit) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set mb to mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set msgCount to count of messages of mb
+            if msgCount = 0 then return {}
+            if \(limit) < msgCount then
+                set actualLimit to \(limit)
+            else
+                set actualLimit to msgCount
+            end if
+            get id of messages 1 thru actualLimit of mb
         end tell
         """
 
@@ -413,7 +437,7 @@ actor MailController {
         // Fetch each field separately for reliability
         let idsScript = """
         tell application "Mail"
-            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))")
+            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))" or sender contains "\(escapeForAppleScript(query))")
             set results to {}
             set counter to 0
             repeat with msg in foundMsgs
@@ -427,7 +451,7 @@ actor MailController {
 
         let subjectsScript = """
         tell application "Mail"
-            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))")
+            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))" or sender contains "\(escapeForAppleScript(query))")
             set results to {}
             set counter to 0
             repeat with msg in foundMsgs
@@ -441,7 +465,7 @@ actor MailController {
 
         let sendersScript = """
         tell application "Mail"
-            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))")
+            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))" or sender contains "\(escapeForAppleScript(query))")
             set results to {}
             set counter to 0
             repeat with msg in foundMsgs
@@ -455,7 +479,7 @@ actor MailController {
 
         let datesScript = """
         tell application "Mail"
-            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))")
+            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))" or sender contains "\(escapeForAppleScript(query))")
             set results to {}
             set counter to 0
             repeat with msg in foundMsgs
