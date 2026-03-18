@@ -111,7 +111,7 @@ Then grant Automation permission in **System Settings > Privacy & Security > Aut
 
 | Tool | Description |
 |------|-------------|
-| `compose_email` | Send new email |
+| `compose_email` | Send new email (supports attachments) |
 | `reply_email` | Reply to email |
 | `forward_email` | Forward email |
 | `redirect_email` | Redirect email (keeps original sender) |
@@ -125,7 +125,7 @@ Then grant Automation permission in **System Settings > Privacy & Security > Aut
 | Tool | Description |
 |------|-------------|
 | `list_drafts` | List draft emails |
-| `create_draft` | Create a draft |
+| `create_draft` | Create a draft (supports attachments) |
 
 </details>
 

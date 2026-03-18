@@ -12,7 +12,7 @@ class CheAppleMailMCPServer {
         self.tools = Self.defineTools()
         self.server = Server(
             name: "che-apple-mail-mcp",
-            version: "0.1.0",
+            version: "1.1.0",
             capabilities: .init(tools: .init())
         )
         self.transport = StdioTransport()
@@ -206,7 +206,8 @@ class CheAppleMailMCPServer {
                         "subject": .object(["type": .string("string"), "description": .string("Email subject")]),
                         "body": .object(["type": .string("string"), "description": .string("Email body content")]),
                         "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("CC recipients (optional)")]),
-                        "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("BCC recipients (optional)")])
+                        "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("BCC recipients (optional)")]),
+                        "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")])
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
@@ -262,7 +263,8 @@ class CheAppleMailMCPServer {
                     "properties": .object([
                         "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipient email addresses")]),
                         "subject": .object(["type": .string("string"), "description": .string("Email subject")]),
-                        "body": .object(["type": .string("string"), "description": .string("Email body content")])
+                        "body": .object(["type": .string("string"), "description": .string("Email body content")]),
+                        "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")])
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
@@ -725,7 +727,8 @@ class CheAppleMailMCPServer {
             let to = toArray.compactMap { $0.stringValue }
             let cc = arguments["cc"]?.arrayValue?.compactMap { $0.stringValue }
             let bcc = arguments["bcc"]?.arrayValue?.compactMap { $0.stringValue }
-            return try await mailController.composeEmail(to: to, subject: subject, body: body, cc: cc, bcc: bcc)
+            let attachments = arguments["attachments"]?.arrayValue?.compactMap { $0.stringValue }
+            return try await mailController.composeEmail(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments)
 
         case "reply_email":
             guard let id = arguments["id"]?.stringValue,
@@ -763,7 +766,8 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("to, subject, and body are required")
             }
             let to = toArray.compactMap { $0.stringValue }
-            return try await mailController.createDraft(to: to, subject: subject, body: body)
+            let attachments = arguments["attachments"]?.arrayValue?.compactMap { $0.stringValue }
+            return try await mailController.createDraft(to: to, subject: subject, body: body, attachments: attachments)
 
         // Attachment Tools
         case "list_attachments":

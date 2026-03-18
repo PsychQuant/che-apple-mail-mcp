@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-03-18
+
+### Added
+- Optional `attachments` parameter for `compose_email` and `create_draft` (#1)
+  - Accepts array of absolute file paths
+  - Validates file existence before attaching
+  - Fully backward compatible
+
+### Fixed
+- AppleScript parse error (-2741) with Chinese characters and multi-line content (#2)
+  - Root cause: C-style `\n` escape not supported in AppleScript strings
+  - Fix: use AppleScript-native `" & return & "` concatenation for newlines and tabs
+
+---
+
 ## [1.0.0] - 2026-01-13
 
 ### Added
@@ -31,4 +46,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Total Tools | Notes |
 |---------|-------------|-------|
+| 1.1.0   | 42          | Attachments support for compose/draft, CJK encoding fix |
 | 1.0.0   | 42          | Initial release with full Mail.app coverage |

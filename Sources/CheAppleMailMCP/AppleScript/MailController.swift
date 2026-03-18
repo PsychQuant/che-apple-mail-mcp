@@ -581,8 +581,27 @@ actor MailController {
 
     // MARK: - Compose Operations
 
+    /// Validate that all file paths exist, throwing with a clear message if any are missing
+    private func validateFilePaths(_ paths: [String]) throws {
+        let missing = paths.filter { !FileManager.default.fileExists(atPath: $0) }
+        guard missing.isEmpty else {
+            throw MailError.invalidParameter("File(s) not found: \(missing.joined(separator: ", "))")
+        }
+    }
+
+    /// Generate AppleScript lines to attach files to an outgoing message
+    private func attachmentScript(for paths: [String]) -> String {
+        paths.map { path in
+            """
+                make new attachment with properties {file name:POSIX file "\(escapeForAppleScript(path))"} at after the last paragraph
+            """
+        }.joined()
+    }
+
     /// Compose and send a new email
-    func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, accountName: String? = nil) throws -> String {
+    func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil) throws -> String {
+        if let attachments = attachments { try validateFilePaths(attachments) }
+
         var script = """
         tell application "Mail"
             set newMessage to make new outgoing message with properties {subject:"\(escapeForAppleScript(subject))", content:"\(escapeForAppleScript(body))", visible:true}
@@ -609,6 +628,10 @@ actor MailController {
                     make new bcc recipient at end of bcc recipients with properties {address:"\(escapeForAppleScript(recipient))"}
                 """
             }
+        }
+
+        if let attachments = attachments {
+            script += attachmentScript(for: attachments)
         }
 
         script += """
@@ -689,7 +712,9 @@ actor MailController {
     }
 
     /// Create a draft
-    func createDraft(to: [String], subject: String, body: String, accountName: String? = nil) throws -> String {
+    func createDraft(to: [String], subject: String, body: String, attachments: [String]? = nil, accountName: String? = nil) throws -> String {
+        if let attachments = attachments { try validateFilePaths(attachments) }
+
         var script = """
         tell application "Mail"
             set newMessage to make new outgoing message with properties {subject:"\(escapeForAppleScript(subject))", content:"\(escapeForAppleScript(body))", visible:true}
@@ -700,6 +725,10 @@ actor MailController {
             script += """
                 make new to recipient at end of to recipients with properties {address:"\(escapeForAppleScript(recipient))"}
             """
+        }
+
+        if let attachments = attachments {
+            script += attachmentScript(for: attachments)
         }
 
         script += """
@@ -1298,14 +1327,17 @@ actor MailController {
         return "(first message of mailbox \"\(escapeForAppleScript(mailbox))\" of account \"\(escapeForAppleScript(account))\" whose id is \(id))"
     }
 
-    /// Escape special characters for AppleScript strings
+    /// Escape special characters for AppleScript strings.
+    /// AppleScript does not support C-style escape sequences (\n, \t).
+    /// Newlines must be expressed as: `" & return & "` string concatenation.
     private func escapeForAppleScript(_ string: String) -> String {
         return string
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "\\r")
-            .replacingOccurrences(of: "\t", with: "\\t")
+            .replacingOccurrences(of: "\r\n", with: "\" & return & \"")
+            .replacingOccurrences(of: "\n", with: "\" & return & \"")
+            .replacingOccurrences(of: "\r", with: "\" & return & \"")
+            .replacingOccurrences(of: "\t", with: "\" & tab & \"")
     }
 }
 

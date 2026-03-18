@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "che-apple-mail-mcp",
   "display_name": "Apple Mail Manager",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Native AppleScript integration for Apple Mail with 42 comprehensive tools",
   "long_description": "The most comprehensive Apple Mail MCP server providing 42 tools covering nearly all Mail.app scripting capabilities. Features include account management, mailbox CRUD, email operations with 7 flag colors and background colors, compose/reply/forward/redirect, attachments, VIP management, mail rules, signatures, SMTP servers, and sync operations. Uses native AppleScript for reliable integration. Requires macOS 13.0 or later.",
   "author": {

@@ -111,7 +111,7 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 
 | 工具 | 說明 |
 |------|------|
-| `compose_email` | 撰寫新郵件 |
+| `compose_email` | 撰寫新郵件（支援附件） |
 | `reply_email` | 回覆郵件 |
 | `forward_email` | 轉寄郵件 |
 | `redirect_email` | 重導向郵件（保留原始寄件者） |
@@ -125,7 +125,7 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 | 工具 | 說明 |
 |------|------|
 | `list_drafts` | 列出草稿郵件 |
-| `create_draft` | 建立草稿 |
+| `create_draft` | 建立草稿（支援附件） |
 
 </details>
 
