@@ -113,17 +113,17 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "search_emails",
-                description: "Search emails by subject or content",
+                description: "Search emails by subject or sender. Without mailbox/account_name, searches ALL accounts and ALL mailboxes in one call — no need to guess which account the email is in. Results include account_name and mailbox so you know where each email was found.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "query": .object(["type": .string("string"), "description": .string("Search query")]),
-                        "mailbox": .object(["type": .string("string"), "description": .string("Mailbox to search in")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "query": .object(["type": .string("string"), "description": .string("Search query (matches subject or sender)")]),
+                        "mailbox": .object(["type": .string("string"), "description": .string("Mailbox to search in (optional — omit to search all mailboxes)")]),
+                        "account_name": .object(["type": .string("string"), "description": .string("Mail account (optional — omit to search all accounts)")]),
                         "limit": .object(["type": .string("integer"), "description": .string("Maximum results (default: 20)")]),
                         "sort": .object(["type": .string("string"), "description": .string("Sort order by date: 'desc' (newest first, default) or 'asc' (oldest first)")])
                     ]),
-                    "required": .array([.string("query"), .string("mailbox"), .string("account_name")])
+                    "required": .array([.string("query")])
                 ])
             ),
             Tool(
@@ -665,11 +665,11 @@ class CheAppleMailMCPServer {
             return formatJSON(email)
 
         case "search_emails":
-            guard let query = arguments["query"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
-                  let accountName = arguments["account_name"]?.stringValue else {
-                throw MailError.invalidParameter("query, mailbox, and account_name are required")
+            guard let query = arguments["query"]?.stringValue else {
+                throw MailError.invalidParameter("query is required")
             }
+            let mailbox = arguments["mailbox"]?.stringValue
+            let accountName = arguments["account_name"]?.stringValue
             let limit = arguments["limit"]?.intValue ?? 20
             let sort = arguments["sort"]?.stringValue ?? "desc"
             let results = try await mailController.searchEmails(query: query, mailbox: mailbox, accountName: accountName, limit: limit, sort: sort)
