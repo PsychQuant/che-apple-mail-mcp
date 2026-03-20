@@ -460,20 +460,21 @@ actor MailController {
                 set results to {}
                 set counter to 0
                 repeat with acct in every account
-                    if not (enabled of acct) then next
-                    set acctName to name of acct
-                    repeat with mbox in every mailbox of acct
-                        try
-                            set mboxName to name of mbox
-                            set foundMsgs to (messages of mbox whose subject contains "\(escapedQuery)" or sender contains "\(escapedQuery)")
-                            repeat with msg in foundMsgs
-                                if counter ≥ \(limit) then exit repeat
-                                set end of results to (id of msg as string) & "\(sep)" & (subject of msg) & "\(sep)" & (sender of msg) & "\(sep)" & (date received of msg as string) & "\(sep)" & acctName & "\(sep)" & mboxName
-                                set counter to counter + 1
-                            end repeat
-                        end try
-                        if counter ≥ \(limit) then exit repeat
-                    end repeat
+                    if (enabled of acct) then
+                        set acctName to name of acct
+                        repeat with mbox in every mailbox of acct
+                            try
+                                set mboxName to name of mbox
+                                set foundMsgs to (messages of mbox whose subject contains "\(escapedQuery)" or sender contains "\(escapedQuery)")
+                                repeat with msg in foundMsgs
+                                    if counter ≥ \(limit) then exit repeat
+                                    set end of results to (id of msg as string) & "\(sep)" & (subject of msg) & "\(sep)" & (sender of msg) & "\(sep)" & (date received of msg as string) & "\(sep)" & acctName & "\(sep)" & mboxName
+                                    set counter to counter + 1
+                                end repeat
+                            end try
+                            if counter ≥ \(limit) then exit repeat
+                        end repeat
+                    end if
                     if counter ≥ \(limit) then exit repeat
                 end repeat
                 return results
