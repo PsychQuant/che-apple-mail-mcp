@@ -433,76 +433,67 @@ actor MailController {
     }
 
     /// Search emails
-    func searchEmails(query: String, mailbox: String, accountName: String, limit: Int = 20, sort: String = "desc") throws -> [[String: Any]] {
-        // Fetch each field separately for reliability
-        let idsScript = """
-        tell application "Mail"
-            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))" or sender contains "\(escapeForAppleScript(query))")
-            set results to {}
-            set counter to 0
-            repeat with msg in foundMsgs
-                if counter ≥ \(limit) then exit repeat
-                set end of results to id of msg as string
-                set counter to counter + 1
-            end repeat
-            return results
-        end tell
-        """
+    func searchEmails(query: String, mailbox: String? = nil, accountName: String? = nil, limit: Int = 20, sort: String = "desc") throws -> [[String: Any]] {
+        let escapedQuery = escapeForAppleScript(query)
+        let sep = "⏐"  // Separator unlikely to appear in email fields
 
-        let subjectsScript = """
-        tell application "Mail"
-            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))" or sender contains "\(escapeForAppleScript(query))")
-            set results to {}
-            set counter to 0
-            repeat with msg in foundMsgs
-                if counter ≥ \(limit) then exit repeat
-                set end of results to subject of msg
-                set counter to counter + 1
-            end repeat
-            return results
-        end tell
-        """
+        let script: String
+        if let mailbox = mailbox, let accountName = accountName {
+            // Search specific mailbox of specific account
+            script = """
+            tell application "Mail"
+                set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapedQuery)" or sender contains "\(escapedQuery)")
+                set results to {}
+                set counter to 0
+                repeat with msg in foundMsgs
+                    if counter ≥ \(limit) then exit repeat
+                    set end of results to (id of msg as string) & "\(sep)" & (subject of msg) & "\(sep)" & (sender of msg) & "\(sep)" & (date received of msg as string) & "\(sep)" & "\(escapeForAppleScript(accountName))" & "\(sep)" & "\(escapeForAppleScript(mailbox))"
+                    set counter to counter + 1
+                end repeat
+                return results
+            end tell
+            """
+        } else {
+            // Search across all accounts and mailboxes
+            script = """
+            tell application "Mail"
+                set results to {}
+                set counter to 0
+                repeat with acct in every account
+                    if not (enabled of acct) then next
+                    set acctName to name of acct
+                    repeat with mbox in every mailbox of acct
+                        try
+                            set mboxName to name of mbox
+                            set foundMsgs to (messages of mbox whose subject contains "\(escapedQuery)" or sender contains "\(escapedQuery)")
+                            repeat with msg in foundMsgs
+                                if counter ≥ \(limit) then exit repeat
+                                set end of results to (id of msg as string) & "\(sep)" & (subject of msg) & "\(sep)" & (sender of msg) & "\(sep)" & (date received of msg as string) & "\(sep)" & acctName & "\(sep)" & mboxName
+                                set counter to counter + 1
+                            end repeat
+                        end try
+                        if counter ≥ \(limit) then exit repeat
+                    end repeat
+                    if counter ≥ \(limit) then exit repeat
+                end repeat
+                return results
+            end tell
+            """
+        }
 
-        let sendersScript = """
-        tell application "Mail"
-            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))" or sender contains "\(escapeForAppleScript(query))")
-            set results to {}
-            set counter to 0
-            repeat with msg in foundMsgs
-                if counter ≥ \(limit) then exit repeat
-                set end of results to sender of msg
-                set counter to counter + 1
-            end repeat
-            return results
-        end tell
-        """
-
-        let datesScript = """
-        tell application "Mail"
-            set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapeForAppleScript(query))" or sender contains "\(escapeForAppleScript(query))")
-            set results to {}
-            set counter to 0
-            repeat with msg in foundMsgs
-                if counter ≥ \(limit) then exit repeat
-                set end of results to date received of msg as string
-                set counter to counter + 1
-            end repeat
-            return results
-        end tell
-        """
-
-        let ids = try runScriptAsList(idsScript)
-        let subjects = try runScriptAsList(subjectsScript)
-        let senders = try runScriptAsList(sendersScript)
-        let dates = try runScriptAsList(datesScript)
+        let rows = try runScriptAsList(script)
 
         var emails: [[String: Any]] = []
-        for i in 0..<min(ids.count, subjects.count, senders.count, dates.count) {
+        for row in rows {
+            let fields = row.components(separatedBy: sep)
+            guard fields.count >= 6 else { continue }
             emails.append([
-                "id": ids[i],
-                "subject": subjects[i],
-                "sender": senders[i],
-                "date_received": dates[i]
+                "id": fields[0],
+                "subject": fields[1],
+                "sender": fields[2],
+                "date_received": fields[3],
+                "account_name": fields[4],
+                "mailbox": fields[5]
             ])
         }
 
