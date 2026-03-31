@@ -8,12 +8,25 @@ let package = Package(
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.10.0")
     ],
     targets: [
+        .target(
+            name: "MailSQLite",
+            path: "Sources/MailSQLite",
+            linkerSettings: [
+                .linkedLibrary("sqlite3")
+            ]
+        ),
         .executableTarget(
             name: "CheAppleMailMCP",
             dependencies: [
-                .product(name: "MCP", package: "swift-sdk")
+                .product(name: "MCP", package: "swift-sdk"),
+                "MailSQLite"
             ],
             path: "Sources/CheAppleMailMCP"
+        ),
+        .testTarget(
+            name: "MailSQLiteTests",
+            dependencies: ["MailSQLite"],
+            path: "Tests/MailSQLiteTests"
         )
     ]
 )

@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-04-01
+
+### Added
+- **SQLite search engine**: Direct queries to Mail.app's Envelope Index database for millisecond-speed search across 250K+ emails
+  - New `field` parameter: search by `subject`, `sender`, `recipient`, or `any` (default)
+  - New `date_from`/`date_to` parameters for date range filtering (ISO 8601)
+  - New `to` field in search results containing recipient addresses
+  - Automatic fallback to AppleScript when SQLite is unavailable
+- **`.emlx` file parser**: Direct reading of email content from `.emlx` files, bypassing AppleScript
+  - RFC 822 header parsing with RFC 2047 encoded-word support (Base64/Quoted-Printable)
+  - MIME body parsing (text/plain, text/html, multipart/*, charset conversion)
+  - Automatic fallback to AppleScript when `.emlx` files are unavailable
+- **Batch operations**: Two new MCP tools for processing multiple emails in a single call
+  - `get_emails_batch`: Get content of up to 50 emails at once (uses `.emlx` parser)
+  - `list_attachments_batch`: List attachments for up to 50 emails at once
+- **MailSQLite library**: New standalone Swift library target with 92 unit/integration tests
+
+### Changed
+- `search_emails` default limit changed from 20 to 50
+- `get_email` now uses `.emlx` parser as primary source with AppleScript fallback
+- Server version bumped to 2.0.0
+- Project now has 3 SPM targets: `CheAppleMailMCP` (executable), `MailSQLite` (library), `MailSQLiteTests` (tests)
+
+---
+
 ## [1.1.0] - 2026-03-18
 
 ### Added

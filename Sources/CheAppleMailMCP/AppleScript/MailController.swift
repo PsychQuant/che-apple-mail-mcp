@@ -192,7 +192,7 @@ actor MailController {
     func deleteMailbox(name: String, accountName: String) throws -> String {
         let script = """
         tell application "Mail"
-            delete mailbox "\(escapeForAppleScript(name))" of account "\(escapeForAppleScript(accountName))"
+            delete \(mailboxRef(name, account: accountName))
             return "Deleted mailbox: \(escapeForAppleScript(name))"
         end tell
         """
@@ -205,7 +205,8 @@ actor MailController {
     func listEmails(mailbox: String, accountName: String, limit: Int = 50) throws -> [[String: Any]] {
         let script = """
         tell application "Mail"
-            set msgs to messages 1 thru \(limit) of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set mb to \(mailboxRef(mailbox, account: accountName))
+            set msgs to messages 1 thru \(limit) of mb
             set msgList to {}
             repeat with msg in msgs
                 set msgInfo to {|id|:id of msg, |subject|:subject of msg, |sender|:sender of msg, |dateReceived|:date received of msg as string, |read|:read status of msg}
@@ -218,7 +219,7 @@ actor MailController {
         // Simplified approach: get basic info (clamp limit to actual message count)
         let subjectsScript = """
         tell application "Mail"
-            set mb to mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set mb to \(mailboxRef(mailbox, account: accountName))
             set msgCount to count of messages of mb
             if msgCount = 0 then return {}
             if \(limit) < msgCount then
@@ -232,7 +233,7 @@ actor MailController {
 
         let sendersScript = """
         tell application "Mail"
-            set mb to mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set mb to \(mailboxRef(mailbox, account: accountName))
             set msgCount to count of messages of mb
             if msgCount = 0 then return {}
             if \(limit) < msgCount then
@@ -246,7 +247,7 @@ actor MailController {
 
         let idsScript = """
         tell application "Mail"
-            set mb to mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))"
+            set mb to \(mailboxRef(mailbox, account: accountName))
             set msgCount to count of messages of mb
             if msgCount = 0 then return {}
             if \(limit) < msgCount then
@@ -442,7 +443,8 @@ actor MailController {
             // Search specific mailbox of specific account
             script = """
             tell application "Mail"
-                set foundMsgs to (messages of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(accountName))" whose subject contains "\(escapedQuery)" or sender contains "\(escapedQuery)")
+                set mb to \(mailboxRef(mailbox, account: accountName))
+                set foundMsgs to (messages of mb whose subject contains "\(escapedQuery)" or sender contains "\(escapedQuery)")
                 set results to {}
                 set counter to 0
                 repeat with msg in foundMsgs
@@ -513,7 +515,7 @@ actor MailController {
         if let mailbox = mailbox, let account = accountName {
             script = """
             tell application "Mail"
-                get unread count of mailbox "\(escapeForAppleScript(mailbox))" of account "\(escapeForAppleScript(account))"
+                get unread count of \(mailboxRef(mailbox, account: account))
             end tell
             """
         } else if let account = accountName {
@@ -576,7 +578,7 @@ actor MailController {
         let script = """
         tell application "Mail"
             set msg to \(ref)
-            move msg to mailbox "\(escapeForAppleScript(toMailbox))" of account "\(escapeForAppleScript(accountName))"
+            move msg to \(mailboxRef(toMailbox, account: accountName))
             return "Email moved to \(escapeForAppleScript(toMailbox))"
         end tell
         """
@@ -609,9 +611,9 @@ actor MailController {
     private func attachmentScript(for paths: [String]) -> String {
         paths.map { path in
             """
-                make new attachment with properties {file name:POSIX file "\(escapeForAppleScript(path))"} at after the last paragraph
+            make new attachment with properties {file name:POSIX file "\(escapeForAppleScript(path))"} at after the last paragraph
             """
-        }.joined()
+        }.joined(separator: "\n")
     }
 
     /// Compose and send a new email
@@ -625,14 +627,14 @@ actor MailController {
         """
 
         for recipient in to {
-            script += """
+            script += "\n" + """
                 make new to recipient at end of to recipients with properties {address:"\(escapeForAppleScript(recipient))"}
             """
         }
 
         if let cc = cc {
             for recipient in cc {
-                script += """
+                script += "\n" + """
                     make new cc recipient at end of cc recipients with properties {address:"\(escapeForAppleScript(recipient))"}
                 """
             }
@@ -640,17 +642,17 @@ actor MailController {
 
         if let bcc = bcc {
             for recipient in bcc {
-                script += """
+                script += "\n" + """
                     make new bcc recipient at end of bcc recipients with properties {address:"\(escapeForAppleScript(recipient))"}
                 """
             }
         }
 
         if let attachments = attachments {
-            script += attachmentScript(for: attachments)
+            script += "\n" + attachmentScript(for: attachments)
         }
 
-        script += """
+        script += "\n" + """
             end tell
             send newMessage
             return "Email sent successfully"
@@ -689,18 +691,18 @@ actor MailController {
         """
 
         for recipient in to {
-            script += """
+            script += "\n" + """
                 make new to recipient at end of to recipients with properties {address:"\(escapeForAppleScript(recipient))"}
             """
         }
 
         if let body = body {
-            script += """
+            script += "\n" + """
                 set content to "\(escapeForAppleScript(body))" & return & return & content
             """
         }
 
-        script += """
+        script += "\n" + """
             end tell
             send fwdMsg
             return "Email forwarded successfully"
@@ -716,7 +718,7 @@ actor MailController {
     func listDrafts(accountName: String) throws -> [[String: Any]] {
         let script = """
         tell application "Mail"
-            get subject of messages of mailbox "Drafts" of account "\(escapeForAppleScript(accountName))"
+            get subject of messages of \(mailboxRef("Drafts", account: accountName))
         end tell
         """
 
@@ -738,16 +740,16 @@ actor MailController {
         """
 
         for recipient in to {
-            script += """
+            script += "\n" + """
                 make new to recipient at end of to recipients with properties {address:"\(escapeForAppleScript(recipient))"}
             """
         }
 
         if let attachments = attachments {
-            script += attachmentScript(for: attachments)
+            script += "\n" + attachmentScript(for: attachments)
         }
 
-        script += """
+        script += "\n" + """
             end tell
             save newMessage
             return "Draft created successfully"
@@ -890,7 +892,7 @@ actor MailController {
             if let header = condition["header"],
                let qualifier = condition["qualifier"],
                let expression = condition["expression"] {
-                script += """
+                script += "\n" + """
                     tell newRule
                         make new rule condition with properties {rule type:header rule, header:"\(escapeForAppleScript(header))", qualifier:\(qualifier), expression:"\(escapeForAppleScript(expression))"}
                     end tell
@@ -900,30 +902,30 @@ actor MailController {
 
         // Add actions
         if let moveMailbox = actions["move_message"] as? String {
-            script += """
-                set move message of newRule to mailbox "\(escapeForAppleScript(moveMailbox))"
+            script += "\n" + """
+                set move message of newRule to (first mailbox whose name is "\(escapeForAppleScript(moveMailbox))")
             """
         }
 
         if let markRead = actions["mark_read"] as? Bool {
-            script += """
+            script += "\n" + """
                 set mark read of newRule to \(markRead)
             """
         }
 
         if let markFlagged = actions["mark_flagged"] as? Bool {
-            script += """
+            script += "\n" + """
                 set mark flagged of newRule to \(markFlagged)
             """
         }
 
         if let deleteMessage = actions["delete_message"] as? Bool {
-            script += """
+            script += "\n" + """
                 set delete message of newRule to \(deleteMessage)
             """
         }
 
-        script += """
+        script += "\n" + """
             return "Rule '\(escapeForAppleScript(name))' created successfully"
         end tell
         """
@@ -984,7 +986,7 @@ actor MailController {
         let script = """
         tell application "Mail"
             set msg to \(ref)
-            duplicate msg to mailbox "\(escapeForAppleScript(toMailbox))" of account "\(escapeForAppleScript(accountName))"
+            duplicate msg to \(mailboxRef(toMailbox, account: accountName))
             return "Email copied to \(escapeForAppleScript(toMailbox))"
         end tell
         """
@@ -1064,12 +1066,12 @@ actor MailController {
         """
 
         for recipient in to {
-            script += """
+            script += "\n" + """
                 make new to recipient at end of to recipients with properties {address:"\(escapeForAppleScript(recipient))"}
             """
         }
 
-        script += """
+        script += "\n" + """
             end tell
             send redirectMsg
             return "Email redirected successfully"
@@ -1335,12 +1337,19 @@ actor MailController {
 
     // MARK: - Helpers
 
+    /// Generate AppleScript expression to reference a mailbox by display name.
+    /// `mailbox "X" of account "Y"` fails for Gmail localized names (e.g. "寄件備份").
+    /// `first mailbox of account "Y" whose name is "X"` always works.
+    private func mailboxRef(_ mailbox: String, account: String) -> String {
+        return "(first mailbox of account \"\(escapeForAppleScript(account))\" whose name is \"\(escapeForAppleScript(mailbox))\")"
+    }
+
     /// Generate AppleScript reference to find a message by its numeric id.
     /// Apple Mail's `message id` refers to the RFC822 Message-ID (string),
     /// but `id` is the internal numeric identifier returned by search/list.
     /// We must use `first message ... whose id is N` instead of `message id N`.
     private func msgRef(_ id: String, mailbox: String, account: String) -> String {
-        return "(first message of mailbox \"\(escapeForAppleScript(mailbox))\" of account \"\(escapeForAppleScript(account))\" whose id is \(id))"
+        return "(first message of \(mailboxRef(mailbox, account: account)) whose id is \(id))"
     }
 
     /// Escape special characters for AppleScript strings.

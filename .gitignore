@@ -20,3 +20,11 @@ docs/private/
 # Build artifacts (distributed via GitHub Release)
 mcpb/server/*
 !mcpb/server/.gitkeep
+.spectra/
+openspec/.vector-search.db*
+
+# Local/personal files
+.remember/
+.agents/
+.claude/
+logs/

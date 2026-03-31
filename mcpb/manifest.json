@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "che-apple-mail-mcp",
   "display_name": "Apple Mail Manager",
-  "version": "1.1.0",
-  "description": "Native AppleScript integration for Apple Mail with 42 comprehensive tools",
-  "long_description": "The most comprehensive Apple Mail MCP server providing 42 tools covering nearly all Mail.app scripting capabilities. Features include account management, mailbox CRUD, email operations with 7 flag colors and background colors, compose/reply/forward/redirect, attachments, VIP management, mail rules, signatures, SMTP servers, and sync operations. Uses native AppleScript for reliable integration. Requires macOS 13.0 or later.",
+  "version": "2.0.0",
+  "description": "Apple Mail MCP server with 44 tools — SQLite-powered millisecond search across 250K+ emails",
+  "long_description": "The most comprehensive Apple Mail MCP server providing 44 tools. v2.0 adds a SQLite search engine that queries Mail.app's Envelope Index directly for millisecond-speed search across all accounts (subject, sender, recipient, date range). Also includes .emlx file parser for direct email content reading, and batch operations (get_emails_batch, list_attachments_batch). Falls back to AppleScript when SQLite is unavailable. Requires macOS 13.0+ and Full Disk Access for SQLite features.",
   "author": {
     "name": "Che Cheng",
     "url": "https://github.com/kiki830621"
@@ -37,7 +37,7 @@
     { "name": "get_special_mailboxes", "description": "Get special mailbox names" },
     { "name": "list_emails", "description": "List emails in a mailbox" },
     { "name": "get_email", "description": "Get full email content" },
-    { "name": "search_emails", "description": "Search by subject/content" },
+    { "name": "search_emails", "description": "SQLite-powered search (subject/sender/recipient/date range)" },
     { "name": "get_unread_count", "description": "Get unread count" },
     { "name": "get_email_headers", "description": "Get all email headers" },
     { "name": "get_email_source", "description": "Get raw email source" },
@@ -73,7 +73,9 @@
     { "name": "extract_name_from_address", "description": "Extract name from email address" },
     { "name": "extract_address", "description": "Extract email from full address" },
     { "name": "get_mail_app_info", "description": "Get Mail.app info" },
-    { "name": "import_mailbox", "description": "Import mailbox from file" }
+    { "name": "import_mailbox", "description": "Import mailbox from file" },
+    { "name": "get_emails_batch", "description": "Get multiple emails in one call" },
+    { "name": "list_attachments_batch", "description": "List attachments for multiple emails" }
   ],
   "compatibility": {
     "platforms": ["darwin"]

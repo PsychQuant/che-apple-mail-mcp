@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**最完整的 Apple Mail MCP 伺服器** - 提供 42 個工具，涵蓋幾乎所有 Mail.app 腳本功能。
+**最完整的 Apple Mail MCP 伺服器** - 44 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,15 +15,16 @@
 
 | 功能 | 其他 MCP | che-apple-mail-mcp |
 |------|----------|-------------------|
-| 工具總數 | ~20 | **42** |
+| 工具總數 | ~20 | **44** |
 | 開發語言 | Python | **Swift (原生)** |
+| 搜尋速度 | 秒級 (AppleScript) | **毫秒級 (SQLite)** |
+| 搜尋欄位 | 主旨/寄件人 | **主旨/寄件人/收件人/日期** |
+| 批次操作 | 無 | **每次最多 50 封** |
 | 信箱管理 | 基本 | 完整 CRUD |
 | 郵件顏色 | 無 | 7 種旗標顏色 + 背景色 |
 | VIP 管理 | 無 | 有 |
 | 規則管理 | 部分 | 完整 CRUD |
 | 簽名檔 | 無 | 有 |
-| SMTP 伺服器 | 無 | 有 |
-| 郵件重導向 | 無 | 有 |
 | 原始標頭/原始碼 | 無 | 有 |
 
 ---
@@ -51,7 +52,7 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 
 ---
 
-## 全部 42 個工具
+## 全部 44 個工具
 
 <details>
 <summary><b>帳戶 (2)</b></summary>

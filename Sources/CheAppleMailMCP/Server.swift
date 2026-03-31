@@ -1,5 +1,6 @@
 import Foundation
 import MCP
+import MailSQLite
 
 /// MCP Server for Apple Mail
 class CheAppleMailMCPServer {
@@ -7,15 +8,44 @@ class CheAppleMailMCPServer {
     private let transport: StdioTransport
     private let mailController = MailController.shared
     private let tools: [Tool]
+    private let indexReader: EnvelopeIndexReader?
 
     init() async throws {
         self.tools = Self.defineTools()
         self.server = Server(
             name: "che-apple-mail-mcp",
-            version: "1.1.0",
+            version: "2.0.0",
             capabilities: .init(tools: .init())
         )
         self.transport = StdioTransport()
+
+        // Initialize SQLite reader (optional — falls back to AppleScript if unavailable)
+        do {
+            let reader = try EnvelopeIndexReader(databasePath: EnvelopeIndexReader.defaultDatabasePath)
+            // Build account UUID → name mapping from AppleScript
+            let accounts = try await mailController.listAccounts()
+            let uuids = EnvelopeIndexReader.scanAccountUUIDs()
+            var mapping: [String: String] = [:]
+            let accountNames = accounts.compactMap { $0["name"] as? String }
+            // Match UUIDs to account names by directory order
+            // More robust: use AppleScript account id which matches the UUID
+            for uuid in uuids {
+                // Try to find account name from AppleScript by matching account id
+                for name in accountNames {
+                    if let info = try? await mailController.getAccountInfo(accountName: name),
+                       let accId = info["id"] as? String,
+                       accId == uuid {
+                        mapping[uuid] = name
+                        break
+                    }
+                }
+            }
+            reader.updateAccountMapping(mapping)
+            self.indexReader = reader
+        } catch {
+            // SQLite not available — all operations will use AppleScript
+            self.indexReader = nil
+        }
 
         await registerHandlers()
     }
@@ -113,14 +143,17 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "search_emails",
-                description: "Search emails by subject or sender. Without mailbox/account_name, searches ALL accounts and ALL mailboxes in one call — no need to guess which account the email is in. Results include account_name and mailbox so you know where each email was found.",
+                description: "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include account_name and mailbox so you know where each email was found.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "query": .object(["type": .string("string"), "description": .string("Search query (matches subject or sender)")]),
+                        "query": .object(["type": .string("string"), "description": .string("Search query string")]),
+                        "field": .object(["type": .string("string"), "description": .string("Search field: 'subject', 'sender', 'recipient', or 'any' (default: 'any' — searches all fields)")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox to search in (optional — omit to search all mailboxes)")]),
                         "account_name": .object(["type": .string("string"), "description": .string("Mail account (optional — omit to search all accounts)")]),
-                        "limit": .object(["type": .string("integer"), "description": .string("Maximum results (default: 20)")]),
+                        "date_from": .object(["type": .string("string"), "description": .string("Start date filter, ISO 8601 (e.g., '2026-01-01')")]),
+                        "date_to": .object(["type": .string("string"), "description": .string("End date filter, ISO 8601 (e.g., '2026-03-31')")]),
+                        "limit": .object(["type": .string("integer"), "description": .string("Maximum results (default: 50)")]),
                         "sort": .object(["type": .string("string"), "description": .string("Sort order by date: 'desc' (newest first, default) or 'asc' (oldest first)")])
                     ]),
                     "required": .array([.string("query")])
@@ -581,6 +614,55 @@ class CheAppleMailMCPServer {
                     "required": .array([.string("path")])
                 ])
             ),
+
+            // Batch Tools
+            Tool(
+                name: "get_emails_batch",
+                description: "Get full content of multiple emails in a single call. Much faster than calling get_email repeatedly. Returns results for each email, including errors for any that failed.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "emails": .object([
+                            "type": .string("array"),
+                            "description": .string("Array of email identifiers"),
+                            "items": .object([
+                                "type": .string("object"),
+                                "properties": .object([
+                                    "id": .object(["type": .string("string"), "description": .string("The email ID")]),
+                                    "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
+                                    "account_name": .object(["type": .string("string"), "description": .string("The mail account")])
+                                ]),
+                                "required": .array([.string("id"), .string("mailbox"), .string("account_name")])
+                            ])
+                        ]),
+                        "format": .object(["type": .string("string"), "description": .string("Content format: 'html' (default), 'text', 'source'")])
+                    ]),
+                    "required": .array([.string("emails")])
+                ])
+            ),
+            Tool(
+                name: "list_attachments_batch",
+                description: "List attachments for multiple emails in a single call. Returns attachment lists for each email, including errors for any that failed.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "emails": .object([
+                            "type": .string("array"),
+                            "description": .string("Array of email identifiers"),
+                            "items": .object([
+                                "type": .string("object"),
+                                "properties": .object([
+                                    "id": .object(["type": .string("string"), "description": .string("The email ID")]),
+                                    "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
+                                    "account_name": .object(["type": .string("string"), "description": .string("The mail account")])
+                                ]),
+                                "required": .array([.string("id"), .string("mailbox"), .string("account_name")])
+                            ])
+                        ])
+                    ]),
+                    "required": .array([.string("emails")])
+                ])
+            ),
         ]
     }
 
@@ -661,6 +743,29 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("id, mailbox, and account_name are required")
             }
             let format = arguments["format"]?.stringValue ?? "html"
+            // Try SQLite/emlx first, fall back to AppleScript
+            if let reader = indexReader, let rowId = Int(id) {
+                do {
+                    if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
+                        let content = try EmlxParser.readEmail(rowId: rowId, mailboxURL: mailboxUrl, format: format)
+                        var result: [String: Any] = [
+                            "id": id,
+                            "subject": content.subject,
+                            "sender": content.sender,
+                            "date": content.date,
+                            "to": content.toRecipients,
+                            "cc": content.ccRecipients,
+                            "message_id": content.messageId
+                        ]
+                        if let text = content.textBody { result["text_body"] = text }
+                        if let html = content.htmlBody { result["html_body"] = html }
+                        if let source = content.rawSource { result["source"] = String(data: source, encoding: .utf8) ?? "" }
+                        return formatJSON(result)
+                    }
+                } catch {
+                    // Fall through to AppleScript
+                }
+            }
             let email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName, format: format)
             return formatJSON(email)
 
@@ -670,8 +775,37 @@ class CheAppleMailMCPServer {
             }
             let mailbox = arguments["mailbox"]?.stringValue
             let accountName = arguments["account_name"]?.stringValue
-            let limit = arguments["limit"]?.intValue ?? 20
+            let limit = arguments["limit"]?.intValue ?? 50
             let sort = arguments["sort"]?.stringValue ?? "desc"
+            let fieldStr = arguments["field"]?.stringValue ?? "any"
+            let dateFromStr = arguments["date_from"]?.stringValue
+            let dateToStr = arguments["date_to"]?.stringValue
+            // Use SQLite search if available
+            if let reader = indexReader {
+                let field = SearchField(rawValue: fieldStr) ?? .any
+                let sortOrder = SortOrder(rawValue: sort) ?? .desc
+                let dateFrom = dateFromStr.flatMap { Self.parseDate($0) }
+                let dateTo = dateToStr.flatMap { Self.parseDate($0) }
+                let params = SearchParameters(
+                    query: query, field: field, accountName: accountName,
+                    mailbox: mailbox, dateFrom: dateFrom, dateTo: dateTo,
+                    sort: sortOrder, limit: limit
+                )
+                let results = try reader.search(params)
+                let formatted: [[String: Any]] = results.map { r in
+                    [
+                        "id": String(r.id),
+                        "subject": r.subject,
+                        "sender": r.senderAddress.isEmpty ? r.senderName : "\(r.senderName) <\(r.senderAddress)>",
+                        "date_received": ISO8601DateFormatter().string(from: r.dateReceived),
+                        "account_name": r.accountName,
+                        "mailbox": r.mailboxPath,
+                        "to": r.toRecipients
+                    ]
+                }
+                return formatJSON(formatted)
+            }
+            // Fallback to AppleScript
             let results = try await mailController.searchEmails(query: query, mailbox: mailbox, accountName: accountName, limit: limit, sort: sort)
             return formatJSON(results)
 
@@ -979,12 +1113,91 @@ class CheAppleMailMCPServer {
             }
             return try await mailController.importMailbox(path: path)
 
+        // Batch Tools
+        case "get_emails_batch":
+            guard let emailsArray = arguments["emails"]?.arrayValue else {
+                throw MailError.invalidParameter("emails array is required")
+            }
+            guard emailsArray.count <= 50 else {
+                throw MailError.invalidParameter("Batch size exceeds maximum of 50 items")
+            }
+            let format = arguments["format"]?.stringValue ?? "html"
+            var results: [[String: Any]] = []
+            for emailVal in emailsArray {
+                guard let obj = emailVal.objectValue,
+                      let id = obj["id"]?.stringValue,
+                      let mailbox = obj["mailbox"]?.stringValue,
+                      let accountName = obj["account_name"]?.stringValue else {
+                    results.append(["error": "Missing required fields (id, mailbox, account_name)"])
+                    continue
+                }
+                do {
+                    // Try SQLite/emlx first
+                    if let reader = indexReader, let rowId = Int(id),
+                       let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
+                        let content = try EmlxParser.readEmail(rowId: rowId, mailboxURL: mailboxUrl, format: format)
+                        var entry: [String: Any] = [
+                            "id": id, "subject": content.subject, "sender": content.sender,
+                            "date": content.date, "to": content.toRecipients, "cc": content.ccRecipients
+                        ]
+                        if let text = content.textBody { entry["text_body"] = text }
+                        if let html = content.htmlBody { entry["html_body"] = html }
+                        if let source = content.rawSource { entry["source"] = String(data: source, encoding: .utf8) ?? "" }
+                        results.append(entry)
+                        continue
+                    }
+                    // Fallback to AppleScript
+                    let email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName, format: format)
+                    results.append(email)
+                } catch {
+                    results.append(["id": id, "error": error.localizedDescription])
+                }
+            }
+            return formatJSON(results)
+
+        case "list_attachments_batch":
+            guard let emailsArray = arguments["emails"]?.arrayValue else {
+                throw MailError.invalidParameter("emails array is required")
+            }
+            guard emailsArray.count <= 50 else {
+                throw MailError.invalidParameter("Batch size exceeds maximum of 50 items")
+            }
+            var results: [[String: Any]] = []
+            for emailVal in emailsArray {
+                guard let obj = emailVal.objectValue,
+                      let id = obj["id"]?.stringValue,
+                      let mailbox = obj["mailbox"]?.stringValue,
+                      let accountName = obj["account_name"]?.stringValue else {
+                    results.append(["error": "Missing required fields (id, mailbox, account_name)"])
+                    continue
+                }
+                do {
+                    let attachments = try await mailController.listAttachments(id: id, mailbox: mailbox, accountName: accountName)
+                    results.append(["id": id, "mailbox": mailbox, "account_name": accountName, "attachments": attachments])
+                } catch {
+                    results.append(["id": id, "error": error.localizedDescription])
+                }
+            }
+            return formatJSON(results)
+
         default:
             throw MailError.invalidParameter("Unknown tool: \(name)")
         }
     }
 
     // MARK: - Helpers
+
+    private static func parseDate(_ string: String) -> Date? {
+        // Try ISO 8601 with time
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime]
+        if let date = isoFormatter.date(from: string) { return date }
+        // Try date-only (YYYY-MM-DD) in local timezone
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd"
+        dateFormatter.timeZone = .current
+        return dateFormatter.date(from: string)
+    }
 
     private func formatJSON(_ value: Any) -> String {
         do {

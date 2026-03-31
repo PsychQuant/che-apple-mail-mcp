@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**The most comprehensive Apple Mail MCP server** - 42 tools covering nearly all Mail.app scripting capabilities.
+**The most comprehensive Apple Mail MCP server** - 44 tools with SQLite-powered millisecond search across 250K+ emails.
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,15 +15,16 @@
 
 | Feature | Other MCPs | che-apple-mail-mcp |
 |---------|------------|-------------------|
-| Total Tools | ~20 | **42** |
+| Total Tools | ~20 | **44** |
 | Language | Python | **Swift (Native)** |
+| Search Speed | Seconds (AppleScript) | **Milliseconds (SQLite)** |
+| Search Fields | Subject/Sender | **Subject/Sender/Recipient/Date** |
+| Batch Operations | No | **Up to 50 emails per call** |
 | Mailbox Management | Basic | Full CRUD |
 | Email Colors | No | 7 flag colors + background |
 | VIP Management | No | Yes |
 | Rule Management | Partial | Full CRUD |
 | Signatures | No | Yes |
-| SMTP Servers | No | Yes |
-| Email Redirect | No | Yes |
 | Raw Headers/Source | No | Yes |
 
 ---
