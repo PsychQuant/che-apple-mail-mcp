@@ -9,13 +9,12 @@ class CheAppleMailMCPServer {
     private let mailController = MailController.shared
     private let tools: [Tool]
     private let indexReader: EnvelopeIndexReader?
-    private var accountMappingBuilt = false
 
     init() async throws {
         self.tools = Self.defineTools()
         self.server = Server(
             name: "che-apple-mail-mcp",
-            version: "2.0.1",
+            version: "2.1.0",
             capabilities: .init(tools: .init())
         )
         self.transport = StdioTransport()
@@ -30,6 +29,10 @@ class CheAppleMailMCPServer {
         }
 
         await registerHandlers()
+
+        // Fire-and-forget: trigger Mail.app sync so Envelope Index is fresh.
+        // If Mail.app isn't running, this starts it. IDLE/fetch takes over after.
+        Task { try? await mailController.checkForNewMail() }
     }
 
     func run() async throws {
@@ -678,6 +681,9 @@ class CheAppleMailMCPServer {
         switch name {
         // Account Tools
         case "list_accounts":
+            if let reader = indexReader {
+                return formatJSON(reader.listAccounts())
+            }
             let accounts = try await mailController.listAccounts()
             return formatJSON(accounts)
 
@@ -685,12 +691,22 @@ class CheAppleMailMCPServer {
             guard let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("account_name is required")
             }
+            if let reader = indexReader {
+                let accounts = reader.listAccounts()
+                if let acct = accounts.first(where: { ($0["name"] as? String) == accountName }) {
+                    return formatJSON(acct)
+                }
+            }
             let info = try await mailController.getAccountInfo(accountName: accountName)
             return formatJSON(info)
 
         // Mailbox Tools
         case "list_mailboxes":
             let accountName = arguments["account_name"]?.stringValue
+            if let reader = indexReader {
+                let mailboxes = try reader.listMailboxes(accountName: accountName)
+                return formatJSON(mailboxes)
+            }
             let mailboxes = try await mailController.listMailboxes(accountName: accountName)
             return formatJSON(mailboxes)
 
@@ -715,6 +731,10 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("mailbox and account_name are required")
             }
             let limit = arguments["limit"]?.intValue ?? 50
+            if let reader = indexReader {
+                let emails = try reader.listEmails(mailbox: mailbox, accountName: accountName, limit: limit)
+                return formatJSON(emails)
+            }
             let emails = try await mailController.listEmails(mailbox: mailbox, accountName: accountName, limit: limit)
             return formatJSON(emails)
 
@@ -726,7 +746,7 @@ class CheAppleMailMCPServer {
             }
             let format = arguments["format"]?.stringValue ?? "html"
             // Try SQLite/emlx first, fall back to AppleScript
-            await ensureAccountMapping()
+
             if let reader = indexReader, let rowId = Int(id) {
                 do {
                     if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
@@ -764,7 +784,7 @@ class CheAppleMailMCPServer {
             let dateFromStr = arguments["date_from"]?.stringValue
             let dateToStr = arguments["date_to"]?.stringValue
             // Use SQLite search if available
-            await ensureAccountMapping()
+
             if let reader = indexReader {
                 let field = SearchField(rawValue: fieldStr) ?? .any
                 let sortOrder = SortOrder(rawValue: sort) ?? .desc
@@ -796,6 +816,10 @@ class CheAppleMailMCPServer {
         case "get_unread_count":
             let mailbox = arguments["mailbox"]?.stringValue
             let accountName = arguments["account_name"]?.stringValue
+            if let reader = indexReader {
+                let count = try reader.getUnreadCount(mailbox: mailbox, accountName: accountName)
+                return "Unread count: \(count)"
+            }
             let count = try await mailController.getUnreadCount(mailbox: mailbox, accountName: accountName)
             return "Unread count: \(count)"
 
@@ -894,6 +918,10 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("id, mailbox, and account_name are required")
             }
+            if let reader = indexReader, let rowId = Int(id) {
+                let attachments = try reader.listAttachments(messageId: rowId)
+                return formatJSON(attachments)
+            }
             let attachments = try await mailController.listAttachments(id: id, mailbox: mailbox, accountName: accountName)
             return formatJSON(attachments)
 
@@ -909,6 +937,10 @@ class CheAppleMailMCPServer {
 
         // VIP Tools
         case "list_vip_senders":
+            if let reader = indexReader {
+                let vips = reader.listVIPSenders()
+                return formatJSON(vips)
+            }
             let vips = try await mailController.listVIPSenders()
             return formatJSON(vips)
 
@@ -1014,6 +1046,12 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("id, mailbox, and account_name are required")
             }
+            if let reader = indexReader, let rowId = Int(id),
+               let mailboxUrl = try? reader.mailboxURL(forMessageId: rowId) {
+                if let headers = try? EmlxParser.readHeaders(rowId: rowId, mailboxURL: mailboxUrl) {
+                    return headers
+                }
+            }
             return try await mailController.getEmailHeaders(id: id, mailbox: mailbox, accountName: accountName)
 
         case "get_email_source":
@@ -1021,6 +1059,12 @@ class CheAppleMailMCPServer {
                   let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("id, mailbox, and account_name are required")
+            }
+            if let reader = indexReader, let rowId = Int(id),
+               let mailboxUrl = try? reader.mailboxURL(forMessageId: rowId) {
+                if let source = try? EmlxParser.readSource(rowId: rowId, mailboxURL: mailboxUrl) {
+                    return source
+                }
             }
             return try await mailController.getEmailSource(id: id, mailbox: mailbox, accountName: accountName)
 
@@ -1039,6 +1083,10 @@ class CheAppleMailMCPServer {
                   let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("id, mailbox, and account_name are required")
+            }
+            if let reader = indexReader, let rowId = Int(id) {
+                let metadata = try reader.getEmailMetadata(messageId: rowId)
+                return formatJSON(metadata)
             }
             let metadata = try await mailController.getEmailMetadata(id: id, mailbox: mailbox, accountName: accountName)
             return formatJSON(metadata)
@@ -1170,32 +1218,6 @@ class CheAppleMailMCPServer {
     }
 
     // MARK: - Helpers
-
-    /// Build account UUID → name mapping lazily (first search call).
-    /// This avoids blocking server startup with AppleScript calls.
-    private func ensureAccountMapping() async {
-        guard let reader = indexReader, !accountMappingBuilt else { return }
-        accountMappingBuilt = true
-        do {
-            let accounts = try await mailController.listAccounts()
-            let uuids = EnvelopeIndexReader.scanAccountUUIDs()
-            var mapping: [String: String] = [:]
-            let accountNames = accounts.compactMap { $0["name"] as? String }
-            for uuid in uuids {
-                for name in accountNames {
-                    if let info = try? await mailController.getAccountInfo(accountName: name),
-                       let accId = info["id"] as? String,
-                       accId == uuid {
-                        mapping[uuid] = name
-                        break
-                    }
-                }
-            }
-            reader.updateAccountMapping(mapping)
-        } catch {
-            // AppleScript failed — use UUIDs as account names
-        }
-    }
 
     private static func parseDate(_ string: String) -> Date? {
         // Try ISO 8601 with time

@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "che-apple-mail-mcp",
   "display_name": "Apple Mail Manager",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "description": "Apple Mail MCP server with 44 tools — SQLite-powered millisecond search across 250K+ emails",
   "long_description": "The most comprehensive Apple Mail MCP server providing 44 tools. v2.0 adds a SQLite search engine that queries Mail.app's Envelope Index directly for millisecond-speed search across all accounts (subject, sender, recipient, date range). Also includes .emlx file parser for direct email content reading, and batch operations (get_emails_batch, list_attachments_batch). Falls back to AppleScript when SQLite is unavailable. Requires macOS 13.0+ and Full Disk Access for SQLite features.",
   "author": {

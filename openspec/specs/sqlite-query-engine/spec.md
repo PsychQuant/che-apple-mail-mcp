@@ -309,297 +309,31 @@ code:
 ---
 ### Requirement: Account UUID to name mapping
 
-The system SHALL build a mapping from account UUID (directory names under `~/Library/Mail/V10/`) to human-readable account names at initialization time. The system SHALL use AppleScript to query account names and match them to UUID directories.
+The system SHALL build a mapping from account UUID to human-readable account names by reading `~/Library/Mail/V10/MailData/Signatures/AccountsMap.plist` at initialization time. The system SHALL NOT use AppleScript for this mapping. The plist maps each UUID to an `AccountURL` field containing the account's email address (percent-encoded). The system SHALL use the decoded email address as the account display name.
 
-#### Scenario: Mapping built at startup
+#### Scenario: Mapping built from AccountsMap.plist
 
 - **WHEN** the EnvelopeIndexReader initializes
-- **THEN** the system creates a `[String: String]` dictionary mapping account UUIDs to account names by combining AppleScript account query results with filesystem directory listing
+- **THEN** the system reads `AccountsMap.plist`, extracts each UUID key and its `AccountURL` value, percent-decodes the email from the URL authority, and creates a `[String: String]` dictionary mapping UUIDs to email addresses
 
-#### Scenario: Unknown account UUID encountered
+#### Scenario: AccountsMap.plist not available
 
-- **WHEN** a mailbox URL contains an account UUID not present in the mapping
-- **THEN** the system uses the UUID string itself as the account name fallback
+- **WHEN** the `AccountsMap.plist` file does not exist or cannot be read
+- **THEN** the system falls back to using UUID strings as account names without blocking or crashing
 
 
 <!-- @trace
-source: sqlite-search-engine
-updated: 2026-04-01
+source: filesystem-only-reads
+updated: 2026-04-02
 code:
-  - .remember/logs/autonomous/save-000640.log
-  - .remember/logs/autonomous/save-053348.log
-  - .remember/logs/autonomous/save-002310.log
-  - .remember/logs/autonomous/save-002351.log
-  - .remember/logs/autonomous/save-001649.log
-  - .remember/logs/autonomous/save-053413.log
-  - .remember/logs/autonomous/save-002438.log
-  - .remember/logs/autonomous/save-053450.log
-  - .remember/logs/autonomous/save-002236.log
-  - .remember/logs/autonomous/save-053342.log
-  - .remember/tmp/save-session.pid
-  - .remember/logs/autonomous/save-000421.log
-  - .remember/logs/autonomous/save-000520.log
-  - Tests/MailSQLiteTests/EmlxFormatTests.swift
-  - .remember/logs/autonomous/save-053405.log
-  - .agents/skills/spectra-ingest/SKILL.md
-  - .remember/logs/autonomous/save-053523.log
-  - logs/mcptools/debug/debug-report-20260316-001500.md
-  - .remember/logs/autonomous/save-001229.log
-  - Tests/MailSQLiteTests/SearchTests.swift
-  - .remember/logs/autonomous/save-002340.log
-  - .remember/logs/autonomous/save-001250.log
-  - .remember/logs/autonomous/save-002328.log
-  - .remember/logs/autonomous/save-003320.log
-  - .remember/logs/autonomous/save-003259.log
-  - .remember/logs/autonomous/save-001939.log
-  - .remember/logs/autonomous/save-001502.log
-  - .agents/skills/spectra-ask/SKILL.md
-  - .remember/logs/autonomous/save-002847.log
-  - .remember/logs/autonomous/save-001309.log
-  - .remember/logs/autonomous/save-002345.log
-  - .remember/logs/autonomous/save-001425.log
-  - .remember/logs/autonomous/save-053406.log
-  - .remember/logs/autonomous/save-001555.log
-  - .remember/logs/autonomous/save-001418.log
-  - .remember/logs/autonomous/save-002232.log
-  - .remember/logs/autonomous/save-001455.log
-  - .remember/logs/autonomous/save-001834.log
-  - Tests/MailSQLiteTests/MailboxURLTests.swift
-  - .remember/logs/autonomous/save-001432.log
-  - .remember/logs/autonomous/save-053728.log
-  - .remember/logs/autonomous/save-005259.log
-  - .remember/logs/autonomous/save-001901.log
-  - .remember/logs/autonomous/save-001543.log
-  - .remember/logs/autonomous/save-001304.log
-  - .remember/logs/autonomous/save-002244.log
-  - .remember/logs/autonomous/save-053218.log
-  - .remember/logs/autonomous/save-053433.log
-  - .remember/logs/autonomous/save-054753.log
-  - Sources/MailSQLite/RFC822Parser.swift
-  - .remember/logs/autonomous/save-053416.log
-  - .remember/logs/autonomous/save-003428.log
-  - .remember/logs/autonomous/save-053341.log
-  - .remember/logs/autonomous/save-000627.log
-  - .remember/logs/autonomous/save-002359.log
-  - .remember/logs/autonomous/save-002229.log
-  - .remember/logs/autonomous/save-053445.log
-  - Sources/MailSQLite/SearchResult.swift
-  - .remember/logs/autonomous/save-005355.log
-  - .remember/logs/autonomous/save-003351.log
-  - .remember/logs/autonomous/save-001029.log
-  - Tests/MailSQLiteTests/EmailContentTests.swift
-  - .remember/logs/autonomous/save-000614.log
-  - .remember/logs/autonomous/save-002046.log
-  - .remember/logs/autonomous/save-002713.log
-  - .remember/logs/autonomous/save-001534.log
-  - .remember/logs/autonomous/save-053517.log
-  - Tests/MailSQLiteTests/HeaderParserTests.swift
-  - .remember/logs/autonomous/save-001520.log
-  - .remember/logs/autonomous/save-002612.log
-  - .remember/logs/autonomous/save-003306.log
-  - .remember/logs/autonomous/save-053441.log
-  - .remember/logs/autonomous/save-001622.log
-  - .remember/logs/autonomous/save-000601.log
-  - .remember/logs/autonomous/save-001311.log
-  - .remember/logs/autonomous/save-053736.log
-  - .remember/logs/autonomous/save-001725.log
-  - Tests/MailSQLiteTests/BatchOperationTests.swift
-  - .remember/logs/autonomous/save-053259.log
-  - .remember/logs/autonomous/save-053332.log
-  - .remember/logs/autonomous/save-001804.log
-  - .remember/logs/autonomous/save-001337.log
-  - .remember/logs/autonomous/save-054754.log
-  - .remember/logs/autonomous/save-053415.log
-  - .remember/logs/autonomous/save-053457.log
-  - .remember/logs/autonomous/save-000442.log
-  - .remember/logs/autonomous/save-003252.log
-  - .remember/logs/autonomous/save-002558.log
-  - .remember/logs/autonomous/save-053715.log
-  - .remember/logs/autonomous/save-005655.log
-  - .remember/logs/autonomous/save-003502.log
-  - .remember/logs/autonomous/save-002645.log
-  - .remember/logs/autonomous/save-000528.log
-  - Sources/MailSQLite/MailSQLiteError.swift
-  - .remember/logs/autonomous/save-002400.log
-  - .remember/logs/autonomous/save-001315.log
-  - .remember/logs/autonomous/save-005635.log
-  - .remember/logs/autonomous/save-002003.log
-  - .remember/logs/autonomous/save-053512.log
-  - .remember/logs/autonomous/save-003407.log
-  - .remember/logs/autonomous/save-002235.log
-  - .remember/logs/autonomous/save-002941.log
-  - .remember/logs/autonomous/save-001451.log
-  - .remember/logs/autonomous/save-053550.log
-  - .remember/logs/autonomous/save-001828.log
-  - .remember/logs/autonomous/save-000536.log
-  - .remember/logs/autonomous/save-000602.log
-  - Sources/MailSQLite/BatchValidator.swift
-  - .remember/logs/autonomous/save-053409.log
-  - .remember/logs/autonomous/save-005354.log
-  - .remember/logs/autonomous/save-002420.log
-  - .remember/logs/autonomous/save-053354.log
-  - .remember/logs/autonomous/save-053157.log
-  - Tests/MailSQLiteTests/EmlxPathTests.swift
-  - .remember/logs/autonomous/save-053249.log
-  - .remember/logs/autonomous/save-005601.log
-  - Sources/CheAppleMailMCP/Server.swift
-  - .remember/logs/autonomous/save-053350.log
-  - .remember/logs/autonomous/save-000429.log
-  - .agents/skills/spectra-propose/SKILL.md
-  - .remember/logs/autonomous/save-002658.log
-  - .remember/logs/autonomous/save-053355.log
-  - .agents/skills/spectra-archive/SKILL.md
-  - .remember/logs/autonomous/save-003020.log
-  - .remember/logs/autonomous/save-001908.log
-  - .remember/logs/autonomous/save-000834.log
-  - .remember/logs/autonomous/save-053611.log
-  - .remember/logs/autonomous/save-002228.log
-  - .remember/logs/autonomous/save-002039.log
-  - .remember/logs/autonomous/save-053338.log
-  - .remember/logs/autonomous/save-002118.log
-  - .remember/logs/autonomous/save-001019.log
-  - .agents/skills/spectra-apply/SKILL.md
-  - Tests/MailSQLiteTests/FallbackTests.swift
-  - .remember/logs/autonomous/save-000420.log
-  - .remember/logs/autonomous/save-002030.log
-  - .remember/logs/autonomous/save-053424.log
-  - .remember/logs/autonomous/save-000427.log
-  - Sources/MailSQLite/EmlxFormat.swift
-  - .remember/logs/autonomous/save-001627.log
-  - .remember/logs/autonomous/save-001928.log
-  - .remember/logs/autonomous/save-005252.log
-  - Tests/MailSQLiteTests/BatchEmptyTests.swift
-  - .remember/logs/autonomous/save-001001.log
-  - Tests/MailSQLiteTests/SearchIntegrationTests.swift
-  - .remember/logs/autonomous/save-053220.log
-  - .remember/logs/autonomous/save-001024.log
-  - .remember/logs/autonomous/save-001119.log
-  - .remember/logs/autonomous/save-002620.log
-  - .remember/logs/autonomous/save-003509.log
-  - .agents/skills/spectra-debug/SKILL.md
-  - .remember/logs/autonomous/save-001921.log
-  - .remember/logs/autonomous/save-053650.log
-  - Sources/MailSQLite/MIMEParser.swift
-  - .remember/logs/autonomous/save-003455.log
-  - .remember/logs/autonomous/save-003102.log
-  - .remember/logs/autonomous/save-053700.log
-  - .remember/logs/autonomous/save-053422.log
-  - AGENTS.md
-  - .remember/logs/autonomous/save-002706.log
-  - Tests/MailSQLiteTests/EnvelopeIndexReaderTests.swift
-  - .remember/logs/autonomous/save-000458.log
-  - .remember/logs/autonomous/save-054747.log
-  - .remember/logs/autonomous/save-001234.log
-  - .remember/logs/autonomous/save-000547.log
-  - .remember/logs/autonomous/save-005611.log
-  - .remember/logs/autonomous/save-005626.log
-  - Sources/CheAppleMailMCP/AppleScript/MailController.swift
-  - Sources/MailSQLite/MailboxURL.swift
-  - .remember/logs/autonomous/save-003313.log
-  - .remember/logs/autonomous/save-001159.log
-  - .remember/logs/autonomous/save-000923.log
-  - .remember/logs/autonomous/save-003120.log
-  - .remember/logs/autonomous/save-001414.log
-  - .remember/logs/autonomous/save-053404.log
-  - .remember/logs/autonomous/save-001352.log
-  - .remember/logs/autonomous/save-000508.log
-  - .remember/logs/autonomous/save-001655.log
-  - .remember/logs/autonomous/save-002300.log
-  - .remember/logs/autonomous/save-000409.log
-  - .remember/logs/autonomous/save-000705.log
-  - .remember/logs/autonomous/save-001732.log
-  - .remember/logs/autonomous/save-002447.log
-  - .remember/logs/autonomous/save-003524.log
-  - .remember/logs/autonomous/save-003445.log
-  - .remember/logs/autonomous/save-001747.log
-  - .remember/logs/autonomous/save-053401.log
-  - .remember/logs/autonomous/save-000535.log
-  - .remember/logs/autonomous/save-000634.log
-  - .remember/logs/autonomous/save-003335.log
-  - Tests/MailSQLiteTests/BatchPartialFailureTests.swift
-  - .remember/logs/autonomous/save-002414.log
-  - .remember/logs/autonomous/save-002133.log
-  - .remember/logs/autonomous/save-001133.log
-  - .remember/logs/autonomous/save-000434.log
-  - .remember/logs/autonomous/save-053234.log
-  - .remember/logs/autonomous/save-053426.log
-  - .remember/logs/autonomous/save-001550.log
-  - .remember/logs/autonomous/save-002426.log
-  - .remember/logs/autonomous/save-000613.log
-  - .remember/logs/autonomous/save-002152.log
-  - .remember/logs/autonomous/save-002737.log
-  - .remember/logs/autonomous/save-053707.log
-  - .remember/logs/autonomous/save-001336.log
-  - .remember/logs/autonomous/save-005400.log
-  - CLAUDE.md
-  - .remember/logs/autonomous/save-000410.log
-  - .remember/logs/autonomous/save-000527.log
-  - .remember/logs/autonomous/save-001218.log
-  - .remember/logs/autonomous/save-001223.log
-  - .remember/logs/autonomous/save-001847.log
-  - .remember/logs/autonomous/save-001755.log
-  - .remember/logs/autonomous/save-000545.log
-  - .remember/logs/autonomous/save-002729.log
-  - .remember/logs/autonomous/save-002322.log
-  - .remember/logs/autonomous/save-003010.log
-  - .remember/logs/autonomous/save-002125.log
-  - .remember/logs/autonomous/save-002224.log
-  - .remember/logs/autonomous/save-053434.log
-  - Package.swift
-  - .remember/logs/autonomous/save-001812.log
+  - Tests/MailSQLiteTests/FilesystemQueryTests.swift
   - Sources/MailSQLite/EmlxParser.swift
-  - .remember/logs/autonomous/save-002933.log
-  - .remember/logs/autonomous/save-000440.log
-  - .remember/logs/autonomous/save-005711.log
-  - .remember/logs/autonomous/save-003247.log
-  - .remember/logs/autonomous/save-000459.log
-  - .remember/logs/autonomous/save-000518.log
-  - .remember/logs/autonomous/save-001508.log
-  - .remember/logs/autonomous/save-003038.log
-  - .remember/logs/autonomous/save-002249.log
-  - .remember/logs/autonomous/save-002522.log
-  - .remember/logs/autonomous/save-053356.log
-  - .remember/logs/autonomous/save-001610.log
-  - .remember/logs/autonomous/save-001212.log
-  - .remember/logs/autonomous/save-001949.log
-  - .remember/logs/autonomous/save-002951.log
-  - .remember/logs/autonomous/save-053410.log
-  - .remember/logs/autonomous/save-002334.log
-  - .remember/logs/autonomous/save-002830.log
-  - .remember/logs/autonomous/save-002256.log
-  - .remember/logs/autonomous/save-005610.log
-  - .remember/logs/autonomous/save-003532.log
-  - .remember/logs/autonomous/save-001853.log
-  - .remember/logs/autonomous/save-001603.log
-  - .remember/logs/autonomous/save-000652.log
-  - .remember/logs/autonomous/save-054739.log
-  - .remember/logs/autonomous/save-053400.log
-  - .remember/logs/autonomous/save-003045.log
-  - .remember/logs/autonomous/save-005705.log
-  - .remember/logs/autonomous/save-002914.log
-  - .remember/logs/autonomous/save-053331.log
-  - .remember/logs/autonomous/save-053208.log
-  - Sources/MailSQLite/EmailContent.swift
-  - .remember/logs/autonomous/save-002408.log
-  - .agents/skills/spectra-audit/SKILL.md
+  - Tests/MailSQLiteTests/StartupTests.swift
+  - Sources/CheAppleMailMCP/Server.swift
+  - Sources/MailSQLite/AccountMapper.swift
   - Sources/MailSQLite/EnvelopeIndexReader.swift
-  - .remember/logs/autonomous/save-002501.log
-  - .remember/logs/autonomous/save-053357.log
-  - .remember/logs/autonomous/save-053557.log
-  - .remember/logs/autonomous/save-001636.log
-  - Tests/MailSQLiteTests/MIMEParserTests.swift
-  - .remember/logs/autonomous/save-000841.log
-  - .remember/logs/autonomous/save-003109.log
-  - .spectra.yaml
-  - .remember/logs/autonomous/save-000456.log
-  - .remember/logs/autonomous/save-000510.log
-  - .remember/logs/autonomous/save-053639.log
-  - .remember/logs/autonomous/save-001205.log
-  - .remember/logs/autonomous/save-001320.log
-  - .remember/logs/autonomous/save-001151.log
-  - .remember/logs/autonomous/save-001709.log
-  - .remember/logs/autonomous/save-002837.log
-  - .agents/skills/spectra-discuss/SKILL.md
+  - Tests/MailSQLiteTests/AccountMapperTests.swift
+  - Tests/MailSQLiteTests/EmlxReadersTests.swift
 -->
 
 ---
@@ -2962,4 +2696,188 @@ code:
   - .remember/logs/autonomous/save-001709.log
   - .remember/logs/autonomous/save-002837.log
   - .agents/skills/spectra-discuss/SKILL.md
+-->
+
+---
+### Requirement: List accounts via filesystem
+
+The system SHALL provide account listing by scanning `~/Library/Mail/V10/` for UUID-formatted subdirectories and reading `AccountsMap.plist` for account details. The system SHALL NOT use AppleScript for listing accounts.
+
+#### Scenario: List all accounts
+
+- **WHEN** `list_accounts` is called
+- **THEN** the system returns an array of accounts, each containing `name` (email address from AccountsMap.plist) and the UUID, derived entirely from filesystem scanning
+
+
+<!-- @trace
+source: filesystem-only-reads
+updated: 2026-04-02
+code:
+  - Tests/MailSQLiteTests/FilesystemQueryTests.swift
+  - Sources/MailSQLite/EmlxParser.swift
+  - Tests/MailSQLiteTests/StartupTests.swift
+  - Sources/CheAppleMailMCP/Server.swift
+  - Sources/MailSQLite/AccountMapper.swift
+  - Sources/MailSQLite/EnvelopeIndexReader.swift
+  - Tests/MailSQLiteTests/AccountMapperTests.swift
+  - Tests/MailSQLiteTests/EmlxReadersTests.swift
+-->
+
+---
+### Requirement: List mailboxes via SQLite
+
+The system SHALL list mailboxes by querying the `mailboxes` table in the Envelope Index. The system SHALL decode mailbox URLs to extract human-readable mailbox names and account associations.
+
+#### Scenario: List all mailboxes
+
+- **WHEN** `list_mailboxes` is called without an account filter
+- **THEN** the system queries all rows from the `mailboxes` table and returns decoded mailbox names with total_count and unread_count
+
+#### Scenario: List mailboxes for specific account
+
+- **WHEN** `list_mailboxes` is called with `account_name`
+- **THEN** the system filters mailbox URLs by the corresponding account UUID and returns only that account's mailboxes
+
+
+<!-- @trace
+source: filesystem-only-reads
+updated: 2026-04-02
+code:
+  - Tests/MailSQLiteTests/FilesystemQueryTests.swift
+  - Sources/MailSQLite/EmlxParser.swift
+  - Tests/MailSQLiteTests/StartupTests.swift
+  - Sources/CheAppleMailMCP/Server.swift
+  - Sources/MailSQLite/AccountMapper.swift
+  - Sources/MailSQLite/EnvelopeIndexReader.swift
+  - Tests/MailSQLiteTests/AccountMapperTests.swift
+  - Tests/MailSQLiteTests/EmlxReadersTests.swift
+-->
+
+---
+### Requirement: List emails via SQLite
+
+The system SHALL list emails in a mailbox by querying the Envelope Index database, joining `messages`, `subjects`, `addresses`, and `mailboxes` tables. The system SHALL NOT use AppleScript for listing emails.
+
+#### Scenario: List emails in a mailbox
+
+- **WHEN** `list_emails` is called with `mailbox` and `account_name`
+- **THEN** the system returns emails with id, subject, sender, and date_received, ordered by date_received descending, limited by the `limit` parameter
+
+
+<!-- @trace
+source: filesystem-only-reads
+updated: 2026-04-02
+code:
+  - Tests/MailSQLiteTests/FilesystemQueryTests.swift
+  - Sources/MailSQLite/EmlxParser.swift
+  - Tests/MailSQLiteTests/StartupTests.swift
+  - Sources/CheAppleMailMCP/Server.swift
+  - Sources/MailSQLite/AccountMapper.swift
+  - Sources/MailSQLite/EnvelopeIndexReader.swift
+  - Tests/MailSQLiteTests/AccountMapperTests.swift
+  - Tests/MailSQLiteTests/EmlxReadersTests.swift
+-->
+
+---
+### Requirement: Get unread count via SQLite
+
+The system SHALL return unread counts by reading `mailboxes.unread_count` from the Envelope Index. The system SHALL NOT use AppleScript for unread counts.
+
+#### Scenario: Unread count for specific mailbox
+
+- **WHEN** `get_unread_count` is called with `mailbox` and `account_name`
+- **THEN** the system returns the `unread_count` value from the matching mailbox row
+
+#### Scenario: Total unread count across all mailboxes
+
+- **WHEN** `get_unread_count` is called without filters
+- **THEN** the system returns the sum of `unread_count` across all mailbox rows
+
+
+<!-- @trace
+source: filesystem-only-reads
+updated: 2026-04-02
+code:
+  - Tests/MailSQLiteTests/FilesystemQueryTests.swift
+  - Sources/MailSQLite/EmlxParser.swift
+  - Tests/MailSQLiteTests/StartupTests.swift
+  - Sources/CheAppleMailMCP/Server.swift
+  - Sources/MailSQLite/AccountMapper.swift
+  - Sources/MailSQLite/EnvelopeIndexReader.swift
+  - Tests/MailSQLiteTests/AccountMapperTests.swift
+  - Tests/MailSQLiteTests/EmlxReadersTests.swift
+-->
+
+---
+### Requirement: List attachments via SQLite
+
+The system SHALL list email attachments by querying the `attachments` table in the Envelope Index, joined with `messages`. The system SHALL NOT use AppleScript for listing attachments.
+
+#### Scenario: List attachments for an email
+
+- **WHEN** `list_attachments` is called with a message `id`
+- **THEN** the system queries the `attachments` table for rows where `message` equals the ROWID, returning attachment `name` and `attachment_id`
+
+
+<!-- @trace
+source: filesystem-only-reads
+updated: 2026-04-02
+code:
+  - Tests/MailSQLiteTests/FilesystemQueryTests.swift
+  - Sources/MailSQLite/EmlxParser.swift
+  - Tests/MailSQLiteTests/StartupTests.swift
+  - Sources/CheAppleMailMCP/Server.swift
+  - Sources/MailSQLite/AccountMapper.swift
+  - Sources/MailSQLite/EnvelopeIndexReader.swift
+  - Tests/MailSQLiteTests/AccountMapperTests.swift
+  - Tests/MailSQLiteTests/EmlxReadersTests.swift
+-->
+
+---
+### Requirement: Get email metadata via SQLite
+
+The system SHALL provide email metadata (read status, flagged status, size, deleted status, conversation_id) by querying the `messages` table directly. The system SHALL NOT use AppleScript for metadata retrieval.
+
+#### Scenario: Get metadata for a message
+
+- **WHEN** `get_email_metadata` is called with a message `id`
+- **THEN** the system queries the `messages` table for the row with that ROWID and returns read, flagged, deleted, size, and date_received fields
+
+
+<!-- @trace
+source: filesystem-only-reads
+updated: 2026-04-02
+code:
+  - Tests/MailSQLiteTests/FilesystemQueryTests.swift
+  - Sources/MailSQLite/EmlxParser.swift
+  - Tests/MailSQLiteTests/StartupTests.swift
+  - Sources/CheAppleMailMCP/Server.swift
+  - Sources/MailSQLite/AccountMapper.swift
+  - Sources/MailSQLite/EnvelopeIndexReader.swift
+  - Tests/MailSQLiteTests/AccountMapperTests.swift
+  - Tests/MailSQLiteTests/EmlxReadersTests.swift
+-->
+
+---
+### Requirement: List VIP senders via filesystem
+
+The system SHALL list VIP senders by reading `~/Library/Mail/V10/MailData/VIPMailboxes.plist`. The system SHALL NOT use AppleScript for VIP listing.
+
+#### Scenario: List VIP senders
+
+- **WHEN** `list_vip_senders` is called
+- **THEN** the system reads VIPMailboxes.plist and returns the list of VIP email addresses
+
+<!-- @trace
+source: filesystem-only-reads
+updated: 2026-04-02
+code:
+  - Tests/MailSQLiteTests/FilesystemQueryTests.swift
+  - Sources/MailSQLite/EmlxParser.swift
+  - Tests/MailSQLiteTests/StartupTests.swift
+  - Sources/CheAppleMailMCP/Server.swift
+  - Sources/MailSQLite/AccountMapper.swift
+  - Sources/MailSQLite/EnvelopeIndexReader.swift
+  - Tests/MailSQLiteTests/AccountMapperTests.swift
+  - Tests/MailSQLiteTests/EmlxReadersTests.swift
 -->

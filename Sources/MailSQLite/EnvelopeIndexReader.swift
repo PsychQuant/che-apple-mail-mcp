@@ -38,12 +38,12 @@ public final class EnvelopeIndexReader {
     ///
     /// - Parameters:
     ///   - databasePath: Path to the Envelope Index SQLite file.
-    ///   - accountMapping: UUID → account name mapping. Pass an empty dictionary
-    ///     to use UUIDs as fallback names. Typically built from AppleScript at startup.
+    ///   - accountMapping: UUID → account name mapping. Defaults to reading
+    ///     AccountsMap.plist via `AccountMapper.buildMapping()` (no AppleScript).
     /// - Throws: `MailSQLiteError.databaseNotAccessible` if the file
     ///   does not exist or cannot be opened (e.g., missing Full Disk Access).
-    public init(databasePath: String, accountMapping: [String: String] = [:]) throws {
-        self.accountMap = accountMapping
+    public init(databasePath: String, accountMapping: [String: String]? = nil) throws {
+        self.accountMap = accountMapping ?? AccountMapper.buildMapping()
 
         guard FileManager.default.fileExists(atPath: databasePath) else {
             throw MailSQLiteError.databaseNotAccessible(
@@ -103,6 +103,231 @@ public final class EnvelopeIndexReader {
             && name.split(separator: "-").count == 5
             && name.allSatisfy { $0.isHexDigit || $0 == "-" }
         }
+    }
+
+    // MARK: - Account & Mailbox Queries
+
+    /// List all accounts by combining filesystem UUID scan with AccountMapper names.
+    public func listAccounts() -> [[String: Any]] {
+        let uuids = Self.scanAccountUUIDs()
+        return uuids.map { uuid in
+            ["name": accountName(for: uuid), "uuid": uuid]
+        }
+    }
+
+    /// List mailboxes from the SQLite mailboxes table.
+    /// - Parameter accountName: Optional account filter (matches against account mapping).
+    public func listMailboxes(accountName: String? = nil) throws -> [[String: Any]] {
+        guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
+
+        var sql = "SELECT url, total_count, unread_count FROM mailboxes"
+        var bindings: [String] = []
+
+        if let accountName = accountName {
+            if let uuid = accountMap.first(where: { $0.value == accountName })?.key {
+                sql += " WHERE url LIKE ?"
+                bindings.append("%://\(uuid)/%")
+            }
+        }
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw MailSQLiteError.queryFailed("Prepare failed: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        for (i, binding) in bindings.enumerated() {
+            sqlite3_bind_text(stmt, Int32(i + 1), binding, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        }
+
+        var results: [[String: Any]] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let url = columnText(stmt, 0)
+            let totalCount = Int(sqlite3_column_int(stmt, 1))
+            let unreadCount = Int(sqlite3_column_int(stmt, 2))
+
+            guard let parsed = MailboxURL.decode(url) else { continue }
+            let acctName = self.accountName(for: parsed.accountUUID)
+
+            results.append([
+                "name": parsed.mailboxPath,
+                "account_name": acctName,
+                "total_count": totalCount,
+                "unread_count": unreadCount
+            ])
+        }
+        return results
+    }
+
+    /// List emails in a mailbox via SQLite.
+    public func listEmails(mailbox: String, accountName: String, limit: Int = 50) throws -> [[String: Any]] {
+        guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
+
+        var conditions = ["m.deleted = 0"]
+        var bindings: [String] = []
+
+        // Account filter
+        if let uuid = accountMap.first(where: { $0.value == accountName })?.key {
+            conditions.append("mb.url LIKE ?")
+            bindings.append("%://\(uuid)/%")
+        }
+
+        // Mailbox filter
+        let encoded = mailbox.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? mailbox
+        conditions.append("(mb.url LIKE ? OR mb.url LIKE ?)")
+        bindings.append("%/\(encoded)")
+        bindings.append("%/\(encoded)/%")
+
+        let sql = """
+            SELECT m.ROWID, s.subject, a.address, a.comment, m.date_received
+            FROM messages m
+            JOIN subjects s ON m.subject = s.ROWID
+            JOIN addresses a ON m.sender = a.ROWID
+            JOIN mailboxes mb ON m.mailbox = mb.ROWID
+            WHERE \(conditions.joined(separator: " AND "))
+            ORDER BY m.date_received DESC
+            LIMIT ?
+            """
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw MailSQLiteError.queryFailed("Prepare failed: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var idx: Int32 = 1
+        for binding in bindings {
+            sqlite3_bind_text(stmt, idx, binding, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            idx += 1
+        }
+        sqlite3_bind_int(stmt, idx, Int32(limit))
+
+        var results: [[String: Any]] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let rowId = Int(sqlite3_column_int64(stmt, 0))
+            let subject = columnText(stmt, 1)
+            let senderAddr = columnText(stmt, 2)
+            let senderName = columnText(stmt, 3)
+            let sender = senderName.isEmpty ? senderAddr : "\(senderName) <\(senderAddr)>"
+            results.append([
+                "id": String(rowId),
+                "subject": subject,
+                "sender": sender
+            ])
+        }
+        return results
+    }
+
+    /// Get unread count via SQLite mailboxes table.
+    public func getUnreadCount(mailbox: String? = nil, accountName: String? = nil) throws -> Int {
+        guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
+
+        var sql = "SELECT SUM(unread_count) FROM mailboxes"
+        var conditions: [String] = []
+        var bindings: [String] = []
+
+        if let accountName = accountName, let uuid = accountMap.first(where: { $0.value == accountName })?.key {
+            conditions.append("url LIKE ?")
+            bindings.append("%://\(uuid)/%")
+        }
+        if let mailbox = mailbox {
+            let encoded = mailbox.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? mailbox
+            conditions.append("(url LIKE ? OR url LIKE ?)")
+            bindings.append("%/\(encoded)")
+            bindings.append("%/\(encoded)/%")
+        }
+
+        if !conditions.isEmpty {
+            sql += " WHERE " + conditions.joined(separator: " AND ")
+        }
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw MailSQLiteError.queryFailed("Prepare failed: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        for (i, binding) in bindings.enumerated() {
+            sqlite3_bind_text(stmt, Int32(i + 1), binding, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        }
+
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            return Int(sqlite3_column_int64(stmt, 0))
+        }
+        return 0
+    }
+
+    /// List attachments for a message via SQLite.
+    public func listAttachments(messageId: Int) throws -> [[String: Any]] {
+        guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
+
+        let sql = "SELECT name, attachment_id FROM attachments WHERE message = ?"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw MailSQLiteError.queryFailed("Prepare failed: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(messageId))
+
+        var results: [[String: Any]] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            results.append([
+                "name": columnText(stmt, 0),
+                "attachment_id": columnText(stmt, 1)
+            ])
+        }
+        return results
+    }
+
+    /// Get email metadata from SQLite messages table.
+    public func getEmailMetadata(messageId: Int) throws -> [String: Any] {
+        guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
+
+        let sql = """
+            SELECT m.read, m.flagged, m.deleted, m.size, m.date_received,
+                   m.conversation_id, s.subject, a.address, mb.url
+            FROM messages m
+            JOIN subjects s ON m.subject = s.ROWID
+            JOIN addresses a ON m.sender = a.ROWID
+            JOIN mailboxes mb ON m.mailbox = mb.ROWID
+            WHERE m.ROWID = ?
+            """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw MailSQLiteError.queryFailed("Prepare failed: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int64(stmt, 1, Int64(messageId))
+
+        guard sqlite3_step(stmt) == SQLITE_ROW else {
+            throw MailSQLiteError.queryFailed("Message \(messageId) not found")
+        }
+
+        let dateReceived = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 4)))
+        return [
+            "read": sqlite3_column_int(stmt, 0) != 0,
+            "flagged": sqlite3_column_int(stmt, 1) != 0,
+            "deleted": sqlite3_column_int(stmt, 2) != 0,
+            "size": Int(sqlite3_column_int64(stmt, 3)),
+            "date_received": ISO8601DateFormatter().string(from: dateReceived),
+            "conversation_id": Int(sqlite3_column_int64(stmt, 5)),
+            "subject": columnText(stmt, 6),
+            "sender": columnText(stmt, 7),
+            "mailbox": MailboxURL.decode(columnText(stmt, 8))?.mailboxPath ?? columnText(stmt, 8)
+        ]
+    }
+
+    /// List VIP senders from VIPMailboxes.plist.
+    public func listVIPSenders() -> [[String: Any]] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = "\(home)/Library/Mail/V10/MailData/VIPMailboxes.plist"
+        guard let data = FileManager.default.contents(atPath: path),
+              let plist = try? PropertyListSerialization.propertyList(
+                  from: data, options: [], format: nil
+              ) as? [[String: Any]] else {
+            return []
+        }
+        return plist
     }
 
     // MARK: - Message Lookup

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-04-02
+
+### Added
+- All read operations (list_accounts, list_mailboxes, list_emails, get_unread_count, list_attachments, get_email_headers, get_email_source, get_email_metadata, list_vip_senders) now use filesystem-only access (SQLite + .emlx + plist) — zero AppleScript dependency on the read path
+- AccountMapper: reads account UUID→name mapping from AccountsMap.plist instead of AppleScript
+- Fire-and-forget `check for new mail` at server startup to ensure Envelope Index freshness
+
+### Removed
+- `ensureAccountMapping()` AppleScript-based lazy account mapping — replaced by synchronous plist read
+
+---
+
 ## [2.0.1] - 2026-04-02
 
 ### Fixed
