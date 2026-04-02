@@ -9,6 +9,7 @@ class CheAppleMailMCPServer {
     private let mailController = MailController.shared
     private let tools: [Tool]
     private let indexReader: EnvelopeIndexReader?
+    private var accountMappingBuilt = false
 
     init() async throws {
         self.tools = Self.defineTools()
@@ -20,30 +21,11 @@ class CheAppleMailMCPServer {
         self.transport = StdioTransport()
 
         // Initialize SQLite reader (optional — falls back to AppleScript if unavailable)
+        // Only open the DB connection here; account mapping is built lazily on first search
+        // to avoid blocking server startup with AppleScript calls.
         do {
-            let reader = try EnvelopeIndexReader(databasePath: EnvelopeIndexReader.defaultDatabasePath)
-            // Build account UUID → name mapping from AppleScript
-            let accounts = try await mailController.listAccounts()
-            let uuids = EnvelopeIndexReader.scanAccountUUIDs()
-            var mapping: [String: String] = [:]
-            let accountNames = accounts.compactMap { $0["name"] as? String }
-            // Match UUIDs to account names by directory order
-            // More robust: use AppleScript account id which matches the UUID
-            for uuid in uuids {
-                // Try to find account name from AppleScript by matching account id
-                for name in accountNames {
-                    if let info = try? await mailController.getAccountInfo(accountName: name),
-                       let accId = info["id"] as? String,
-                       accId == uuid {
-                        mapping[uuid] = name
-                        break
-                    }
-                }
-            }
-            reader.updateAccountMapping(mapping)
-            self.indexReader = reader
+            self.indexReader = try EnvelopeIndexReader(databasePath: EnvelopeIndexReader.defaultDatabasePath)
         } catch {
-            // SQLite not available — all operations will use AppleScript
             self.indexReader = nil
         }
 
@@ -744,6 +726,7 @@ class CheAppleMailMCPServer {
             }
             let format = arguments["format"]?.stringValue ?? "html"
             // Try SQLite/emlx first, fall back to AppleScript
+            await ensureAccountMapping()
             if let reader = indexReader, let rowId = Int(id) {
                 do {
                     if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
@@ -781,6 +764,7 @@ class CheAppleMailMCPServer {
             let dateFromStr = arguments["date_from"]?.stringValue
             let dateToStr = arguments["date_to"]?.stringValue
             // Use SQLite search if available
+            await ensureAccountMapping()
             if let reader = indexReader {
                 let field = SearchField(rawValue: fieldStr) ?? .any
                 let sortOrder = SortOrder(rawValue: sort) ?? .desc
@@ -1186,6 +1170,32 @@ class CheAppleMailMCPServer {
     }
 
     // MARK: - Helpers
+
+    /// Build account UUID → name mapping lazily (first search call).
+    /// This avoids blocking server startup with AppleScript calls.
+    private func ensureAccountMapping() async {
+        guard let reader = indexReader, !accountMappingBuilt else { return }
+        accountMappingBuilt = true
+        do {
+            let accounts = try await mailController.listAccounts()
+            let uuids = EnvelopeIndexReader.scanAccountUUIDs()
+            var mapping: [String: String] = [:]
+            let accountNames = accounts.compactMap { $0["name"] as? String }
+            for uuid in uuids {
+                for name in accountNames {
+                    if let info = try? await mailController.getAccountInfo(accountName: name),
+                       let accId = info["id"] as? String,
+                       accId == uuid {
+                        mapping[uuid] = name
+                        break
+                    }
+                }
+            }
+            reader.updateAccountMapping(mapping)
+        } catch {
+            // AppleScript failed — use UUIDs as account names
+        }
+    }
 
     private static func parseDate(_ string: String) -> Date? {
         // Try ISO 8601 with time
