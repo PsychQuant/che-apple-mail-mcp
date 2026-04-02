@@ -15,7 +15,7 @@ class CheAppleMailMCPServer {
         self.tools = Self.defineTools()
         self.server = Server(
             name: "che-apple-mail-mcp",
-            version: "2.0.0",
+            version: "2.0.1",
             capabilities: .init(tools: .init())
         )
         self.transport = StdioTransport()
