@@ -9,33 +9,55 @@ public enum EmlxParser {
 
     /// Compute the hash directory path for a given ROWID.
     ///
-    /// Apple Mail V10 stores .emlx files in a 3-level directory tree whose
-    /// components are the thousands, tenthousands, and hundredthousands digits
-    /// of the ROWID (not ones/tens/hundreds as earlier versions of this
-    /// resolver incorrectly assumed — see #9):
-    /// - d1 = (rowId / 1000) % 10
-    /// - d2 = (rowId / 10000) % 10
-    /// - d3 = (rowId / 100000) % 10
+    /// Apple Mail V10 uses a **variable-depth** hash layout under each
+    /// mailbox's `Data/` directory, driven by the decimal digits of
+    /// `rowId / 1000`. The digits are emitted right-to-left:
     ///
-    /// Examples verified against real mailboxes on macOS Sequoia / Tahoe:
-    ///   ROWID 262653 → `2/6/2`
-    ///   ROWID 267943 → `7/6/2`
-    ///   ROWID 999    → `0/0/0`
+    /// - rowId < 1000              → `""`         (file at `Data/Messages/`)
+    /// - 1000 ≤ rowId < 10000      → `"d4"`       (`Data/d4/Messages/`)
+    /// - 10000 ≤ rowId < 100000    → `"d4/d5"`    (`Data/d4/d5/Messages/`)
+    /// - 100000 ≤ rowId < 1000000  → `"d4/d5/d6"` (`Data/d4/d5/d6/Messages/`)
+    /// - …and so on for seven-digit ROWIDs and beyond.
+    ///
+    /// where `d4 = (rowId / 1000) % 10`,
+    ///       `d5 = (rowId / 10000) % 10`,
+    ///       `d6 = (rowId / 100000) % 10`, etc.
+    ///
+    /// Verified against **256,428 real .emlx files** (all four depth levels
+    /// present in a production mailbox) on macOS Sequoia / Tahoe — see #9.
+    /// Earlier versions of this resolver incorrectly assumed a fixed
+    /// 3-level tree hashing ones/tens/hundreds of the ROWID, which silently
+    /// matched only 61.5% of real files.
+    ///
+    /// Examples:
+    ///   ROWID 218     → `""`        (depth 0)
+    ///   ROWID 9865    → `"9"`       (depth 1)
+    ///   ROWID 19926   → `"9/1"`     (depth 2)
+    ///   ROWID 262653  → `"2/6/2"`   (depth 3)
+    ///   ROWID 1234567 → `"4/3/2/1"` (depth 4)
     ///
     /// - Parameter rowId: The message ROWID from the Envelope Index.
-    /// - Returns: A relative path string like `"2/6/2"`.
+    /// - Returns: A slash-separated path string (possibly empty).
     public static func hashDirectoryPath(rowId: Int) -> String {
-        let d1 = (rowId / 1000) % 10      // thousands
-        let d2 = (rowId / 10000) % 10     // tenthousands
-        let d3 = (rowId / 100000) % 10    // hundredthousands
-        return "\(d1)/\(d2)/\(d3)"
+        var n = rowId / 1000
+        if n <= 0 {
+            return ""
+        }
+        var parts: [String] = []
+        while n > 0 {
+            parts.append(String(n % 10))
+            n /= 10
+        }
+        return parts.joined(separator: "/")
     }
 
     /// Resolve the filesystem path to an .emlx (or .partial.emlx) file
     /// for a given message ROWID and mailbox URL.
     ///
-    /// Path pattern:
-    /// `~/Library/Mail/V10/<account-uuid>/<mailbox-path>.mbox/<store-uuid>/Data/<d1>/<d2>/<d3>/Messages/<ROWID>.emlx`
+    /// Path pattern (variable depth — see `hashDirectoryPath`):
+    /// `~/Library/Mail/V10/<account-uuid>/<mailbox-path>.mbox/<store-uuid>/Data/<hash>/Messages/<ROWID>.emlx`
+    ///
+    /// where `<hash>` is zero or more `/`-separated decimal digits.
     ///
     /// - Parameters:
     ///   - rowId: The message ROWID from the Envelope Index.
@@ -61,7 +83,14 @@ public enum EmlxParser {
         }
 
         let hashDir = hashDirectoryPath(rowId: rowId)
-        let messagesDir = "\(mailboxDir)/\(storeUUID)/Data/\(hashDir)/Messages"
+        let dataPath = "\(mailboxDir)/\(storeUUID)/Data"
+        let messagesDir: String
+        if hashDir.isEmpty {
+            // Depth 0: rowId < 1000 → file lives directly under Data/Messages/
+            messagesDir = "\(dataPath)/Messages"
+        } else {
+            messagesDir = "\(dataPath)/\(hashDir)/Messages"
+        }
 
         let fm = FileManager.default
 

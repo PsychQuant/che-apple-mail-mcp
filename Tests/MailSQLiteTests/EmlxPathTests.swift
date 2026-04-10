@@ -6,48 +6,79 @@ final class EmlxPathTests: XCTestCase {
 
     // MARK: - Hash Directory Calculation
 
-    func testHashDirectoryForLargeRowId() {
-        // ROWID 262653: thousands=2, tenthousands=6, hundredthousands=2
+    // Apple Mail V10 hashes message IDs by the decimal digits of
+    // `rowId / 1000`, right-to-left. The directory depth is dynamic:
+    // messages below ROWID 1000 go directly under `Data/Messages/`
+    // (depth 0); 4-digit rowIds get one hash level; 5-digit rowIds
+    // get two; and so on. Verified against 256,428 real .emlx files
+    // on macOS Sequoia / Tahoe — see #9.
+    //
+    // Expected output of hashDirectoryPath:
+    //   rowId 218    → ""      (depth 0, file at Data/Messages/218.emlx)
+    //   rowId 9865   → "9"     (depth 1, 9865/1000 = 9)
+    //   rowId 19926  → "9/1"   (depth 2, 19926/1000 = 19 → 9, 1)
+    //   rowId 262653 → "2/6/2" (depth 3, 262653/1000 = 262 → 2, 6, 2)
+    //   rowId 1234567 → "4/3/2/1" (depth 4)
+
+    func testHashDirectoryForDepth3RealRowId() {
         XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 262653), "2/6/2")
     }
 
-    func testHashDirectoryForAnotherLargeRowId() {
-        // ROWID 267943: thousands=7, tenthousands=6, hundredthousands=2
+    func testHashDirectoryForDepth3AnotherRealRowId() {
         XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 267943), "7/6/2")
     }
 
-    func testHashDirectoryForSmallRowId() {
-        // ROWID 42: all three digits are 0 (below thousands)
-        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 42), "0/0/0")
+    func testHashDirectoryForDepth2RealRowId() {
+        // 19926 / 1000 = 19 → d4=9, d5=1
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 19926), "9/1")
     }
 
-    func testHashDirectoryForSingleDigitRowId() {
-        // ROWID 5: below thousands → 0/0/0
-        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 5), "0/0/0")
+    func testHashDirectoryForDepth2MaxRealRowId() {
+        // 99173 / 1000 = 99 → d4=9, d5=9
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 99173), "9/9")
+    }
+
+    func testHashDirectoryForDepth1RealRowId() {
+        // 9865 / 1000 = 9 → single-level "9"
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 9865), "9")
+    }
+
+    func testHashDirectoryForDepth1MinRealRowId() {
+        // 1805 / 1000 = 1 → single-level "1"
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 1805), "1")
+    }
+
+    func testHashDirectoryForDepth0SmallRowId() {
+        // ROWID 218 sits directly under Data/Messages/ — no hash dir
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 218), "")
+    }
+
+    func testHashDirectoryForDepth0SingleDigit() {
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 5), "")
     }
 
     func testHashDirectoryForZero() {
-        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 0), "0/0/0")
-    }
-
-    func testHashDirectoryForExactlyThreeDigits() {
-        // ROWID 123: still below thousands → 0/0/0
-        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 123), "0/0/0")
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 0), "")
     }
 
     func testHashDirectoryForExactlyOneThousand() {
-        // ROWID 1000: thousands=1, tenthousands=0, hundredthousands=0
-        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 1000), "1/0/0")
+        // 1000 / 1000 = 1 → single-digit hash "1"
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 1000), "1")
     }
 
-    func testHashDirectoryForLowerBoundOfSixDigits() {
-        // ROWID 100000: thousands=0, tenthousands=0, hundredthousands=1
-        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 100000), "0/0/1")
+    func testHashDirectoryForJustBelowOneThousand() {
+        // 999 / 1000 = 0 → no hash dir
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 999), "")
     }
 
-    func testHashDirectoryForMaxSixDigits() {
-        // ROWID 999999: all three digits = 9
-        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 999999), "9/9/9")
+    func testHashDirectoryForDepth4SevenDigitRowId() {
+        // 1234567 / 1000 = 1234 → "4/3/2/1"
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 1234567), "4/3/2/1")
+    }
+
+    func testHashDirectoryForDepth5EightDigitRowId() {
+        // 12345678 / 1000 = 12345 → "5/4/3/2/1"
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 12345678), "5/4/3/2/1")
     }
 
     // MARK: - resolveEmlxPath with Invalid Input
@@ -64,13 +95,83 @@ final class EmlxPathTests: XCTestCase {
 
     // MARK: - resolveEmlxPath with fake filesystem fixture
 
-    /// Regression test for #9: hashDirectoryPath must match Apple Mail V10's
-    /// actual on-disk layout, which hashes the ROWID by
-    /// thousands/tenthousands/hundredthousands — not ones/tens/hundreds.
-    ///
-    /// Observed from real mailboxes:
-    ///   ROWID 262653 → `…/Data/2/6/2/Messages/262653.emlx`
-    ///   ROWID 266684 → `…/Data/6/6/2/Messages/266684.emlx`
+    /// Regression test for #9: resolveEmlxPath must find files at every
+    /// depth level Apple Mail V10 uses — 0 (no hash dir), 1, 2, 3, and
+    /// deeper. Exercises all four observed layouts with a fake
+    /// ~/Library/Mail/V10 tree in /tmp.
+    func testResolveEmlxPathFindsFilesAtAllDepths() throws {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent(
+            "emlx-fixture-alldepths-\(UUID().uuidString)", isDirectory: true
+        )
+        defer { try? fm.removeItem(at: tmp) }
+
+        let mailV10 = tmp.appendingPathComponent("Library/Mail/V10", isDirectory: true)
+        let accountUUID = "ABCE3A85-06BE-43BC-9B84-2CA6F325612F"
+        let storeUUID = "5FCC6F13-2CE3-48B1-907D-686244C0229A"
+        let mailboxLeaf = "INBOX"
+
+        // (rowId, expected hash dir)
+        let cases: [(Int, String)] = [
+            (218,    ""),        // depth 0
+            (1805,   "1"),       // depth 1 min
+            (9865,   "9"),       // depth 1 max
+            (19926,  "9/1"),     // depth 2
+            (99173,  "9/9"),     // depth 2 max
+            (262653, "2/6/2"),   // depth 3 (real BMC email from #9 repro)
+            (999999, "9/9/9"),   // depth 3 max
+            (1234567, "4/3/2/1") // depth 4
+        ]
+
+        let mboxStoreDir = mailV10
+            .appendingPathComponent(accountUUID)
+            .appendingPathComponent("\(mailboxLeaf).mbox")
+            .appendingPathComponent(storeUUID)
+
+        for (rowId, expectedHash) in cases {
+            let messagesDir: URL
+            if expectedHash.isEmpty {
+                messagesDir = mboxStoreDir.appendingPathComponent("Data/Messages", isDirectory: true)
+            } else {
+                messagesDir = mboxStoreDir
+                    .appendingPathComponent("Data/\(expectedHash)/Messages", isDirectory: true)
+            }
+            try fm.createDirectory(at: messagesDir, withIntermediateDirectories: true)
+            let emlx = messagesDir.appendingPathComponent("\(rowId).emlx")
+            try "10\nheader: x\n\nbody\n".data(using: .utf8)!.write(to: emlx)
+        }
+
+        let originalBase = EnvelopeIndexReader.mailStoragePathOverride
+        EnvelopeIndexReader.mailStoragePathOverride = mailV10.path
+        defer { EnvelopeIndexReader.mailStoragePathOverride = originalBase }
+
+        let mailboxURL = "ews://\(accountUUID)/\(mailboxLeaf)"
+        for (rowId, expectedHash) in cases {
+            let resolved = EmlxParser.resolveEmlxPath(rowId: rowId, mailboxURL: mailboxURL)
+            XCTAssertNotNil(
+                resolved,
+                "resolveEmlxPath(rowId: \(rowId)) returned nil; expected depth \(expectedHash.isEmpty ? "0 (no hash dir)" : expectedHash)"
+            )
+            if let resolved = resolved {
+                XCTAssertTrue(
+                    resolved.hasSuffix("/\(rowId).emlx"),
+                    "Resolved path \(resolved) does not end with /\(rowId).emlx"
+                )
+                let expectedSegment: String
+                if expectedHash.isEmpty {
+                    expectedSegment = "/Data/Messages/"
+                } else {
+                    expectedSegment = "/Data/\(expectedHash)/Messages/"
+                }
+                XCTAssertTrue(
+                    resolved.contains(expectedSegment),
+                    "Resolved path \(resolved) missing expected segment \(expectedSegment)"
+                )
+            }
+        }
+    }
+
+    /// Original single-depth regression test (kept as the minimal repro for #9).
     func testResolveEmlxPathFindsFileAtThousandsLevelHash() throws {
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory.appendingPathComponent(
