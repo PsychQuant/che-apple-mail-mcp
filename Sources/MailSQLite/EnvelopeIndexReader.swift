@@ -20,10 +20,11 @@ public final class EnvelopeIndexReader {
     }
 
     /// Test-only override for `mailStoragePath`. When non-nil, `mailStoragePath`
-    /// returns this value instead of `~/Library/Mail/V10`. Tests set this to
-    /// point the emlx resolver at a temp fixture directory; production code
-    /// must leave it `nil`.
-    public nonisolated(unsafe) static var mailStoragePathOverride: String?
+    /// returns this value instead of `~/Library/Mail/V10`. Tests inside the
+    /// MailSQLite package set this via `@testable import` to point the emlx
+    /// resolver at a temp fixture directory. Declared `internal` so external
+    /// Swift modules (e.g., CheAppleMailMCP release build) cannot mutate it.
+    nonisolated(unsafe) static var mailStoragePathOverride: String?
 
     /// Base path for mail storage (account directories).
     public static var mailStoragePath: String {

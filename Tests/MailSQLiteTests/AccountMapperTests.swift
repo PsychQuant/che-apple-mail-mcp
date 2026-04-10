@@ -88,4 +88,46 @@ final class AccountMapperTests: XCTestCase {
             "Mapped value should not contain base64 padding — got \(value)"
         )
     }
+
+    /// Reverse-lookup consistency (#9): callers look up accounts by doing
+    /// `accountMap.first(where: { $0.value == accountName })?.key`. For the
+    /// EWS fallback (value == UUID == key) that lookup must still resolve
+    /// back to the correct UUID.
+    func testEwsAccountRoundTripsThroughReverseLookup() throws {
+        let fm = FileManager.default
+        let tmpDir = fm.temporaryDirectory.appendingPathComponent(
+            "accountmap-roundtrip-\(UUID().uuidString)", isDirectory: true
+        )
+        try fm.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tmpDir) }
+
+        let ewsUUID = "ABCE3A85-06BE-43BC-9B84-2CA6F325612F"
+        let imapUUID = "C38E0583-47F8-4468-BE70-43155C15549D"
+        let plist: [String: Any] = [
+            ewsUUID: ["AccountURL": "ews://AAMkAGE5==/"],
+            imapUUID: ["AccountURL": "imap://user%40example.com/"]
+        ]
+        let plistPath = tmpDir.appendingPathComponent("AccountsMap.plist").path
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: plist, format: .xml, options: 0
+        )
+        try data.write(to: URL(fileURLWithPath: plistPath))
+
+        let mapping = AccountMapper.buildMapping(path: plistPath)
+
+        // IMAP: display name → UUID by reverse lookup
+        let imapKey = mapping.first(where: { $0.value == "user@example.com" })?.key
+        XCTAssertEqual(imapKey, imapUUID)
+
+        // EWS: the only handle the user has is the UUID itself; reverse
+        // lookup on that UUID must find exactly the same UUID key.
+        let ewsKey = mapping.first(where: { $0.value == ewsUUID })?.key
+        XCTAssertEqual(ewsKey, ewsUUID, "EWS UUID must round-trip through reverse lookup")
+
+        // Make sure the two accounts don't collide on each other's values.
+        XCTAssertNotEqual(
+            mapping.first(where: { $0.value == ewsUUID })?.key,
+            imapUUID
+        )
+    }
 }
