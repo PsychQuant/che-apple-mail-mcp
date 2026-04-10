@@ -19,8 +19,17 @@ public final class EnvelopeIndexReader {
         return "\(home)/Library/Mail/\(mailDataVersion)/MailData/Envelope Index"
     }
 
+    /// Test-only override for `mailStoragePath`. When non-nil, `mailStoragePath`
+    /// returns this value instead of `~/Library/Mail/V10`. Tests set this to
+    /// point the emlx resolver at a temp fixture directory; production code
+    /// must leave it `nil`.
+    public nonisolated(unsafe) static var mailStoragePathOverride: String?
+
     /// Base path for mail storage (account directories).
     public static var mailStoragePath: String {
+        if let override = mailStoragePathOverride {
+            return override
+        }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return "\(home)/Library/Mail/\(mailDataVersion)"
     }

@@ -9,20 +9,25 @@ public enum EmlxParser {
 
     /// Compute the hash directory path for a given ROWID.
     ///
-    /// Apple Mail stores .emlx files in a 3-level directory tree
-    /// based on the decimal digits of the ROWID:
-    /// - d1 = ones digit
-    /// - d2 = tens digit
-    /// - d3 = hundreds digit
+    /// Apple Mail V10 stores .emlx files in a 3-level directory tree whose
+    /// components are the thousands, tenthousands, and hundredthousands digits
+    /// of the ROWID (not ones/tens/hundreds as earlier versions of this
+    /// resolver incorrectly assumed — see #9):
+    /// - d1 = (rowId / 1000) % 10
+    /// - d2 = (rowId / 10000) % 10
+    /// - d3 = (rowId / 100000) % 10
     ///
-    /// For example: ROWID 267597 → `7/9/5`, ROWID 42 → `2/4/0`, ROWID 5 → `5/0/0`.
+    /// Examples verified against real mailboxes on macOS Sequoia / Tahoe:
+    ///   ROWID 262653 → `2/6/2`
+    ///   ROWID 267943 → `7/6/2`
+    ///   ROWID 999    → `0/0/0`
     ///
     /// - Parameter rowId: The message ROWID from the Envelope Index.
-    /// - Returns: A relative path string like `"7/9/5"`.
+    /// - Returns: A relative path string like `"2/6/2"`.
     public static func hashDirectoryPath(rowId: Int) -> String {
-        let d1 = rowId % 10           // ones
-        let d2 = (rowId / 10) % 10    // tens
-        let d3 = (rowId / 100) % 10   // hundreds
+        let d1 = (rowId / 1000) % 10      // thousands
+        let d2 = (rowId / 10000) % 10     // tenthousands
+        let d3 = (rowId / 100000) % 10    // hundredthousands
         return "\(d1)/\(d2)/\(d3)"
     }
 

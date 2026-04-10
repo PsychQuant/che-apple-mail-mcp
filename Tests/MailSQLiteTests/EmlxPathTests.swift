@@ -7,18 +7,23 @@ final class EmlxPathTests: XCTestCase {
     // MARK: - Hash Directory Calculation
 
     func testHashDirectoryForLargeRowId() {
-        // ROWID 267597: ones=7, tens=9, hundreds=5
-        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 267597), "7/9/5")
+        // ROWID 262653: thousands=2, tenthousands=6, hundredthousands=2
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 262653), "2/6/2")
     }
 
-    func testHashDirectoryForTwoDigitRowId() {
-        // ROWID 42: ones=2, tens=4, hundreds=0
-        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 42), "2/4/0")
+    func testHashDirectoryForAnotherLargeRowId() {
+        // ROWID 267943: thousands=7, tenthousands=6, hundredthousands=2
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 267943), "7/6/2")
+    }
+
+    func testHashDirectoryForSmallRowId() {
+        // ROWID 42: all three digits are 0 (below thousands)
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 42), "0/0/0")
     }
 
     func testHashDirectoryForSingleDigitRowId() {
-        // ROWID 5: ones=5, tens=0, hundreds=0
-        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 5), "5/0/0")
+        // ROWID 5: below thousands → 0/0/0
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 5), "0/0/0")
     }
 
     func testHashDirectoryForZero() {
@@ -26,18 +31,23 @@ final class EmlxPathTests: XCTestCase {
     }
 
     func testHashDirectoryForExactlyThreeDigits() {
-        // ROWID 123: ones=3, tens=2, hundreds=1
-        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 123), "3/2/1")
+        // ROWID 123: still below thousands → 0/0/0
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 123), "0/0/0")
     }
 
-    func testHashDirectoryForRoundNumber() {
-        // ROWID 1000: ones=0, tens=0, hundreds=0
-        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 1000), "0/0/0")
+    func testHashDirectoryForExactlyOneThousand() {
+        // ROWID 1000: thousands=1, tenthousands=0, hundredthousands=0
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 1000), "1/0/0")
     }
 
-    func testHashDirectoryForMaxDigits() {
-        // ROWID 999: ones=9, tens=9, hundreds=9
-        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 999), "9/9/9")
+    func testHashDirectoryForLowerBoundOfSixDigits() {
+        // ROWID 100000: thousands=0, tenthousands=0, hundredthousands=1
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 100000), "0/0/1")
+    }
+
+    func testHashDirectoryForMaxSixDigits() {
+        // ROWID 999999: all three digits = 9
+        XCTAssertEqual(EmlxParser.hashDirectoryPath(rowId: 999999), "9/9/9")
     }
 
     // MARK: - resolveEmlxPath with Invalid Input
@@ -50,6 +60,54 @@ final class EmlxPathTests: XCTestCase {
     func testResolveEmlxPathWithURLMissingPath() {
         let result = EmlxParser.resolveEmlxPath(rowId: 1, mailboxURL: "imap://some-uuid")
         XCTAssertNil(result, "Should return nil when URL has no mailbox path")
+    }
+
+    // MARK: - resolveEmlxPath with fake filesystem fixture
+
+    /// Regression test for #9: hashDirectoryPath must match Apple Mail V10's
+    /// actual on-disk layout, which hashes the ROWID by
+    /// thousands/tenthousands/hundredthousands — not ones/tens/hundreds.
+    ///
+    /// Observed from real mailboxes:
+    ///   ROWID 262653 → `…/Data/2/6/2/Messages/262653.emlx`
+    ///   ROWID 266684 → `…/Data/6/6/2/Messages/266684.emlx`
+    func testResolveEmlxPathFindsFileAtThousandsLevelHash() throws {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent(
+            "emlx-fixture-\(UUID().uuidString)", isDirectory: true
+        )
+        defer { try? fm.removeItem(at: tmp) }
+
+        let mailV10 = tmp.appendingPathComponent("Library/Mail/V10", isDirectory: true)
+        let accountUUID = "ABCE3A85-06BE-43BC-9B84-2CA6F325612F"
+        let storeUUID = "5FCC6F13-2CE3-48B1-907D-686244C0229A"
+        let mailboxLeaf = "INBOX"
+        let rowId = 262653
+
+        // thousands=2, tenthousands=6, hundredthousands=2 → "2/6/2"
+        let messagesDir = mailV10
+            .appendingPathComponent(accountUUID)
+            .appendingPathComponent("\(mailboxLeaf).mbox")
+            .appendingPathComponent(storeUUID)
+            .appendingPathComponent("Data/2/6/2/Messages", isDirectory: true)
+        try fm.createDirectory(at: messagesDir, withIntermediateDirectories: true)
+
+        let emlxFile = messagesDir.appendingPathComponent("\(rowId).emlx")
+        let fakeEmlx = "10\nheader: x\n\nbody\n"
+        try fakeEmlx.data(using: .utf8)!.write(to: emlxFile)
+
+        // Point the resolver at our fake V10 root.
+        let originalBase = EnvelopeIndexReader.mailStoragePathOverride
+        EnvelopeIndexReader.mailStoragePathOverride = mailV10.path
+        defer { EnvelopeIndexReader.mailStoragePathOverride = originalBase }
+
+        let mailboxURL = "ews://\(accountUUID)/\(mailboxLeaf)"
+        let resolved = EmlxParser.resolveEmlxPath(rowId: rowId, mailboxURL: mailboxURL)
+
+        XCTAssertEqual(
+            resolved, emlxFile.path,
+            "resolveEmlxPath must use thousands/tenthousands/hundredthousands hash"
+        )
     }
 
     // MARK: - resolveEmlxPath with Real Data
