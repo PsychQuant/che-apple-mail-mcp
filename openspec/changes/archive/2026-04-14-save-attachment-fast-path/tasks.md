@@ -43,5 +43,5 @@
 
 - [x] 7.1 CHANGELOG.md 新增 `## [2.2.0] - <date>` 區段，Added: MIMEPart / parseAllParts / AttachmentExtractor.saveAttachment; Changed: save_attachment dispatcher two-tier catch (SQLite primary, AppleScript fallback); Performance: save_attachment 延遲從 1-3s 降到 < 50ms；引用 #12 與 design 的決定
 - [x] 7.2 `swift test` 跑全部測試，確認 130 個既有 tests 全部通過 + 新測試通過 (156 total / 1 skipped / 0 failures)
-- [ ] 7.3 `./scripts/release.sh v2.2.0 "v2.2.0: save_attachment SQLite fast path"` 發布 release 並驗證 binary asset 上傳成功
-- [ ] 7.4 更新 `psychquant-claude-plugins` 的 `marketplace.json` 把 `che-apple-mail-mcp` 版本 bump 到 `2.1.2` → `2.2.0`
+- [x] 7.3 `./scripts/release.sh v2.2.0 "v2.2.0: save_attachment SQLite fast path"` 發布 release 並驗證 binary asset 上傳成功 (8.8 MB binary uploaded, view: https://github.com/PsychQuant/che-apple-mail-mcp/releases/tag/v2.2.0)
+- [x] 7.4 更新 `psychquant-claude-plugins` 的 `marketplace.json` 把 `che-apple-mail-mcp` 版本 bump 到 `2.1.2` → `2.2.0` (commit 687ccb6 pushed)
