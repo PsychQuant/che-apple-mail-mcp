@@ -1,0 +1,24 @@
+633
+From: sender@example.com
+To: recipient@example.com
+Subject: Duplicate filename test
+Content-Type: multipart/mixed; boundary="----=_DUP"
+MIME-Version: 1.0
+
+------=_DUP
+Content-Type: text/plain; charset=utf-8
+
+Two attachments with the same filename.
+------=_DUP
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="report.pdf"
+Content-Transfer-Encoding: base64
+
+RklSU1RfVkVSU0lPTl9CWVRFU192MQ==
+------=_DUP
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename="report.pdf"
+Content-Transfer-Encoding: base64
+
+U0VDT05EX1ZFUlNJT05fQllURVNfdjI=
+------=_DUP--

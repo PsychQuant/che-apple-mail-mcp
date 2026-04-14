@@ -1,0 +1,18 @@
+515
+From: sender@example.com
+To: recipient@example.com
+Subject: CJK filename test
+Content-Type: multipart/mixed; boundary="----=_BOUNDARY_CJK"
+MIME-Version: 1.0
+
+------=_BOUNDARY_CJK
+Content-Type: text/plain; charset=utf-8
+
+This message has a CJK-named attachment.
+------=_BOUNDARY_CJK
+Content-Type: application/pdf
+Content-Disposition: attachment; filename*=UTF-8''%E4%B8%AD%E6%96%87%E6%AA%94%E6%A1%88.pdf
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKJWNqay10ZXN0CiUlRU9GCg==
+------=_BOUNDARY_CJK--

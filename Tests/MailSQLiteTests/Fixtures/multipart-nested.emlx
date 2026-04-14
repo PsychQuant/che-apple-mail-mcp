@@ -1,0 +1,27 @@
+583
+From: sender@example.com
+To: recipient@example.com
+Subject: Nested multipart test
+Content-Type: multipart/mixed; boundary="----=_OUTER"
+MIME-Version: 1.0
+
+------=_OUTER
+Content-Type: multipart/alternative; boundary="----=_INNER"
+
+------=_INNER
+Content-Type: text/plain; charset=utf-8
+
+Plain version
+------=_INNER
+Content-Type: text/html; charset=utf-8
+
+<p>HTML version</p>
+------=_INNER--
+
+------=_OUTER
+Content-Type: image/png
+Content-Disposition: inline; filename="logo.png"
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgpGQUtFUE5HQllURVM=
+------=_OUTER--

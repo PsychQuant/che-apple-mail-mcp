@@ -944,6 +944,33 @@ class CheAppleMailMCPServer {
                   let savePath = arguments["save_path"]?.stringValue else {
                 throw MailError.invalidParameter("id, mailbox, account_name, attachment_name, and save_path are required")
             }
+            // Tier 1: SQLite + .emlx fast path (see openspec/changes/save-attachment-fast-path).
+            // Wraps in its own do/catch so any failure falls through to the
+            // AppleScript tier in the trailing `mailController.saveAttachment`
+            // call — matches the two-tier pattern used by get_email (#9's
+            // lesson: never collapse the tiers into one catch).
+            if let reader = indexReader, let rowId = Int(id) {
+                do {
+                    if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
+                        let destination = URL(fileURLWithPath: savePath)
+                        try EmlxParser.saveAttachment(
+                            rowId: rowId,
+                            mailboxURL: mailboxUrl,
+                            attachmentName: attachmentName,
+                            destination: destination
+                        )
+                        return "Attachment saved to \(savePath)"
+                    }
+                } catch {
+                    // Log the cause so silent fallbacks are observable,
+                    // then fall through to the AppleScript fallback below.
+                    let message = "SQLite save_attachment fast path failed: "
+                        + "\(error.localizedDescription), "
+                        + "falling through to AppleScript\n"
+                    FileHandle.standardError.write(Data(message.utf8))
+                }
+            }
+            // Tier 2: AppleScript fallback (legacy path, preserved unchanged).
             return try await mailController.saveAttachment(id: id, mailbox: mailbox, accountName: accountName, attachmentName: attachmentName, savePath: savePath)
 
         // VIP Tools

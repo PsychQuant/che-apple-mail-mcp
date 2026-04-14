@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - 2026-04-14
+
+### Performance
+- **`save_attachment` is now 10–100× faster** ([#12](https://github.com/PsychQuant/che-apple-mail-mcp/issues/12)). The previous implementation went through AppleScript IPC (`tell Mail.app to save att in POSIX file ...`), taking 1–3 seconds per attachment. The new fast path reads the `.emlx` file directly, parses the MIME multipart structure, decodes the matching part, and writes it — all in-memory — for sub-50 ms latency. Bulk operations (e.g., `/archive-mail` attachment backfill) drop from ~30 s to under 1 s for 14 attachments.
+
+### Added
+- **`MIMEParser.parseAllParts(_:headers:) -> [MIMEPart]`** — a non-lossy MIME enumeration API that walks the multipart tree and returns every part (text, html, attachments, inline images, nested multipart). Complements (does not replace) the existing `parseBody` text-extraction API. The new API is hardened against multipart bombs with a depth limit of 8.
+- **`MIMEPart` struct** in `Sources/MailSQLite/MIMEPart.swift` — a `Sendable`, `Equatable` value type that carries `headers`, `contentType`, `contentTypeParams`, `contentDisposition`, `filename`, `rawBytes`, and eagerly-decoded `decodedData` for each part. Filename resolution honors RFC 2231 / RFC 5987 continuation encoding and percent-decoded UTF-8 (so Exchange / Gmail CJK filenames work).
+- **`EmlxParser.saveAttachment(rowId:mailboxURL:attachmentName:destination:)`** in `Sources/MailSQLite/AttachmentExtractor.swift` — direct-from-filesystem attachment extraction. Resolves `.emlx` path via the existing `mailStoragePathOverride` test hook (#9), strips the Apple wrapper, walks all MIME parts, finds first match by filename (first-match semantics), and writes `decodedData.write(to: destination, options: .atomic)`.
+- **Typed errors**: `MailSQLiteError.attachmentNotFound(name:)` and `MailSQLiteError.attachmentTooLarge(name:size:limit:)` so the dispatcher can distinguish fallback triggers.
+- **26 new tests** (156 total now, was 130): 6 for `MIMEPart`, 13 for `MIMEParser.parseAllParts` + filename decoding, 7 for `AttachmentExtractor` end-to-end with fixture `.emlx` files.
+- **4 fixture files** in `Tests/MailSQLiteTests/Fixtures/`: ASCII attachment, CJK filename (RFC 5987), nested multipart, duplicate filename. Plus expected-payload `.bin` files for byte-level assertion.
+
+### Changed
+- **`save_attachment` MCP tool dispatcher** (`Server.swift:939`) now uses a **two-tier catch** pattern matching `get_email`'s precedent: SQLite + `.emlx` fast path runs in its own `do/catch`; any thrown error falls through to the legacy `MailController.saveAttachment` AppleScript call. The two `do/catch` blocks are intentionally **not** collapsed into one — that mistake caused `#9`'s `get_emails_batch` regression and we explicitly avoid it here. The fallback path logs the cause to stderr (`SQLite save_attachment fast path failed: ..., falling through to AppleScript`) so silent fallbacks are observable in production.
+- **`MIMEParser.parseBody` is unchanged** — preserved as the hot path used by `get_email` / `list_emails`. The two parallel APIs are cross-verified by `testParseAllPartsAndParseBodyAgreeOnTextBody`.
+
+### Non-Goals (deferred)
+- **Streaming / `FileHandle` pipeline**: out of scope. The fast path is in-memory only. Attachments larger than 100 MB throw `attachmentTooLarge`, which the dispatcher catches and falls through to the AppleScript path (Mail.app handles streaming write internally). 99% of real attachments are well under this limit.
+- **Inline image `cid:` resolution**: `save_attachment` writes part bytes, not HTML rewrites. Inline images with filenames are still saveable, but `<img src="cid:...">` references in HTML body are unchanged.
+- **Exotic transfer encodings** (`uuencode`, `binhex`): unsupported on the fast path; falls through to AppleScript.
+- **GitHub Actions automation** for releases: still tracked under [#13](https://github.com/PsychQuant/che-apple-mail-mcp/issues/13). For now, releases are published via `./scripts/release.sh`.
+
+### Spec
+- **`emlx-parser` capability** gains a new `Attachment extraction from emlx` requirement with 6 scenarios (ASCII PDF, CJK filename, fallback on throw, first-match duplicate, parseAllParts ⇄ parseBody consistency, large-attachment size-based fallback). See `openspec/changes/save-attachment-fast-path/specs/emlx-parser/spec.md`.
+
+---
+
 ## [2.1.2] - 2026-04-14
 
 ### Fixed
