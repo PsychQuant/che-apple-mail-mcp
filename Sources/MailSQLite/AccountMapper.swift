@@ -35,7 +35,12 @@ public enum AccountMapper {
             if let email = extractEmail(from: accountURL) {
                 mapping[uuid] = email
             } else {
-                mapping[uuid] = accountURL
+                // AccountURL is opaque (e.g., EWS/Exchange store URL). Fall
+                // back to the UUID itself rather than leaking the raw URL
+                // as a "display name" — see #9. Downstream callers already
+                // use `accountName(for:)`, which returns the UUID when no
+                // mapping exists, so behavior is consistent either way.
+                mapping[uuid] = uuid
             }
         }
         return mapping

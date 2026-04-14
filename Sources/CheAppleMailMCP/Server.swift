@@ -1163,22 +1163,30 @@ class CheAppleMailMCPServer {
                     results.append(["error": "Missing required fields (id, mailbox, account_name)"])
                     continue
                 }
-                do {
-                    // Try SQLite/emlx first
-                    if let reader = indexReader, let rowId = Int(id),
-                       let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
-                        let content = try EmlxParser.readEmail(rowId: rowId, mailboxURL: mailboxUrl, format: format)
-                        var entry: [String: Any] = [
-                            "id": id, "subject": content.subject, "sender": content.sender,
-                            "date": content.date, "to": content.toRecipients, "cc": content.ccRecipients
-                        ]
-                        if let text = content.textBody { entry["text_body"] = text }
-                        if let html = content.htmlBody { entry["html_body"] = html }
-                        if let source = content.rawSource { entry["source"] = String(data: source, encoding: .utf8) ?? "" }
-                        results.append(entry)
-                        continue
+                // Try SQLite/emlx first; on any failure, fall through to
+                // AppleScript — mirrors the structure of `get_email` so both
+                // tools behave identically when the filesystem-fast-path is
+                // unavailable. See #9.
+                if let reader = indexReader, let rowId = Int(id) {
+                    do {
+                        if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
+                            let content = try EmlxParser.readEmail(rowId: rowId, mailboxURL: mailboxUrl, format: format)
+                            var entry: [String: Any] = [
+                                "id": id, "subject": content.subject, "sender": content.sender,
+                                "date": content.date, "to": content.toRecipients, "cc": content.ccRecipients
+                            ]
+                            if let text = content.textBody { entry["text_body"] = text }
+                            if let html = content.htmlBody { entry["html_body"] = html }
+                            if let source = content.rawSource { entry["source"] = String(data: source, encoding: .utf8) ?? "" }
+                            results.append(entry)
+                            continue
+                        }
+                    } catch {
+                        // Fall through to AppleScript
                     }
-                    // Fallback to AppleScript
+                }
+                // Fallback to AppleScript
+                do {
                     let email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName, format: format)
                     results.append(email)
                 } catch {

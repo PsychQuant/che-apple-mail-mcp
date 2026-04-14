@@ -8,17 +8,37 @@ TBD - created by archiving change 'sqlite-search-engine'. Update Purpose after a
 
 ### Requirement: Emlx file path resolution
 
-The system SHALL resolve the filesystem path of a `.emlx` file from a message ROWID and mailbox URL. The path pattern is `~/Library/Mail/V10/<account-uuid>/<mailbox-path>.mbox/<store-uuid>/Data/<d1>/<d2>/<d3>/Messages/<ROWID>.emlx` where `d1`, `d2`, `d3` are derived from the ROWID digits (ones, tens, hundreds places respectively). The system SHALL locate the store UUID subdirectory by scanning the mailbox `.mbox` directory for a UUID-formatted subdirectory.
+The system SHALL resolve the filesystem path of a `.emlx` file from a message ROWID and mailbox URL. The path pattern is `~/Library/Mail/V10/<account-uuid>/<mailbox-path>.mbox/<store-uuid>/Data/<hash>/Messages/<ROWID>.emlx`, where `<hash>` is a **variable-depth** slash-separated sequence of decimal digits derived from `rowId / 1000`, emitted right-to-left. When `rowId < 1000` the hash is empty and the file lives directly under `Data/Messages/<ROWID>.emlx`. The system SHALL locate the store UUID subdirectory by scanning the mailbox `.mbox` directory for a UUID-formatted subdirectory.
 
-#### Scenario: Resolve path for a known message
+The depth rule (verified against 256,428 real `.emlx` files on macOS Sequoia / Tahoe — see issue #9):
 
-- **WHEN** the system resolves the path for ROWID 267597 in mailbox URL `imap://E51B96AC.../[Gmail]/全部郵件`
-- **THEN** the system produces path `~/Library/Mail/V10/E51B96AC-.../[Gmail].mbox/全部郵件.mbox/<store-uuid>/Data/7/9/5/Messages/267597.emlx`
+- `rowId < 1000` → depth 0, path = `Data/Messages/<id>.emlx`
+- `1000 ≤ rowId < 10000` → depth 1, path = `Data/d4/Messages/`
+- `10000 ≤ rowId < 100000` → depth 2, path = `Data/d4/d5/Messages/`
+- `100000 ≤ rowId < 1000000` → depth 3, path = `Data/d4/d5/d6/Messages/`
+- …and so on for 7+ digit ROWIDs
 
-#### Scenario: ROWID with fewer than 3 digits
+where `d4 = (rowId / 1000) % 10`, `d5 = (rowId / 10000) % 10`, etc.
 
-- **WHEN** the system resolves the path for ROWID 42
-- **THEN** the hash directory path is `2/4/0/Messages/42.emlx` (ones=2, tens=4, hundreds=0)
+#### Scenario: Resolve path for a depth-3 message
+
+- **WHEN** the system resolves the path for ROWID 262653 in mailbox URL `ews://ABCE3A85.../收件匣`
+- **THEN** the system produces path `~/Library/Mail/V10/ABCE3A85-.../收件匣.mbox/<store-uuid>/Data/2/6/2/Messages/262653.emlx`
+
+#### Scenario: Depth-1 ROWID
+
+- **WHEN** the system resolves the path for ROWID 9865
+- **THEN** the hash directory path is `9/Messages/9865.emlx` (single level, `9865 / 1000 = 9`)
+
+#### Scenario: Depth-2 ROWID
+
+- **WHEN** the system resolves the path for ROWID 19926
+- **THEN** the hash directory path is `9/1/Messages/19926.emlx` (`19926 / 1000 = 19 → 9, 1`)
+
+#### Scenario: ROWID below 1000 (no hash dir)
+
+- **WHEN** the system resolves the path for ROWID 218
+- **THEN** the file lives directly at `Data/Messages/218.emlx` with no intermediate hash subdirectories
 
 #### Scenario: Emlx file does not exist
 

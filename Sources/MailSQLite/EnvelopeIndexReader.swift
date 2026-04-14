@@ -19,8 +19,41 @@ public final class EnvelopeIndexReader {
         return "\(home)/Library/Mail/\(mailDataVersion)/MailData/Envelope Index"
     }
 
+    /// Lock guarding `_mailStoragePathOverride`. Tests mutate the override
+    /// from arbitrary threads (XCTest currently runs serially on this
+    /// target, but we don't want to rely on that assumption — see #9
+    /// verify round 2).
+    private static let _mailStoragePathOverrideLock = NSLock()
+    private nonisolated(unsafe) static var _mailStoragePathOverride: String?
+
+    /// Test-only override for `mailStoragePath`. Reads and writes are
+    /// serialized through `_mailStoragePathOverrideLock`, so concurrent
+    /// test execution (if ever enabled) produces consistent values within
+    /// each critical section. **Tests that mutate this property must still
+    /// save/restore the previous value under a common scope** — the lock
+    /// prevents torn reads, not logical races between overlapping tests.
+    ///
+    /// Declared `internal` so that release builds of external Swift
+    /// modules (e.g., CheAppleMailMCP) cannot mutate it; tests access it
+    /// via `@testable import`.
+    static var mailStoragePathOverride: String? {
+        get {
+            _mailStoragePathOverrideLock.lock()
+            defer { _mailStoragePathOverrideLock.unlock() }
+            return _mailStoragePathOverride
+        }
+        set {
+            _mailStoragePathOverrideLock.lock()
+            defer { _mailStoragePathOverrideLock.unlock() }
+            _mailStoragePathOverride = newValue
+        }
+    }
+
     /// Base path for mail storage (account directories).
     public static var mailStoragePath: String {
+        if let override = mailStoragePathOverride {
+            return override
+        }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return "\(home)/Library/Mail/\(mailDataVersion)"
     }
