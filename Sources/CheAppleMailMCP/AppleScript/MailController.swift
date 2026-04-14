@@ -56,31 +56,66 @@ actor MailController {
 
     // MARK: - Account Operations
 
-    /// List all mail accounts
+    /// List all mail accounts with structured metadata.
+    ///
+    /// Returns `display_name` (the canonical identifier to pass back to
+    /// `get_email` / `search_emails` etc.), the raw `name` attribute (which
+    /// for EWS accounts is the opaque `ews://.../` URL, not usable as an
+    /// AppleScript `account "..."` reference), and the account's `user_name`,
+    /// `id`, `email_addresses`, and `enabled` state.
+    ///
+    /// Why AppleScript and not the SQLite fast path: `AccountsMap.plist`
+    /// exposes only `AccountURL`, not email addresses, so filesystem-only
+    /// resolution cannot recover the email for EWS accounts (per #9 and #11).
+    /// Mail.app's `user name` / `email addresses` AppleScript attributes are
+    /// the only reliable source.
     func listAccounts() throws -> [[String: Any]] {
+        // Emit one record per account, using control characters as separators
+        // to avoid the quoting headaches of &/,/newline. See AccountsScriptParser
+        // for the field layout.
+        //
+        // Use \u{001E} (RS), \u{001F} (US), \u{001D} (GS) — guaranteed not
+        // to appear in legitimate account metadata.
+        let RS = "\u{001E}"
+        let US = "\u{001F}"
+        let GS = "\u{001D}"
+
         let script = """
+        set AppleScript's text item delimiters to "\(GS)"
         tell application "Mail"
-            set accountList to {}
+            set out to ""
+            set first_acc to true
             repeat with acc in accounts
-                set accInfo to {|name|:name of acc, |id|:id of acc, |enabled|:enabled of acc, |type|:account type of acc as string}
-                set end of accountList to accInfo
+                set n to name of acc as string
+                set u to ""
+                try
+                    set u to user name of acc as string
+                end try
+                set i to id of acc as string
+                set emails_list to {}
+                try
+                    set emails_list to email addresses of acc
+                end try
+                if emails_list is missing value then
+                    set emails_str to ""
+                else
+                    set emails_str to emails_list as string
+                end if
+                set en to enabled of acc as string
+                if first_acc then
+                    set first_acc to false
+                else
+                    set out to out & "\(RS)"
+                end if
+                set out to out & n & "\(US)" & u & "\(US)" & i & "\(US)" & emails_str & "\(US)" & en
             end repeat
-            return accountList
+            return out
         end tell
         """
 
-        // For simplicity, get names and basic info
-        let namesScript = """
-        tell application "Mail"
-            get name of every account
-        end tell
-        """
-
-        let names = try runScriptAsList(namesScript)
-
-        return names.map { name in
-            ["name": name]
-        }
+        let raw = try runScript(script)
+        let parsed = AccountsScriptParser.parse(raw)
+        return parsed.map { $0.asDictionary() }
     }
 
     /// Get account details

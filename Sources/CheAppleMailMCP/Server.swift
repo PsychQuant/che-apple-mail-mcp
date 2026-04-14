@@ -681,11 +681,22 @@ class CheAppleMailMCPServer {
         switch name {
         // Account Tools
         case "list_accounts":
-            if let reader = indexReader {
-                return formatJSON(reader.listAccounts())
+            // Primary: AppleScript path — only way to resolve EWS display_name
+            // (AccountsMap.plist has no email field, so SQLite/filesystem
+            // fallback cannot recover the email for Exchange accounts).
+            // See #11 for the full analysis.
+            do {
+                let accounts = try await mailController.listAccounts()
+                return formatJSON(accounts)
+            } catch {
+                // Fallback: SQLite path, only if AppleScript fails (e.g., Mail.app
+                // not running). Returns the same JSON schema but with empty
+                // user_name / email_addresses for EWS accounts.
+                if let reader = indexReader {
+                    return formatJSON(reader.listAccounts())
+                }
+                throw error
             }
-            let accounts = try await mailController.listAccounts()
-            return formatJSON(accounts)
 
         case "get_account_info":
             guard let accountName = arguments["account_name"]?.stringValue else {

@@ -27,6 +27,11 @@ let package = Package(
             name: "MailSQLiteTests",
             dependencies: ["MailSQLite"],
             path: "Tests/MailSQLiteTests"
+        ),
+        .testTarget(
+            name: "CheAppleMailMCPTests",
+            dependencies: ["CheAppleMailMCP"],
+            path: "Tests/CheAppleMailMCPTests"
         )
     ]
 )

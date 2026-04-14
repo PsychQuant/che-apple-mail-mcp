@@ -140,11 +140,35 @@ public final class EnvelopeIndexReader {
 
     // MARK: - Account & Mailbox Queries
 
-    /// List all accounts by combining filesystem UUID scan with AccountMapper names.
+    /// List accounts from the filesystem (AccountsMap.plist).
+    ///
+    /// Fallback path for `list_accounts` when Mail.app is unavailable. Because
+    /// the plist has no `user_name` or `email_addresses` field, EWS accounts
+    /// resolve to UUID-as-display-name (see #9 and #11). Use the AppleScript
+    /// path in `MailController.listAccounts` as the primary resolver for
+    /// accurate EWS email addresses.
+    ///
+    /// Returns the same JSON schema as `MailController.listAccounts` so callers
+    /// can consume either path uniformly. Fields that cannot be resolved from
+    /// the filesystem (`user_name`, `email_addresses`) are empty for EWS.
     public func listAccounts() -> [[String: Any]] {
         let uuids = Self.scanAccountUUIDs()
         return uuids.map { uuid in
-            ["name": accountName(for: uuid), "uuid": uuid]
+            let mappedName = accountName(for: uuid)
+            // Honest about filesystem-only limits: if AccountMapper could parse
+            // an email out of AccountURL (IMAP style), surface it in both `name`
+            // and `display_name`. For EWS, mappedName == uuid per #9's fallback,
+            // so user_name and email_addresses stay empty.
+            let hasEmail = mappedName.contains("@")
+            return [
+                "name": mappedName,
+                "user_name": hasEmail ? mappedName : "",
+                "id": uuid,
+                "email_addresses": hasEmail ? [mappedName] : [],
+                "display_name": mappedName,
+                "enabled": true,
+                "uuid": uuid  // legacy field, keep for backward compat
+            ]
         }
     }
 
