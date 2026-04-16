@@ -5,21 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.3.0] - 2026-04-17
 
 ### Added
-- **`format` parameter on four composing tools** (`compose_email`, `create_draft`, `reply_email`, `forward_email`) — resolves [#15](https://github.com/PsychQuant/che-apple-mail-mcp/issues/15) (P0) and [#14](https://github.com/PsychQuant/che-apple-mail-mcp/issues/14). Accepts `"plain"` (default, fully backwards-compatible), `"markdown"`, or `"html"`. `"markdown"` renders bold / italic / inline code / links / lists via Swift-native `AttributedString(markdown:)` with a custom HTML emitter (direct run walk, not `NSAttributedString → .html`, which drops inline presentation intents). `"html"` passes body verbatim into Mail.app's AppleScript `html content` property.
-- **Reply / forward blockquote merge semantics**: in `"markdown"` / `"html"` mode, the user body is composed as HTML and the original message is wrapped in `<blockquote>…</blockquote>` beneath an `<hr>` separator. When the original has `html content`, that is preserved verbatim inside the blockquote; when only plain text is available, it is HTML-escaped first.
-- **New `message-composition` capability spec** at `openspec/specs/message-composition/spec.md` — first formal spec covering all four composing tools' input schemas, format semantics, and reply/forward merge rules.
+- **`format` parameter on four composing tools** (`compose_email`, `create_draft`, `reply_email`, `forward_email`) — resolves [#15](https://github.com/PsychQuant/che-apple-mail-mcp/issues/15) (P0) and [#14](https://github.com/PsychQuant/che-apple-mail-mcp/issues/14). Accepts `"plain"` (default, fully backwards-compatible), `"markdown"`, or `"html"`. `"markdown"` renders bold / italic / inline code / links / lists / multi-paragraph via Swift-native `AttributedString(markdown:)` with a custom HTML emitter (direct run walk with `PresentationIntent` identity-based block boundaries, not `NSAttributedString → .html`, which drops inline presentation intents). `"html"` passes body verbatim into Mail.app's AppleScript `html content` property.
+- **Reply / forward blockquote merge semantics**: in `"markdown"` / `"html"` mode, the user body is composed as HTML and the original message is wrapped in `<blockquote>…</blockquote>` beneath an `<hr>` separator. In practice, the original's HTML is HTML-escaped plain text because Apple's AppleScript interface denies read access to `html content` on current macOS (empirically confirmed error -1728/-1723). See [#18](https://github.com/PsychQuant/che-apple-mail-mcp/issues/18) for architectural follow-up on full rich-text preservation.
+- **New `message-composition` capability spec** at `openspec/specs/message-composition/spec.md` — first formal spec covering all four composing tools' input schemas, format semantics, reply/forward merge rules, and the AppleScript `html content` read-denial limitation.
 - **`Sources/CheAppleMailMCP/MarkdownRendering.swift`** — new helper module exposing `BodyFormat`, `ComposedBody`, `renderBody(_:format:)`, and `htmlEscape(_:)`. Zero new Swift Package dependencies.
-- **`Sources/CheAppleMailMCP/AppleScript/ComposeScriptBuilder.swift`** — extracted nonisolated script builders for all four composing tools, making script output unit-testable without executing Mail.app (37 new tests across `MarkdownRenderingTests`, `BodyFormatTests`, `MailControllerComposeTests`, `ServerSchemaTests`).
+- **`Sources/CheAppleMailMCP/AppleScript/ComposeScriptBuilder.swift`** — extracted nonisolated script builders for all four composing tools, making script output unit-testable without executing Mail.app.
+- **45 new unit tests** across `MarkdownRenderingTests` (14), `BodyFormatTests` (5), `MailControllerComposeTests` (20), `ServerSchemaTests` (8, including `parseBodyFormatArgument` type validation).
+- **4 integration tests** in `MailAppIntegrationTests` (gated by `MAIL_APP_INTEGRATION_TESTS=1`) that create real drafts in Mail.app, confirm `html content` write succeeds, and assert the inbox read-denial behavior — produces the spec's empirical ground truth.
 
 ### Changed
 - **`MailController.composeEmail` / `createDraft` / `replyEmail` / `forwardEmail` signatures** gain an optional trailing `format: BodyFormat = .plain` parameter. All existing call sites compile unchanged; default `.plain` preserves current AppleScript `content:` behavior.
+- **`CheAppleMailMCPServer.defineTools()`** widened from `private` to module-internal visibility to enable schema round-trip tests.
+- **Tool descriptions** for all four composing tools updated to advertise the `format` parameter and its semantics.
 
-### Technical Notes
-- The AppleScript `html content` property was empirically validated as writable on macOS 26.4.1 / Mail 16.0 during design — no clipboard hack or MailKit entitlement is required.
-- Full design rationale and alternatives in `openspec/changes/compose-tools-format-parameter/design.md`.
+### Fixed
+- **Multi-paragraph markdown now renders as distinct `<p>` tags** ([#15 verify finding](https://github.com/PsychQuant/che-apple-mail-mcp/issues/15#issuecomment-4263936896)). Previously, `"Para 1.\n\nPara 2."` merged into `<p>Para 1.Para 2.</p>` because `attributedStringToHTML` used only `BlockKind` enum equality to detect block boundaries; adjacent paragraphs share the same `BlockKind.paragraph` value. Fix: flush the buffer on any `PresentationIntent` change (identity-aware), not only on `BlockKind` change. Same root cause affected adjacent markdown list items (`- a\n- b` collapsed into single `<li>`); now correctly produces multiple `<li>` elements per list.
+- **Non-string `format` argument no longer silently falls back to plain** ([#15 verify finding](https://github.com/PsychQuant/che-apple-mail-mcp/issues/15#issuecomment-4263936896)). `format: 42` or `format: true` previously returned `.plain` because `Value.stringValue` returned nil for non-`.string` cases. New `parseBodyFormatArgument(Value?)` distinguishes `nil` / `.null` (→ `.plain`, backwards compat) from present-but-wrong-type (→ `MailError.invalidParameter`).
+
+### Non-Goals (deferred to follow-up issues)
+- **Signature preservation in non-plain modes** ([#18](https://github.com/PsychQuant/che-apple-mail-mcp/issues/18)): the system overwrites `html content` wholesale in markdown/html mode, losing Mail.app's auto-inserted signature. Apple's AppleScript denies read access that would let us preserve it. Full preservation requires a MailKit extension (architectural follow-up).
+- **Nested markdown lists** ([#16](https://github.com/PsychQuant/che-apple-mail-mcp/issues/16)): `- outer\n  - inner` collapses to a single list item. `assembleBlocks` needs stack-based list tracking.
+- **Markdown tables** ([#17](https://github.com/PsychQuant/che-apple-mail-mcp/issues/17)): silently concatenate row cells; currently not in the supported subset.
+- **Link URL sanitization** ([#19](https://github.com/PsychQuant/che-apple-mail-mcp/issues/19)): `[x](javascript:...)` passes through unchanged. Documented as "caller responsibility" but an opt-in sanitizer is a reasonable follow-up.
+- **Misc hardening** ([#20](https://github.com/PsychQuant/che-apple-mail-mcp/issues/20), [#21](https://github.com/PsychQuant/che-apple-mail-mcp/issues/21), [#22](https://github.com/PsychQuant/che-apple-mail-mcp/issues/22)): test quality (lenient `contains` assertions), tool description caveats about HTML read denial, attachment-line indentation parity, U+001E edge cases, bold-inside-link AttributedString limitation, fenced code block language tag.
+
+### Verification
+6-way review (`/idd-verify #15`): Claude Explore agent + Claude self-review 5 lens + Codex CLI (gpt-5.4 xhigh, independent model) + Devil's Advocate adversarial agent. 20+ findings merged & deduped; 2 P1s fixed in-scope, 12 follow-ups routed to issues #16-#22. Spec + design analyzer clean, validator ✓. 214 tests pass / 5 skipped / 0 failures.
+
+### Spec
+- New capability `message-composition` with 8 Requirements covering format parameter, plain/markdown/html semantics, reply/forward blockquote, signature out-of-scope, and AppleScript html-content read denial (empirically-grounded).
 
 ## [2.2.0] - 2026-04-14
 
