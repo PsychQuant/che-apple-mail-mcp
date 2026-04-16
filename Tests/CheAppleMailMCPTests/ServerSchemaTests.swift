@@ -108,4 +108,29 @@ final class ServerSchemaTests: XCTestCase {
             XCTAssertTrue(msg.contains("rtf"), "error message must include the offending value")
         }
     }
+
+    // MARK: - parseBodyFormatArgument (handles MCP Value type)
+
+    func testParseBodyFormatArgument_nilReturnsPlain() throws {
+        XCTAssertEqual(try parseBodyFormatArgument(nil), .plain)
+    }
+
+    func testParseBodyFormatArgument_stringValid() throws {
+        XCTAssertEqual(try parseBodyFormatArgument(.string("markdown")), .markdown)
+    }
+
+    func testParseBodyFormatArgument_integerRejected() {
+        XCTAssertThrowsError(try parseBodyFormatArgument(.int(42))) { error in
+            guard let mailErr = error as? MailError,
+                  case .invalidParameter(let msg) = mailErr else {
+                XCTFail("Expected MailError.invalidParameter, got \(error)")
+                return
+            }
+            XCTAssertTrue(msg.contains("must be a string"), "error message must call out type mismatch")
+        }
+    }
+
+    func testParseBodyFormatArgument_booleanRejected() {
+        XCTAssertThrowsError(try parseBodyFormatArgument(.bool(true)))
+    }
 }

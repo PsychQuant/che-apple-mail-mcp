@@ -76,6 +76,48 @@ final class MarkdownRenderingTests: XCTestCase {
         XCTAssertFalse(html.contains("**bold**"), "raw markdown delimiters must not survive")
     }
 
+    // MARK: - Multi-block rendering (P0 verify finding)
+
+    func testRenderBody_markdown_twoParagraphs_producesTwoPTags() throws {
+        let result = try renderBody("Para one.\n\nPara two.", format: .markdown)
+        let html = result.htmlContent ?? ""
+        // Must be two distinct <p> elements, not a merged one.
+        let pOpenCount = html.components(separatedBy: "<p>").count - 1
+        XCTAssertGreaterThanOrEqual(pOpenCount, 2, "Multi-paragraph markdown must produce at least two <p> tags, got HTML: \(html)")
+    }
+
+    func testRenderBody_markdown_paragraphThenList_producesUlAndTwoLis() throws {
+        let result = try renderBody("Intro paragraph.\n\n- first item\n- second item", format: .markdown)
+        let html = result.htmlContent ?? ""
+        XCTAssertTrue(html.contains("<ul>"), "missing <ul>, got: \(html)")
+        XCTAssertTrue(html.contains("</ul>"), "missing </ul>, got: \(html)")
+        let liCount = html.components(separatedBy: "<li>").count - 1
+        XCTAssertEqual(liCount, 2, "expected 2 <li> items, got HTML: \(html)")
+    }
+
+    func testRenderBody_markdown_orderedList_threeItems_produceThreeLi() throws {
+        let result = try renderBody("1. First\n2. Second\n3. Third", format: .markdown)
+        let html = result.htmlContent ?? ""
+        XCTAssertTrue(html.contains("<ol>"), "missing <ol>, got: \(html)")
+        let liCount = html.components(separatedBy: "<li>").count - 1
+        XCTAssertEqual(liCount, 3, "ordered list MUST produce 3 <li> items, got HTML: \(html)")
+    }
+
+    func testRenderBody_markdown_listThenParagraph_separatesCorrectly() throws {
+        let result = try renderBody("- item a\n- item b\n\nAfter list.", format: .markdown)
+        let html = result.htmlContent ?? ""
+        XCTAssertTrue(html.contains("</ul>"), "list must be closed before paragraph, got: \(html)")
+        XCTAssertTrue(html.contains("<p>After list.</p>"), "paragraph after list must render as own <p>, got: \(html)")
+    }
+
+    func testRenderBody_markdown_twoOrderedLists_separated_countItemsCorrectly() throws {
+        let result = try renderBody("1. a\n2. b\n\n---\n\n1. x\n2. y", format: .markdown)
+        let html = result.htmlContent ?? ""
+        // 2 + 2 = 4 items total across two lists
+        let liCount = html.components(separatedBy: "<li>").count - 1
+        XCTAssertEqual(liCount, 4, "two ordered lists = 4 items, got HTML: \(html)")
+    }
+
     // MARK: - htmlEscape: Reply/forward original content path
 
     func testHTMLEscape_escapesLTGTAmp() {

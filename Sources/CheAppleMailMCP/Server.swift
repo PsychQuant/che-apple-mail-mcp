@@ -885,7 +885,7 @@ class CheAppleMailMCPServer {
             let cc = arguments["cc"]?.arrayValue?.compactMap { $0.stringValue }
             let bcc = arguments["bcc"]?.arrayValue?.compactMap { $0.stringValue }
             let attachments = arguments["attachments"]?.arrayValue?.compactMap { $0.stringValue }
-            let format = try parseBodyFormat(arguments["format"]?.stringValue)
+            let format = try parseBodyFormatArgument(arguments["format"])
             return try await mailController.composeEmail(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format)
 
         case "reply_email":
@@ -896,7 +896,7 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("id, mailbox, account_name, and body are required")
             }
             let replyAll = arguments["reply_all"]?.boolValue ?? false
-            let format = try parseBodyFormat(arguments["format"]?.stringValue)
+            let format = try parseBodyFormatArgument(arguments["format"])
             return try await mailController.replyEmail(id: id, mailbox: mailbox, accountName: accountName, body: body, replyAll: replyAll, format: format)
 
         case "forward_email":
@@ -908,7 +908,7 @@ class CheAppleMailMCPServer {
             }
             let to = toArray.compactMap { $0.stringValue }
             let body = arguments["body"]?.stringValue
-            let format = try parseBodyFormat(arguments["format"]?.stringValue)
+            let format = try parseBodyFormatArgument(arguments["format"])
             return try await mailController.forwardEmail(id: id, mailbox: mailbox, accountName: accountName, to: to, body: body, format: format)
 
         // Draft Tools
@@ -927,7 +927,7 @@ class CheAppleMailMCPServer {
             }
             let to = toArray.compactMap { $0.stringValue }
             let attachments = arguments["attachments"]?.arrayValue?.compactMap { $0.stringValue }
-            let format = try parseBodyFormat(arguments["format"]?.stringValue)
+            let format = try parseBodyFormatArgument(arguments["format"])
             return try await mailController.createDraft(to: to, subject: subject, body: body, attachments: attachments, format: format)
 
         // Attachment Tools
@@ -1331,4 +1331,13 @@ func parseBodyFormat(_ raw: String?) throws -> BodyFormat {
         return format
     }
     throw MailError.invalidParameter("format must be one of: plain, markdown, html (got: \(raw ?? "nil"))")
+}
+
+func parseBodyFormatArgument(_ raw: Value?) throws -> BodyFormat {
+    guard let raw = raw else { return .plain }
+    if case .null = raw { return .plain }
+    guard let str = raw.stringValue else {
+        throw MailError.invalidParameter("format must be a string (plain, markdown, or html)")
+    }
+    return try parseBodyFormat(str)
 }

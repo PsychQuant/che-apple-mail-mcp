@@ -36,6 +36,14 @@
 - [x] 6.3 無效 `format` 值回傳 MCP error，訊息列出三個合法值（覆蓋 "Invalid format value is rejected" scenario）
 - [x] 6.4 `Tests/CheAppleMailMCPTests/ServerSchemaTests.swift` 新增或擴充：`tools/list` 回傳中，四個 composing tool 都宣告 format enum 為 `["plain", "markdown", "html"]` 且非 required（覆蓋 "Tool schema advertises format enum" scenario）
 
+## 7.4 Verify findings remediation（來自 /idd-verify #15）
+
+- [x] 7.4.1 P1 修復：`attributedStringToHTML` 改用 `PresentationIntent` identity-based flush，修復 adjacent same-kind block 合併 bug（multi-paragraph / adjacent list items）
+- [x] 7.4.2 新增 4 個多段 / list 測試：`testRenderBody_markdown_twoParagraphs_producesTwoPTags`、`testRenderBody_markdown_orderedList_threeItems_produceThreeLi`、`testRenderBody_markdown_paragraphThenList_producesUlAndTwoLis`、`testRenderBody_markdown_listThenParagraph_separatesCorrectly`、`testRenderBody_markdown_twoOrderedLists_separated_countItemsCorrectly`
+- [x] 7.4.3 新增 `parseBodyFormatArgument(Value?)`: 處理 MCP Value 型別，拒絕非 string（如 int/bool）並丟 MailError.invalidParameter，相容 `.null` 為 `.plain`。4 個 handler dispatch 改呼此函式
+- [x] 7.4.4 新增 3 個 Value 型別測試：nil → .plain、.string 正常、.int(42) / .bool(true) → 拒絕
+- [x] 7.4.5 Spec 新增 Requirement "Signature preservation is out of scope"（覆蓋 #15 Required Support #3 誠實定位為 partial — 簽名保留需要不同架構如 MailKit extension）
+
 ## 7.5 Integration testing（E2E against real Mail.app）
 
 - [x] 7.5.1 Spec 修正：新增 Requirement "AppleScript html content read is denied on messages" 與對應 scenario，反映 apply 階段發現的 AppleScript 權限限制（incoming msg -1728 / outgoing msg -1723）

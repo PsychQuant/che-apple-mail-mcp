@@ -55,22 +55,29 @@ private func attributedStringToHTML(_ attr: AttributedString) -> String {
     var paragraphs: [(text: String, kind: BlockKind)] = []
     var currentBuffer = ""
     var currentKind: BlockKind = .paragraph
+    var currentIntent: PresentationIntent? = nil
+    var currentIntentInitialized = false
 
     for run in attr.runs {
         let substring = attr[run.range]
         let text = String(substring.characters)
 
-        let kind = blockKind(of: run.presentationIntent)
+        let intent = run.presentationIntent
+        let kind = blockKind(of: intent)
 
-        // Block boundary: flush buffer when kind changes or run contains
-        // a hard paragraph break (AttributedString splits paragraphs into
-        // separate runs automatically, so a change in presentationIntent
-        // identity signals a new block).
-        if kind != currentKind && !currentBuffer.isEmpty {
+        // Flush on any PresentationIntent change so adjacent same-kind blocks
+        // (two paragraphs, two list items) get distinct output elements.
+        // PresentationIntent is Hashable; each block instance carries a
+        // unique identity per component, so equality here is a true
+        // block-boundary check.
+        let boundaryCrossed = currentIntentInitialized && intent != currentIntent
+        if boundaryCrossed && !currentBuffer.isEmpty {
             paragraphs.append((currentBuffer, currentKind))
             currentBuffer = ""
         }
         currentKind = kind
+        currentIntent = intent
+        currentIntentInitialized = true
 
         currentBuffer += inlineHTML(text: text, run: run)
     }
