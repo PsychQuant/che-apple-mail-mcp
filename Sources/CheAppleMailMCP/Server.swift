@@ -42,7 +42,7 @@ class CheAppleMailMCPServer {
 
     // MARK: - Tool Definitions
 
-    private static func defineTools() -> [Tool] {
+    static func defineTools() -> [Tool] {
         [
             // Account Tools
             Tool(
@@ -216,38 +216,40 @@ class CheAppleMailMCPServer {
             // Compose Tools
             Tool(
                 name: "compose_email",
-                description: "Compose and send a new email",
+                description: "Compose and send a new email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipient email addresses")]),
                         "subject": .object(["type": .string("string"), "description": .string("Email subject")]),
-                        "body": .object(["type": .string("string"), "description": .string("Email body content")]),
+                        "body": .object(["type": .string("string"), "description": .string("Email body content (interpreted according to 'format')")]),
                         "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("CC recipients (optional)")]),
                         "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("BCC recipients (optional)")]),
-                        "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")])
+                        "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")]),
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is; 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML.")])
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
             ),
             Tool(
                 name: "reply_email",
-                description: "Reply to an email",
+                description: "Reply to an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Non-plain modes wrap the original message in a blockquote.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "id": .object(["type": .string("string"), "description": .string("The email ID to reply to")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
-                        "body": .object(["type": .string("string"), "description": .string("Reply content")]),
-                        "reply_all": .object(["type": .string("boolean"), "description": .string("Reply to all recipients (default: false)")])
+                        "body": .object(["type": .string("string"), "description": .string("Reply content (interpreted according to 'format')")]),
+                        "reply_all": .object(["type": .string("boolean"), "description": .string("Reply to all recipients (default: false)")]),
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) preserves existing concatenation semantics; 'markdown'/'html' produce rich text and wrap the original in a blockquote.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("body")])
                 ])
             ),
             Tool(
                 name: "forward_email",
-                description: "Forward an email",
+                description: "Forward an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Non-plain modes wrap the original message in a blockquote.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -255,7 +257,8 @@ class CheAppleMailMCPServer {
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
                         "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipients to forward to")]),
-                        "body": .object(["type": .string("string"), "description": .string("Optional message to add")])
+                        "body": .object(["type": .string("string"), "description": .string("Optional message to add (interpreted according to 'format')")]),
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default), 'markdown', or 'html'.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("to")])
                 ])
@@ -275,14 +278,15 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "create_draft",
-                description: "Create a new draft email",
+                description: "Create a new draft email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipient email addresses")]),
                         "subject": .object(["type": .string("string"), "description": .string("Email subject")]),
-                        "body": .object(["type": .string("string"), "description": .string("Email body content")]),
-                        "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")])
+                        "body": .object(["type": .string("string"), "description": .string("Email body content (interpreted according to 'format')")]),
+                        "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")]),
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is; 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML.")])
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
@@ -881,7 +885,8 @@ class CheAppleMailMCPServer {
             let cc = arguments["cc"]?.arrayValue?.compactMap { $0.stringValue }
             let bcc = arguments["bcc"]?.arrayValue?.compactMap { $0.stringValue }
             let attachments = arguments["attachments"]?.arrayValue?.compactMap { $0.stringValue }
-            return try await mailController.composeEmail(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments)
+            let format = try parseBodyFormat(arguments["format"]?.stringValue)
+            return try await mailController.composeEmail(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format)
 
         case "reply_email":
             guard let id = arguments["id"]?.stringValue,
@@ -891,7 +896,8 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("id, mailbox, account_name, and body are required")
             }
             let replyAll = arguments["reply_all"]?.boolValue ?? false
-            return try await mailController.replyEmail(id: id, mailbox: mailbox, accountName: accountName, body: body, replyAll: replyAll)
+            let format = try parseBodyFormat(arguments["format"]?.stringValue)
+            return try await mailController.replyEmail(id: id, mailbox: mailbox, accountName: accountName, body: body, replyAll: replyAll, format: format)
 
         case "forward_email":
             guard let id = arguments["id"]?.stringValue,
@@ -902,7 +908,8 @@ class CheAppleMailMCPServer {
             }
             let to = toArray.compactMap { $0.stringValue }
             let body = arguments["body"]?.stringValue
-            return try await mailController.forwardEmail(id: id, mailbox: mailbox, accountName: accountName, to: to, body: body)
+            let format = try parseBodyFormat(arguments["format"]?.stringValue)
+            return try await mailController.forwardEmail(id: id, mailbox: mailbox, accountName: accountName, to: to, body: body, format: format)
 
         // Draft Tools
         case "list_drafts":
@@ -920,7 +927,8 @@ class CheAppleMailMCPServer {
             }
             let to = toArray.compactMap { $0.stringValue }
             let attachments = arguments["attachments"]?.arrayValue?.compactMap { $0.stringValue }
-            return try await mailController.createDraft(to: to, subject: subject, body: body, attachments: attachments)
+            let format = try parseBodyFormat(arguments["format"]?.stringValue)
+            return try await mailController.createDraft(to: to, subject: subject, body: body, attachments: attachments, format: format)
 
         // Attachment Tools
         case "list_attachments":
@@ -1316,4 +1324,11 @@ extension Value {
         if case .object(let obj) = self { return obj }
         return nil
     }
+}
+
+func parseBodyFormat(_ raw: String?) throws -> BodyFormat {
+    if let format = BodyFormat(rawValueOrNil: raw) {
+        return format
+    }
+    throw MailError.invalidParameter("format must be one of: plain, markdown, html (got: \(raw ?? "nil"))")
 }

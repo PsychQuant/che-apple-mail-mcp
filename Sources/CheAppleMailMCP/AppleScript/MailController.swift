@@ -652,98 +652,65 @@ actor MailController {
     }
 
     /// Compose and send a new email
-    func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil) throws -> String {
+    func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain) throws -> String {
         if let attachments = attachments { try validateFilePaths(attachments) }
-
-        var script = """
-        tell application "Mail"
-            set newMessage to make new outgoing message with properties {subject:"\(escapeForAppleScript(subject))", content:"\(escapeForAppleScript(body))", visible:true}
-            tell newMessage
-        """
-
-        for recipient in to {
-            script += "\n" + """
-                make new to recipient at end of to recipients with properties {address:"\(escapeForAppleScript(recipient))"}
-            """
-        }
-
-        if let cc = cc {
-            for recipient in cc {
-                script += "\n" + """
-                    make new cc recipient at end of cc recipients with properties {address:"\(escapeForAppleScript(recipient))"}
-                """
-            }
-        }
-
-        if let bcc = bcc {
-            for recipient in bcc {
-                script += "\n" + """
-                    make new bcc recipient at end of bcc recipients with properties {address:"\(escapeForAppleScript(recipient))"}
-                """
-            }
-        }
-
-        if let attachments = attachments {
-            script += "\n" + attachmentScript(for: attachments)
-        }
-
-        script += "\n" + """
-            end tell
-            send newMessage
-            return "Email sent successfully"
-        end tell
-        """
-
+        let script = try buildComposeEmailScript(
+            to: to,
+            subject: subject,
+            body: body,
+            cc: cc,
+            bcc: bcc,
+            attachments: attachments,
+            format: format
+        )
         return try runScript(script)
     }
 
     /// Reply to an email
-    func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false) throws -> String {
-        let replyType = replyAll ? "reply all" : "reply"
+    func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, format: BodyFormat = .plain) throws -> String {
         let ref = msgRef(id, mailbox: mailbox, account: accountName)
-        let script = """
-        tell application "Mail"
-            set originalMsg to \(ref)
-            set replyMsg to \(replyType) originalMsg with opening window
-            tell replyMsg
-                set content to "\(escapeForAppleScript(body))" & return & return & content
-            end tell
-            send replyMsg
-            return "Reply sent successfully"
-        end tell
-        """
+
+        var originalHTML: String? = nil
+        var originalPlain = ""
+        if format != .plain {
+            let fetched = try runScript(buildFetchOriginalContentScript(messageRef: ref))
+            let parsed = parseFetchedOriginalContent(fetched)
+            originalHTML = parsed.html
+            originalPlain = parsed.plain
+        }
+
+        let script = try buildReplyEmailScript(
+            messageRef: ref,
+            userBody: body,
+            userFormat: format,
+            replyAll: replyAll,
+            originalHTML: originalHTML,
+            originalPlain: originalPlain
+        )
         return try runScript(script)
     }
 
     /// Forward an email
-    func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil) throws -> String {
+    func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil, format: BodyFormat = .plain) throws -> String {
         let ref = msgRef(id, mailbox: mailbox, account: accountName)
-        var script = """
-        tell application "Mail"
-            set originalMsg to \(ref)
-            set fwdMsg to forward originalMsg with opening window
-            tell fwdMsg
-        """
 
-        for recipient in to {
-            script += "\n" + """
-                make new to recipient at end of to recipients with properties {address:"\(escapeForAppleScript(recipient))"}
-            """
+        var originalHTML: String? = nil
+        var originalPlain: String? = nil
+        if format != .plain, body != nil {
+            let fetched = try runScript(buildFetchOriginalContentScript(messageRef: ref))
+            let parsed = parseFetchedOriginalContent(fetched)
+            originalHTML = parsed.html
+            originalPlain = parsed.plain
         }
 
-        if let body = body {
-            script += "\n" + """
-                set content to "\(escapeForAppleScript(body))" & return & return & content
-            """
-        }
-
-        script += "\n" + """
-            end tell
-            send fwdMsg
-            return "Email forwarded successfully"
-        end tell
-        """
-
+        let script = try buildForwardEmailScript(
+            messageRef: ref,
+            to: to,
+            userBody: body,
+            userFormat: format,
+            originalHTML: originalHTML,
+            originalPlain: originalPlain
+        )
         return try runScript(script)
     }
 
@@ -765,32 +732,15 @@ actor MailController {
     }
 
     /// Create a draft
-    func createDraft(to: [String], subject: String, body: String, attachments: [String]? = nil, accountName: String? = nil) throws -> String {
+    func createDraft(to: [String], subject: String, body: String, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain) throws -> String {
         if let attachments = attachments { try validateFilePaths(attachments) }
-
-        var script = """
-        tell application "Mail"
-            set newMessage to make new outgoing message with properties {subject:"\(escapeForAppleScript(subject))", content:"\(escapeForAppleScript(body))", visible:true}
-            tell newMessage
-        """
-
-        for recipient in to {
-            script += "\n" + """
-                make new to recipient at end of to recipients with properties {address:"\(escapeForAppleScript(recipient))"}
-            """
-        }
-
-        if let attachments = attachments {
-            script += "\n" + attachmentScript(for: attachments)
-        }
-
-        script += "\n" + """
-            end tell
-            save newMessage
-            return "Draft created successfully"
-        end tell
-        """
-
+        let script = try buildCreateDraftScript(
+            to: to,
+            subject: subject,
+            body: body,
+            attachments: attachments,
+            format: format
+        )
         return try runScript(script)
     }
 

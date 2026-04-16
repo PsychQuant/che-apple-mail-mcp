@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`format` parameter on four composing tools** (`compose_email`, `create_draft`, `reply_email`, `forward_email`) — resolves [#15](https://github.com/PsychQuant/che-apple-mail-mcp/issues/15) (P0) and [#14](https://github.com/PsychQuant/che-apple-mail-mcp/issues/14). Accepts `"plain"` (default, fully backwards-compatible), `"markdown"`, or `"html"`. `"markdown"` renders bold / italic / inline code / links / lists via Swift-native `AttributedString(markdown:)` with a custom HTML emitter (direct run walk, not `NSAttributedString → .html`, which drops inline presentation intents). `"html"` passes body verbatim into Mail.app's AppleScript `html content` property.
+- **Reply / forward blockquote merge semantics**: in `"markdown"` / `"html"` mode, the user body is composed as HTML and the original message is wrapped in `<blockquote>…</blockquote>` beneath an `<hr>` separator. When the original has `html content`, that is preserved verbatim inside the blockquote; when only plain text is available, it is HTML-escaped first.
+- **New `message-composition` capability spec** at `openspec/specs/message-composition/spec.md` — first formal spec covering all four composing tools' input schemas, format semantics, and reply/forward merge rules.
+- **`Sources/CheAppleMailMCP/MarkdownRendering.swift`** — new helper module exposing `BodyFormat`, `ComposedBody`, `renderBody(_:format:)`, and `htmlEscape(_:)`. Zero new Swift Package dependencies.
+- **`Sources/CheAppleMailMCP/AppleScript/ComposeScriptBuilder.swift`** — extracted nonisolated script builders for all four composing tools, making script output unit-testable without executing Mail.app (37 new tests across `MarkdownRenderingTests`, `BodyFormatTests`, `MailControllerComposeTests`, `ServerSchemaTests`).
+
+### Changed
+- **`MailController.composeEmail` / `createDraft` / `replyEmail` / `forwardEmail` signatures** gain an optional trailing `format: BodyFormat = .plain` parameter. All existing call sites compile unchanged; default `.plain` preserves current AppleScript `content:` behavior.
+
+### Technical Notes
+- The AppleScript `html content` property was empirically validated as writable on macOS 26.4.1 / Mail 16.0 during design — no clipboard hack or MailKit entitlement is required.
+- Full design rationale and alternatives in `openspec/changes/compose-tools-format-parameter/design.md`.
+
 ## [2.2.0] - 2026-04-14
 
 ### Performance
