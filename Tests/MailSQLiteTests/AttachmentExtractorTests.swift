@@ -383,6 +383,64 @@ final class AttachmentExtractorTests: XCTestCase {
         )
     }
 
+    /// Ensure `attachmentNames` does NOT decode part bodies (Codex P1 verify
+    /// finding for #24). Synthesizes a multipart/mixed message with an
+    /// **invalid** base64 attachment payload — `parseAllParts` would crash
+    /// or produce empty `decodedData`, but `enumerateAttachmentNames` should
+    /// extract the filename without ever invoking the transfer decoder.
+    func testAttachmentNames_doesNotDecodeBody_invalidBase64StillReturnsName() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262653
+        let boundary = "myboundary123"
+        let invalidBase64 = "!!!@@@###$$$"  // never valid base64 — would fail decode
+
+        // Build RFC822 manually with explicit \r\n to avoid triple-quoted
+        // ambiguity around line endings.
+        let rfc822 =
+            "From: alice@example.com\r\n"
+            + "To: bob@example.com\r\n"
+            + "Subject: bad-base64\r\n"
+            + "MIME-Version: 1.0\r\n"
+            + "Content-Type: multipart/mixed; boundary=\(boundary)\r\n"
+            + "\r\n"
+            + "--\(boundary)\r\n"
+            + "Content-Type: text/plain; charset=utf-8\r\n"
+            + "\r\n"
+            + "body text\r\n"
+            + "--\(boundary)\r\n"
+            + "Content-Type: application/octet-stream; name=\"trap.bin\"\r\n"
+            + "Content-Disposition: attachment; filename=\"trap.bin\"\r\n"
+            + "Content-Transfer-Encoding: base64\r\n"
+            + "\r\n"
+            + "\(invalidBase64)\r\n"
+            + "--\(boundary)--\r\n"
+        let body = Data(rfc822.utf8)
+        var emlx = Data("\(body.count)\n".utf8)
+        emlx.append(body)
+
+        let mailV10 = root.appendingPathComponent("Library/Mail/V10", isDirectory: true)
+        let messagesDir = mailV10
+            .appendingPathComponent("ABCE3A85-06BE-43BC-9B84-2CA6F325612F")
+            .appendingPathComponent("INBOX.mbox")
+            .appendingPathComponent("5FCC6F13-2CE3-48B1-907D-686244C0229A")
+            .appendingPathComponent("Data/2/6/2/Messages", isDirectory: true)
+        try FileManager.default.createDirectory(at: messagesDir, withIntermediateDirectories: true)
+        try emlx.write(to: messagesDir.appendingPathComponent("\(rowId).emlx"))
+        EnvelopeIndexReader.mailStoragePathOverride = mailV10.path
+
+        let mailboxURL = "ews://ABCE3A85-06BE-43BC-9B84-2CA6F325612F/INBOX"
+
+        // Should still return "trap.bin" because we walk headers only — no
+        // base64 decode is attempted on the corrupt body.
+        let names = try EmlxParser.attachmentNames(rowId: rowId, mailboxURL: mailboxURL)
+        XCTAssertTrue(
+            names.contains("trap.bin"),
+            "names-only walker must extract filename even when body is undecodable; got \(names)"
+        )
+    }
+
     func testAttachmentNames_missingEmlxThrowsEmlxNotFound() throws {
         let root = tempRoot()
         defer { try? FileManager.default.removeItem(at: root) }

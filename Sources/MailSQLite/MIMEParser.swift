@@ -80,6 +80,94 @@ public enum MIMEParser {
         return parts
     }
 
+    /// Enumerate attachment filenames in a body without decoding any
+    /// transfer-encoded data. Returns the union of `Content-Disposition:
+    /// filename` (RFC 2231/5987 decoded) and the legacy `Content-Type: name`
+    /// parameter for every leaf part.
+    ///
+    /// Faster + lower-memory alternative to `parseAllParts` when the caller
+    /// only needs the set of names (e.g. for cross-validating SQLite cached
+    /// attachment metadata against the `.emlx` body — see issue #24).
+    /// Critically, this walker **does not** call `decodeTransferEncoding`,
+    /// so a 50-MB base64-encoded attachment is not allocated into memory
+    /// just to read its `filename` parameter.
+    ///
+    /// Honors the same `maxMultipartDepth=8` guard as `parseAllParts`. Returns
+    /// an empty set for malformed multipart (missing boundary / depth limit
+    /// exceeded) — semantics intentionally match `parseAllParts`.
+    ///
+    /// - Parameters:
+    ///   - bodyData: The raw body bytes (after header/body split).
+    ///   - headers: Parsed headers from `RFC822Parser` (top-level message).
+    /// - Returns: Set of attachment names (deduplicated).
+    public static func enumerateAttachmentNames(
+        _ bodyData: Data,
+        headers: [String: String]
+    ) -> Set<String> {
+        let contentType = headers["content-type"] ?? "text/plain"
+
+        var names = Set<String>()
+        collectAttachmentNames(
+            body: bodyData,
+            partHeaders: headers,
+            contentType: contentType,
+            depth: 0,
+            out: &names
+        )
+        return names
+    }
+
+    /// Recursive walker mirroring `collectParts`, but skipping the
+    /// `decodeTransferEncoding` call on leaf parts. See
+    /// `enumerateAttachmentNames` docstring for rationale.
+    private static func collectAttachmentNames(
+        body: Data,
+        partHeaders: [String: String],
+        contentType: String,
+        depth: Int,
+        out: inout Set<String>
+    ) {
+        guard depth < maxMultipartDepth else { return }
+
+        let (mimeType, params) = parseContentType(contentType)
+
+        if mimeType.hasPrefix("multipart/") {
+            guard let boundary = params["boundary"], !boundary.isEmpty else {
+                return
+            }
+            splitMultipart(body, boundary: boundary).forEach { childData in
+                guard let split = RFC822Parser.headerBodySplitOffset(in: childData) else {
+                    return
+                }
+                let childHeaders = RFC822Parser.parseHeaders(from: childData)
+                let childBody = Data(childData[split...])
+                let childCT = childHeaders["content-type"] ?? "text/plain"
+                collectAttachmentNames(
+                    body: childBody,
+                    partHeaders: childHeaders,
+                    contentType: childCT,
+                    depth: depth + 1,
+                    out: &out
+                )
+            }
+            return
+        }
+
+        // Leaf part — extract names without decoding body.
+        let (_, dispositionParams) = parseContentDisposition(
+            partHeaders["content-disposition"]
+        )
+        if let filename = resolveFilename(
+            dispositionParams: dispositionParams,
+            contentTypeParams: params
+        ) {
+            out.insert(filename)
+        }
+        if let name = params["name"] {
+            out.insert(name)
+        }
+    }
+
     // MARK: - parseAllParts internals
 
     /// Recursive walker. Either adds a leaf `MIMEPart` to `out`, or

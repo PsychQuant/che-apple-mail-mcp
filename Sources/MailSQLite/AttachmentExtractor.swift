@@ -131,8 +131,14 @@ extension EmlxParser {
     /// "attachments" that `saveAttachment` cannot actually extract — see
     /// issue #24.
     ///
-    /// Mirrors steps 1–4 of `saveAttachment` (resolve / load / split /
-    /// walk parts) but stops before the first-match step.
+    /// Internally walks the MIME tree via
+    /// `MIMEParser.enumerateAttachmentNames` — a names-only traversal that
+    /// **does not** decode transfer-encoded body bytes. This makes the
+    /// memory + CPU cost O(message structure size), independent of total
+    /// attachment payload size, which is critical when a `list_attachments`
+    /// caller doesn't actually need the binary (see verify finding for #24:
+    /// `parseAllParts` would eager-decode every base64 attachment just to
+    /// read its filename).
     ///
     /// - Throws:
     ///   - `MailSQLiteError.emlxNotFound` if the `.emlx` path cannot be
@@ -159,17 +165,6 @@ extension EmlxParser {
             )
         }
         let bodyData = Data(messageData[bodyOffset...])
-        let parts = MIMEParser.parseAllParts(bodyData, headers: headers)
-
-        var names = Set<String>()
-        for part in parts {
-            if let filename = part.filename {
-                names.insert(filename)
-            }
-            if let name = part.contentTypeParams["name"] {
-                names.insert(name)
-            }
-        }
-        return names
+        return MIMEParser.enumerateAttachmentNames(bodyData, headers: headers)
     }
 }
