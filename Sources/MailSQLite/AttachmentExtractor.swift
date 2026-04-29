@@ -119,4 +119,57 @@ extension EmlxParser {
         }
         return false
     }
+
+    /// Return the union of attachment names actually present in the
+    /// `.emlx` envelope — both `Content-Disposition: filename` (RFC
+    /// 2231/5987 decoded) and the legacy `Content-Type: name` parameter.
+    ///
+    /// Useful for cross-validating SQLite's cached `attachments` table
+    /// against the on-disk message body. SQLite metadata can drift from
+    /// reality (Sent message after IMAP binary strip, lazy-loaded
+    /// IMAP message that never received its body) and surface
+    /// "attachments" that `saveAttachment` cannot actually extract — see
+    /// issue #24.
+    ///
+    /// Mirrors steps 1–4 of `saveAttachment` (resolve / load / split /
+    /// walk parts) but stops before the first-match step.
+    ///
+    /// - Throws:
+    ///   - `MailSQLiteError.emlxNotFound` if the `.emlx` path cannot be
+    ///     resolved
+    ///   - `MailSQLiteError.emlxParseFailed` if the envelope cannot be
+    ///     parsed
+    ///   - Foundation file-IO errors on read failure
+    public static func attachmentNames(
+        rowId: Int,
+        mailboxURL: String
+    ) throws -> Set<String> {
+        guard let path = resolveEmlxPath(rowId: rowId, mailboxURL: mailboxURL) else {
+            throw MailSQLiteError.emlxNotFound(
+                messageId: rowId,
+                path: "Could not resolve .emlx path for message \(rowId)"
+            )
+        }
+        let fileData = try Data(contentsOf: URL(fileURLWithPath: path))
+        let messageData = try EmlxFormat.extractMessageData(from: fileData)
+        let headers = RFC822Parser.parseHeaders(from: messageData)
+        guard let bodyOffset = RFC822Parser.headerBodySplitOffset(in: messageData) else {
+            throw MailSQLiteError.emlxParseFailed(
+                "No header/body split found in message \(rowId)"
+            )
+        }
+        let bodyData = Data(messageData[bodyOffset...])
+        let parts = MIMEParser.parseAllParts(bodyData, headers: headers)
+
+        var names = Set<String>()
+        for part in parts {
+            if let filename = part.filename {
+                names.insert(filename)
+            }
+            if let name = part.contentTypeParams["name"] {
+                names.insert(name)
+            }
+        }
+        return names
+    }
 }

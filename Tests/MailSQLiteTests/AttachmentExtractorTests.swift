@@ -298,4 +298,107 @@ final class AttachmentExtractorTests: XCTestCase {
         let expected = try Data(contentsOf: fixtureURLNamed("multipart-attachment-ascii.expected.bin"))
         XCTAssertEqual(written, expected)
     }
+
+    // MARK: - Scenario (#24): attachmentNames cross-validation helper
+
+    /// Synthesize a plain-text .emlx (no MIME multipart, no attachments)
+    /// at the path `EmlxParser.resolveEmlxPath` will look up. Returns the
+    /// `mailboxURL` to pass to subsequent calls.
+    ///
+    /// Used by #24 negative cases where SQLite metadata claims attachments
+    /// exist but the on-disk envelope has none.
+    private func installSyntheticPlainTextEmlx(
+        rowId: Int,
+        accountUUID: String = "ABCE3A85-06BE-43BC-9B84-2CA6F325612F",
+        mailboxLeaf: String = "INBOX",
+        storeUUID: String = "5FCC6F13-2CE3-48B1-907D-686244C0229A",
+        in root: URL
+    ) throws -> String {
+        let rfc822 = """
+        From: alice@example.com\r
+        To: bob@example.com\r
+        Subject: plain note\r
+        Content-Type: text/plain; charset=utf-8\r
+        \r
+        Hi, this is a plain text email with no attachments.\r
+        """
+        let body = Data(rfc822.utf8)
+        var emlx = Data("\(body.count)\n".utf8)
+        emlx.append(body)
+
+        let mailV10 = root.appendingPathComponent("Library/Mail/V10", isDirectory: true)
+        let messagesDir = mailV10
+            .appendingPathComponent(accountUUID)
+            .appendingPathComponent("\(mailboxLeaf).mbox")
+            .appendingPathComponent(storeUUID)
+            .appendingPathComponent("Data/2/6/2/Messages", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: messagesDir,
+            withIntermediateDirectories: true
+        )
+        try emlx.write(to: messagesDir.appendingPathComponent("\(rowId).emlx"))
+
+        EnvelopeIndexReader.mailStoragePathOverride = mailV10.path
+
+        return "ews://\(accountUUID)/\(mailboxLeaf)"
+    }
+
+    func testAttachmentNames_existingFixtureWithAttachment_returnsFilename() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262653
+        let mailboxURL = try installFixture(
+            from: "multipart-attachment-ascii.emlx",
+            rowId: rowId,
+            in: root
+        )
+
+        let names = try EmlxParser.attachmentNames(
+            rowId: rowId,
+            mailboxURL: mailboxURL
+        )
+
+        XCTAssertTrue(
+            names.contains("report.pdf"),
+            "expected 'report.pdf' in returned set, got \(names)"
+        )
+    }
+
+    func testAttachmentNames_plainTextEmlxNoAttachment_returnsEmptySet() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262653
+        let mailboxURL = try installSyntheticPlainTextEmlx(rowId: rowId, in: root)
+
+        let names = try EmlxParser.attachmentNames(
+            rowId: rowId,
+            mailboxURL: mailboxURL
+        )
+
+        XCTAssertTrue(
+            names.isEmpty,
+            "plain-text .emlx must yield empty attachment-name set; got \(names)"
+        )
+    }
+
+    func testAttachmentNames_missingEmlxThrowsEmlxNotFound() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let mailV10 = root.appendingPathComponent("Library/Mail/V10")
+        try FileManager.default.createDirectory(at: mailV10, withIntermediateDirectories: true)
+        EnvelopeIndexReader.mailStoragePathOverride = mailV10.path
+
+        XCTAssertThrowsError(try EmlxParser.attachmentNames(
+            rowId: 262653,
+            mailboxURL: "ews://ABCE3A85-06BE-43BC-9B84-2CA6F325612F/INBOX"
+        )) { error in
+            guard case MailSQLiteError.emlxNotFound = error else {
+                XCTFail("expected emlxNotFound, got \(error)")
+                return
+            }
+        }
+    }
 }

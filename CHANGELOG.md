@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`list_attachments` now cross-validates SQLite metadata against on-disk `.emlx` contents** ([#24](https://github.com/PsychQuant/che-apple-mail-mcp/issues/24)). Previously, the SQLite `attachments` table could surface stale entries — Mail.app keeps the row even after the IMAP binary is stripped on Sent / lazy-loaded — and `save_attachment` would then fail with `Attachment not found`. The handler now calls a new `EmlxParser.attachmentNames(rowId:mailboxURL:)` helper that walks the `.emlx` MIME tree, and filters SQLite results to names actually present. On `.emlx` resolve / parse failure, falls back to raw SQLite metadata (≥ pre-fix behavior) and logs the cause to stderr. Three regression tests cover: existing fixture with attachment, synthetic plain-text `.emlx` with empty result, missing `.emlx` throws `emlxNotFound`.
+
+### Added
+- **`EmlxParser.attachmentNames(rowId:mailboxURL:) -> Set<String>`** — new helper that returns the union of `Content-Disposition: filename` (RFC 2231/5987 decoded) and `Content-Type: name` parameter values across all MIME parts. Mirrors steps 1–4 of `saveAttachment` but stops before the first-match step. Used by the `list_attachments` cross-validation path; also available to future callers that need to enumerate attachment names without writing any to disk.
+
 ## [2.3.0] - 2026-04-17
 
 ### Added

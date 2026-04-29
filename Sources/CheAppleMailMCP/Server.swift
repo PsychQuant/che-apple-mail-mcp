@@ -938,8 +938,37 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("id, mailbox, and account_name are required")
             }
             if let reader = indexReader, let rowId = Int(id) {
-                let attachments = try reader.listAttachments(messageId: rowId)
-                return formatJSON(attachments)
+                let sqliteAttachments = try reader.listAttachments(messageId: rowId)
+                // Cross-validate SQLite metadata against actual .emlx contents
+                // (issue #24): SQLite caches attachment rows even after Mail.app
+                // strips the binary on Sent / IMAP lazy-load, leaving stale
+                // entries that save_attachment then fails to extract. Filter
+                // SQLite results to names actually present in the .emlx body.
+                if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
+                    do {
+                        let realNames = try EmlxParser.attachmentNames(
+                            rowId: rowId,
+                            mailboxURL: mailboxUrl
+                        )
+                        let validated = sqliteAttachments.filter { entry in
+                            guard let name = entry["name"] as? String else { return false }
+                            return realNames.contains(name)
+                        }
+                        return formatJSON(validated)
+                    } catch {
+                        // .emlx unreadable / parse failed — log and fall back
+                        // to raw SQLite metadata (matches save_attachment's
+                        // fallback pattern). Caller may still hit the same
+                        // not-found error on save, but we don't degrade the
+                        // pre-#24 behavior for callers whose .emlx layer is
+                        // genuinely broken.
+                        let message = "list_attachments emlx validation failed for "
+                            + "rowId=\(rowId): \(error.localizedDescription); "
+                            + "returning unvalidated SQLite metadata\n"
+                        FileHandle.standardError.write(Data(message.utf8))
+                    }
+                }
+                return formatJSON(sqliteAttachments)
             }
             let attachments = try await mailController.listAttachments(id: id, mailbox: mailbox, accountName: accountName)
             return formatJSON(attachments)
