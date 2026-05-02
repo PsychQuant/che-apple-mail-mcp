@@ -698,6 +698,81 @@ actor MailController {
         return result
     }
 
+    /// Issue #38: harden attachment path validation against prompt-injection
+    /// exfil vectors. Three layers of defense applied in order:
+    ///   1. Existence (preserved from validateFilePaths)
+    ///   2. Symlink resolution (defeats `~/Documents/decoy → ~/.ssh` bypass)
+    ///   3. Deny-list of sensitive directories (default-on, hardcoded)
+    ///   4. Optional allow-list via `MAIL_MCP_ATTACHMENT_ROOTS` env var
+    ///      (colon-separated, `~` expanded). If unset, only deny-list applies.
+    ///
+    /// Without these checks, a malicious / hallucinated MCP caller could pass
+    /// `attachments=["/Users/X/.ssh/id_ed25519"]` and have it attached to a
+    /// silent draft (combined with `save_as_draft=true` post-#33).
+    ///
+    /// `internal` (not `private`) so `@testable import` can exercise the helper
+    /// in unit tests without going through Mail.app.
+    func validateAttachmentPaths(_ paths: [String]) throws {
+        guard !paths.isEmpty else { return }
+
+        let home = NSHomeDirectory()
+        let denyList: [String] = [
+            "\(home)/.ssh",
+            "\(home)/Library/Keychains",
+            "\(home)/Library/Application Support/com.apple.TCC",
+            "\(home)/Library/Cookies",
+            "\(home)/Library/Application Support/Google/Chrome",
+            "\(home)/Library/Application Support/Safari",
+            "/etc",
+            "/var",
+            "/private",
+        ]
+
+        // Allow-list: env var split on ":" (Unix convention); leading "~"
+        // expanded to NSHomeDirectory(). nil if env var unset → no allow-list
+        // restriction (only deny-list applies).
+        let allowList: [String]? = ProcessInfo.processInfo
+            .environment["MAIL_MCP_ATTACHMENT_ROOTS"]
+            .map { raw in
+                raw.split(separator: ":", omittingEmptySubsequences: true)
+                    .map { String($0) }
+                    .map { p in p.hasPrefix("~") ? "\(home)\(p.dropFirst())" : p }
+            }
+
+        var failures: [String] = []
+
+        for path in paths {
+            guard FileManager.default.fileExists(atPath: path) else {
+                failures.append("'\(path)' not found")
+                continue
+            }
+
+            let resolved = URL(fileURLWithPath: path)
+                .standardized
+                .resolvingSymlinksInPath()
+                .path
+
+            if let denied = denyList.first(where: { resolved == $0 || resolved.hasPrefix("\($0)/") }) {
+                failures.append("'\(path)' rejected: resolves under sensitive directory '\(denied)'")
+                continue
+            }
+
+            if let allowList = allowList {
+                let isAllowed = allowList.contains { allowed in
+                    resolved == allowed || resolved.hasPrefix("\(allowed)/")
+                }
+                if !isAllowed {
+                    failures.append("'\(path)' rejected: outside MAIL_MCP_ATTACHMENT_ROOTS allow-list")
+                    continue
+                }
+            }
+        }
+
+        guard failures.isEmpty else {
+            throw MailError.invalidParameter("Attachment path validation failed: \(failures.joined(separator: "; "))")
+        }
+    }
+
     /// Generate AppleScript lines to attach files to an outgoing message
     private func attachmentScript(for paths: [String]) -> String {
         paths.map { path in
@@ -709,7 +784,7 @@ actor MailController {
 
     /// Compose and send a new email
     func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain) throws -> String {
-        if let attachments = attachments { try validateFilePaths(attachments) }
+        if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41: validate every recipient field (to / cc / bcc) at the boundary.
         try validateEmailAddresses(to, field: "to")
         if let cc = cc { try validateEmailAddresses(cc, field: "cc") }
@@ -728,7 +803,7 @@ actor MailController {
 
     /// Reply to an email. Optionally add extra CC, attach files, and/or save as draft instead of sending.
     func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]? = nil, saveAsDraft: Bool = false, format: BodyFormat = .plain) throws -> String {
-        if let attachments = attachments { try validateFilePaths(attachments) }
+        if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41 + #34: validate cc_additional then dedup case-insensitively
         // (within the user-supplied list; cross-list dedup vs reply_all-derived
         // CCs requires fetching original CCs — out of scope, see #34).
@@ -837,7 +912,7 @@ actor MailController {
 
     /// Create a draft
     func createDraft(to: [String], subject: String, body: String, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain) throws -> String {
-        if let attachments = attachments { try validateFilePaths(attachments) }
+        if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41: validate draft recipients at the boundary.
         try validateEmailAddresses(to, field: "to")
         let script = try buildCreateDraftScript(
