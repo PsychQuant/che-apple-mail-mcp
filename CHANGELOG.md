@@ -7,12 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-05-02
+
+### Fixed
+- **`reply_email` `save_as_draft=true` no longer pops Mail.app reply window** ([#33 verify finding A](https://github.com/PsychQuant/che-apple-mail-mcp/issues/33)). Previously the AppleScript used `with opening window` unconditionally, which pops the GUI even when the caller asked for a quiet draft. User edits the popup, closes-without-save → the version in Drafts is the pre-edit snapshot, silently stale. Fix: branch on `saveAsDraft` and use `without opening window` when saving as draft; keep `with opening window` for the send path (backward compat).
+- **`reply_email` now validates attachment paths up-front** ([#33 verify finding B](https://github.com/PsychQuant/che-apple-mail-mcp/issues/33), Codex finding). `composeEmail` (line 656) and `createDraft` (line 739) already call `validateFilePaths(attachments)`. `replyEmail` was missing the same call, so an invalid path would error inside the `tell replyMsg` block AFTER `set content` and CC fragments had executed — leaving the user with a polluted half-open reply window and no draft. Fix: mirror the call at the top of `replyEmail`.
+
 ## [2.4.0] - 2026-05-02
 
 ### Added
 - **`reply_email` reply-as-draft mode** with `cc_additional`, `attachments`, `save_as_draft` optional params ([#33](https://github.com/PsychQuant/che-apple-mail-mcp/issues/33)). Closes the gap where `reply_email` could preserve a thread but not save as draft / add CC / add attachments, while `create_draft` could save + attach but not stay in the original thread. Workflow this unblocks: reply to an existing thread + add extra CC + attach files + save as draft for human review before sending. AppleScript implementation reuses existing `recipientFragment` and `attachmentFragment` helpers; conditional `save replyMsg` vs `send replyMsg` based on `save_as_draft`. Both plain and html branches updated symmetrically. Backward compatible — defaults preserve existing send-immediate behavior. 6 new tests (1 schema test + 5 compose tests covering cc, attachments, save vs send, backward compat, html branch parity).
-
-## [Unreleased pre-2.4.0]
 
 ### Fixed
 - **`list_attachments` now cross-validates SQLite metadata against on-disk `.emlx` contents** ([#24](https://github.com/PsychQuant/che-apple-mail-mcp/issues/24)). Previously, the SQLite `attachments` table could surface stale entries — Mail.app keeps the row even after the IMAP binary is stripped on Sent / lazy-loaded — and `save_attachment` would then fail with `Attachment not found`. The handler now calls a new `EmlxParser.attachmentNames(rowId:mailboxURL:)` helper that walks the `.emlx` MIME tree, and filters SQLite results to names actually present. On `.emlx` resolve / parse failure, falls back to raw SQLite metadata (≥ pre-fix behavior) and logs the cause to stderr.
@@ -20,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Performance
 - **`list_attachments` no longer eager-decodes attachment binaries during cross-validation** (verify finding for [#24](https://github.com/PsychQuant/che-apple-mail-mcp/issues/24)). The initial fix used `MIMEParser.parseAllParts`, which decodes every part's body (including base64 attachments) just to read the filenames — a 50 MB attachment caused list_attachments to allocate ≈50 MB of decoded data the caller never reads. Now uses a new `MIMEParser.enumerateAttachmentNames(_:headers:)` walker that visits MIME tree headers but skips `decodeTransferEncoding` on leaves. Complexity drops from O(message size) to O(message structure size), independent of attachment payload sizes. Honors the same `maxMultipartDepth=8` guard.
 
-### Added
+### Added (v2.4.0 ancillary)
 - **`EmlxParser.attachmentNames(rowId:mailboxURL:) -> Set<String>`** — new helper that returns the union of `Content-Disposition: filename` (RFC 2231/5987 decoded) and `Content-Type: name` parameter values across all MIME parts. Used by the `list_attachments` cross-validation path; also available to future callers that need to enumerate attachment names without writing any to disk.
 - **`MIMEParser.enumerateAttachmentNames(_:headers:) -> Set<String>`** — names-only MIME tree traversal. Faster + lower-memory alternative to `parseAllParts` when the caller only needs filenames (skips transfer decoding). 4 regression tests including a names-only invariant test (synthesizes a multipart with invalid base64 body, asserts filename still extractable — proves no decode path is taken).
 

@@ -124,6 +124,11 @@ func buildReplyEmailScript(
     let replyType = replyAll ? "reply all" : "reply"
     let dispatchVerb = saveAsDraft ? "save" : "send"
     let returnMessage = saveAsDraft ? "Reply saved as draft" : "Reply sent successfully"
+    // saveAsDraft=true: don't open Mail.app GUI window. The user wanted a quiet
+    // draft for later review; popping a window invites them to edit it directly
+    // and lose the saved snapshot. saveAsDraft=false: keep the existing
+    // send-path behavior (window briefly opens during send, backward compat).
+    let windowClause = saveAsDraft ? "without opening window" : "with opening window"
 
     let extraTellLines: String = {
         var lines: [String] = []
@@ -140,7 +145,7 @@ func buildReplyEmailScript(
         return """
         tell application "Mail"
             set originalMsg to \(messageRef)
-            set replyMsg to \(replyType) originalMsg with opening window
+            set replyMsg to \(replyType) originalMsg \(windowClause)
             tell replyMsg
                 set content to "\(appleScriptEscape(userBody))" & return & return & content\(extraTellLines)
             end tell
@@ -160,7 +165,7 @@ func buildReplyEmailScript(
     return """
     tell application "Mail"
         set originalMsg to \(messageRef)
-        set replyMsg to \(replyType) originalMsg with opening window
+        set replyMsg to \(replyType) originalMsg \(windowClause)
         tell replyMsg
             set html content to "\(appleScriptEscape(finalHTML))"\(extraTellLines)
         end tell

@@ -668,6 +668,7 @@ actor MailController {
 
     /// Reply to an email. Optionally add extra CC, attach files, and/or save as draft instead of sending.
     func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]? = nil, saveAsDraft: Bool = false, format: BodyFormat = .plain) throws -> String {
+        if let attachments = attachments { try validateFilePaths(attachments) }
         let ref = msgRef(id, mailbox: mailbox, account: accountName)
 
         var originalHTML: String? = nil

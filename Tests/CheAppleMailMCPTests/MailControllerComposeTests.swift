@@ -273,6 +273,54 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertFalse(script.contains("send replyMsg"))
     }
 
+    // MARK: - buildReplyEmailScript: window-popup behavior (issue #33 verify finding A)
+
+    func testBuildReplyEmailScript_saveAsDraft_usesWithoutOpeningWindow() throws {
+        // saveAsDraft=true should NOT pop the Mail.app reply window — the user
+        // wanted a quiet draft; popping a window invites them to edit it
+        // directly and lose the saved snapshot.
+        let script = try buildReplyEmailScript(
+            messageRef: "msgRef",
+            userBody: "B",
+            userFormat: .plain,
+            replyAll: false,
+            saveAsDraft: true,
+            originalHTML: nil,
+            originalPlain: ""
+        )
+        XCTAssertTrue(script.contains("without opening window"), "save_as_draft=true MUST use `without opening window`")
+        XCTAssertFalse(script.contains("with opening window"), "save_as_draft=true MUST NOT use `with opening window`")
+    }
+
+    func testBuildReplyEmailScript_sendPath_keepsWithOpeningWindow() throws {
+        // Send path (default) should keep `with opening window` — backward compat.
+        let script = try buildReplyEmailScript(
+            messageRef: "msgRef",
+            userBody: "B",
+            userFormat: .plain,
+            replyAll: false,
+            originalHTML: nil,
+            originalPlain: ""
+        )
+        XCTAssertTrue(script.contains("with opening window"), "send path MUST keep `with opening window` (backward compat)")
+        XCTAssertFalse(script.contains("without opening window"))
+    }
+
+    func testBuildReplyEmailScript_htmlMode_saveAsDraft_alsoUsesWithoutOpeningWindow() throws {
+        // html branch must mirror plain branch's window-clause behavior.
+        let script = try buildReplyEmailScript(
+            messageRef: "msgRef",
+            userBody: "Thanks.",
+            userFormat: .html,
+            replyAll: false,
+            saveAsDraft: true,
+            originalHTML: "<p>orig</p>",
+            originalPlain: "orig"
+        )
+        XCTAssertTrue(script.contains("without opening window"), "html branch save_as_draft=true MUST use `without opening window`")
+        XCTAssertFalse(script.contains("with opening window"))
+    }
+
     // MARK: - buildForwardEmailScript
 
     func testBuildForwardEmailScript_plainMode_withBody_keepsConcatenation() throws {
