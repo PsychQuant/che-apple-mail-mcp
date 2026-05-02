@@ -10,19 +10,20 @@ func appleScriptEscape(_ string: String) -> String {
         .replacingOccurrences(of: "\t", with: "\" & tab & \"")
 }
 
+// Issue #39: both fragment helpers emit consistent 4-space indent for
+// readable AppleScript output. Callers concatenate without adding extra
+// indent prefixes (previous code added "        " for attachments only,
+// causing visual mismatch in emitted scripts).
+
 private func attachmentFragment(for paths: [String]) -> String {
     paths.map { path in
-        """
-        make new attachment with properties {file name:POSIX file "\(appleScriptEscape(path))"} at after the last paragraph
-        """
+        "    make new attachment with properties {file name:POSIX file \"\(appleScriptEscape(path))\"} at after the last paragraph"
     }.joined(separator: "\n")
 }
 
 private func recipientFragment(_ addresses: [String], kind: String) -> String {
     addresses.map { addr in
-        """
-            make new \(kind) recipient at end of \(kind) recipients with properties {address:"\(appleScriptEscape(addr))"}
-        """
+        "    make new \(kind) recipient at end of \(kind) recipients with properties {address:\"\(appleScriptEscape(addr))\"}"
     }.joined(separator: "\n")
 }
 
@@ -168,7 +169,7 @@ func buildReplyEmailScript(
             lines.append(recipientFragment(cc, kind: "cc"))
         }
         if let atts = attachments, !atts.isEmpty {
-            lines.append("        " + attachmentFragment(for: atts))
+            lines.append(attachmentFragment(for: atts))
         }
         return lines.isEmpty ? "" : "\n" + lines.joined(separator: "\n")
     }()

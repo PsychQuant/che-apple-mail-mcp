@@ -112,11 +112,27 @@ Then grant Automation permission in **System Settings > Privacy & Security > Aut
 
 | Tool | Description |
 |------|-------------|
-| `compose_email` | Send new email (supports attachments) |
-| `reply_email` | Reply to email |
-| `forward_email` | Forward email |
+| `compose_email` | Send new email (supports cc/bcc/attachments; `format`: plain/markdown/html) |
+| `reply_email` | Reply to email. Optional: `cc_additional`, `attachments`, `save_as_draft`, `format` (since v2.4.0). Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0 / #43) |
+| `forward_email` | Forward email. Optional `body` + `format`. Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0+ / #44) |
 | `redirect_email` | Redirect email (keeps original sender) |
 | `open_mailto` | Open mailto URL |
+
+#### Reply-as-draft example (v2.4.0+)
+
+Reply to a thread, add extra CC, attach files, and save as a draft for human review before sending:
+
+```
+reply_email(
+    id="<message id from search_emails>",
+    mailbox="INBOX",
+    account_name="iCloud",
+    body="Reply text",
+    cc_additional=["x@y.com"],
+    attachments=["/path/to/file.pdf"],
+    save_as_draft=true
+)
+```
 
 </details>
 

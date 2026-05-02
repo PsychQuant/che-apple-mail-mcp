@@ -617,4 +617,38 @@ final class MailControllerComposeTests: XCTestCase {
         )
         XCTAssertEqual(result, ["c@d.com", "a@b.com", "b@e.com"])
     }
+
+    // MARK: - Large originalPlain script size (#49)
+
+    /// Issue #49: defensive coverage for long-thread scenarios. After
+    /// composeReplyPlainText emits `> `-prefixed lines + appleScriptEscape mangles
+    /// each `\n` to `& return &` (12-char expansion), large originalPlain could
+    /// approach macOS osascript's stack-derived script size limit (~64 KB
+    /// historically). This test asserts a 14 KB original (200 lines × ~70 chars)
+    /// still produces a script under 32 KB after escape mangling.
+    func testComposeReplyPlainText_largeOriginal_doesNotExplode() {
+        let original = String(repeating: "Lorem ipsum dolor sit amet, consectetur adipiscing.\n", count: 200)
+        XCTAssertGreaterThan(original.count, 10_000, "test fixture must be ≥10 KB to be meaningful")
+        let result = composeReplyPlainText(userBody: "Reply", originalPlain: original)
+        XCTAssertLessThan(result.count, 32_000, "composed body must fit comfortably in osascript limits")
+        // Verify the helper still produces a useful first quoted line.
+        XCTAssertTrue(result.contains("> Lorem ipsum"), "helper must still produce `> ` quoted lines for large originals")
+    }
+
+    func testBuildReplyEmailScript_largeOriginal_scriptUnderOsascriptLimit() throws {
+        // 500 lines × ~12 chars = ~6 KB raw original.
+        // After appleScriptEscape mangles 500 newlines (each into 12-char `& return &`),
+        // adds +6 KB → ~14 KB script. Still safely under any osascript ceiling.
+        let original = String(repeating: "Lorem ipsum.\n", count: 500)
+        let script = try buildReplyEmailScript(
+            messageRef: "msgRef",
+            userBody: "Reply",
+            userFormat: .plain,
+            replyAll: false,
+            originalHTML: nil,
+            originalPlain: original
+        )
+        XCTAssertLessThan(script.count, 32_000, "generated AppleScript must fit within osascript limits")
+        XCTAssertTrue(script.contains("> Lorem ipsum"), "script must still contain quoted lines")
+    }
 }
