@@ -147,9 +147,66 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertTrue(result.contains("<br>"), "plain-only original newlines must become <br>")
     }
 
+    // MARK: - composeReplyPlainText (issue #43 fix)
+
+    func testComposeReplyPlainText_prependsUserBody_quotesOriginalLines() {
+        let result = composeReplyPlainText(
+            userBody: "Thanks, noted.",
+            originalPlain: "Can you review?\nThe deadline is Friday."
+        )
+        XCTAssertTrue(result.hasPrefix("Thanks, noted."), "user body must come first")
+        XCTAssertTrue(result.contains("> Can you review?"), "each original line must be `> `-prefixed (RFC 3676)")
+        XCTAssertTrue(result.contains("> The deadline is Friday."), "every original line must be quoted")
+        XCTAssertTrue(result.contains("Thanks, noted.\n\n> "), "user body and quote block separated by blank line")
+    }
+
+    func testComposeReplyPlainText_emptyOriginal_returnsUserBodyOnly() {
+        let result = composeReplyPlainText(
+            userBody: "Just a heads-up.",
+            originalPlain: ""
+        )
+        XCTAssertEqual(result, "Just a heads-up.", "empty originalPlain must NOT emit a stray quote block")
+        XCTAssertFalse(result.contains("> "), "no `> ` prefix when no original to quote")
+    }
+
+    func testComposeReplyPlainText_originalWithEmptyLines_keepsQuotedEmptyLines() {
+        let result = composeReplyPlainText(
+            userBody: "Reply",
+            originalPlain: "Para 1\n\nPara 2"
+        )
+        // RFC 3676: quoted empty lines stay quoted (preserves paragraph breaks visually)
+        XCTAssertTrue(result.contains("> Para 1"))
+        XCTAssertTrue(result.contains("> Para 2"))
+        XCTAssertTrue(result.contains("> \n"), "blank lines between quoted paragraphs must remain prefixed")
+    }
+
     // MARK: - buildReplyEmailScript
 
-    func testBuildReplyEmailScript_plainMode_keepsAmpersandConcatenation() throws {
+    func testBuildReplyEmailScript_plainMode_includesQuotedOriginal() throws {
+        // Issue #43 fix: plain branch now Swift-side composes the quoted body
+        // (RFC 3676 `> ` prefix) instead of relying on the broken
+        // `& return & return & content` AppleScript pattern, which silently
+        // produced bare-body replies because Mail.app does not populate the
+        // outgoing message's `content` until the GUI compose window materializes.
+        let script = try buildReplyEmailScript(
+            messageRef: "msgRef",
+            userBody: "Reply body",
+            userFormat: .plain,
+            replyAll: false,
+            originalHTML: nil,
+            originalPlain: "Original line 1\nOriginal line 2"
+        )
+        XCTAssertTrue(script.contains("set content to"), "plain mode still uses `set content to`")
+        XCTAssertTrue(script.contains("> Original line 1"), "quoted original line must appear in the script literal")
+        XCTAssertTrue(script.contains("> Original line 2"), "every original line must be quoted")
+        XCTAssertFalse(script.contains("& return & return & content"), "broken AppleScript `& content` pattern MUST be removed (#43)")
+        XCTAssertFalse(script.contains("html content"), "plain mode MUST NOT touch html content")
+        XCTAssertFalse(script.contains("<blockquote>"), "plain mode MUST NOT wrap in blockquote (HTML tag)")
+    }
+
+    func testBuildReplyEmailScript_plainMode_emptyOriginal_omitsQuoteBlock() throws {
+        // Edge case for #43: when no original content was pre-fetched (e.g.
+        // pre-fetch failed or original is empty), do NOT emit a stray `> ` line.
         let script = try buildReplyEmailScript(
             messageRef: "msgRef",
             userBody: "Reply body",
@@ -158,10 +215,10 @@ final class MailControllerComposeTests: XCTestCase {
             originalHTML: nil,
             originalPlain: ""
         )
-        XCTAssertTrue(script.contains("set content to"))
-        XCTAssertTrue(script.contains("& return & return & content"), "plain mode MUST keep existing concatenation semantics")
-        XCTAssertFalse(script.contains("html content"), "plain mode MUST NOT touch html content")
-        XCTAssertFalse(script.contains("<blockquote>"), "plain mode MUST NOT wrap in blockquote")
+        XCTAssertTrue(script.contains("set content to"), "plain mode still uses `set content to`")
+        XCTAssertTrue(script.contains("Reply body"), "user body must appear")
+        XCTAssertFalse(script.contains("> "), "empty originalPlain MUST NOT emit `> ` quote prefix")
+        XCTAssertFalse(script.contains("& return & return & content"), "broken AppleScript `& content` pattern MUST be removed (#43)")
     }
 
     func testBuildReplyEmailScript_markdownMode_setsHTMLContentWithBlockquote() throws {
