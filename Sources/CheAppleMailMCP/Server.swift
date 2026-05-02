@@ -885,9 +885,9 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("to, subject, and body are required")
             }
             let to = toArray.compactMap { $0.stringValue }
-            let cc = arguments["cc"]?.arrayValue?.compactMap { $0.stringValue }
-            let bcc = arguments["bcc"]?.arrayValue?.compactMap { $0.stringValue }
-            let attachments = arguments["attachments"]?.arrayValue?.compactMap { $0.stringValue }
+            let cc = try optionalStringArray(arguments, key: "cc")
+            let bcc = try optionalStringArray(arguments, key: "bcc")
+            let attachments = try optionalStringArray(arguments, key: "attachments")
             let format = try parseBodyFormatArgument(arguments["format"])
             return try await mailController.composeEmail(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format)
 
@@ -898,10 +898,10 @@ class CheAppleMailMCPServer {
                   let body = arguments["body"]?.stringValue else {
                 throw MailError.invalidParameter("id, mailbox, account_name, and body are required")
             }
-            let replyAll = arguments["reply_all"]?.boolValue ?? false
-            let ccAdditional = arguments["cc_additional"]?.arrayValue?.compactMap { $0.stringValue }
-            let replyAttachments = arguments["attachments"]?.arrayValue?.compactMap { $0.stringValue }
-            let saveAsDraft = arguments["save_as_draft"]?.boolValue ?? false
+            let replyAll = try requireBool(arguments, key: "reply_all", default: false)
+            let ccAdditional = try optionalStringArray(arguments, key: "cc_additional")
+            let replyAttachments = try optionalStringArray(arguments, key: "attachments")
+            let saveAsDraft = try requireBool(arguments, key: "save_as_draft", default: false)
             let format = try parseBodyFormatArgument(arguments["format"])
             return try await mailController.replyEmail(id: id, mailbox: mailbox, accountName: accountName, body: body, replyAll: replyAll, ccAdditional: ccAdditional, attachments: replyAttachments, saveAsDraft: saveAsDraft, format: format)
 
@@ -932,7 +932,7 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("to, subject, and body are required")
             }
             let to = toArray.compactMap { $0.stringValue }
-            let attachments = arguments["attachments"]?.arrayValue?.compactMap { $0.stringValue }
+            let attachments = try optionalStringArray(arguments, key: "attachments")
             let format = try parseBodyFormatArgument(arguments["format"])
             return try await mailController.createDraft(to: to, subject: subject, body: body, attachments: attachments, format: format)
 
@@ -1366,6 +1366,62 @@ func parseBodyFormat(_ raw: String?) throws -> BodyFormat {
         return format
     }
     throw MailError.invalidParameter("format must be one of: plain, markdown, html (got: \(raw ?? "nil"))")
+}
+
+/// Issue #35: type-strict bool extraction. Returns the bool when key is present
+/// and is a real boolean; returns `defaultValue` when key is missing or null;
+/// **throws** `MailError.invalidParameter` when key is present but wrong type
+/// (e.g. caller sent string `"true"` instead of bool `true`).
+///
+/// The previous pattern `arguments[key]?.boolValue ?? false` silently coerced
+/// non-bool inputs to default, which for `save_as_draft` meant the user wanted
+/// "save for review" but got "send now" — irreversible.
+func requireBool(_ arguments: [String: Value], key: String, default defaultValue: Bool) throws -> Bool {
+    guard let value = arguments[key] else { return defaultValue }
+    if case .null = value { return defaultValue }
+    // Strict type check: .boolValue on Value coerces some non-bool inputs
+    // (per #35 anti-pattern). Use case-pattern matching to require an actual
+    // Bool literal in the JSON.
+    if case .bool(let bool) = value {
+        return bool
+    }
+    throw MailError.invalidParameter("'\(key)' must be a boolean (true/false), got: \(typeName(of: value))")
+}
+
+/// Issue #35: type-strict optional string-array extraction. Returns nil when
+/// key is missing or null; **throws** when key is present but not an array of
+/// strings. The previous pattern `arguments[key]?.arrayValue?.compactMap` would
+/// silently drop entries that weren't strings (e.g. caller sent a string
+/// instead of an array → silent nil → recipient missing CC).
+func optionalStringArray(_ arguments: [String: Value], key: String) throws -> [String]? {
+    guard let value = arguments[key] else { return nil }
+    if case .null = value { return nil }
+    // Strict type check via case-pattern (Value's accessors are lenient).
+    guard case .array(let array) = value else {
+        throw MailError.invalidParameter("'\(key)' must be an array of strings, got: \(typeName(of: value))")
+    }
+    var result: [String] = []
+    for (idx, element) in array.enumerated() {
+        guard case .string(let str) = element else {
+            throw MailError.invalidParameter("'\(key)[\(idx)]' must be a string, got: \(typeName(of: element))")
+        }
+        result.append(str)
+    }
+    return result
+}
+
+/// Helper for diagnostic error messages: human-readable type name for a Value.
+func typeName(of value: Value) -> String {
+    switch value {
+    case .null: return "null"
+    case .bool: return "boolean"
+    case .int: return "integer"
+    case .double: return "number"
+    case .string: return "string"
+    case .array: return "array"
+    case .object: return "object"
+    case .data: return "data"
+    }
 }
 
 func parseBodyFormatArgument(_ raw: Value?) throws -> BodyFormat {

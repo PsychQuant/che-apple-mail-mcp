@@ -155,4 +155,82 @@ final class ServerSchemaTests: XCTestCase {
     func testParseBodyFormatArgument_booleanRejected() {
         XCTAssertThrowsError(try parseBodyFormatArgument(.bool(true)))
     }
+
+    // MARK: - requireBool / optionalStringArray (#35 — type-strict handler validation)
+
+    func testRequireBool_validBoolReturnsValue() throws {
+        XCTAssertEqual(try requireBool(["k": .bool(true)], key: "k", default: false), true)
+        XCTAssertEqual(try requireBool(["k": .bool(false)], key: "k", default: true), false)
+    }
+
+    func testRequireBool_missingKeyReturnsDefault() throws {
+        XCTAssertEqual(try requireBool([:], key: "k", default: true), true)
+        XCTAssertEqual(try requireBool([:], key: "k", default: false), false)
+    }
+
+    func testRequireBool_nullValueReturnsDefault() throws {
+        // Caller emitted explicit `null` — treat as missing.
+        XCTAssertEqual(try requireBool(["k": .null], key: "k", default: true), true)
+        XCTAssertEqual(try requireBool(["k": .null], key: "k", default: false), false)
+    }
+
+    func testRequireBool_stringTrueIsRejected() {
+        // Issue #35 anti-pattern: previously `arguments["save_as_draft"]?.boolValue ?? false`
+        // silently coerced string "true" to false → user wanted draft, got send.
+        XCTAssertThrowsError(try requireBool(["k": .string("true")], key: "k", default: false)) { err in
+            guard case MailError.invalidParameter(let msg) = err else {
+                XCTFail("expected MailError.invalidParameter, got \(err)")
+                return
+            }
+            XCTAssertTrue(msg.contains("'k'"), "error must name the key: \(msg)")
+            XCTAssertTrue(msg.contains("boolean"), "error must mention expected type: \(msg)")
+            XCTAssertTrue(msg.contains("string"), "error must mention actual type: \(msg)")
+        }
+    }
+
+    func testRequireBool_intRejected() {
+        XCTAssertThrowsError(try requireBool(["k": .int(1)], key: "k", default: false))
+    }
+
+    func testOptionalStringArray_validReturnsArray() throws {
+        let result = try optionalStringArray(["k": .array([.string("a"), .string("b")])], key: "k")
+        XCTAssertEqual(result, ["a", "b"])
+    }
+
+    func testOptionalStringArray_missingKeyReturnsNil() throws {
+        XCTAssertNil(try optionalStringArray([:], key: "k"))
+    }
+
+    func testOptionalStringArray_nullReturnsNil() throws {
+        XCTAssertNil(try optionalStringArray(["k": .null], key: "k"))
+    }
+
+    func testOptionalStringArray_emptyArrayReturnsEmpty() throws {
+        XCTAssertEqual(try optionalStringArray(["k": .array([])], key: "k"), [])
+    }
+
+    func testOptionalStringArray_stringInsteadOfArrayRejected() {
+        // Anti-pattern: caller sent a single string instead of array.
+        // Previously `?.arrayValue?.compactMap` returned nil silently → entry dropped.
+        XCTAssertThrowsError(try optionalStringArray(["k": .string("a@b.com")], key: "k")) { err in
+            guard case MailError.invalidParameter(let msg) = err else {
+                XCTFail("expected MailError.invalidParameter, got \(err)")
+                return
+            }
+            XCTAssertTrue(msg.contains("'k'"))
+            XCTAssertTrue(msg.contains("array of strings"))
+        }
+    }
+
+    func testOptionalStringArray_nonStringElementRejected() {
+        // Mixed types in the array — reject (don't silently drop).
+        XCTAssertThrowsError(try optionalStringArray(["k": .array([.string("a"), .int(42)])], key: "k")) { err in
+            guard case MailError.invalidParameter(let msg) = err else {
+                XCTFail("expected MailError.invalidParameter, got \(err)")
+                return
+            }
+            XCTAssertTrue(msg.contains("'k[1]'"), "error must point to the offending index: \(msg)")
+            XCTAssertTrue(msg.contains("integer"), "error must mention actual type")
+        }
+    }
 }
