@@ -666,8 +666,8 @@ actor MailController {
         return try runScript(script)
     }
 
-    /// Reply to an email
-    func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, format: BodyFormat = .plain) throws -> String {
+    /// Reply to an email. Optionally add extra CC, attach files, and/or save as draft instead of sending.
+    func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]? = nil, saveAsDraft: Bool = false, format: BodyFormat = .plain) throws -> String {
         let ref = msgRef(id, mailbox: mailbox, account: accountName)
 
         var originalHTML: String? = nil
@@ -684,6 +684,9 @@ actor MailController {
             userBody: body,
             userFormat: format,
             replyAll: replyAll,
+            ccAdditional: ccAdditional,
+            attachments: attachments,
+            saveAsDraft: saveAsDraft,
             originalHTML: originalHTML,
             originalPlain: originalPlain
         )

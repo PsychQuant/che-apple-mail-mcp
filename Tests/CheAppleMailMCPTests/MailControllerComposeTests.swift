@@ -190,6 +190,89 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertTrue(script.contains("reply all originalMsg"))
     }
 
+    // MARK: - buildReplyEmailScript: cc_additional / attachments / save_as_draft (issue #33)
+
+    func testBuildReplyEmailScript_ccAdditional_emitsCCRecipientFragment() throws {
+        let script = try buildReplyEmailScript(
+            messageRef: "msgRef",
+            userBody: "B",
+            userFormat: .plain,
+            replyAll: false,
+            ccAdditional: ["a@b.com", "c@d.com"],
+            originalHTML: nil,
+            originalPlain: ""
+        )
+        XCTAssertTrue(script.contains("make new cc recipient"), "cc_additional MUST emit AppleScript cc recipient fragments")
+        XCTAssertTrue(script.contains("a@b.com"))
+        XCTAssertTrue(script.contains("c@d.com"))
+    }
+
+    func testBuildReplyEmailScript_attachments_emitsAttachmentFragment() throws {
+        let script = try buildReplyEmailScript(
+            messageRef: "msgRef",
+            userBody: "B",
+            userFormat: .plain,
+            replyAll: false,
+            attachments: ["/tmp/cv.pdf", "/tmp/cert.pdf"],
+            originalHTML: nil,
+            originalPlain: ""
+        )
+        XCTAssertTrue(script.contains("make new attachment"), "attachments MUST emit AppleScript attachment fragment")
+        XCTAssertTrue(script.contains("POSIX file \"/tmp/cv.pdf\""))
+        XCTAssertTrue(script.contains("POSIX file \"/tmp/cert.pdf\""))
+    }
+
+    func testBuildReplyEmailScript_saveAsDraft_replacesSendWithSave() throws {
+        let script = try buildReplyEmailScript(
+            messageRef: "msgRef",
+            userBody: "B",
+            userFormat: .plain,
+            replyAll: false,
+            saveAsDraft: true,
+            originalHTML: nil,
+            originalPlain: ""
+        )
+        XCTAssertTrue(script.contains("save replyMsg"), "save_as_draft=true MUST emit `save replyMsg`")
+        XCTAssertFalse(script.contains("send replyMsg"), "save_as_draft=true MUST NOT emit `send replyMsg`")
+        XCTAssertTrue(script.contains("\"Reply saved as draft\""), "draft mode MUST report `Reply saved as draft`")
+    }
+
+    func testBuildReplyEmailScript_backwardCompat_defaultsPreserveSendBehavior() throws {
+        // No new params -> behavior must be byte-identical to v0.1.x send-immediate path
+        let script = try buildReplyEmailScript(
+            messageRef: "msgRef",
+            userBody: "B",
+            userFormat: .plain,
+            replyAll: false,
+            originalHTML: nil,
+            originalPlain: ""
+        )
+        XCTAssertTrue(script.contains("send replyMsg"), "default behavior MUST send (backward compat)")
+        XCTAssertFalse(script.contains("save replyMsg"))
+        XCTAssertFalse(script.contains("make new cc recipient"))
+        XCTAssertFalse(script.contains("make new attachment"))
+        XCTAssertTrue(script.contains("\"Reply sent successfully\""))
+    }
+
+    func testBuildReplyEmailScript_htmlMode_alsoSupportsCcAttachmentsSave() throws {
+        let script = try buildReplyEmailScript(
+            messageRef: "msgRef",
+            userBody: "Thanks.",
+            userFormat: .html,
+            replyAll: false,
+            ccAdditional: ["x@y.z"],
+            attachments: ["/tmp/a.pdf"],
+            saveAsDraft: true,
+            originalHTML: "<p>Can you review?</p>",
+            originalPlain: "Can you review?"
+        )
+        XCTAssertTrue(script.contains("set html content to"), "html branch should still set html content")
+        XCTAssertTrue(script.contains("make new cc recipient"), "html branch must also support cc_additional")
+        XCTAssertTrue(script.contains("make new attachment"), "html branch must also support attachments")
+        XCTAssertTrue(script.contains("save replyMsg"), "html branch must also support save_as_draft")
+        XCTAssertFalse(script.contains("send replyMsg"))
+    }
+
     // MARK: - buildForwardEmailScript
 
     func testBuildForwardEmailScript_plainMode_withBody_keepsConcatenation() throws {

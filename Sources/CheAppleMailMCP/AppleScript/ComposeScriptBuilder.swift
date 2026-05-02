@@ -115,10 +115,26 @@ func buildReplyEmailScript(
     userBody: String,
     userFormat: BodyFormat,
     replyAll: Bool,
+    ccAdditional: [String]? = nil,
+    attachments: [String]? = nil,
+    saveAsDraft: Bool = false,
     originalHTML: String?,
     originalPlain: String
 ) throws -> String {
     let replyType = replyAll ? "reply all" : "reply"
+    let dispatchVerb = saveAsDraft ? "save" : "send"
+    let returnMessage = saveAsDraft ? "Reply saved as draft" : "Reply sent successfully"
+
+    let extraTellLines: String = {
+        var lines: [String] = []
+        if let cc = ccAdditional, !cc.isEmpty {
+            lines.append(recipientFragment(cc, kind: "cc"))
+        }
+        if let atts = attachments, !atts.isEmpty {
+            lines.append("        " + attachmentFragment(for: atts))
+        }
+        return lines.isEmpty ? "" : "\n" + lines.joined(separator: "\n")
+    }()
 
     if userFormat == .plain {
         return """
@@ -126,10 +142,10 @@ func buildReplyEmailScript(
             set originalMsg to \(messageRef)
             set replyMsg to \(replyType) originalMsg with opening window
             tell replyMsg
-                set content to "\(appleScriptEscape(userBody))" & return & return & content
+                set content to "\(appleScriptEscape(userBody))" & return & return & content\(extraTellLines)
             end tell
-            send replyMsg
-            return "Reply sent successfully"
+            \(dispatchVerb) replyMsg
+            return "\(returnMessage)"
         end tell
         """
     }
@@ -146,10 +162,10 @@ func buildReplyEmailScript(
         set originalMsg to \(messageRef)
         set replyMsg to \(replyType) originalMsg with opening window
         tell replyMsg
-            set html content to "\(appleScriptEscape(finalHTML))"
+            set html content to "\(appleScriptEscape(finalHTML))"\(extraTellLines)
         end tell
-        send replyMsg
-        return "Reply sent successfully"
+        \(dispatchVerb) replyMsg
+        return "\(returnMessage)"
     end tell
     """
 }

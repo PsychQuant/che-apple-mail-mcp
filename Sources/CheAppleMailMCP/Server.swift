@@ -14,7 +14,7 @@ class CheAppleMailMCPServer {
         self.tools = Self.defineTools()
         self.server = Server(
             name: "che-apple-mail-mcp",
-            version: "2.1.0",
+            version: "2.4.0",
             capabilities: .init(tools: .init())
         )
         self.transport = StdioTransport()
@@ -233,7 +233,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "reply_email",
-                description: "Reply to an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Non-plain modes wrap the original message in a blockquote.",
+                description: "Reply to an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Non-plain modes wrap the original message in a blockquote. Optionally add extra CC, attach files, and save as draft instead of sending.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -242,6 +242,9 @@ class CheAppleMailMCPServer {
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
                         "body": .object(["type": .string("string"), "description": .string("Reply content (interpreted according to 'format')")]),
                         "reply_all": .object(["type": .string("boolean"), "description": .string("Reply to all recipients (default: false)")]),
+                        "cc_additional": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Extra CC recipients to add on top of those derived from 'reply_all'. Email addresses (RFC 5322 addr-spec).")]),
+                        "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach to the reply.")]),
+                        "save_as_draft": .object(["type": .string("boolean"), "description": .string("If true, save the reply as a draft instead of sending it (default: false). Use when you want a human to review before send.")]),
                         "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) preserves existing concatenation semantics; 'markdown'/'html' produce rich text and wrap the original in a blockquote.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("body")])
@@ -896,8 +899,11 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("id, mailbox, account_name, and body are required")
             }
             let replyAll = arguments["reply_all"]?.boolValue ?? false
+            let ccAdditional = arguments["cc_additional"]?.arrayValue?.compactMap { $0.stringValue }
+            let replyAttachments = arguments["attachments"]?.arrayValue?.compactMap { $0.stringValue }
+            let saveAsDraft = arguments["save_as_draft"]?.boolValue ?? false
             let format = try parseBodyFormatArgument(arguments["format"])
-            return try await mailController.replyEmail(id: id, mailbox: mailbox, accountName: accountName, body: body, replyAll: replyAll, format: format)
+            return try await mailController.replyEmail(id: id, mailbox: mailbox, accountName: accountName, body: body, replyAll: replyAll, ccAdditional: ccAdditional, attachments: replyAttachments, saveAsDraft: saveAsDraft, format: format)
 
         case "forward_email":
             guard let id = arguments["id"]?.stringValue,

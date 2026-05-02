@@ -79,6 +79,28 @@ final class ServerSchemaTests: XCTestCase {
         assertFormatParameter(toolName: "forward_email")
     }
 
+    // MARK: - reply_email new optional params (issue #33)
+
+    func testReplyEmail_advertisesCcAdditionalAttachmentsAndSaveAsDraft() throws {
+        guard let tool = tool(named: "reply_email"),
+              let props = propertiesObject(of: tool),
+              let required = requiredArray(of: tool) else {
+            XCTFail("reply_email schema missing or malformed")
+            return
+        }
+
+        XCTAssertNotNil(props["cc_additional"], "reply_email schema MUST advertise `cc_additional`")
+        XCTAssertNotNil(props["attachments"], "reply_email schema MUST advertise `attachments`")
+        XCTAssertNotNil(props["save_as_draft"], "reply_email schema MUST advertise `save_as_draft`")
+
+        // Required list must NOT change (backward compat).
+        XCTAssertEqual(
+            Set(required),
+            Set(["id", "mailbox", "account_name", "body"]),
+            "reply_email required params MUST stay {id, mailbox, account_name, body}; new params are optional"
+        )
+    }
+
     // MARK: - parseBodyFormat (handler dispatch behavior)
 
     func testParseBodyFormat_nilReturnsPlain() throws {
