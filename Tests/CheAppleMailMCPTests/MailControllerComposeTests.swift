@@ -548,6 +548,137 @@ final class MailControllerComposeTests: XCTestCase {
         }
     }
 
+    // MARK: - validateAttachmentPaths (#38)
+
+    /// Helper to assert validation throws MailError.invalidParameter with a recognizable fragment.
+    private func assertAttachmentRejected(_ paths: [String],
+                                          containing fragment: String,
+                                          envAllowList: String? = nil,
+                                          file: StaticString = #file, line: UInt = #line) async {
+        if let env = envAllowList {
+            setenv("MAIL_MCP_ATTACHMENT_ROOTS", env, 1)
+            addTeardownBlock { unsetenv("MAIL_MCP_ATTACHMENT_ROOTS") }
+        }
+        do {
+            try await MailController.shared.validateAttachmentPaths(paths)
+            XCTFail("expected validation to throw, paths=\(paths)", file: file, line: line)
+        } catch let error as MailError {
+            guard case .invalidParameter(let msg) = error else {
+                XCTFail("expected MailError.invalidParameter, got \(error)", file: file, line: line)
+                return
+            }
+            XCTAssertTrue(msg.contains(fragment),
+                          "error '\(msg)' must contain '\(fragment)'",
+                          file: file, line: line)
+        } catch {
+            XCTFail("unexpected error: \(error)", file: file, line: line)
+        }
+    }
+
+    private func assertAttachmentAccepted(_ paths: [String],
+                                          envAllowList: String? = nil,
+                                          file: StaticString = #file, line: UInt = #line) async {
+        if let env = envAllowList {
+            setenv("MAIL_MCP_ATTACHMENT_ROOTS", env, 1)
+            addTeardownBlock { unsetenv("MAIL_MCP_ATTACHMENT_ROOTS") }
+        }
+        do {
+            try await MailController.shared.validateAttachmentPaths(paths)
+        } catch {
+            XCTFail("expected validation to accept paths=\(paths), got error: \(error)",
+                    file: file, line: line)
+        }
+    }
+
+    func testValidateAttachmentPaths_emptyArrayIsNoop() async throws {
+        // Defensive: empty array short-circuits, no env var lookup, no FileManager hit.
+        try await MailController.shared.validateAttachmentPaths([])
+    }
+
+    func testValidateAttachmentPaths_acceptsRegularTempFile() async throws {
+        let tmp = "/tmp/che-apple-mail-test-\(UUID().uuidString).txt"
+        FileManager.default.createFile(atPath: tmp, contents: Data("ok".utf8))
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: tmp) }
+        await assertAttachmentAccepted([tmp])
+    }
+
+    func testValidateAttachmentPaths_rejectsNonexistent() async {
+        let bogus = "/tmp/does-not-exist-\(UUID().uuidString).pdf"
+        await assertAttachmentRejected([bogus], containing: "not found")
+    }
+
+    func testValidateAttachmentPaths_rejectsSshDirectory() async throws {
+        // We can't rely on actual ~/.ssh/id_ed25519 existing in test env. Create a
+        // probe file in HOME/.ssh and assert deny-list catches it. If HOME/.ssh
+        // doesn't exist or isn't writable, fall back to asserting that any path
+        // _under_ ~/.ssh would be rejected (helper compares prefix, file existence
+        // is checked first so we need a real file).
+        let home = NSHomeDirectory()
+        let sshProbe = "\(home)/.ssh/che-apple-mail-test-probe-\(UUID().uuidString).txt"
+        // Try to create — if can't, skip
+        let parent = "\(home)/.ssh"
+        guard FileManager.default.isWritableFile(atPath: parent) ||
+              ((try? FileManager.default.createDirectory(atPath: parent, withIntermediateDirectories: true)) != nil),
+              FileManager.default.createFile(atPath: sshProbe, contents: Data("probe".utf8)) else {
+            throw XCTSkip("Cannot create probe file under ~/.ssh in test env")
+        }
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: sshProbe) }
+        await assertAttachmentRejected([sshProbe], containing: ".ssh")
+    }
+
+    func testValidateAttachmentPaths_rejectsSystemPath() async {
+        // /etc/hosts always exists on macOS; under deny-list "/etc".
+        await assertAttachmentRejected(["/etc/hosts"], containing: "/etc")
+    }
+
+    func testValidateAttachmentPaths_resolvesSymlinkBeforeCheck() async throws {
+        // Create symlink in /tmp pointing to /etc/hosts (deny-listed).
+        // Without symlink resolution, the path "/tmp/symlink" looks safe (under /tmp)
+        // and bypasses deny-list. With resolution, the resolved path is /etc/hosts
+        // and gets rejected.
+        let symlink = "/tmp/che-apple-mail-test-symlink-\(UUID().uuidString)"
+        try FileManager.default.createSymbolicLink(atPath: symlink, withDestinationPath: "/etc/hosts")
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: symlink) }
+        await assertAttachmentRejected([symlink], containing: "/etc")
+    }
+
+    func testValidateAttachmentPaths_envAllowList_acceptsAllowed() async throws {
+        let tmp = "/tmp/che-apple-mail-allow-\(UUID().uuidString).txt"
+        FileManager.default.createFile(atPath: tmp, contents: Data("ok".utf8))
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: tmp) }
+        await assertAttachmentAccepted([tmp], envAllowList: "/tmp")
+    }
+
+    func testValidateAttachmentPaths_envAllowList_rejectsOutsideAllowed() async throws {
+        // /tmp is not in env allow-list "/var/folders" — should reject even though
+        // /tmp itself isn't deny-listed.
+        let tmp = "/tmp/che-apple-mail-deny-\(UUID().uuidString).txt"
+        FileManager.default.createFile(atPath: tmp, contents: Data("ok".utf8))
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: tmp) }
+        await assertAttachmentRejected([tmp], containing: "MAIL_MCP_ATTACHMENT_ROOTS",
+                                        envAllowList: "/Users/nonexistent-allow-root")
+    }
+
+    func testValidateAttachmentPaths_multiplePaths_collectsAllFailures() async {
+        // /etc/hosts (system deny) + bogus nonexistent. Both should be in error msg.
+        let bogus = "/tmp/missing-\(UUID().uuidString).pdf"
+        do {
+            try await MailController.shared.validateAttachmentPaths(["/etc/hosts", bogus])
+            XCTFail("expected validation to throw")
+        } catch let error as MailError {
+            guard case .invalidParameter(let msg) = error else {
+                XCTFail("expected MailError.invalidParameter, got \(error)")
+                return
+            }
+            XCTAssertTrue(msg.contains("/etc"), "msg must mention /etc rejection: \(msg)")
+            XCTAssertTrue(msg.contains("not found"), "msg must mention bogus path not found: \(msg)")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    // MARK: - validateEmailAddresses (#41) — continued
+
     func testValidateEmailAddresses_rejectsMultipleAt() async {
         do {
             try await MailController.shared.validateEmailAddresses(["a@b@c.com"], field: "to")
