@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-05-02
+
+### Added
+- **`reply_email` reply-as-draft mode** with `cc_additional`, `attachments`, `save_as_draft` optional params ([#33](https://github.com/PsychQuant/che-apple-mail-mcp/issues/33)). Closes the gap where `reply_email` could preserve a thread but not save as draft / add CC / add attachments, while `create_draft` could save + attach but not stay in the original thread. Workflow this unblocks: reply to an existing thread + add extra CC + attach files + save as draft for human review before sending. AppleScript implementation reuses existing `recipientFragment` and `attachmentFragment` helpers; conditional `save replyMsg` vs `send replyMsg` based on `save_as_draft`. Both plain and html branches updated symmetrically. Backward compatible — defaults preserve existing send-immediate behavior. 6 new tests (1 schema test + 5 compose tests covering cc, attachments, save vs send, backward compat, html branch parity).
+
+## [Unreleased pre-2.4.0]
+
 ### Fixed
 - **`list_attachments` now cross-validates SQLite metadata against on-disk `.emlx` contents** ([#24](https://github.com/PsychQuant/che-apple-mail-mcp/issues/24)). Previously, the SQLite `attachments` table could surface stale entries — Mail.app keeps the row even after the IMAP binary is stripped on Sent / lazy-loaded — and `save_attachment` would then fail with `Attachment not found`. The handler now calls a new `EmlxParser.attachmentNames(rowId:mailboxURL:)` helper that walks the `.emlx` MIME tree, and filters SQLite results to names actually present. On `.emlx` resolve / parse failure, falls back to raw SQLite metadata (≥ pre-fix behavior) and logs the cause to stderr.
 
