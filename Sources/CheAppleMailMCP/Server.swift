@@ -252,7 +252,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "forward_email",
-                description: "Forward an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Non-plain modes wrap the original message in a blockquote.",
+                description: "Forward an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). 'plain' embeds the original message as RFC 3676 `> `-prefixed quoted lines (when body is provided); 'markdown'/'html' wrap the original in a `<blockquote>`. Body is optional (omit for a bare forward without commentary).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([

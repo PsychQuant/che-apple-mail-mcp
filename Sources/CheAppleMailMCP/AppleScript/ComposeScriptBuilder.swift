@@ -227,8 +227,14 @@ func buildForwardEmailScript(
 
     if let body = userBody {
         if userFormat == .plain {
+            // Issue #44 (mirrors #43): use Swift-side composeReplyPlainText helper
+            // instead of broken `& content` AppleScript. The pre-fix pattern read
+            // outgoing message's `content` as empty before Mail.app's GUI populated
+            // the quoted body — every plain forward since b8a4a89 silently dropped
+            // the quoted original.
+            let composedPlain = composeReplyPlainText(userBody: body, originalPlain: originalPlain ?? "")
             script += "\n" + """
-                set content to "\(appleScriptEscape(body))" & return & return & content
+                set content to "\(appleScriptEscape(composedPlain))"
             """
         } else {
             let finalHTML = try composeReplyHTML(

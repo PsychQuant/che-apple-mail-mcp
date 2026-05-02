@@ -711,13 +711,28 @@ actor MailController {
     func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil, format: BodyFormat = .plain) throws -> String {
         let ref = msgRef(id, mailbox: mailbox, account: accountName)
 
-        var originalHTML: String? = nil
-        var originalPlain: String? = nil
-        if format != .plain, body != nil {
-            let fetched = try runScript(buildFetchOriginalContentScript(messageRef: ref))
-            let parsed = parseFetchedOriginalContent(fetched)
-            originalHTML = parsed.html
-            originalPlain = parsed.plain
+        // Issue #44 (mirrors #43): pre-fetch unconditionally when body is provided.
+        // Plain mode also needs originalPlain so composeReplyPlainText can build
+        // RFC 3676 quoted body — same root cause as #43 (AppleScript `& content`
+        // against fresh outgoing message returns empty before GUI populates it).
+        // Wrap in try/catch for graceful degrade (mirror #43 round-1 hardening):
+        // pre-fetch failure (sandbox -1743, deleted message) must not hard-fail
+        // the whole forward.
+        let originalHTML: String?
+        let originalPlain: String
+        if body != nil {
+            do {
+                let fetched = try runScript(buildFetchOriginalContentScript(messageRef: ref))
+                let parsed = parseFetchedOriginalContent(fetched)
+                originalHTML = parsed.html
+                originalPlain = parsed.plain
+            } catch {
+                originalHTML = nil
+                originalPlain = ""
+            }
+        } else {
+            originalHTML = nil
+            originalPlain = ""
         }
 
         let script = try buildForwardEmailScript(

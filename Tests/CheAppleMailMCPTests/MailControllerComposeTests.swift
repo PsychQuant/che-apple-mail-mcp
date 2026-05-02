@@ -417,19 +417,43 @@ final class MailControllerComposeTests: XCTestCase {
 
     // MARK: - buildForwardEmailScript
 
-    func testBuildForwardEmailScript_plainMode_withBody_keepsConcatenation() throws {
+    func testBuildForwardEmailScript_plainMode_withBody_includesQuotedOriginal() throws {
+        // Issue #44 (mirrors #43 fix): plain forward must embed the quoted
+        // original via Swift-side composeReplyPlainText helper, not the broken
+        // `& content` AppleScript pattern. See #43 closing summary for root cause.
         let script = try buildForwardEmailScript(
             messageRef: "msgRef",
             to: ["x@y.z"],
             userBody: "FYI",
             userFormat: .plain,
             originalHTML: nil,
-            originalPlain: nil
+            originalPlain: "Original line 1\nOriginal line 2"
         )
         XCTAssertTrue(script.contains("forward originalMsg"))
         XCTAssertTrue(script.contains("to recipient"))
         XCTAssertTrue(script.contains("set content to"))
-        XCTAssertTrue(script.contains("& return & return & content"))
+        XCTAssertTrue(script.contains("> Original line 1"), "quoted original must appear in script")
+        XCTAssertTrue(script.contains("> Original line 2"), "every original line must be quoted")
+        XCTAssertFalse(script.contains("& return & return & content"), "broken `& content` AppleScript pattern MUST be removed (#44)")
+        XCTAssertFalse(script.contains("html content"), "plain mode MUST NOT touch html content")
+    }
+
+    func testBuildForwardEmailScript_plainMode_emptyOriginal_omitsQuoteBlock() throws {
+        // Edge case mirror of #43: when pre-fetch returns empty originalPlain
+        // (e.g. message deleted, sandbox error, or no body to forward), do NOT
+        // emit a stray `> ` line. Helper composeReplyPlainText handles this via
+        // its isEmpty/whitespace-only guard.
+        let script = try buildForwardEmailScript(
+            messageRef: "msgRef",
+            to: ["x@y.z"],
+            userBody: "FYI",
+            userFormat: .plain,
+            originalHTML: nil,
+            originalPlain: ""
+        )
+        XCTAssertTrue(script.contains("set content to"))
+        XCTAssertTrue(script.contains("FYI"))
+        XCTAssertFalse(script.contains("> "), "empty originalPlain MUST NOT emit `> ` quote prefix")
         XCTAssertFalse(script.contains("html content"))
     }
 

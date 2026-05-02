@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`forward_email` plain mode now embeds quoted original message in the forwarded body** ([#44](https://github.com/PsychQuant/che-apple-mail-mcp/issues/44)). Same root cause as #43 (which fixed `reply_email`): AppleScript `& content` against a freshly-created outgoing message returns empty before Mail.app's GUI populates the quoted body, so every plain `forward_email` since `b8a4a89` (initial release) silently dropped the quoted original. Fix: lift the `if format != .plain` pre-fetch gate so `originalPlain` is always fetched (when a body is provided), wrapped in `try/catch` for graceful degrade; refactor plain branch in `buildForwardEmailScript` to use the existing `composeReplyPlainText` helper from #43 (reuses RFC 3676 `> ` prefix + CRLF normalization + trim + empty-line `>` stuffing). The HTML branch was already correct (uses `composeReplyHTML` + `<blockquote>`). **Wire-output behavioral change**: every plain-format `forward_email` body with a user-provided body now reads `<user body>\n\n> <quoted lines>` instead of just `<user body>`. Forward without body is unchanged (no quote block, no body mutation). The `forward_email` tool description updated accordingly.
+
 ## [2.5.0] - 2026-05-03
 
 ### Fixed
