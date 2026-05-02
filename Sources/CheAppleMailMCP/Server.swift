@@ -757,10 +757,10 @@ class CheAppleMailMCPServer {
             return formatJSON(emails)
 
         case "get_email":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue else {
-                throw MailError.invalidParameter("id, mailbox, and account_name are required")
+                throw MailError.invalidParameter("mailbox, and account_name are required")
             }
             let format = arguments["format"]?.stringValue ?? "html"
             // Try SQLite/emlx first, fall back to AppleScript
@@ -843,37 +843,37 @@ class CheAppleMailMCPServer {
 
         // Email Action Tools
         case "mark_read":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue,
                   let read = arguments["read"]?.boolValue else {
-                throw MailError.invalidParameter("id, mailbox, account_name, and read are required")
+                throw MailError.invalidParameter("mailbox, account_name, and read are required")
             }
             return try await mailController.markRead(id: id, mailbox: mailbox, accountName: accountName, read: read)
 
         case "flag_email":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue,
                   let flagged = arguments["flagged"]?.boolValue else {
-                throw MailError.invalidParameter("id, mailbox, account_name, and flagged are required")
+                throw MailError.invalidParameter("mailbox, account_name, and flagged are required")
             }
             return try await mailController.flagEmail(id: id, mailbox: mailbox, accountName: accountName, flagged: flagged)
 
         case "move_email":
-            guard let id = arguments["id"]?.stringValue,
-                  let fromMailbox = arguments["from_mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let fromMailbox = arguments["from_mailbox"]?.stringValue,
                   let toMailbox = arguments["to_mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue else {
-                throw MailError.invalidParameter("id, from_mailbox, to_mailbox, and account_name are required")
+                throw MailError.invalidParameter("from_mailbox, to_mailbox, and account_name are required")
             }
             return try await mailController.moveEmail(id: id, fromMailbox: fromMailbox, toMailbox: toMailbox, accountName: accountName)
 
         case "delete_email":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue else {
-                throw MailError.invalidParameter("id, mailbox, and account_name are required")
+                throw MailError.invalidParameter("mailbox, and account_name are required")
             }
             return try await mailController.deleteEmail(id: id, mailbox: mailbox, accountName: accountName)
 
@@ -892,11 +892,11 @@ class CheAppleMailMCPServer {
             return try await mailController.composeEmail(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format)
 
         case "reply_email":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue,
                   let body = arguments["body"]?.stringValue else {
-                throw MailError.invalidParameter("id, mailbox, account_name, and body are required")
+                throw MailError.invalidParameter("mailbox, account_name, and body are required")
             }
             let replyAll = try requireBool(arguments, key: "reply_all", default: false)
             let ccAdditional = try optionalStringArray(arguments, key: "cc_additional")
@@ -906,11 +906,11 @@ class CheAppleMailMCPServer {
             return try await mailController.replyEmail(id: id, mailbox: mailbox, accountName: accountName, body: body, replyAll: replyAll, ccAdditional: ccAdditional, attachments: replyAttachments, saveAsDraft: saveAsDraft, format: format)
 
         case "forward_email":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue,
                   let toArray = arguments["to"]?.arrayValue else {
-                throw MailError.invalidParameter("id, mailbox, account_name, and to are required")
+                throw MailError.invalidParameter("mailbox, account_name, and to are required")
             }
             let to = toArray.compactMap { $0.stringValue }
             let body = arguments["body"]?.stringValue
@@ -938,10 +938,10 @@ class CheAppleMailMCPServer {
 
         // Attachment Tools
         case "list_attachments":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue else {
-                throw MailError.invalidParameter("id, mailbox, and account_name are required")
+                throw MailError.invalidParameter("mailbox, and account_name are required")
             }
             if let reader = indexReader, let rowId = Int(id) {
                 let sqliteAttachments = try reader.listAttachments(messageId: rowId)
@@ -980,12 +980,12 @@ class CheAppleMailMCPServer {
             return formatJSON(attachments)
 
         case "save_attachment":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue,
                   let attachmentName = arguments["attachment_name"]?.stringValue,
                   let savePath = arguments["save_path"]?.stringValue else {
-                throw MailError.invalidParameter("id, mailbox, account_name, attachment_name, and save_path are required")
+                throw MailError.invalidParameter("mailbox, account_name, attachment_name, and save_path are required")
             }
             // Tier 1: SQLite + .emlx fast path (see openspec/changes/save-attachment-fast-path).
             // Wraps in its own do/catch so any failure falls through to the
@@ -1086,46 +1086,46 @@ class CheAppleMailMCPServer {
 
         // Advanced Email Tools
         case "copy_email":
-            guard let id = arguments["id"]?.stringValue,
-                  let fromMailbox = arguments["from_mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let fromMailbox = arguments["from_mailbox"]?.stringValue,
                   let toMailbox = arguments["to_mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue else {
-                throw MailError.invalidParameter("id, from_mailbox, to_mailbox, and account_name are required")
+                throw MailError.invalidParameter("from_mailbox, to_mailbox, and account_name are required")
             }
             return try await mailController.copyEmail(id: id, fromMailbox: fromMailbox, toMailbox: toMailbox, accountName: accountName)
 
         case "set_flag_color":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue,
                   let colorIndex = arguments["color_index"]?.intValue else {
-                throw MailError.invalidParameter("id, mailbox, account_name, and color_index are required")
+                throw MailError.invalidParameter("mailbox, account_name, and color_index are required")
             }
             return try await mailController.setFlagColor(id: id, mailbox: mailbox, accountName: accountName, colorIndex: colorIndex)
 
         case "set_background_color":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue,
                   let color = arguments["color"]?.stringValue else {
-                throw MailError.invalidParameter("id, mailbox, account_name, and color are required")
+                throw MailError.invalidParameter("mailbox, account_name, and color are required")
             }
             return try await mailController.setBackgroundColor(id: id, mailbox: mailbox, accountName: accountName, color: color)
 
         case "mark_as_junk":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue,
                   let isJunk = arguments["is_junk"]?.boolValue else {
-                throw MailError.invalidParameter("id, mailbox, account_name, and is_junk are required")
+                throw MailError.invalidParameter("mailbox, account_name, and is_junk are required")
             }
             return try await mailController.markAsJunk(id: id, mailbox: mailbox, accountName: accountName, isJunk: isJunk)
 
         case "get_email_headers":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue else {
-                throw MailError.invalidParameter("id, mailbox, and account_name are required")
+                throw MailError.invalidParameter("mailbox, and account_name are required")
             }
             if let reader = indexReader, let rowId = Int(id),
                let mailboxUrl = try? reader.mailboxURL(forMessageId: rowId) {
@@ -1136,10 +1136,10 @@ class CheAppleMailMCPServer {
             return try await mailController.getEmailHeaders(id: id, mailbox: mailbox, accountName: accountName)
 
         case "get_email_source":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue else {
-                throw MailError.invalidParameter("id, mailbox, and account_name are required")
+                throw MailError.invalidParameter("mailbox, and account_name are required")
             }
             if let reader = indexReader, let rowId = Int(id),
                let mailboxUrl = try? reader.mailboxURL(forMessageId: rowId) {
@@ -1150,20 +1150,20 @@ class CheAppleMailMCPServer {
             return try await mailController.getEmailSource(id: id, mailbox: mailbox, accountName: accountName)
 
         case "redirect_email":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue,
                   let toArray = arguments["to"]?.arrayValue else {
-                throw MailError.invalidParameter("id, mailbox, account_name, and to are required")
+                throw MailError.invalidParameter("mailbox, account_name, and to are required")
             }
             let to = toArray.compactMap { $0.stringValue }
             return try await mailController.redirectEmail(id: id, mailbox: mailbox, accountName: accountName, to: to)
 
         case "get_email_metadata":
-            guard let id = arguments["id"]?.stringValue,
-                  let mailbox = arguments["mailbox"]?.stringValue,
+            let id = try requireMessageId(arguments)
+            guard let mailbox = arguments["mailbox"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue else {
-                throw MailError.invalidParameter("id, mailbox, and account_name are required")
+                throw MailError.invalidParameter("mailbox, and account_name are required")
             }
             if let reader = indexReader, let rowId = Int(id) {
                 let metadata = try reader.getEmailMetadata(messageId: rowId)
@@ -1422,6 +1422,27 @@ func typeName(of value: Value) -> String {
     case .object: return "object"
     case .data: return "data"
     }
+}
+
+/// Issue #50: validate that `arguments["id"]` is present, a string, and parses as Int.
+/// Returns the validated id as `String` to preserve the existing JSON Schema (`id: string`).
+/// Throws `MailError.invalidParameter` for missing, non-string, or non-numeric input.
+///
+/// Without this validation, a malicious / hallucinated MCP caller could pass
+/// `id = "123 whose subject is \"x\" or true ..."` which AppleScript interpolates
+/// into `whose id is 123 whose subject is "x" or true ...` — `or true` short-circuits
+/// the predicate and returns the wrong message. See #50 diagnosis.
+func requireMessageId(_ arguments: [String: Value]) throws -> String {
+    guard let raw = arguments["id"]?.stringValue else {
+        throw MailError.invalidParameter("id is required and must be a numeric message id")
+    }
+    guard !raw.isEmpty else {
+        throw MailError.invalidParameter("id must be a non-empty numeric message id (got empty string)")
+    }
+    guard Int(raw) != nil else {
+        throw MailError.invalidParameter("id must be a numeric message id (got: '\(raw)')")
+    }
+    return raw
 }
 
 func parseBodyFormatArgument(_ raw: Value?) throws -> BodyFormat {

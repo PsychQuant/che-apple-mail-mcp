@@ -131,6 +131,71 @@ final class ServerSchemaTests: XCTestCase {
         }
     }
 
+    // MARK: - requireMessageId (#50 — id injection hardening)
+
+    private func assertInvalidMessageId(_ arguments: [String: Value],
+                                        expectedFragment: String,
+                                        file: StaticString = #file, line: UInt = #line) {
+        XCTAssertThrowsError(try requireMessageId(arguments), file: file, line: line) { error in
+            guard let mailErr = error as? MailError,
+                  case .invalidParameter(let msg) = mailErr else {
+                XCTFail("Expected MailError.invalidParameter, got \(error)", file: file, line: line)
+                return
+            }
+            XCTAssertTrue(msg.contains(expectedFragment),
+                          "error '\(msg)' must contain '\(expectedFragment)'",
+                          file: file, line: line)
+        }
+    }
+
+    func testRequireMessageId_acceptsValidNumericString() throws {
+        XCTAssertEqual(try requireMessageId(["id": .string("123")]), "123")
+        XCTAssertEqual(try requireMessageId(["id": .string("0")]), "0")
+        // Mail.app message IDs are Int64-range; verify large values pass.
+        XCTAssertEqual(try requireMessageId(["id": .string("9223372036854775807")]),
+                       "9223372036854775807")  // Int64.max
+    }
+
+    func testRequireMessageId_missingKeyThrows() {
+        assertInvalidMessageId([:], expectedFragment: "required")
+    }
+
+    func testRequireMessageId_emptyStringThrows() {
+        assertInvalidMessageId(["id": .string("")], expectedFragment: "non-empty")
+    }
+
+    func testRequireMessageId_nonNumericStringThrows() {
+        assertInvalidMessageId(["id": .string("abc")], expectedFragment: "abc")
+        assertInvalidMessageId(["id": .string("12abc")], expectedFragment: "12abc")
+        assertInvalidMessageId(["id": .string("12.5")], expectedFragment: "12.5")
+    }
+
+    func testRequireMessageId_injectionAttemptThrows() {
+        // Issue #50 attack vector: AppleScript predicate-injection via crafted id.
+        // Without validation, this would interpolate as
+        //   `whose id is 123 whose subject is "x" or true or whose name is`
+        // and `or true` short-circuits returning the wrong message.
+        assertInvalidMessageId(
+            ["id": .string("123 whose subject is \"x\" or true")],
+            expectedFragment: "whose subject"
+        )
+    }
+
+    func testRequireMessageId_whitespaceTrimmedRejected() {
+        // Strict: leading/trailing whitespace not accepted (Int("123 ") returns nil
+        // because Swift's Int initializer doesn't trim).
+        assertInvalidMessageId(["id": .string("123 ")], expectedFragment: "123 ")
+        assertInvalidMessageId(["id": .string(" 123")], expectedFragment: " 123")
+    }
+
+    func testRequireMessageId_nonStringTypeThrows() {
+        // arguments["id"] returns nil for missing key; non-string Value types
+        // also return nil from .stringValue accessor → same path as missing.
+        assertInvalidMessageId(["id": .int(123)], expectedFragment: "required")
+        assertInvalidMessageId(["id": .bool(true)], expectedFragment: "required")
+        assertInvalidMessageId(["id": .null], expectedFragment: "required")
+    }
+
     // MARK: - parseBodyFormatArgument (handles MCP Value type)
 
     func testParseBodyFormatArgument_nilReturnsPlain() throws {

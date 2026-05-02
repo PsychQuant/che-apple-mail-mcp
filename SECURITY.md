@@ -23,6 +23,16 @@ tool handler should be treated as untrusted (LLM-generated, possibly prompt-
 injected from inbound email content). The Mail.app side runs with the user's
 local privileges.
 
+We defend against:
+- AppleScript injection via crafted tool parameters (#50: `id` Int validation
+  at handler boundary)
+- Path traversal / sensitive file exfil via attachments (#38: deny-list +
+  optional allow-list for attachment paths)
+- Email header injection via crafted addresses (#41: RFC 5322 addr-spec +
+  control-char rejection at recipient validation)
+- Type-coercion silent failures (#35: typed helpers `requireBool` /
+  `optionalStringArray` reject non-matching types instead of silent default)
+
 We do NOT defend against:
 - Local user with shell access (out of trust boundary; Mail.app is already
   fully accessible)
@@ -105,9 +115,24 @@ This is consistent with [RFC 3676 §4.5](https://datatracker.ietf.org/doc/html/r
 
 Discovered during 6-AI verify of [#43](https://github.com/PsychQuant/che-apple-mail-mcp/issues/43). Tracked in [#48](https://github.com/PsychQuant/che-apple-mail-mcp/issues/48).
 
+### `id` parameter is validated as Int (since v2.6.0 / #50)
+
+All 17 message-id-taking MCP tools now hard-fail at the handler boundary if
+the `id` parameter is missing, empty, non-string, or non-numeric. Prior to
+v2.6.0, a crafted `id` like `"123 whose subject is \"x\" or true ..."` could
+cause Mail.app to return the wrong message via AppleScript predicate
+short-circuit.
+
+This is now handled at the Server.swift handler layer via `requireMessageId`,
+with a `MailController.msgRef` debug-only assertion as defense in depth.
+
+The `id` JSON Schema remains `string` (callers don't need to change encoding);
+runtime validation is strictly stronger than the schema.
+
 ## Audit Trail
 
 | Date | Issue | Fix |
 |------|-------|-----|
-| 2026-05-03 | [#48](https://github.com/PsychQuant/che-apple-mail-mcp/issues/48) | SECURITY.md created (this document) — RFC 3676 nested quote forgery limitation documented |
+| 2026-05-03 | [#48](https://github.com/PsychQuant/che-apple-mail-mcp/issues/48) | SECURITY.md created — RFC 3676 nested quote forgery limitation documented |
 | 2026-05-03 | [#38](https://github.com/PsychQuant/che-apple-mail-mcp/issues/38) | Attachment path validation: deny-list + symlink resolution + opt-in allow-list |
+| 2026-05-03 | [#50](https://github.com/PsychQuant/che-apple-mail-mcp/issues/50) | `id` injection at msgRef AppleScript interpolation — Int validation at handler boundary |

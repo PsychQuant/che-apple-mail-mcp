@@ -1514,7 +1514,14 @@ actor MailController {
     /// Apple Mail's `message id` refers to the RFC822 Message-ID (string),
     /// but `id` is the internal numeric identifier returned by search/list.
     /// We must use `first message ... whose id is N` instead of `message id N`.
+    ///
+    /// Issue #50: `id` is interpolated unescaped. Server.swift's `requireMessageId`
+    /// validates Int format at the handler boundary; this assertion catches future
+    /// internal callers that bypass that validation. Use `assert` (debug-only) not
+    /// `precondition` — Server-layer throw is the user-facing contract; release
+    /// builds should not crash on internal-caller bug.
     private func msgRef(_ id: String, mailbox: String, account: String) -> String {
+        assert(Int(id) != nil, "msgRef called with non-numeric id '\(id)' — Server.swift handler missed validation (#50)")
         return "(first message of \(mailboxRef(mailbox, account: account)) whose id is \(id))"
     }
 
