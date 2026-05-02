@@ -642,6 +642,62 @@ actor MailController {
         }
     }
 
+    /// Issue #41: validate email addresses (RFC 5322 addr-spec lite). Rejects:
+    ///   - Control characters (0x00-0x1F) — header injection vector
+    ///   - Missing or multiple `@` — structurally malformed
+    ///   - `@` at start/end — malformed local-part or domain
+    ///
+    /// Defense-in-depth: `appleScriptEscape` already prevents AppleScript-string
+    /// injection, but malformed addresses can corrupt Mail.app's draft creation
+    /// or generate confusing recipient errors. Strict validation gives clear
+    /// caller-visible errors at the boundary.
+    ///
+    /// `internal` so @testable import can exercise without going through
+    /// composeEmail / replyEmail. Empty array is no-op.
+    func validateEmailAddresses(_ addresses: [String], field: String) throws {
+        guard !addresses.isEmpty else { return }
+        var failures: [String] = []
+        for addr in addresses {
+            // Reject control chars + tab + DEL (RFC 5322 forbids in addr-spec).
+            if addr.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) {
+                failures.append("'\(addr)' contains control characters")
+                continue
+            }
+            // Structural: exactly one `@`, neither at start nor end.
+            let atCount = addr.filter { $0 == "@" }.count
+            if atCount != 1 {
+                failures.append("'\(addr)' must contain exactly one '@' (got \(atCount))")
+                continue
+            }
+            if addr.hasPrefix("@") || addr.hasSuffix("@") {
+                failures.append("'\(addr)' must not start or end with '@'")
+                continue
+            }
+        }
+        guard failures.isEmpty else {
+            throw MailError.invalidParameter("Invalid email address(es) in '\(field)': \(failures.joined(separator: "; "))")
+        }
+    }
+
+    /// Issue #34: case-insensitive dedup within a recipient list (preserves
+    /// first-seen order). Use BEFORE passing to recipientFragment to avoid
+    /// duplicate `make new cc recipient` AppleScript calls for the same address.
+    ///
+    /// Note: cross-list dedup (cc_additional vs reply_all-derived CCs from
+    /// original message) is OUT of scope for this helper — it would require
+    /// fetching original-message CC headers. Document as known limitation.
+    func dedupAddresses(_ addresses: [String]) -> [String] {
+        var seen: Set<String> = []
+        var result: [String] = []
+        for addr in addresses {
+            let key = addr.lowercased()
+            if seen.insert(key).inserted {
+                result.append(addr)
+            }
+        }
+        return result
+    }
+
     /// Generate AppleScript lines to attach files to an outgoing message
     private func attachmentScript(for paths: [String]) -> String {
         paths.map { path in
@@ -654,6 +710,10 @@ actor MailController {
     /// Compose and send a new email
     func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain) throws -> String {
         if let attachments = attachments { try validateFilePaths(attachments) }
+        // Issue #41: validate every recipient field (to / cc / bcc) at the boundary.
+        try validateEmailAddresses(to, field: "to")
+        if let cc = cc { try validateEmailAddresses(cc, field: "cc") }
+        if let bcc = bcc { try validateEmailAddresses(bcc, field: "bcc") }
         let script = try buildComposeEmailScript(
             to: to,
             subject: subject,
@@ -669,6 +729,16 @@ actor MailController {
     /// Reply to an email. Optionally add extra CC, attach files, and/or save as draft instead of sending.
     func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]? = nil, saveAsDraft: Bool = false, format: BodyFormat = .plain) throws -> String {
         if let attachments = attachments { try validateFilePaths(attachments) }
+        // Issue #41 + #34: validate cc_additional then dedup case-insensitively
+        // (within the user-supplied list; cross-list dedup vs reply_all-derived
+        // CCs requires fetching original CCs — out of scope, see #34).
+        let dedupedCC: [String]?
+        if let cc = ccAdditional {
+            try validateEmailAddresses(cc, field: "cc_additional")
+            dedupedCC = dedupAddresses(cc)
+        } else {
+            dedupedCC = nil
+        }
         let ref = msgRef(id, mailbox: mailbox, account: accountName)
 
         // Issue #43: pre-fetch unconditionally — plain mode also needs originalPlain
@@ -698,7 +768,7 @@ actor MailController {
             userBody: body,
             userFormat: format,
             replyAll: replyAll,
-            ccAdditional: ccAdditional,
+            ccAdditional: dedupedCC,
             attachments: attachments,
             saveAsDraft: saveAsDraft,
             originalHTML: originalHTML,
@@ -709,6 +779,8 @@ actor MailController {
 
     /// Forward an email
     func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil, format: BodyFormat = .plain) throws -> String {
+        // Issue #41: validate forward recipients at the boundary.
+        try validateEmailAddresses(to, field: "to")
         let ref = msgRef(id, mailbox: mailbox, account: accountName)
 
         // Issue #44 (mirrors #43): pre-fetch unconditionally when body is provided.
@@ -766,6 +838,8 @@ actor MailController {
     /// Create a draft
     func createDraft(to: [String], subject: String, body: String, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain) throws -> String {
         if let attachments = attachments { try validateFilePaths(attachments) }
+        // Issue #41: validate draft recipients at the boundary.
+        try validateEmailAddresses(to, field: "to")
         let script = try buildCreateDraftScript(
             to: to,
             subject: subject,

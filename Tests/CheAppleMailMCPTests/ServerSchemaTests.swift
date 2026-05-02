@@ -233,4 +233,74 @@ final class ServerSchemaTests: XCTestCase {
             XCTAssertTrue(msg.contains("integer"), "error must mention actual type")
         }
     }
+
+    // MARK: - Schema property type-annotation assertions (#42)
+
+    /// Helper for #42: assert a schema property exists AND has the expected type
+    /// annotation. For arrays, optionally assert items.type. Catches accidental
+    /// drop of `type` or `items.type` during schema refactors.
+    private func assertSchemaProperty(_ properties: [String: Value],
+                                      key: String,
+                                      hasType: String,
+                                      itemsType: String? = nil,
+                                      file: StaticString = #file, line: UInt = #line) {
+        guard let prop = properties[key] else {
+            XCTFail("schema missing key '\(key)'", file: file, line: line)
+            return
+        }
+        guard case .object(let propObj) = prop else {
+            XCTFail("'\(key)' must be a schema object", file: file, line: line)
+            return
+        }
+        guard case .string(let typeStr) = propObj["type"] ?? .null else {
+            XCTFail("'\(key)' missing or wrong-typed 'type' annotation", file: file, line: line)
+            return
+        }
+        XCTAssertEqual(typeStr, hasType, "'\(key)'.type must be '\(hasType)'", file: file, line: line)
+
+        if let expectedItemsType = itemsType {
+            guard case .object(let itemsObj) = propObj["items"] ?? .null,
+                  case .string(let actualItemsType) = itemsObj["type"] ?? .null else {
+                XCTFail("'\(key)'.items.type missing or wrong-typed", file: file, line: line)
+                return
+            }
+            XCTAssertEqual(actualItemsType, expectedItemsType,
+                           "'\(key)'.items.type must be '\(expectedItemsType)'",
+                           file: file, line: line)
+        }
+    }
+
+    func testReplyEmail_typeAnnotationsAreCorrect() throws {
+        // Issue #42: schema tests must assert type annotations not just key presence.
+        // Catches accidental drop of type or items.type during refactors.
+        guard let tool = tool(named: "reply_email"),
+              let props = propertiesObject(of: tool) else {
+            XCTFail("reply_email schema missing")
+            return
+        }
+        assertSchemaProperty(props, key: "id", hasType: "string")
+        assertSchemaProperty(props, key: "mailbox", hasType: "string")
+        assertSchemaProperty(props, key: "account_name", hasType: "string")
+        assertSchemaProperty(props, key: "body", hasType: "string")
+        assertSchemaProperty(props, key: "reply_all", hasType: "boolean")
+        assertSchemaProperty(props, key: "save_as_draft", hasType: "boolean")
+        assertSchemaProperty(props, key: "cc_additional", hasType: "array", itemsType: "string")
+        assertSchemaProperty(props, key: "attachments", hasType: "array", itemsType: "string")
+        assertSchemaProperty(props, key: "format", hasType: "string")
+    }
+
+    func testComposeEmail_typeAnnotationsAreCorrect() throws {
+        guard let tool = tool(named: "compose_email"),
+              let props = propertiesObject(of: tool) else {
+            XCTFail("compose_email schema missing")
+            return
+        }
+        assertSchemaProperty(props, key: "to", hasType: "array", itemsType: "string")
+        assertSchemaProperty(props, key: "subject", hasType: "string")
+        assertSchemaProperty(props, key: "body", hasType: "string")
+        assertSchemaProperty(props, key: "cc", hasType: "array", itemsType: "string")
+        assertSchemaProperty(props, key: "bcc", hasType: "array", itemsType: "string")
+        assertSchemaProperty(props, key: "attachments", hasType: "array", itemsType: "string")
+        assertSchemaProperty(props, key: "format", hasType: "string")
+    }
 }

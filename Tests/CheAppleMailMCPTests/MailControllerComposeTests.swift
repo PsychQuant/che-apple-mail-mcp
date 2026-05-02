@@ -499,4 +499,122 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertNil(parsed.html)
         XCTAssertEqual(parsed.plain, "plain only")
     }
+
+    // MARK: - validateEmailAddresses (#41)
+
+    func testValidateEmailAddresses_acceptsValid() async throws {
+        try await MailController.shared.validateEmailAddresses(
+            ["a@b.com", "user.name+tag@example.co.uk", "用戶@xn--wgv71a.com"],
+            field: "to"
+        )
+    }
+
+    func testValidateEmailAddresses_emptyArrayIsNoop() async throws {
+        try await MailController.shared.validateEmailAddresses([], field: "cc")
+    }
+
+    func testValidateEmailAddresses_rejectsControlChars() async {
+        // Header injection attempt: \n in address could try to inject Bcc: header.
+        do {
+            try await MailController.shared.validateEmailAddresses(
+                ["ok@x.com\nBcc: leak@evil.com"],
+                field: "cc_additional"
+            )
+            XCTFail("expected control-char rejection")
+        } catch let error as MailError {
+            guard case .invalidParameter(let msg) = error else {
+                XCTFail("expected invalidParameter, got \(error)")
+                return
+            }
+            XCTAssertTrue(msg.contains("control characters"), "msg must mention control chars: \(msg)")
+            XCTAssertTrue(msg.contains("cc_additional"), "msg must include field name: \(msg)")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testValidateEmailAddresses_rejectsMissingAt() async {
+        do {
+            try await MailController.shared.validateEmailAddresses(["not-an-email"], field: "to")
+            XCTFail("expected reject")
+        } catch let error as MailError {
+            guard case .invalidParameter(let msg) = error else {
+                XCTFail("expected invalidParameter, got \(error)")
+                return
+            }
+            XCTAssertTrue(msg.contains("exactly one '@'"), "msg must explain: \(msg)")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testValidateEmailAddresses_rejectsMultipleAt() async {
+        do {
+            try await MailController.shared.validateEmailAddresses(["a@b@c.com"], field: "to")
+            XCTFail("expected reject")
+        } catch let error as MailError {
+            guard case .invalidParameter(let msg) = error else { return XCTFail() }
+            XCTAssertTrue(msg.contains("exactly one '@'"))
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testValidateEmailAddresses_rejectsAtAtBoundaries() async {
+        for bogus in ["@nodomain.com", "noprefix@", "@", ""] {
+            do {
+                try await MailController.shared.validateEmailAddresses([bogus], field: "to")
+                XCTFail("expected reject for '\(bogus)'")
+            } catch is MailError {
+                // expected
+            } catch {
+                XCTFail("unexpected error type for '\(bogus)': \(error)")
+            }
+        }
+    }
+
+    func testValidateEmailAddresses_collectsAllFailures() async {
+        do {
+            try await MailController.shared.validateEmailAddresses(
+                ["a@b@c.com", "valid@x.com", "bad"],
+                field: "to"
+            )
+            XCTFail("expected reject")
+        } catch let error as MailError {
+            guard case .invalidParameter(let msg) = error else { return XCTFail() }
+            // Both invalid addresses should appear in error message; valid one should not.
+            XCTAssertTrue(msg.contains("a@b@c.com"), "msg must list a@b@c.com: \(msg)")
+            XCTAssertTrue(msg.contains("'bad'"), "msg must list 'bad': \(msg)")
+            XCTAssertFalse(msg.contains("'valid@x.com'"), "msg must NOT list valid address: \(msg)")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    // MARK: - dedupAddresses (#34)
+
+    func testDedupAddresses_removesCaseInsensitiveDuplicates() async {
+        let result = await MailController.shared.dedupAddresses(
+            ["a@b.com", "A@B.COM", "c@d.com", "a@b.com"]
+        )
+        XCTAssertEqual(result, ["a@b.com", "c@d.com"], "first-seen wins; case-insensitive dedup")
+    }
+
+    func testDedupAddresses_emptyArray() async {
+        let result = await MailController.shared.dedupAddresses([])
+        XCTAssertEqual(result, [])
+    }
+
+    func testDedupAddresses_singleAddress() async {
+        let result = await MailController.shared.dedupAddresses(["a@b.com"])
+        XCTAssertEqual(result, ["a@b.com"])
+    }
+
+    func testDedupAddresses_preservesFirstSeenOrder() async {
+        // Order matters for downstream recipientFragment generation.
+        let result = await MailController.shared.dedupAddresses(
+            ["c@d.com", "a@b.com", "C@D.com", "b@e.com"]
+        )
+        XCTAssertEqual(result, ["c@d.com", "a@b.com", "b@e.com"])
+    }
 }
