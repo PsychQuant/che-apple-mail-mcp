@@ -671,13 +671,26 @@ actor MailController {
         if let attachments = attachments { try validateFilePaths(attachments) }
         let ref = msgRef(id, mailbox: mailbox, account: accountName)
 
-        var originalHTML: String? = nil
-        var originalPlain = ""
-        if format != .plain {
+        // Issue #43: pre-fetch unconditionally — plain mode also needs originalPlain
+        // so composeReplyPlainText can build RFC 3676 quoted body. AppleScript's
+        // `& content` against a freshly-created outgoing message reads as empty
+        // before Mail.app's GUI populates it, which silently dropped the quoted
+        // original from every plain reply since b8a4a89 (initial release).
+        //
+        // Round-1 hardening (#43 verify Logic #4 / DA-3): pre-fetch failure
+        // (sandbox -1743, message deleted, ICloud server-side body) must not
+        // hard-fail the whole reply. Fall back to "no quote" so the user's
+        // body is still preserved and the reply can still be sent/saved.
+        let originalHTML: String?
+        let originalPlain: String
+        do {
             let fetched = try runScript(buildFetchOriginalContentScript(messageRef: ref))
             let parsed = parseFetchedOriginalContent(fetched)
             originalHTML = parsed.html
             originalPlain = parsed.plain
+        } catch {
+            originalHTML = nil
+            originalPlain = ""
         }
 
         let script = try buildReplyEmailScript(

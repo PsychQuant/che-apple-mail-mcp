@@ -110,6 +110,38 @@ func composeReplyHTML(userBody: String, userFormat: BodyFormat, originalHTML: St
     return "\(userPart)\n<hr>\n<blockquote>\n\(quoted)\n</blockquote>"
 }
 
+// Issue #43: AppleScript `& content` against a freshly-created outgoing message
+// returns empty before the GUI compose pipeline materializes the quoted body.
+// We pre-fetch the original plain text and Swift-side compose RFC 3676 quoted
+// reply body so the result is deterministic regardless of window state.
+//
+// Round-1 hardening (#43 verify findings — Logic #1/2/3/5, Codex P1/P3):
+// - Normalize CRLF/CR → LF before splitting (Mail.app IMAP/Exchange messages
+//   sometimes return CRLF line endings).
+// - Strip trailing newlines (Mail.app commonly appends a trailing newline,
+//   which would emit a stray `> ` line at the end).
+// - For empty quoted lines, emit `>` (no trailing space) per RFC 3676 §4.5;
+//   only non-empty lines get the `> ` stuffing space.
+// - After normalization, if there is no quotable content (e.g. originalPlain
+//   was just whitespace/newlines), return userBody alone.
+func composeReplyPlainText(userBody: String, originalPlain: String) -> String {
+    let normalized = originalPlain
+        .replacingOccurrences(of: "\r\n", with: "\n")
+        .replacingOccurrences(of: "\r", with: "\n")
+    var trimmed = Substring(normalized)
+    while let last = trimmed.last, last == "\n" {
+        trimmed = trimmed.dropLast()
+    }
+    if trimmed.isEmpty {
+        return userBody
+    }
+    let quoted = trimmed
+        .split(separator: "\n", omittingEmptySubsequences: false)
+        .map { $0.isEmpty ? ">" : "> \($0)" }
+        .joined(separator: "\n")
+    return "\(userBody)\n\n\(quoted)"
+}
+
 func buildReplyEmailScript(
     messageRef: String,
     userBody: String,
@@ -142,12 +174,13 @@ func buildReplyEmailScript(
     }()
 
     if userFormat == .plain {
+        let composedPlain = composeReplyPlainText(userBody: userBody, originalPlain: originalPlain)
         return """
         tell application "Mail"
             set originalMsg to \(messageRef)
             set replyMsg to \(replyType) originalMsg \(windowClause)
             tell replyMsg
-                set content to "\(appleScriptEscape(userBody))" & return & return & content\(extraTellLines)
+                set content to "\(appleScriptEscape(composedPlain))"\(extraTellLines)
             end tell
             \(dispatchVerb) replyMsg
             return "\(returnMessage)"

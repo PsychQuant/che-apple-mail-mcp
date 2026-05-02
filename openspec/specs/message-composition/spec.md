@@ -84,11 +84,16 @@ When `reply_email` or `forward_email` is invoked with `format` set to `"markdown
 - **THEN** the returned HTML SHALL contain `<blockquote>`
 - **AND** the blockquote content SHALL contain `Can you &lt;review&gt;?` (HTML-escaped)
 
-#### Scenario: Reply in plain mode keeps existing concatenation
+#### Scenario: Reply in plain mode embeds RFC 3676 quoted original
 
 - **WHEN** a caller invokes `reply_email` with `body: "Thanks"` and `format: "plain"` (or omits format)
-- **THEN** the reply SHALL use the AppleScript `content` property with value `"Thanks\n\n<original plain content>"`
+- **THEN** the reply SHALL use the AppleScript `content` property
+- **AND** the value SHALL be `"Thanks\n\n> <line 1 of original plain content>\n> <line 2>\n..."` — the user body, a blank line, then the original plain message with each line prefixed by `"> "` (greater-than + space) per RFC 3676 §4.5
+- **AND** empty lines in the original SHALL be quoted as `">"` (no trailing space) per RFC 3676 §4.5 stuffing rule
 - **AND** the reply SHALL NOT use the AppleScript `html content` property
+- **AND** if the pre-fetch of original content fails (e.g. message deleted, sandbox denial), the reply SHALL gracefully degrade to the user body alone (no quoted block) rather than aborting the entire reply
+
+> **Note (#43)**: Pre-v2.5.0 the plain branch used `set content to "<body>" & return & return & content`, which silently produced bare-body replies because Mail.app's outgoing-message `content` property is empty until the GUI compose pipeline materializes the quoted body. Replaced with Swift-side composition (`composeReplyPlainText`) that pre-fetches and quotes deterministically.
 
 ---
 ### Requirement: Signature preservation is out of scope

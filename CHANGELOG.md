@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`reply_email` plain mode now embeds quoted original message in the draft body** ([#43](https://github.com/PsychQuant/che-apple-mail-mcp/issues/43)). Pre-fix every plain-format `reply_email` call since `b8a4a89` (initial release) silently produced bare-body replies because the AppleScript `set content to "<body>" & return & return & content` pattern read the outgoing message's `content` property as empty — Mail.app does not populate the quoted body until the GUI compose pipeline materializes it (especially when `without opening window` is used for `save_as_draft=true`). Fix: pre-fetch the original content unconditionally and Swift-side compose RFC 3676 `> `-prefixed quoted body via a new `composeReplyPlainText` helper. The HTML branch was already correct (it always pre-fetched and built `<blockquote>`). **Wire-output behavioral change**: every plain-format reply body now reads `<user reply>\n\n> <each line of original>` instead of just `<user reply>`. Round-1 verify hardening: CRLF/CR normalization, trailing-newline trim, empty-line `>` stuffing per RFC 3676 §4.5, and graceful degrade when pre-fetch fails (sandbox / deleted message → "no quote" rather than abort).
+
+### Changed
+- **`reply_email` MCP tool description and `format` parameter description updated** to document the new RFC 3676 quoted-body behavior for plain mode. The previous wording ("preserves existing concatenation semantics") was misleading because the underlying behavior was broken; the new wording reflects what the tool actually does.
+- **`openspec/specs/message-composition/spec.md` Scenario "Reply in plain mode"** rewritten from `"Thanks\n\n<original plain content>"` to RFC 3676 quoted form, with a `> ` prefix on every original line and `>` (no trailing space) on empty lines.
+
 ## [2.4.1] - 2026-05-02
 
 ### Fixed
