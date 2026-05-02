@@ -174,10 +174,47 @@ final class MailControllerComposeTests: XCTestCase {
             userBody: "Reply",
             originalPlain: "Para 1\n\nPara 2"
         )
-        // RFC 3676: quoted empty lines stay quoted (preserves paragraph breaks visually)
+        // RFC 3676 §4.5: quoted empty lines emit `>` only (no trailing space stuffing
+        // when there is no content). Round-1 hardening (#43 verify Logic #3).
         XCTAssertTrue(result.contains("> Para 1"))
         XCTAssertTrue(result.contains("> Para 2"))
-        XCTAssertTrue(result.contains("> \n"), "blank lines between quoted paragraphs must remain prefixed")
+        XCTAssertTrue(result.contains(">\n"), "blank quoted lines must remain prefixed (with bare `>`)")
+        XCTAssertFalse(result.contains("> \n"), "blank quoted lines MUST NOT have trailing-space stuffing (RFC 3676 §4.5)")
+    }
+
+    func testComposeReplyPlainText_originalWithCRLF_normalizesLineEndings() {
+        // Round-1 hardening (#43 verify Logic #5 / Codex P1): Mail.app IMAP /
+        // Exchange messages return CRLF line endings. The helper must normalize
+        // them so the AppleScript escape doesn't smuggle stray `\r` through.
+        let result = composeReplyPlainText(
+            userBody: "Reply",
+            originalPlain: "Line 1\r\nLine 2\r\nLine 3"
+        )
+        XCTAssertTrue(result.contains("> Line 1"))
+        XCTAssertTrue(result.contains("> Line 2"))
+        XCTAssertTrue(result.contains("> Line 3"))
+        XCTAssertFalse(result.contains("\r"), "CRLF / CR characters MUST be normalized to LF before quoting")
+    }
+
+    func testComposeReplyPlainText_originalWithSingleNewline_returnsUserBodyOnly() {
+        // Round-1 hardening (#43 verify Logic #1 / Codex P3): Mail.app sometimes
+        // returns "\n" or "\n\n" as the plain content for HTML-only messages.
+        // Treat as no-quotable-content rather than emitting stray `>` lines.
+        XCTAssertEqual(composeReplyPlainText(userBody: "Hi", originalPlain: "\n"), "Hi")
+        XCTAssertEqual(composeReplyPlainText(userBody: "Hi", originalPlain: "\n\n\n"), "Hi")
+        XCTAssertEqual(composeReplyPlainText(userBody: "Hi", originalPlain: "\r\n"), "Hi")
+    }
+
+    func testComposeReplyPlainText_originalWithTrailingNewline_dropsStrayQuoteLine() {
+        // Round-1 hardening (#43 verify Logic #2): Mail.app commonly appends a
+        // trailing newline. Without trim, the helper would emit `> ` (with
+        // trailing space) as a stray last quote line.
+        let result = composeReplyPlainText(
+            userBody: "Reply",
+            originalPlain: "Body line\n"
+        )
+        XCTAssertTrue(result.hasSuffix("> Body line"), "result MUST end at the last real quoted line, no stray `> ` afterwards")
+        XCTAssertFalse(result.contains("> \n"), "trailing newline MUST NOT produce a `> ` (with trailing space) stray line")
     }
 
     // MARK: - buildReplyEmailScript

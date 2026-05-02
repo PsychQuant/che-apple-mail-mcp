@@ -233,7 +233,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "reply_email",
-                description: "Reply to an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Non-plain modes wrap the original message in a blockquote. Optionally add extra CC, attach files, and save as draft instead of sending.",
+                description: "Reply to an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). 'plain' embeds the original message as RFC 3676 `> `-prefixed quoted lines; 'markdown'/'html' wrap the original in a `<blockquote>`. Optionally add extra CC, attach files, and save as draft instead of sending.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -245,7 +245,7 @@ class CheAppleMailMCPServer {
                         "cc_additional": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Extra CC recipients to add on top of those derived from 'reply_all'. Email addresses (RFC 5322 addr-spec).")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach to the reply.")]),
                         "save_as_draft": .object(["type": .string("boolean"), "description": .string("If true, save the reply as a draft instead of sending it (default: false). Use when you want a human to review before send.")]),
-                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) preserves existing concatenation semantics; 'markdown'/'html' produce rich text and wrap the original in a blockquote.")])
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) prepends the user body to the original message quoted with RFC 3676 `> ` line prefix; 'markdown'/'html' produce rich text and wrap the original in a `<blockquote>`.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("body")])
                 ])

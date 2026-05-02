@@ -676,10 +676,22 @@ actor MailController {
         // `& content` against a freshly-created outgoing message reads as empty
         // before Mail.app's GUI populates it, which silently dropped the quoted
         // original from every plain reply since b8a4a89 (initial release).
-        let fetched = try runScript(buildFetchOriginalContentScript(messageRef: ref))
-        let parsed = parseFetchedOriginalContent(fetched)
-        let originalHTML = parsed.html
-        let originalPlain = parsed.plain
+        //
+        // Round-1 hardening (#43 verify Logic #4 / DA-3): pre-fetch failure
+        // (sandbox -1743, message deleted, ICloud server-side body) must not
+        // hard-fail the whole reply. Fall back to "no quote" so the user's
+        // body is still preserved and the reply can still be sent/saved.
+        let originalHTML: String?
+        let originalPlain: String
+        do {
+            let fetched = try runScript(buildFetchOriginalContentScript(messageRef: ref))
+            let parsed = parseFetchedOriginalContent(fetched)
+            originalHTML = parsed.html
+            originalPlain = parsed.plain
+        } catch {
+            originalHTML = nil
+            originalPlain = ""
+        }
 
         let script = try buildReplyEmailScript(
             messageRef: ref,
