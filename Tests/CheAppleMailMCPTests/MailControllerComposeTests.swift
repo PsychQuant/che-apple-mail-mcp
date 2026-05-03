@@ -782,4 +782,93 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertLessThan(script.count, 32_000, "generated AppleScript must fit within osascript limits")
         XCTAssertTrue(script.contains("> Lorem ipsum"), "script must still contain quoted lines")
     }
+
+    // MARK: - attachmentFragment race-condition mitigation (issue #60)
+
+    func testAttachmentFragment_multipleAttachments_emitsDelayBetweenEveryPair() throws {
+        // 3 attachments → exactly 2 `delay 0.3` lines between the 3 `make new attachment` lines.
+        // Mitigates Mail.app AppleScript race where `at after the last paragraph` resolves stale
+        // before the previous attachment binds.
+        let script = try buildReplyEmailScript(
+            messageRef: "msgRef",
+            userBody: "B",
+            userFormat: .plain,
+            replyAll: false,
+            attachments: ["/tmp/a.pdf", "/tmp/b.pdf", "/tmp/c.pdf"],
+            originalHTML: nil,
+            originalPlain: ""
+        )
+        let attachmentLineCount = script.components(separatedBy: "make new attachment").count - 1
+        let delayBetweenCount = script.components(separatedBy: "delay 0.3").count - 1
+        XCTAssertEqual(attachmentLineCount, 3, "3 attachments must emit 3 attachment lines")
+        XCTAssertEqual(delayBetweenCount, 2, "3 attachments must emit exactly 2 `delay 0.3` lines (one between each pair)")
+    }
+
+    func testAttachmentFragment_multipleAttachments_emitsTrailingDelayBeforeDispatch() throws {
+        // N >= 2 → exactly one `delay 0.5` after the last attachment, before save/send commits.
+        // Ensures async attachment pipeline drains before save/send (#60 second mechanism).
+        let script = try buildReplyEmailScript(
+            messageRef: "msgRef",
+            userBody: "B",
+            userFormat: .plain,
+            replyAll: false,
+            attachments: ["/tmp/a.pdf", "/tmp/b.pdf"],
+            originalHTML: nil,
+            originalPlain: ""
+        )
+        let trailingDelayCount = script.components(separatedBy: "delay 0.5").count - 1
+        XCTAssertEqual(trailingDelayCount, 1, "N>=2 attachments must emit exactly 1 trailing `delay 0.5`")
+        // Trailing delay must come AFTER the last attachment line and BEFORE the dispatch keyword.
+        guard let lastAttachIdx = script.range(of: "make new attachment", options: .backwards),
+              let trailingDelayIdx = script.range(of: "delay 0.5"),
+              let dispatchIdx = script.range(of: "send replyMsg") ?? script.range(of: "save replyMsg") else {
+            XCTFail("script missing expected anchors")
+            return
+        }
+        XCTAssertLessThan(lastAttachIdx.lowerBound, trailingDelayIdx.lowerBound,
+                          "trailing `delay 0.5` must appear after the last `make new attachment`")
+        XCTAssertLessThan(trailingDelayIdx.lowerBound, dispatchIdx.lowerBound,
+                          "trailing `delay 0.5` must appear before the dispatch (send/save) keyword")
+    }
+
+    func testAttachmentFragment_singleAttachment_emitsNoDelay() throws {
+        // N == 1 has no race to mitigate (no second attachment to compete with).
+        // Don't penalize the common path with unnecessary latency.
+        let script = try buildReplyEmailScript(
+            messageRef: "msgRef",
+            userBody: "B",
+            userFormat: .plain,
+            replyAll: false,
+            attachments: ["/tmp/only.pdf"],
+            originalHTML: nil,
+            originalPlain: ""
+        )
+        XCTAssertTrue(script.contains("make new attachment"), "single attachment still emits attachment line")
+        XCTAssertFalse(script.contains("delay 0.3"), "N=1 must NOT emit `delay 0.3` (no race at N=1)")
+        XCTAssertFalse(script.contains("delay 0.5"), "N=1 must NOT emit trailing `delay 0.5` (no need to drain pipeline for single attachment)")
+    }
+
+    func testAttachmentFragment_composeBuilder_alsoMitigatesRace() throws {
+        // Same fix must apply through buildComposeEmailScript (3 callers all share the helper).
+        let script = try buildComposeEmailScript(
+            to: ["x@y.z"],
+            subject: "S",
+            body: "B",
+            attachments: ["/tmp/a.pdf", "/tmp/b.pdf"]
+        )
+        XCTAssertTrue(script.contains("delay 0.3"), "compose builder must inherit the race fix")
+        XCTAssertTrue(script.contains("delay 0.5"), "compose builder must inherit the trailing drain delay")
+    }
+
+    func testAttachmentFragment_draftBuilder_alsoMitigatesRace() throws {
+        // Same fix must apply through buildCreateDraftScript.
+        let script = try buildCreateDraftScript(
+            to: ["x@y.z"],
+            subject: "S",
+            body: "B",
+            attachments: ["/tmp/a.pdf", "/tmp/b.pdf"]
+        )
+        XCTAssertTrue(script.contains("delay 0.3"), "draft builder must inherit the race fix")
+        XCTAssertTrue(script.contains("delay 0.5"), "draft builder must inherit the trailing drain delay")
+    }
 }
