@@ -459,4 +459,178 @@ final class AttachmentExtractorTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Scenario (#66): .partial.emlx with externalised attachments
+
+    /// Build a `.partial.emlx` whose MIME structure declares an attachment
+    /// with the given filename but carries an empty body — Apple Mail's
+    /// pattern for IMAP messages whose binary parts have been extracted to
+    /// the sibling `Attachments/<rowId>/<part_id>/` folder.
+    ///
+    /// Returns the `(mailboxURL, attachmentsDir)` tuple. `attachmentsDir` is
+    /// the location where the caller can drop the externalised files
+    /// (e.g. `<attachmentsDir>/2/<filename>`); the caller is responsible for
+    /// creating the per-part subdirectory.
+    private func installPartialEmlxWithStrippedAttachment(
+        rowId: Int,
+        attachmentFilename: String,
+        accountUUID: String = "ABCE3A85-06BE-43BC-9B84-2CA6F325612F",
+        mailboxLeaf: String = "INBOX",
+        storeUUID: String = "5FCC6F13-2CE3-48B1-907D-686244C0229A",
+        in root: URL
+    ) throws -> (mailboxURL: String, attachmentsDir: URL) {
+        let boundary = "stripped-boundary"
+        let rfc822 =
+            "From: alice@example.com\r\n"
+            + "To: bob@example.com\r\n"
+            + "Subject: stripped-attachment\r\n"
+            + "MIME-Version: 1.0\r\n"
+            + "Content-Type: multipart/mixed; boundary=\(boundary)\r\n"
+            + "\r\n"
+            + "--\(boundary)\r\n"
+            + "Content-Type: text/plain; charset=utf-8\r\n"
+            + "\r\n"
+            + "body text\r\n"
+            + "--\(boundary)\r\n"
+            + "Content-Type: application/pdf; name=\"\(attachmentFilename)\"\r\n"
+            + "Content-Disposition: attachment; filename=\"\(attachmentFilename)\"\r\n"
+            + "Content-Transfer-Encoding: base64\r\n"
+            + "\r\n"
+            + "\r\n"  // empty body — Apple Mail's stripped pattern
+            + "--\(boundary)--\r\n"
+        let body = Data(rfc822.utf8)
+        var emlx = Data("\(body.count)\n".utf8)
+        emlx.append(body)
+
+        let mailV10 = root.appendingPathComponent("Library/Mail/V10", isDirectory: true)
+        let dataHashDir = mailV10
+            .appendingPathComponent(accountUUID)
+            .appendingPathComponent("\(mailboxLeaf).mbox")
+            .appendingPathComponent(storeUUID)
+            .appendingPathComponent("Data/2/6/2", isDirectory: true)
+        let messagesDir = dataHashDir.appendingPathComponent("Messages", isDirectory: true)
+        try FileManager.default.createDirectory(at: messagesDir, withIntermediateDirectories: true)
+        try emlx.write(to: messagesDir.appendingPathComponent("\(rowId).partial.emlx"))
+
+        let attachmentsDir = dataHashDir
+            .appendingPathComponent("Attachments", isDirectory: true)
+            .appendingPathComponent("\(rowId)", isDirectory: true)
+
+        EnvelopeIndexReader.mailStoragePathOverride = mailV10.path
+        return ("ews://\(accountUUID)/\(mailboxLeaf)", attachmentsDir)
+    }
+
+    /// Happy path for #66: `.partial.emlx` declares the attachment but its
+    /// body is empty; the binary lives in `Attachments/<rowId>/<part_id>/`.
+    /// `saveAttachment` MUST consult the external folder and write the real
+    /// bytes — never produce a 0-byte file.
+    func testSaveAttachment_partialEmlxWithExternalAttachment_writesExternalBytes() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262100
+        let filename = "report.pdf"
+        let (mailboxURL, attachmentsDir) = try installPartialEmlxWithStrippedAttachment(
+            rowId: rowId,
+            attachmentFilename: filename,
+            in: root
+        )
+
+        // Drop a real binary at Attachments/<rowId>/2/<filename> (Apple
+        // Mail uses the part index as the subfolder name).
+        let partDir = attachmentsDir.appendingPathComponent("2", isDirectory: true)
+        try FileManager.default.createDirectory(at: partDir, withIntermediateDirectories: true)
+        let externalFile = partDir.appendingPathComponent(filename)
+        let realBytes = Data((0..<2048).map { UInt8($0 & 0xFF) })
+        try realBytes.write(to: externalFile)
+
+        let dest = root.appendingPathComponent("out.pdf")
+        try EmlxParser.saveAttachment(
+            rowId: rowId,
+            mailboxURL: mailboxURL,
+            attachmentName: filename,
+            destination: dest
+        )
+
+        let written = try Data(contentsOf: dest)
+        XCTAssertEqual(
+            written,
+            realBytes,
+            "saveAttachment must read from external Attachments/<rowId>/<part_id>/<filename>, not the empty inline body"
+        )
+        XCTAssertGreaterThan(
+            written.count,
+            0,
+            "0-byte write means the inline empty body still won — bug #66 not fixed"
+        )
+    }
+
+    /// Negative path for #66: `.partial.emlx` declares the attachment, its
+    /// body is empty, AND the external `Attachments/<rowId>/` folder does
+    /// not exist (e.g. user purged the cache). MUST throw
+    /// `attachmentNotFound` rather than silently writing 0 bytes.
+    func testSaveAttachment_partialEmlxNoExternal_throwsAttachmentNotFound() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262100
+        let filename = "report.pdf"
+        let (mailboxURL, _) = try installPartialEmlxWithStrippedAttachment(
+            rowId: rowId,
+            attachmentFilename: filename,
+            in: root
+        )
+        // Deliberately don't create the Attachments/<rowId>/ folder.
+
+        let dest = root.appendingPathComponent("out.pdf")
+        XCTAssertThrowsError(try EmlxParser.saveAttachment(
+            rowId: rowId,
+            mailboxURL: mailboxURL,
+            attachmentName: filename,
+            destination: dest
+        )) { error in
+            guard case MailSQLiteError.attachmentNotFound(let name) = error else {
+                XCTFail("expected attachmentNotFound, got \(error)")
+                return
+            }
+            XCTAssertEqual(name, filename)
+        }
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: dest.path),
+            "no partial / 0-byte file should be left behind on attachmentNotFound"
+        )
+    }
+
+    /// Mirror of the happy path but exercising the external-folder match
+    /// against the legacy `Content-Type: name` parameter (some senders
+    /// only set `name=`, not `Content-Disposition: filename=`).
+    func testSaveAttachment_partialEmlxExternalLookup_matchesViaContentTypeName() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262200
+        let filename = "scan.pdf"
+        let (mailboxURL, attachmentsDir) = try installPartialEmlxWithStrippedAttachment(
+            rowId: rowId,
+            attachmentFilename: filename,
+            in: root
+        )
+
+        // Try a non-default part subfolder index ("3" instead of "2") to
+        // confirm the lookup walks all subfolders, not just /2/.
+        let partDir = attachmentsDir.appendingPathComponent("3", isDirectory: true)
+        try FileManager.default.createDirectory(at: partDir, withIntermediateDirectories: true)
+        let bytes = Data("PDF body bytes".utf8)
+        try bytes.write(to: partDir.appendingPathComponent(filename))
+
+        let dest = root.appendingPathComponent("out.pdf")
+        try EmlxParser.saveAttachment(
+            rowId: rowId,
+            mailboxURL: mailboxURL,
+            attachmentName: filename,
+            destination: dest
+        )
+
+        XCTAssertEqual(try Data(contentsOf: dest), bytes)
+    }
 }

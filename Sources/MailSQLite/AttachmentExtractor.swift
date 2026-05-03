@@ -89,6 +89,38 @@ extension EmlxParser {
             throw MailSQLiteError.attachmentNotFound(name: attachmentName)
         }
 
+        // Step 5b (#66): if the matched MIME part has no inline body, the
+        // attachment binary lives in Apple Mail's sibling
+        // `Attachments/<rowId>/<part_id>/<filename>` cache. This happens
+        // for `.partial.emlx` messages (Mail.app extracts attachments to
+        // the external folder after IMAP fetch and strips the base64 body
+        // from the on-disk envelope to save space). Without this lookup
+        // we would silently `data.write(...)` an empty `Data()` and lie
+        // about success.
+        if part.decodedData.isEmpty {
+            if let externalURL = externalAttachmentURL(
+                emlxPath: path,
+                rowId: rowId,
+                attachmentName: attachmentName
+            ) {
+                let externalBytes = try Data(contentsOf: externalURL)
+                if externalBytes.count > attachmentInMemoryLimit {
+                    throw MailSQLiteError.attachmentTooLarge(
+                        name: attachmentName,
+                        size: externalBytes.count,
+                        limit: attachmentInMemoryLimit
+                    )
+                }
+                try externalBytes.write(to: destination, options: .atomic)
+                return
+            }
+            // Inline body empty AND no external file — treat as missing
+            // so the AppleScript fallback can have a turn (or surface the
+            // failure to the caller). NEVER write a 0-byte file: that's
+            // the silent-failure mode bug #66 was filed for.
+            throw MailSQLiteError.attachmentNotFound(name: attachmentName)
+        }
+
         // Size guard — large parts fall through to AppleScript streaming.
         let size = part.decodedData.count
         if size > attachmentInMemoryLimit {
@@ -102,6 +134,55 @@ extension EmlxParser {
         // Step 6: write decoded bytes. Use atomic write so partial files
         // never appear on disk on failure.
         try part.decodedData.write(to: destination, options: .atomic)
+    }
+
+    /// Look up the externalised attachment binary that Apple Mail stores
+    /// alongside a `.partial.emlx` message. Layout:
+    ///
+    /// ```
+    /// <hashDir>/Messages/<rowId>.partial.emlx          ← envelope (no body)
+    /// <hashDir>/Attachments/<rowId>/<part_id>/<filename>  ← real bytes
+    /// ```
+    ///
+    /// The `<part_id>` subfolder is opaque to us (Apple Mail picks it
+    /// based on the MIME tree at extraction time), so we walk every
+    /// subdirectory and return the first match by filename.
+    ///
+    /// Returns `nil` if the `Attachments/<rowId>/` directory doesn't exist
+    /// or contains no file matching `attachmentName`.
+    private static func externalAttachmentURL(
+        emlxPath: String,
+        rowId: Int,
+        attachmentName: String
+    ) -> URL? {
+        // emlxPath is `<hashDir>/Messages/<rowId>.{partial.,}emlx`. Walk up
+        // two levels to get the hash dir, then descend into Attachments.
+        let messagesDir = URL(fileURLWithPath: emlxPath).deletingLastPathComponent()
+        let hashDir = messagesDir.deletingLastPathComponent()
+        let attachmentsRoot = hashDir
+            .appendingPathComponent("Attachments", isDirectory: true)
+            .appendingPathComponent("\(rowId)", isDirectory: true)
+
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: attachmentsRoot.path, isDirectory: &isDir), isDir.boolValue else {
+            return nil
+        }
+
+        // Each subdirectory is one MIME part; the file name inside should
+        // match `attachmentName` byte-for-byte.
+        guard let partIds = try? fm.contentsOfDirectory(atPath: attachmentsRoot.path) else {
+            return nil
+        }
+        for partId in partIds {
+            let candidate = attachmentsRoot
+                .appendingPathComponent(partId, isDirectory: true)
+                .appendingPathComponent(attachmentName)
+            if fm.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return nil
     }
 
     /// First-match predicate: part's resolved filename equals request, or

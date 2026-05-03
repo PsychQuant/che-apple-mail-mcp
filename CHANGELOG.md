@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`save_attachment` no longer silently writes 0-byte files when only `.partial.emlx` exists** ([#66](https://github.com/PsychQuant/che-apple-mail-mcp/issues/66)). Pre-fix, `EmlxParser.saveAttachment` would happily `data.write(...)` an empty `Data()` and return `"Attachment saved to <path>"` (success) for any IMAP message Apple Mail had stripped to `.partial.emlx` — the MIME structure still declares the attachment via `Content-Disposition: filename`, but the base64 body is empty because the binary lives in the sibling `Attachments/<rowId>/<part_id>/<filename>` cache folder. Confirmed in the wild on 2026-05-04 against an outbound peer-review attachment retrieval (1.75 MB PDF in cache, MCP wrote 0 bytes, no error). Fix: when the matched MIME part has empty `decodedData`, walk `<hashDir>/Attachments/<rowId>/*/<filename>` and prefer the external bytes; if neither inline nor external file exists, throw `attachmentNotFound` so the AppleScript fallback (or the caller) surfaces the failure rather than producing a false success. The 100 MB size guard is applied to the externalised bytes too. Architecturally: the SQLite + .emlx fast path now handles `.partial.emlx` end-to-end; the AppleScript fallback at `Server.swift:1017` is no longer reached for this common pattern.
+
 ## [2.7.0] - 2026-05-03
 
 ### Fixed
