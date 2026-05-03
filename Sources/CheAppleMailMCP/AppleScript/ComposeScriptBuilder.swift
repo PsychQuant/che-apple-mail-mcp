@@ -14,11 +14,35 @@ func appleScriptEscape(_ string: String) -> String {
 // readable AppleScript output. Callers concatenate without adding extra
 // indent prefixes (previous code added "        " for attachments only,
 // causing visual mismatch in emitted scripts).
+//
+// Issue #60: Mail.app's AppleScript attachment pipeline is asynchronous.
+// Two failure modes when emitting consecutive `make new attachment` calls
+// without pacing: (1) `at after the last paragraph` in the next call
+// resolves to the same anchor as the previous one because the previous
+// insert hasn't materialized yet — Mail.app's collision behavior drops
+// all but one; (2) `save` / `send` commits before in-flight attachment
+// binds drain. For N >= 2 we interleave `delay 0.3` between attachments
+// (gives anchor materialization time) and append `delay 0.5` trailing
+// (ensures pipeline drain before dispatch). N == 1 has no race so emits
+// no delay — keeps the common path latency-free.
 
 private func attachmentFragment(for paths: [String]) -> String {
-    paths.map { path in
+    guard !paths.isEmpty else { return "" }
+    let lines = paths.map { path in
         "    make new attachment with properties {file name:POSIX file \"\(appleScriptEscape(path))\"} at after the last paragraph"
-    }.joined(separator: "\n")
+    }
+    if paths.count == 1 {
+        return lines[0]
+    }
+    var pieces: [String] = []
+    for (idx, line) in lines.enumerated() {
+        pieces.append(line)
+        if idx < lines.count - 1 {
+            pieces.append("    delay 0.3")
+        }
+    }
+    pieces.append("    delay 0.5")
+    return pieces.joined(separator: "\n")
 }
 
 private func recipientFragment(_ addresses: [String], kind: String) -> String {
