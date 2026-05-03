@@ -789,6 +789,9 @@ final class MailControllerComposeTests: XCTestCase {
         // 3 attachments → exactly 2 `delay 0.3` lines between the 3 `make new attachment` lines.
         // Mitigates Mail.app AppleScript race where `at after the last paragraph` resolves stale
         // before the previous attachment binds.
+        // Verify both COUNT and ORDERING — a regression that emits all delays bunched at the end
+        // (e.g., attach,attach,attach,delay,delay,delay 0.5) would still pass a count-only check
+        // but fail to mitigate the race. We need delays interleaved, not aggregated.
         let script = try buildReplyEmailScript(
             messageRef: "msgRef",
             userBody: "B",
@@ -802,6 +805,24 @@ final class MailControllerComposeTests: XCTestCase {
         let delayBetweenCount = script.components(separatedBy: "delay 0.3").count - 1
         XCTAssertEqual(attachmentLineCount, 3, "3 attachments must emit 3 attachment lines")
         XCTAssertEqual(delayBetweenCount, 2, "3 attachments must emit exactly 2 `delay 0.3` lines (one between each pair)")
+
+        // Ordering check: walk the script line-by-line and confirm the sequence is
+        // [attach, delay 0.3, attach, delay 0.3, attach, delay 0.5] (in that order,
+        // ignoring lines that are neither attachment nor delay).
+        let relevantTokens: [String] = script
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .compactMap { line -> String? in
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix("make new attachment") { return "attach" }
+                if trimmed == "delay 0.3" { return "delay-between" }
+                if trimmed == "delay 0.5" { return "delay-trailing" }
+                return nil
+            }
+        XCTAssertEqual(
+            relevantTokens,
+            ["attach", "delay-between", "attach", "delay-between", "attach", "delay-trailing"],
+            "delays must be interleaved between attachments, not bunched at the end (race only mitigated when each delay follows its attachment)"
+        )
     }
 
     func testAttachmentFragment_multipleAttachments_emitsTrailingDelayBeforeDispatch() throws {

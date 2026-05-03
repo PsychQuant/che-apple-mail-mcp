@@ -190,6 +190,67 @@ final class MailAppIntegrationTests: XCTestCase {
         XCTAssertTrue(body.contains("> "), "draft must contain RFC 3676 `> ` quoted original line (#43 fix)")
     }
 
+    // MARK: - Multi-attachment race-condition mitigation (issue #60)
+
+    /// Issue #60: confirms `createDraft` with N=3 attachments produces a draft
+    /// whose actual `mail attachments` count == 3. Pre-fix, this was the failure
+    /// mode (AppleScript reported success but Mail.app silently dropped attachments
+    /// past the first one). The fix interleaves `delay 0.3` between consecutive
+    /// `make new attachment` lines + appends `delay 0.5` trailing.
+    ///
+    /// This test is the only behavioural verification of the fix — unit tests
+    /// can only confirm the emitted script TEXT contains delay tokens; only
+    /// real Mail.app round-trip can confirm the bug is actually mitigated.
+    func test_createDraft_threeAttachments_allLand_issue60() async throws {
+        let attachA = try makeTempAttachmentNamed("issue60-A")
+        let attachB = try makeTempAttachmentNamed("issue60-B")
+        let attachC = try makeTempAttachmentNamed("issue60-C")
+        let subject = uniqueSubject("issue60-3-attach")
+
+        let result = try await MailController.shared.createDraft(
+            to: ["test+discard@example.com"],
+            subject: subject,
+            body: "issue #60 multi-attachment race smoke",
+            attachments: [attachA, attachB, attachC],
+            accountName: accountName,
+            format: .plain
+        )
+        XCTAssertTrue(result.contains("successfully"), "createDraft must succeed; got: \(result)")
+
+        // Read back the draft and assert mail attachments count == 3.
+        // Pre-fix this would be 1 (or 2 for html); post-fix should be 3.
+        let countScript = """
+        tell application "Mail"
+            try
+                set draftsBox to mailbox "Drafts" of account "\(accountName!)"
+            on error
+                return "NO_DRAFTS_BOX"
+            end try
+            set attachCount to -1
+            repeat with m in messages of draftsBox
+                try
+                    set s to subject of m
+                    if s is "\(subject)" then
+                        set attachCount to count of mail attachments of m
+                        exit repeat
+                    end if
+                end try
+            end repeat
+            return attachCount as string
+        end tell
+        """
+        let raw = try await MailController.shared.runScript(countScript)
+        guard raw != "NO_DRAFTS_BOX" else {
+            throw XCTSkip("Account has no Drafts mailbox available")
+        }
+        guard let count = Int(raw) else {
+            XCTFail("expected numeric attachment count, got: \(raw)")
+            return
+        }
+        XCTAssertEqual(count, 3,
+                       "issue #60: all 3 attachments must land in draft. count=\(count) means race fix is insufficient (delay 0.3 may need to grow).")
+    }
+
     // MARK: - Helpers
 
     private func uniqueSubject(_ mode: String) -> String {
@@ -243,6 +304,17 @@ final class MailAppIntegrationTests: XCTestCase {
         return path
     }
 
+    /// Same as `makeTempAttachment` but with a caller-supplied label embedded in
+    /// the filename for easier identification in MIME inspection. Used by #60
+    /// multi-attachment smoke to distinguish the 3 fixture files.
+    private func makeTempAttachmentNamed(_ label: String) throws -> String {
+        let path = "/tmp/che-apple-mail-integration-attach-\(label)-\(UUID().uuidString).txt"
+        FileManager.default.createFile(atPath: path,
+                                       contents: Data("integration test attachment \(label)".utf8))
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: path) }
+        return path
+    }
+
     private func cleanupIntegrationDrafts() async throws {
         let script = """
         tell application "Mail"
@@ -258,7 +330,7 @@ final class MailAppIntegrationTests: XCTestCase {
                             try
                                 set c to content of m
                             end try
-                            if s contains "\(Self.testDraftSubjectPrefix)" or c contains "Integration test reply (#37)" or c contains "INTEGRATION-TEST-43-quote-" then
+                            if s contains "\(Self.testDraftSubjectPrefix)" or c contains "Integration test reply (#37)" or c contains "INTEGRATION-TEST-43-quote-" or c contains "issue #60 multi-attachment race smoke" then
                                 set end of toDelete to m
                             end if
                         end try
