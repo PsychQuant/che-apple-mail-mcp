@@ -328,6 +328,49 @@ claude
 
 ---
 
+## Performance & Storage
+
+### SQLite + .emlx fast path
+
+Most read tools prefer Apple Mail's local Envelope Index (SQLite) and on-disk `.emlx` message files over AppleScript IPC, with transparent AppleScript fallback when the SQLite path can't satisfy a request:
+
+| Tool | SQLite/.emlx path | AppleScript fallback |
+|------|------------------|----------------------|
+| `get_email` | ✓ | ✓ on any error |
+| `get_emails_batch` | ✓ (per item) | ✓ (per item) |
+| `get_email_headers` | ✓ | ✓ on any error |
+| `get_email_source` | ✓ | ✓ on any error |
+| `search_emails` | ✓ | ✓ when reader unavailable |
+| `list_attachments` | ✓ | ✓ on any error |
+| `save_attachment` | ✓ | ✓ on any error |
+| `get_email_metadata` | ✓ | ⚠ does **not** fall back today (see [#69](https://github.com/PsychQuant/che-apple-mail-mcp/issues/69) follow-up) |
+
+For `save_attachment`'s read path the fast path is **10–100× faster** than AppleScript (per [#12](https://github.com/PsychQuant/che-apple-mail-mcp/issues/12) measurements). Other tools' speedup ratios depend on request shape; in general, large bulk reads see the biggest gain.
+
+The fast path requires:
+
+- Full Disk Access granted to the host process (System Settings → Privacy & Security → Full Disk Access)
+- Apple Mail's local store at `~/Library/Mail/V10/...`
+- Message has been synced to local `.emlx` storage
+
+### EWS / Exchange accounts intentionally bypass the fast path
+
+Exchange (EWS) accounts in Apple Mail **do not materialize `.emlx` files** — message bodies live on the server and are fetched on demand. For these accounts, the read tools listed above as having an AppleScript fallback transparently degrade to AppleScript IPC (which is correct but slower); `get_email_metadata` will surface the error today (see follow-up). Symptoms:
+
+- A bulk fetch of 500 EWS messages will be noticeably slower than 500 IMAP/Gmail messages
+- This is **not a bug** — it's an Apple Mail storage architecture constraint (see [#9](https://github.com/PsychQuant/che-apple-mail-mcp/issues/9))
+
+### Diagnosing fast-path bypass
+
+When the fast path fails for a non-EWS account, the failure is logged to stderr (since [#69](https://github.com/PsychQuant/che-apple-mail-mcp/issues/69)). Run the binary in a terminal and watch stderr to distinguish:
+
+- `EnvelopeIndexReader init failed: ...` — DB unreachable (commonly: Full Disk Access missing)
+- `SQLite get_email fast path failed for rowId=N: ...` — per-message failure (e.g., `.partial.emlx` only, malformed MIME, file not yet synced)
+
+Both cases transparently fall through to AppleScript with `... falling through to AppleScript` in the log line, so behavior is preserved while observability is restored.
+
+---
+
 ## Troubleshooting
 
 | Problem | Solution |
@@ -336,13 +379,15 @@ claude
 | Not allowed to send Apple events | Add permissions in System Settings > Automation |
 | Mail.app not responding | Ensure Mail.app is running with configured accounts |
 | Commands timing out | Large mailboxes take longer; try specific searches |
+| Bulk fetch slower than expected | Watch stderr for `... falling through to AppleScript` lines. EWS/Exchange accounts always fall back (see [Performance & Storage](#performance--storage)); other accounts logging fallback indicate a fixable .emlx issue |
 
 ---
 
 ## Technical Details
 
 - **Framework**: [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) v0.10.0
-- **Automation**: AppleScript via `NSAppleScript`
+- **Read path**: SQLite (Envelope Index) + `.emlx` file parser, with AppleScript fallback for EWS / unparseable `.emlx`
+- **Write/state path**: AppleScript via `NSAppleScript`
 - **Transport**: stdio
 - **Platform**: macOS 13.0+ (Ventura and later)
 
