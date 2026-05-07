@@ -332,7 +332,20 @@ claude
 
 ### SQLite + .emlx fast path
 
-Read tools (`get_email`, `get_emails_batch`, `get_email_headers`, `get_email_source`, `get_email_metadata`, `search_emails`, `list_attachments`, `save_attachment`) prefer Apple Mail's local Envelope Index (SQLite) and on-disk `.emlx` message files over AppleScript IPC. This is **10–100× faster** for large reads (e.g., archiving hundreds of messages).
+Most read tools prefer Apple Mail's local Envelope Index (SQLite) and on-disk `.emlx` message files over AppleScript IPC, with transparent AppleScript fallback when the SQLite path can't satisfy a request:
+
+| Tool | SQLite/.emlx path | AppleScript fallback |
+|------|------------------|----------------------|
+| `get_email` | ✓ | ✓ on any error |
+| `get_emails_batch` | ✓ (per item) | ✓ (per item) |
+| `get_email_headers` | ✓ | ✓ on any error |
+| `get_email_source` | ✓ | ✓ on any error |
+| `search_emails` | ✓ | ✓ when reader unavailable |
+| `list_attachments` | ✓ | ✓ on any error |
+| `save_attachment` | ✓ | ✓ on any error |
+| `get_email_metadata` | ✓ | ⚠ does **not** fall back today (see [#69](https://github.com/PsychQuant/che-apple-mail-mcp/issues/69) follow-up) |
+
+For `save_attachment`'s read path the fast path is **10–100× faster** than AppleScript (per [#12](https://github.com/PsychQuant/che-apple-mail-mcp/issues/12) measurements). Other tools' speedup ratios depend on request shape; in general, large bulk reads see the biggest gain.
 
 The fast path requires:
 
@@ -342,7 +355,7 @@ The fast path requires:
 
 ### EWS / Exchange accounts intentionally bypass the fast path
 
-Exchange (EWS) accounts in Apple Mail **do not materialize `.emlx` files** — message bodies live on the server and are fetched on demand. For these accounts, all read tools transparently fall back to AppleScript IPC, which is correct but slower. Symptoms:
+Exchange (EWS) accounts in Apple Mail **do not materialize `.emlx` files** — message bodies live on the server and are fetched on demand. For these accounts, the read tools listed above as having an AppleScript fallback transparently degrade to AppleScript IPC (which is correct but slower); `get_email_metadata` will surface the error today (see follow-up). Symptoms:
 
 - A bulk fetch of 500 EWS messages will be noticeably slower than 500 IMAP/Gmail messages
 - This is **not a bug** — it's an Apple Mail storage architecture constraint (see [#9](https://github.com/PsychQuant/che-apple-mail-mcp/issues/9))
