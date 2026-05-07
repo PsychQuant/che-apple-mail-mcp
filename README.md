@@ -328,6 +328,36 @@ claude
 
 ---
 
+## Performance & Storage
+
+### SQLite + .emlx fast path
+
+Read tools (`get_email`, `get_emails_batch`, `get_email_headers`, `get_email_source`, `get_email_metadata`, `search_emails`, `list_attachments`, `save_attachment`) prefer Apple Mail's local Envelope Index (SQLite) and on-disk `.emlx` message files over AppleScript IPC. This is **10–100× faster** for large reads (e.g., archiving hundreds of messages).
+
+The fast path requires:
+
+- Full Disk Access granted to the host process (System Settings → Privacy & Security → Full Disk Access)
+- Apple Mail's local store at `~/Library/Mail/V10/...`
+- Message has been synced to local `.emlx` storage
+
+### EWS / Exchange accounts intentionally bypass the fast path
+
+Exchange (EWS) accounts in Apple Mail **do not materialize `.emlx` files** — message bodies live on the server and are fetched on demand. For these accounts, all read tools transparently fall back to AppleScript IPC, which is correct but slower. Symptoms:
+
+- A bulk fetch of 500 EWS messages will be noticeably slower than 500 IMAP/Gmail messages
+- This is **not a bug** — it's an Apple Mail storage architecture constraint (see [#9](https://github.com/PsychQuant/che-apple-mail-mcp/issues/9))
+
+### Diagnosing fast-path bypass
+
+When the fast path fails for a non-EWS account, the failure is logged to stderr (since [#69](https://github.com/PsychQuant/che-apple-mail-mcp/issues/69)). Run the binary in a terminal and watch stderr to distinguish:
+
+- `EnvelopeIndexReader init failed: ...` — DB unreachable (commonly: Full Disk Access missing)
+- `SQLite get_email fast path failed for rowId=N: ...` — per-message failure (e.g., `.partial.emlx` only, malformed MIME, file not yet synced)
+
+Both cases transparently fall through to AppleScript with `... falling through to AppleScript` in the log line, so behavior is preserved while observability is restored.
+
+---
+
 ## Troubleshooting
 
 | Problem | Solution |
@@ -336,13 +366,15 @@ claude
 | Not allowed to send Apple events | Add permissions in System Settings > Automation |
 | Mail.app not responding | Ensure Mail.app is running with configured accounts |
 | Commands timing out | Large mailboxes take longer; try specific searches |
+| Bulk fetch slower than expected | Watch stderr for `... falling through to AppleScript` lines. EWS/Exchange accounts always fall back (see [Performance & Storage](#performance--storage)); other accounts logging fallback indicate a fixable .emlx issue |
 
 ---
 
 ## Technical Details
 
 - **Framework**: [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) v0.10.0
-- **Automation**: AppleScript via `NSAppleScript`
+- **Read path**: SQLite (Envelope Index) + `.emlx` file parser, with AppleScript fallback for EWS / unparseable `.emlx`
+- **Write/state path**: AppleScript via `NSAppleScript`
 - **Transport**: stdio
 - **Platform**: macOS 13.0+ (Ventura and later)
 

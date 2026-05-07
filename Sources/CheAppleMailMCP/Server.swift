@@ -22,9 +22,18 @@ class CheAppleMailMCPServer {
         // Initialize SQLite reader (optional — falls back to AppleScript if unavailable)
         // Only open the DB connection here; account mapping is built lazily on first search
         // to avoid blocking server startup with AppleScript calls.
+        //
+        // Init failure surfaces to stderr so users can diagnose silent perf
+        // degradation (#69 — without this log, every read tool silently
+        // bypasses the SQLite + .emlx fast path with no observable cause).
         do {
             self.indexReader = try EnvelopeIndexReader(databasePath: EnvelopeIndexReader.defaultDatabasePath)
         } catch {
+            let message = "EnvelopeIndexReader init failed: "
+                + "\(error.localizedDescription); "
+                + "all read tools will use AppleScript fallback path "
+                + "(slower; expected for EWS accounts, see README).\n"
+            FileHandle.standardError.write(Data(message.utf8))
             self.indexReader = nil
         }
 
@@ -784,7 +793,13 @@ class CheAppleMailMCPServer {
                         return formatJSON(result)
                     }
                 } catch {
-                    // Fall through to AppleScript
+                    // Log the cause so silent fallbacks are observable, then
+                    // fall through to AppleScript (#69 — mirrors the
+                    // save_attachment fast-path logging at Server.swift:1003).
+                    let message = "SQLite get_email fast path failed for "
+                        + "rowId=\(rowId): \(error.localizedDescription); "
+                        + "falling through to AppleScript\n"
+                    FileHandle.standardError.write(Data(message.utf8))
                 }
             }
             let email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName, format: format)
@@ -1127,10 +1142,21 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("mailbox, and account_name are required")
             }
-            if let reader = indexReader, let rowId = Int(id),
-               let mailboxUrl = try? reader.mailboxURL(forMessageId: rowId) {
-                if let headers = try? EmlxParser.readHeaders(rowId: rowId, mailboxURL: mailboxUrl) {
-                    return headers
+            // Convert nested `try?` to do/catch so SQLite-path failures are
+            // observable on stderr (#69 — pre-fix `try?` swallowed the cause
+            // silently). Behavior is unchanged: any error still falls through
+            // to AppleScript.
+            if let reader = indexReader, let rowId = Int(id) {
+                do {
+                    if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
+                        let headers = try EmlxParser.readHeaders(rowId: rowId, mailboxURL: mailboxUrl)
+                        return headers
+                    }
+                } catch {
+                    let message = "SQLite get_email_headers fast path failed for "
+                        + "rowId=\(rowId): \(error.localizedDescription); "
+                        + "falling through to AppleScript\n"
+                    FileHandle.standardError.write(Data(message.utf8))
                 }
             }
             return try await mailController.getEmailHeaders(id: id, mailbox: mailbox, accountName: accountName)
@@ -1141,10 +1167,19 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("mailbox, and account_name are required")
             }
-            if let reader = indexReader, let rowId = Int(id),
-               let mailboxUrl = try? reader.mailboxURL(forMessageId: rowId) {
-                if let source = try? EmlxParser.readSource(rowId: rowId, mailboxURL: mailboxUrl) {
-                    return source
+            // See get_email_headers above for #69 context — same try?-to-catch
+            // refactor for stderr observability.
+            if let reader = indexReader, let rowId = Int(id) {
+                do {
+                    if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
+                        let source = try EmlxParser.readSource(rowId: rowId, mailboxURL: mailboxUrl)
+                        return source
+                    }
+                } catch {
+                    let message = "SQLite get_email_source fast path failed for "
+                        + "rowId=\(rowId): \(error.localizedDescription); "
+                        + "falling through to AppleScript\n"
+                    FileHandle.standardError.write(Data(message.utf8))
                 }
             }
             return try await mailController.getEmailSource(id: id, mailbox: mailbox, accountName: accountName)
@@ -1263,7 +1298,15 @@ class CheAppleMailMCPServer {
                             continue
                         }
                     } catch {
-                        // Fall through to AppleScript
+                        // Log per-item failure with rowId so partial-failure
+                        // diagnostics are observable in batch fetches (#69 —
+                        // an archive of N emails may have M legitimate EWS
+                        // fallbacks vs K silent Gmail failures; without rowId
+                        // logging users can't tell them apart).
+                        let message = "SQLite get_emails_batch fast path failed for "
+                            + "rowId=\(rowId): \(error.localizedDescription); "
+                            + "falling through to AppleScript for this item\n"
+                        FileHandle.standardError.write(Data(message.utf8))
                     }
                 }
                 // Fallback to AppleScript
