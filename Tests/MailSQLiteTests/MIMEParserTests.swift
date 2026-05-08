@@ -379,4 +379,145 @@ final class MIMEParserTests: XCTestCase {
         let decoded = MIMEParser.decodeRFC5987("UTF-8''%E4%B8%AD%E6%96%87.pdf")
         XCTAssertEqual(decoded, "中文.pdf")
     }
+
+    // MARK: - Base64-encoded multipart parts (#72)
+
+    /// Single-layer multipart/alternative with base64-encoded HTML part.
+    /// Mirrors the simplest manifestation of #72 — the HTML body is
+    /// transferred as base64 and `parseBody` must decode it.
+    func testParseBodyMultipartAlternativeBase64HTMLOnly() {
+        let boundary = "----=_Part_b64_single"
+        let headers = ["content-type": "multipart/alternative; boundary=\"\(boundary)\""]
+        // base64 of "<html><body>Hello</body></html>"
+        let htmlBase64 = "PGh0bWw+PGJvZHk+SGVsbG88L2JvZHk+PC9odG1sPg=="
+        let body = """
+        ------=_Part_b64_single\r
+        Content-Type: text/plain; charset=utf-8\r
+        \r
+        Plain text version\r
+        ------=_Part_b64_single\r
+        Content-Type: text/html; charset=utf-8\r
+        Content-Transfer-Encoding: base64\r
+        \r
+        \(htmlBase64)\r
+        ------=_Part_b64_single--\r
+        """
+        let result = MIMEParser.parseBody(Data(body.utf8), headers: headers)
+        XCTAssertEqual(result.textBody, "Plain text version\r\n")
+        XCTAssertEqual(result.htmlBody, "<html><body>Hello</body></html>")
+    }
+
+    /// Nested multipart: outer multipart/mixed wraps an inner
+    /// multipart/alternative whose HTML part is base64-encoded.
+    /// Pattern emitted by Android Gmail (Message-ID `*@email.android.com`)
+    /// and the original reproducer for #72.
+    func testParseBodyNestedMultipartMixedWithAlternativeBase64HTML() {
+        let outer = "----=_Outer_mixed"
+        let inner = "----=_Inner_alt"
+        let headers = ["content-type": "multipart/mixed; boundary=\"\(outer)\""]
+        // base64 of "<html><body>Nested</body></html>"
+        let htmlBase64 = "PGh0bWw+PGJvZHk+TmVzdGVkPC9ib2R5PjwvaHRtbD4="
+        let body = """
+        ------=_Outer_mixed\r
+        Content-Type: multipart/alternative; boundary="\(inner)"\r
+        MIME-Version: 1.0\r
+        \r
+        ------=_Inner_alt\r
+        Content-Type: text/plain; charset=utf-8\r
+        \r
+        Plain text\r
+        ------=_Inner_alt\r
+        Content-Type: text/html; charset=utf-8\r
+        Content-Transfer-Encoding: base64\r
+        \r
+        \(htmlBase64)\r
+        ------=_Inner_alt--\r
+        ------=_Outer_mixed--\r
+        """
+        let result = MIMEParser.parseBody(Data(body.utf8), headers: headers)
+        XCTAssertEqual(result.textBody, "Plain text\r\n")
+        XCTAssertEqual(result.htmlBody, "<html><body>Nested</body></html>")
+        // Regression guard: htmlBody must not contain MIME-Version remnant.
+        XCTAssertFalse(result.htmlBody?.contains("MIME-Version") ?? false)
+        XCTAssertFalse(result.htmlBody?.contains("sion: 1.0") ?? false)
+    }
+
+    /// **Real reproducer for #72**:emlx-extracted Data slice with non-zero
+    /// `startIndex` exposes a Data-index-vs-array-index mismatch in
+    /// `RFC822Parser.headerBodySplitOffset` callers
+    /// (`EmailContent.readEmail`, `EmlxParser.readHeaders`,
+    /// `AttachmentExtractor`).
+    ///
+    /// The .emlx container is: `"<byteCount>\n<RFC822 bytes>"`.
+    /// `EmlxFormat.extractMessageData` returns a `Data` slice whose
+    /// `startIndex == byteCount-header-prefix-length`. Then
+    /// `headerBodySplitOffset(in: messageData)` does `Array(data)` → returns
+    /// a 0-based array index. Callers do `messageData[bodyOffset...]` which
+    /// is interpreted as **absolute** Data index, so the body slice is off
+    /// by `messageData.startIndex` bytes — exactly the symptom observed in
+    /// production (`html_body` starts with `"sion: 1.0\n\n<base64>"`,
+    /// the tail of `"MIME-Version: 1.0"` from the header block).
+    func testEmlxToBodyExtractionPreservesSliceStartIndex() throws {
+        // Synthetic .emlx: `"100\n" + RFC822 message`. The "100" prefix
+        // gives messageData.startIndex == 4.
+        let rfc822 = """
+        Content-Type: text/html; charset="utf-8"
+        Content-Transfer-Encoding: base64
+        MIME-Version: 1.0
+
+        PGh0bWw+PGJvZHk+SGVsbG88L2JvZHk+PC9odG1sPg==
+        """
+        let messageBytes = rfc822.replacingOccurrences(of: "\n", with: "\n").data(using: .utf8)!
+        let prefix = "\(messageBytes.count)\n".data(using: .utf8)!
+        var emlx = Data()
+        emlx.append(prefix)
+        emlx.append(messageBytes)
+
+        let messageData = try EmlxFormat.extractMessageData(from: emlx)
+        XCTAssertNotEqual(messageData.startIndex, 0,
+            "Slice from extractMessageData should retain non-zero startIndex")
+
+        // Mirror the EmailContent.readEmail flow.
+        let headers = RFC822Parser.parseHeaders(from: messageData)
+        XCTAssertEqual(headers["content-type"], "text/html; charset=\"utf-8\"")
+        XCTAssertEqual(headers["content-transfer-encoding"], "base64")
+        XCTAssertEqual(headers["mime-version"], "1.0")
+
+        guard let bodyOffset = RFC822Parser.headerBodySplitOffset(in: messageData) else {
+            XCTFail("Expected to find header/body split")
+            return
+        }
+        let bodyData = Data(messageData[bodyOffset...])
+
+        let parsed = MIMEParser.parseBody(bodyData, headers: headers)
+        // Regression guard: htmlBody must NOT contain the MIME-Version tail
+        // that production observed.
+        XCTAssertFalse(parsed.htmlBody?.contains("sion: 1.0") ?? false,
+            "htmlBody contains MIME-Version header tail: \(parsed.htmlBody ?? "<nil>")")
+        XCTAssertEqual(parsed.htmlBody, "<html><body>Hello</body></html>")
+    }
+
+    /// `text/plain` part transferred as base64 — covers the symmetric case
+    /// where the plain part (not just HTML) needs decoding.
+    func testParseBodyMultipartWithBase64TextPlain() {
+        let boundary = "----=_Part_b64_text"
+        let headers = ["content-type": "multipart/alternative; boundary=\"\(boundary)\""]
+        // base64 of "Hello, world!"
+        let textBase64 = "SGVsbG8sIHdvcmxkIQ=="
+        let body = """
+        ------=_Part_b64_text\r
+        Content-Type: text/plain; charset=utf-8\r
+        Content-Transfer-Encoding: base64\r
+        \r
+        \(textBase64)\r
+        ------=_Part_b64_text\r
+        Content-Type: text/html; charset=utf-8\r
+        \r
+        <p>HTML version</p>\r
+        ------=_Part_b64_text--\r
+        """
+        let result = MIMEParser.parseBody(Data(body.utf8), headers: headers)
+        XCTAssertEqual(result.textBody, "Hello, world!")
+        XCTAssertEqual(result.htmlBody, "<p>HTML version</p>\r\n")
+    }
 }
