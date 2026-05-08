@@ -10,34 +10,38 @@ public enum RFC822Parser {
     /// - Parameter data: Raw RFC 822 message data.
     /// - Returns: Dictionary mapping lowercase header names to decoded values.
     public static func parseHeaders(from data: Data) -> [String: String] {
-        guard let headerEnd = headerBodySplitOffset(in: data) else {
-            // No body separator found — treat entire data as headers
-            return parseHeaderBlock(data)
+        // findDoubleCRLF returns an absolute Data index (slice-safe per #72).
+        if let splitIdx = findDoubleCRLF(in: data) {
+            return parseHeaderBlock(data[data.startIndex..<splitIdx])
         }
-        let headerData = data[data.startIndex..<data.index(data.startIndex, offsetBy: headerEnd - data.startIndex - 4 >= 0 ? 0 : 0)]
-        // Find the \r\n\r\n boundary
-        let splitIdx = findDoubleCRLF(in: data)
-        if let idx = splitIdx {
-            return parseHeaderBlock(data[data.startIndex..<idx])
-        }
+        // No body separator found — treat entire data as headers.
         return parseHeaderBlock(data)
     }
 
-    /// Find the byte offset where the body begins (after \r\n\r\n or \n\n).
-    /// Returns the offset of the first byte of the body, or nil if not found.
+    /// Find the absolute Data index where the body begins (after `\r\n\r\n`
+    /// or `\n\n`). Returns an index suitable for `data[returnedIndex...]`,
+    /// or nil if no separator is found.
+    ///
+    /// **Slice safety (#72)**: `data` may be a slice with non-zero
+    /// `startIndex`. The returned value is an absolute Data index relative
+    /// to the original buffer — callers can write `data[offset...]` and
+    /// `data.endIndex` directly without manual `data.startIndex` arithmetic.
     public static func headerBodySplitOffset(in data: Data) -> Int? {
-        let bytes = Array(data)
         // Look for \r\n\r\n
-        for i in 0..<(bytes.count - 3) {
-            if bytes[i] == 0x0D && bytes[i+1] == 0x0A
-                && bytes[i+2] == 0x0D && bytes[i+3] == 0x0A {
-                return i + 4
+        if data.count >= 4 {
+            for i in data.startIndex..<(data.endIndex - 3) {
+                if data[i] == 0x0D && data[i + 1] == 0x0A
+                    && data[i + 2] == 0x0D && data[i + 3] == 0x0A {
+                    return i + 4
+                }
             }
         }
         // Fallback: look for \n\n (some messages use bare LF)
-        for i in 0..<(bytes.count - 1) {
-            if bytes[i] == 0x0A && bytes[i+1] == 0x0A {
-                return i + 2
+        if data.count >= 2 {
+            for i in data.startIndex..<(data.endIndex - 1) {
+                if data[i] == 0x0A && data[i + 1] == 0x0A {
+                    return i + 2
+                }
             }
         }
         return nil
@@ -45,18 +49,25 @@ public enum RFC822Parser {
 
     // MARK: - Private
 
+    /// Find the absolute Data index of the `\r\n\r\n` (or fallback `\n\n`)
+    /// separator. Returns the index of the **first** byte of the separator,
+    /// suitable for `data[..<returnedIndex]` to slice the headers.
+    ///
+    /// Honors `data.startIndex` (slice safety, #72).
     private static func findDoubleCRLF(in data: Data) -> Int? {
-        let bytes = Array(data)
-        for i in 0..<(bytes.count - 3) {
-            if bytes[i] == 0x0D && bytes[i+1] == 0x0A
-                && bytes[i+2] == 0x0D && bytes[i+3] == 0x0A {
-                return i
+        if data.count >= 4 {
+            for i in data.startIndex..<(data.endIndex - 3) {
+                if data[i] == 0x0D && data[i + 1] == 0x0A
+                    && data[i + 2] == 0x0D && data[i + 3] == 0x0A {
+                    return i
+                }
             }
         }
-        // Fallback: bare \n\n
-        for i in 0..<(bytes.count - 1) {
-            if bytes[i] == 0x0A && bytes[i+1] == 0x0A {
-                return i
+        if data.count >= 2 {
+            for i in data.startIndex..<(data.endIndex - 1) {
+                if data[i] == 0x0A && data[i + 1] == 0x0A {
+                    return i
+                }
             }
         }
         return nil
