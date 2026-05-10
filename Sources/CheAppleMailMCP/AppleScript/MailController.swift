@@ -773,15 +773,6 @@ actor MailController {
         }
     }
 
-    /// Generate AppleScript lines to attach files to an outgoing message
-    private func attachmentScript(for paths: [String]) -> String {
-        paths.map { path in
-            """
-            make new attachment with properties {file name:POSIX file "\(escapeForAppleScript(path))"} at after the last paragraph
-            """
-        }.joined(separator: "\n")
-    }
-
     /// Compose and send a new email
     func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
