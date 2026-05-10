@@ -82,9 +82,10 @@ func buildComposeEmailScript(
     cc: [String]? = nil,
     bcc: [String]? = nil,
     attachments: [String]? = nil,
-    format: BodyFormat = .plain
+    format: BodyFormat = .plain,
+    sanitizeLinks: Bool = false
 ) throws -> String {
-    let composed = try renderBody(body, format: format)
+    let composed = try renderBody(body, format: format, sanitizeLinks: sanitizeLinks)
     let plainFallback = composed.plainContent
 
     var script = """
@@ -117,9 +118,10 @@ func buildCreateDraftScript(
     subject: String,
     body: String,
     attachments: [String]? = nil,
-    format: BodyFormat = .plain
+    format: BodyFormat = .plain,
+    sanitizeLinks: Bool = false
 ) throws -> String {
-    let composed = try renderBody(body, format: format)
+    let composed = try renderBody(body, format: format, sanitizeLinks: sanitizeLinks)
     let plainFallback = composed.plainContent
 
     var script = """
@@ -145,8 +147,8 @@ func buildCreateDraftScript(
     return script
 }
 
-func composeReplyHTML(userBody: String, userFormat: BodyFormat, originalHTML: String?, originalPlain: String) throws -> String {
-    let composed = try renderBody(userBody, format: userFormat)
+func composeReplyHTML(userBody: String, userFormat: BodyFormat, originalHTML: String?, originalPlain: String, sanitizeLinks: Bool = false) throws -> String {
+    let composed = try renderBody(userBody, format: userFormat, sanitizeLinks: sanitizeLinks)
     let userPart = composed.htmlContent ?? htmlEscape(userBody)
 
     let quoted: String
@@ -200,7 +202,8 @@ func buildReplyEmailScript(
     attachments: [String]? = nil,
     saveAsDraft: Bool = false,
     originalHTML: String?,
-    originalPlain: String
+    originalPlain: String,
+    sanitizeLinks: Bool = false
 ) throws -> String {
     let replyType = replyAll ? "reply all" : "reply"
     let dispatchVerb = saveAsDraft ? "save" : "send"
@@ -241,7 +244,8 @@ func buildReplyEmailScript(
         userBody: userBody,
         userFormat: userFormat,
         originalHTML: originalHTML,
-        originalPlain: originalPlain
+        originalPlain: originalPlain,
+        sanitizeLinks: sanitizeLinks
     )
 
     return """
@@ -263,7 +267,8 @@ func buildForwardEmailScript(
     userBody: String?,
     userFormat: BodyFormat,
     originalHTML: String?,
-    originalPlain: String?
+    originalPlain: String?,
+    sanitizeLinks: Bool = false
 ) throws -> String {
     var script = """
     tell application "Mail"
@@ -290,7 +295,8 @@ func buildForwardEmailScript(
                 userBody: body,
                 userFormat: userFormat,
                 originalHTML: originalHTML,
-                originalPlain: originalPlain ?? ""
+                originalPlain: originalPlain ?? "",
+                sanitizeLinks: sanitizeLinks
             )
             script += "\n" + """
                 set html content to "\(appleScriptEscape(finalHTML))"

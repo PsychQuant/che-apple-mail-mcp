@@ -847,7 +847,7 @@ actor MailController {
     }
 
     /// Compose and send a new email
-    func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain) throws -> String {
+    func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41: validate every recipient field (to / cc / bcc) at the boundary.
         try validateEmailAddresses(to, field: "to")
@@ -860,13 +860,14 @@ actor MailController {
             cc: cc,
             bcc: bcc,
             attachments: attachments,
-            format: format
+            format: format,
+            sanitizeLinks: sanitizeLinks
         )
         return try runScript(script)
     }
 
     /// Reply to an email. Optionally add extra CC, attach files, and/or save as draft instead of sending.
-    func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]? = nil, saveAsDraft: Bool = false, format: BodyFormat = .plain) throws -> String {
+    func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]? = nil, saveAsDraft: Bool = false, format: BodyFormat = .plain, sanitizeLinks: Bool = false) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41 + #34: validate cc_additional then dedup case-insensitively
         // (within the user-supplied list; cross-list dedup vs reply_all-derived
@@ -911,13 +912,14 @@ actor MailController {
             attachments: attachments,
             saveAsDraft: saveAsDraft,
             originalHTML: originalHTML,
-            originalPlain: originalPlain
+            originalPlain: originalPlain,
+            sanitizeLinks: sanitizeLinks
         )
         return try runScript(script)
     }
 
     /// Forward an email
-    func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil, format: BodyFormat = .plain) throws -> String {
+    func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false) throws -> String {
         // Issue #41: validate forward recipients at the boundary.
         try validateEmailAddresses(to, field: "to")
         let ref = msgRef(id, mailbox: mailbox, account: accountName)
@@ -952,7 +954,8 @@ actor MailController {
             userBody: body,
             userFormat: format,
             originalHTML: originalHTML,
-            originalPlain: originalPlain
+            originalPlain: originalPlain,
+            sanitizeLinks: sanitizeLinks
         )
         return try runScript(script)
     }
@@ -975,7 +978,7 @@ actor MailController {
     }
 
     /// Create a draft
-    func createDraft(to: [String], subject: String, body: String, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain) throws -> String {
+    func createDraft(to: [String], subject: String, body: String, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41: validate draft recipients at the boundary.
         try validateEmailAddresses(to, field: "to")
@@ -984,7 +987,8 @@ actor MailController {
             subject: subject,
             body: body,
             attachments: attachments,
-            format: format
+            format: format,
+            sanitizeLinks: sanitizeLinks
         )
         return try runScript(script)
     }

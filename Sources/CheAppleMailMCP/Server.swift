@@ -235,7 +235,8 @@ class CheAppleMailMCPServer {
                         "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("CC recipients (optional)")]),
                         "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("BCC recipients (optional)")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")]),
-                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is; 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML.")])
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is; 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML.")]),
+                        "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true, markdown-mode link URLs whose scheme is not http/https/mailto/tel are rendered as plain text (no anchor) — defends against `[click](javascript:...)` XSS injection. Default false (preserves backward compat). Has no effect in plain or html mode (html mode is by-design caller-trusted; you must sanitize your own raw HTML).")])
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
@@ -254,7 +255,8 @@ class CheAppleMailMCPServer {
                         "cc_additional": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Extra CC recipients to add on top of those derived from 'reply_all'. Email addresses (RFC 5322 addr-spec).")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach to the reply.")]),
                         "save_as_draft": .object(["type": .string("boolean"), "description": .string("If true, save the reply as a draft instead of sending it (default: false). Use when you want a human to review before send.")]),
-                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) prepends the user body to the original message quoted with RFC 3676 `> ` line prefix — preserves signature + rich text; 'markdown'/'html' produce rich text user body but wrap the original's plain-text (HTML-escaped) in a `<blockquote>` because AppleScript denies html-content read on current macOS — signature lost.")])
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) prepends the user body to the original message quoted with RFC 3676 `> ` line prefix — preserves signature + rich text; 'markdown'/'html' produce rich text user body but wrap the original's plain-text (HTML-escaped) in a `<blockquote>` because AppleScript denies html-content read on current macOS — signature lost.")]),
+                        "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true, markdown-mode link URLs whose scheme is not http/https/mailto/tel are rendered as plain text (no anchor). Default false. Same semantics as compose_email.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("body")])
                 ])
@@ -270,7 +272,8 @@ class CheAppleMailMCPServer {
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
                         "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipients to forward to")]),
                         "body": .object(["type": .string("string"), "description": .string("Optional message to add (interpreted according to 'format')")]),
-                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default), 'markdown', or 'html'.")])
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default), 'markdown', or 'html'.")]),
+                        "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true, markdown-mode link URLs whose scheme is not http/https/mailto/tel are rendered as plain text (no anchor). Default false. Same semantics as compose_email.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("to")])
                 ])
@@ -298,7 +301,8 @@ class CheAppleMailMCPServer {
                         "subject": .object(["type": .string("string"), "description": .string("Email subject")]),
                         "body": .object(["type": .string("string"), "description": .string("Email body content (interpreted according to 'format')")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")]),
-                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is; 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML.")])
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is; 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML.")]),
+                        "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true, markdown-mode link URLs whose scheme is not http/https/mailto/tel are rendered as plain text (no anchor). Default false. Same semantics as compose_email.")])
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
@@ -904,7 +908,8 @@ class CheAppleMailMCPServer {
             let bcc = try optionalStringArray(arguments, key: "bcc")
             let attachments = try optionalStringArray(arguments, key: "attachments")
             let format = try parseBodyFormatArgument(arguments["format"])
-            return try await mailController.composeEmail(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format)
+            let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
+            return try await mailController.composeEmail(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, sanitizeLinks: sanitizeLinks)
 
         case "reply_email":
             let id = try requireMessageId(arguments)
@@ -918,7 +923,8 @@ class CheAppleMailMCPServer {
             let replyAttachments = try optionalStringArray(arguments, key: "attachments")
             let saveAsDraft = try requireBool(arguments, key: "save_as_draft", default: false)
             let format = try parseBodyFormatArgument(arguments["format"])
-            return try await mailController.replyEmail(id: id, mailbox: mailbox, accountName: accountName, body: body, replyAll: replyAll, ccAdditional: ccAdditional, attachments: replyAttachments, saveAsDraft: saveAsDraft, format: format)
+            let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
+            return try await mailController.replyEmail(id: id, mailbox: mailbox, accountName: accountName, body: body, replyAll: replyAll, ccAdditional: ccAdditional, attachments: replyAttachments, saveAsDraft: saveAsDraft, format: format, sanitizeLinks: sanitizeLinks)
 
         case "forward_email":
             let id = try requireMessageId(arguments)
@@ -930,7 +936,8 @@ class CheAppleMailMCPServer {
             let to = toArray.compactMap { $0.stringValue }
             let body = arguments["body"]?.stringValue
             let format = try parseBodyFormatArgument(arguments["format"])
-            return try await mailController.forwardEmail(id: id, mailbox: mailbox, accountName: accountName, to: to, body: body, format: format)
+            let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
+            return try await mailController.forwardEmail(id: id, mailbox: mailbox, accountName: accountName, to: to, body: body, format: format, sanitizeLinks: sanitizeLinks)
 
         // Draft Tools
         case "list_drafts":
@@ -949,7 +956,8 @@ class CheAppleMailMCPServer {
             let to = toArray.compactMap { $0.stringValue }
             let attachments = try optionalStringArray(arguments, key: "attachments")
             let format = try parseBodyFormatArgument(arguments["format"])
-            return try await mailController.createDraft(to: to, subject: subject, body: body, attachments: attachments, format: format)
+            let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
+            return try await mailController.createDraft(to: to, subject: subject, body: body, attachments: attachments, format: format, sanitizeLinks: sanitizeLinks)
 
         // Attachment Tools
         case "list_attachments":
