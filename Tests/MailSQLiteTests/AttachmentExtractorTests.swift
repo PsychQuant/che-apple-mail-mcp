@@ -633,4 +633,84 @@ final class AttachmentExtractorTests: XCTestCase {
 
         XCTAssertEqual(try Data(contentsOf: dest), bytes)
     }
+
+    // MARK: - Scenario (#27): list_attachments latency budget
+
+    /// Regression-prevention budget for `EmlxParser.attachmentNames` —
+    /// post-`99c7f54` perf is bounded to O(message structure size) by
+    /// using the names-only walker `MIMEParser.enumerateAttachmentNames`
+    /// (skips body decode). Previously this used `parseAllParts` which
+    /// eager-decodes every base64 body, making the path O(message size).
+    /// CI-tolerant ceiling is 200ms; typical run is sub-millisecond.
+    func testListAttachments_latencyBudget() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262653
+        let mailboxURL = try installFixture(
+            from: "multipart-attachment-ascii.emlx",
+            rowId: rowId,
+            in: root
+        )
+
+        let start = Date()
+        _ = try EmlxParser.attachmentNames(rowId: rowId, mailboxURL: mailboxURL)
+        let elapsedMs = Date().timeIntervalSince(start) * 1000
+
+        XCTAssertLessThan(
+            elapsedMs,
+            200,
+            "attachmentNames latency \(elapsedMs)ms exceeds 200ms ceiling — names-only walker (commit 99c7f54) may have regressed back to parseAllParts (eager-decode)"
+        )
+    }
+
+    // MARK: - Scenario (#32): attachmentNames ↔ saveAttachment matcher parity invariant
+
+    /// Codifies the "by construction" invariant from #24's verify report:
+    /// every name `attachmentNames` returns MUST be saveable by
+    /// `saveAttachment`. If the two helpers' filename-resolution logic
+    /// ever drifts apart, this test fails with the specific name +
+    /// fixture pinpointing which side broke.
+    ///
+    /// Loops the four shipped fixtures rather than synthesizing new ones —
+    /// every fixture that the codebase already validates becomes a
+    /// parity check, no fixture maintenance overhead.
+    func testAttachmentNamesAndSaveAttachmentMatcherParity() throws {
+        let fixtures = [
+            "multipart-attachment-ascii.emlx",
+            "multipart-attachment-cjk.emlx",
+            "multipart-duplicate-filename.emlx",
+            "multipart-nested.emlx"
+        ]
+
+        for fixture in fixtures {
+            let root = tempRoot("\(fixture)-parity")
+            defer { try? FileManager.default.removeItem(at: root) }
+
+            let rowId = 262653
+            let mailboxURL = try installFixture(from: fixture, rowId: rowId, in: root)
+
+            let names = try EmlxParser.attachmentNames(rowId: rowId, mailboxURL: mailboxURL)
+
+            // Empty fixture would still pass (no names to check), but our
+            // shipped fixtures all contain at least one attachment by design.
+            XCTAssertFalse(
+                names.isEmpty,
+                "fixture \(fixture) yielded empty attachmentNames set — fixture must contain ≥1 attachment for parity check"
+            )
+
+            for name in names {
+                let dest = root.appendingPathComponent("parity-out-\(UUID().uuidString)")
+                XCTAssertNoThrow(
+                    try EmlxParser.saveAttachment(
+                        rowId: rowId,
+                        mailboxURL: mailboxURL,
+                        attachmentName: name,
+                        destination: dest
+                    ),
+                    "PARITY BROKEN: attachmentNames listed '\(name)' from \(fixture) but saveAttachment cannot match it — the two helpers' filename-resolution logic has drifted apart"
+                )
+            }
+        }
+    }
 }
