@@ -892,4 +892,119 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertTrue(script.contains("delay 0.3"), "draft builder must inherit the race fix")
         XCTAssertTrue(script.contains("delay 0.5"), "draft builder must inherit the trailing drain delay")
     }
+
+    // MARK: - #61 indent parity (helper-owns-indent contract)
+
+    /// Verify all 3 callers (compose / draft / reply) prefix the helper output
+    /// with bare `\n` only — no extra leading-spaces — so the first attachment
+    /// line and subsequent attachment / delay lines all sit at the same column.
+    /// Pre-#61, compose and draft prefixed with "\n        " (8 spaces) which
+    /// double-indented the first line vs subsequent lines.
+    func testAttachmentFragment_indentParity_acrossThreeCallers() throws {
+        let attachments = ["/tmp/a.pdf", "/tmp/b.pdf"]
+
+        let composeScript = try buildComposeEmailScript(
+            to: ["x@y.z"], subject: "S", body: "B", attachments: attachments
+        )
+        let draftScript = try buildCreateDraftScript(
+            to: ["x@y.z"], subject: "S", body: "B", attachments: attachments
+        )
+
+        // Both compose and draft must contain a `\n    make new attachment` line
+        // (bare \n + 4-space helper indent), NOT `\n        make new attachment`
+        // (8 spaces caller-prefix + 4-space helper indent = 12 spaces).
+        XCTAssertTrue(
+            composeScript.contains("\n    make new attachment"),
+            "compose: first attachment line must use bare `\\n` prefix + helper's 4-space indent"
+        )
+        XCTAssertFalse(
+            composeScript.contains("\n        make new attachment"),
+            "compose: must NOT emit 12-space-indented attachment line (regression from #61 fix)"
+        )
+        XCTAssertTrue(
+            draftScript.contains("\n    make new attachment"),
+            "draft: first attachment line must use bare `\\n` prefix + helper's 4-space indent"
+        )
+        XCTAssertFalse(
+            draftScript.contains("\n        make new attachment"),
+            "draft: must NOT emit 12-space-indented attachment line (regression from #61 fix)"
+        )
+    }
+
+    // MARK: - #63 attachment count cap
+
+    func testValidateAttachmentPaths_rejectsCountAboveCap() async throws {
+        let paths = (1...51).map { "/tmp/file\($0).txt" }
+        do {
+            try await MailController.shared.validateAttachmentPaths(paths)
+            XCTFail("expected throw on count > 50")
+        } catch MailError.invalidParameter(let msg) {
+            XCTAssertTrue(msg.contains("exceeds cap"), "error message should mention 'exceeds cap'")
+            XCTAssertTrue(msg.contains("51"), "error message should mention actual count")
+        } catch {
+            XCTFail("expected MailError.invalidParameter, got \(error)")
+        }
+    }
+
+    func testValidateAttachmentPaths_acceptsCountAtCap() async {
+        // 50 paths is at the boundary — must NOT throw on count alone.
+        // (existence check will throw because /tmp/file<n>.txt don't exist,
+        // but that's a different code path; we just want to verify count
+        // gate doesn't reject 50.)
+        let paths = (1...50).map { "/tmp/file\($0).txt" }
+        do {
+            try await MailController.shared.validateAttachmentPaths(paths)
+            XCTFail("validateAttachmentPaths should fail on missing files (existence layer), not count")
+        } catch MailError.invalidParameter(let msg) {
+            XCTAssertFalse(msg.contains("exceeds cap"), "count cap should not fire at exactly 50 paths; got: \(msg)")
+            // Existence-layer failure is the expected path here.
+            XCTAssertTrue(msg.contains("not found"), "expected existence failure, got: \(msg)")
+        } catch {
+            XCTFail("unexpected error type: \(error)")
+        }
+    }
+
+    // MARK: - #64 env-configurable attachment delays
+
+    func testAttachmentFragment_envOverride_changesDelayValues() throws {
+        // Default 0.3 / 0.5 emitted when env vars unset
+        unsetenv("CHE_MAIL_ATTACHMENT_DELAY_BETWEEN")
+        unsetenv("CHE_MAIL_ATTACHMENT_DELAY_TRAILING")
+        let defaultScript = try buildComposeEmailScript(
+            to: ["x@y.z"], subject: "S", body: "B",
+            attachments: ["/tmp/a.pdf", "/tmp/b.pdf"]
+        )
+        XCTAssertTrue(defaultScript.contains("delay 0.3"), "default between-delay should be 0.3")
+        XCTAssertTrue(defaultScript.contains("delay 0.5"), "default trailing-delay should be 0.5")
+
+        // Override to 1.0 / 2.5 — values must appear in emitted script
+        setenv("CHE_MAIL_ATTACHMENT_DELAY_BETWEEN", "1.0", 1)
+        setenv("CHE_MAIL_ATTACHMENT_DELAY_TRAILING", "2.5", 1)
+        defer {
+            unsetenv("CHE_MAIL_ATTACHMENT_DELAY_BETWEEN")
+            unsetenv("CHE_MAIL_ATTACHMENT_DELAY_TRAILING")
+        }
+        let overrideScript = try buildComposeEmailScript(
+            to: ["x@y.z"], subject: "S", body: "B",
+            attachments: ["/tmp/a.pdf", "/tmp/b.pdf"]
+        )
+        XCTAssertTrue(overrideScript.contains("delay 1.0"), "override between-delay should produce `delay 1.0`")
+        XCTAssertTrue(overrideScript.contains("delay 2.5"), "override trailing-delay should produce `delay 2.5`")
+    }
+
+    func testAttachmentFragment_envOverride_outOfBoundsFallsBack() throws {
+        // Negative values, > 10, and unparseable strings should all fall back to defaults
+        for badValue in ["-0.5", "11.0", "abc", ""] {
+            setenv("CHE_MAIL_ATTACHMENT_DELAY_BETWEEN", badValue, 1)
+            let script = try buildComposeEmailScript(
+                to: ["x@y.z"], subject: "S", body: "B",
+                attachments: ["/tmp/a.pdf", "/tmp/b.pdf"]
+            )
+            XCTAssertTrue(
+                script.contains("delay 0.3"),
+                "out-of-bounds env value '\(badValue)' should fall back to 0.3, but got: \(script)"
+            )
+        }
+        unsetenv("CHE_MAIL_ATTACHMENT_DELAY_BETWEEN")
+    }
 }

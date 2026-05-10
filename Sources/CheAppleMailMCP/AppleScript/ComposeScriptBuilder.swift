@@ -10,10 +10,14 @@ func appleScriptEscape(_ string: String) -> String {
         .replacingOccurrences(of: "\t", with: "\" & tab & \"")
 }
 
-// Issue #39: both fragment helpers emit consistent 4-space indent for
-// readable AppleScript output. Callers concatenate without adding extra
-// indent prefixes (previous code added "        " for attachments only,
-// causing visual mismatch in emitted scripts).
+// Issue #39 / #61: helper-owns-indent contract.
+// `attachmentFragment` and `recipientFragment` emit lines with their own
+// 4-space indent baked in. Callers MUST prefix with bare "\n" (newline only,
+// no extra spaces) — the helper output already has the indent. Adding
+// extra prefix at call sites breaks visual alignment between first line
+// (caller-prefix + helper-indent = double-indented) and subsequent lines
+// (separator-only + helper-indent = single-indented), regressing #39's
+// single-source-of-truth promise.
 //
 // Issue #60: Mail.app's AppleScript attachment pipeline is asynchronous.
 // Two failure modes when emitting consecutive `make new attachment` calls
@@ -26,6 +30,24 @@ func appleScriptEscape(_ string: String) -> String {
 // (ensures pipeline drain before dispatch). N == 1 has no race so emits
 // no delay — keeps the common path latency-free.
 
+// Issue #64: delay constants are escape-hatchable via env vars.
+// Defaults (0.3 / 0.5) are picked rather than measured; on a Mac under load
+// (Time Machine, Spotlight reindex, dozen apps) or after Mail.app updates
+// the timing window can shift. Without an escape hatch, a user reporting
+// "still drops attachments 6 months from now" has no way to test calibration
+// without a code change. Sane bounds (0–10s) prevent denial-of-self attacks.
+private let defaultDelayBetween = 0.3
+private let defaultDelayTrailing = 0.5
+
+private func resolvedDelay(envKey: String, fallback: Double) -> Double {
+    guard let raw = ProcessInfo.processInfo.environment[envKey],
+          let value = Double(raw),
+          value >= 0, value <= 10 else {
+        return fallback
+    }
+    return value
+}
+
 private func attachmentFragment(for paths: [String]) -> String {
     guard !paths.isEmpty else { return "" }
     let lines = paths.map { path in
@@ -34,14 +56,16 @@ private func attachmentFragment(for paths: [String]) -> String {
     if paths.count == 1 {
         return lines[0]
     }
+    let between = resolvedDelay(envKey: "CHE_MAIL_ATTACHMENT_DELAY_BETWEEN", fallback: defaultDelayBetween)
+    let trailing = resolvedDelay(envKey: "CHE_MAIL_ATTACHMENT_DELAY_TRAILING", fallback: defaultDelayTrailing)
     var pieces: [String] = []
     for (idx, line) in lines.enumerated() {
         pieces.append(line)
         if idx < lines.count - 1 {
-            pieces.append("    delay 0.3")
+            pieces.append("    delay \(between)")
         }
     }
-    pieces.append("    delay 0.5")
+    pieces.append("    delay \(trailing)")
     return pieces.joined(separator: "\n")
 }
 
@@ -76,7 +100,7 @@ func buildComposeEmailScript(
     script += "\n" + recipientFragment(to, kind: "to")
     if let cc = cc { script += "\n" + recipientFragment(cc, kind: "cc") }
     if let bcc = bcc { script += "\n" + recipientFragment(bcc, kind: "bcc") }
-    if let attachments = attachments { script += "\n        " + attachmentFragment(for: attachments) }
+    if let attachments = attachments { script += "\n" + attachmentFragment(for: attachments) }
 
     script += "\n" + """
         end tell
@@ -109,7 +133,7 @@ func buildCreateDraftScript(
     }
 
     script += "\n" + recipientFragment(to, kind: "to")
-    if let attachments = attachments { script += "\n        " + attachmentFragment(for: attachments) }
+    if let attachments = attachments { script += "\n" + attachmentFragment(for: attachments) }
 
     script += "\n" + """
         end tell
