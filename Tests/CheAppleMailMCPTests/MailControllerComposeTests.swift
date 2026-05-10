@@ -3,6 +3,42 @@ import XCTest
 
 final class MailControllerComposeTests: XCTestCase {
 
+    // MARK: - Test helpers
+
+    /// Tightens lenient `script.contains` assertions (#20 finding C). Asserts
+    /// `needle` appears AFTER `before` and BEFORE `after` — defends against
+    /// regressions that move a property out of its expected AppleScript
+    /// section (e.g. a `set html content to ...` line that ends up after
+    /// `end tell` would previously have passed `script.contains` but
+    /// crashes Mail.app at runtime).
+    private func assertOrdered(
+        _ script: String,
+        _ needle: String,
+        between before: String,
+        and after: String,
+        file: StaticString = #file,
+        line: UInt = #line
+    ) {
+        guard let needleR = script.range(of: needle) else {
+            XCTFail("script missing required token \(needle.debugDescription)", file: file, line: line)
+            return
+        }
+        guard let beforeR = script.range(of: before) else {
+            XCTFail("script missing context anchor \(before.debugDescription)", file: file, line: line)
+            return
+        }
+        guard let afterR = script.range(of: after) else {
+            XCTFail("script missing context anchor \(after.debugDescription)", file: file, line: line)
+            return
+        }
+        XCTAssertLessThan(beforeR.lowerBound, needleR.lowerBound,
+                          "expected \(needle.debugDescription) to come AFTER \(before.debugDescription)",
+                          file: file, line: line)
+        XCTAssertLessThan(needleR.lowerBound, afterR.lowerBound,
+                          "expected \(needle.debugDescription) to come BEFORE \(after.debugDescription)",
+                          file: file, line: line)
+    }
+
     // MARK: - appleScriptEscape
 
     func testAppleScriptEscape_handlesQuotesAndNewlines() {
@@ -35,7 +71,10 @@ final class MailControllerComposeTests: XCTestCase {
             body: "**bold**",
             format: .markdown
         )
-        XCTAssertTrue(script.contains("set html content to"))
+        // #20-C: tightened — `set html content` must live INSIDE the
+        // `tell newMessage … end tell` block, not before/after, or
+        // Mail.app rejects the script at runtime.
+        assertOrdered(script, "set html content to", between: "tell newMessage", and: "end tell")
         XCTAssertTrue(script.contains("<strong>bold</strong>"))
     }
 
@@ -46,7 +85,7 @@ final class MailControllerComposeTests: XCTestCase {
             body: "<b>bold</b>",
             format: .html
         )
-        XCTAssertTrue(script.contains("set html content to"))
+        assertOrdered(script, "set html content to", between: "tell newMessage", and: "end tell")
         XCTAssertTrue(script.contains("<b>bold</b>"))
     }
 

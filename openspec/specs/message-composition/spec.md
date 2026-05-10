@@ -50,12 +50,6 @@ When `format` is `"markdown"`, the system SHALL parse `body` using Swift's `Attr
 - **WHEN** a caller invokes `compose_email` with `body: "See [example](https://example.com)"` and `format: "markdown"`
 - **THEN** the delivered email SHALL contain a clickable hyperlink with visible text "example" and URL `https://example.com`
 
-#### Scenario: Markdown parse failure surfaces as tool error
-
-- **WHEN** a caller invokes a composing tool with malformed markdown that `AttributedString(markdown:)` cannot parse
-- **THEN** the system SHALL return an MCP error describing the parse failure
-- **AND** the system SHALL NOT send or draft the email
-
 ---
 ### Requirement: HTML mode writes body to AppleScript html content
 
