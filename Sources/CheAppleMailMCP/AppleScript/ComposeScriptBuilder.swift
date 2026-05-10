@@ -10,10 +10,14 @@ func appleScriptEscape(_ string: String) -> String {
         .replacingOccurrences(of: "\t", with: "\" & tab & \"")
 }
 
-// Issue #39: both fragment helpers emit consistent 4-space indent for
-// readable AppleScript output. Callers concatenate without adding extra
-// indent prefixes (previous code added "        " for attachments only,
-// causing visual mismatch in emitted scripts).
+// Issue #39 / #61: helper-owns-indent contract.
+// `attachmentFragment` and `recipientFragment` emit lines with their own
+// 4-space indent baked in. Callers MUST prefix with bare "\n" (newline only,
+// no extra spaces) — the helper output already has the indent. Adding
+// extra prefix at call sites breaks visual alignment between first line
+// (caller-prefix + helper-indent = double-indented) and subsequent lines
+// (separator-only + helper-indent = single-indented), regressing #39's
+// single-source-of-truth promise.
 //
 // Issue #60: Mail.app's AppleScript attachment pipeline is asynchronous.
 // Two failure modes when emitting consecutive `make new attachment` calls
@@ -76,7 +80,7 @@ func buildComposeEmailScript(
     script += "\n" + recipientFragment(to, kind: "to")
     if let cc = cc { script += "\n" + recipientFragment(cc, kind: "cc") }
     if let bcc = bcc { script += "\n" + recipientFragment(bcc, kind: "bcc") }
-    if let attachments = attachments { script += "\n        " + attachmentFragment(for: attachments) }
+    if let attachments = attachments { script += "\n" + attachmentFragment(for: attachments) }
 
     script += "\n" + """
         end tell
@@ -109,7 +113,7 @@ func buildCreateDraftScript(
     }
 
     script += "\n" + recipientFragment(to, kind: "to")
-    if let attachments = attachments { script += "\n        " + attachmentFragment(for: attachments) }
+    if let attachments = attachments { script += "\n" + attachmentFragment(for: attachments) }
 
     script += "\n" + """
         end tell
