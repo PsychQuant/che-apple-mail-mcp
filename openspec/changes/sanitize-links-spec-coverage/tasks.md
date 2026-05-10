@@ -13,6 +13,6 @@
 
 ## 3. Validation + CHANGELOG
 
-- [ ] 3.1 跑完整 `swift test` confirm 313 passing / 0 failing / 8 skipped (基準 309 + 4 new wiring tests)。**Verification**: command output 顯示對應 counts; 新增 test 全部出現在 pass list。
-- [ ] 3.2 在 `CHANGELOG.md` `## [Unreleased]` 區塊加一行記錄 spec coverage + wiring contract tests (#85),不加 count metric (per cluster A 學到的反 rotting 教訓)。**Verification**: `grep -F "#85" CHANGELOG.md` 至少 1 hit; 新增的行不含「N tests」之類數字; 風格與相鄰 [Unreleased] entries 一致。
-- [ ] 3.3 跑 `spectra validate sanitize-links-spec-coverage --strict` 通過 (specs delta 對齊 ADDED Requirement、tasks 涵蓋 Requirement title)。**Verification**: command exit code 0; output 不含 Critical / Warning。
+- [x] 3.1 跑完整 `swift test` confirm 313 passing / 0 failing / 8 skipped (基準 309 + 4 new wiring tests)。**Verification**: command output 顯示對應 counts; 新增 test 全部出現在 pass list。
+- [x] 3.2 在 `CHANGELOG.md` `## [Unreleased]` 區塊加一行記錄 spec coverage + wiring contract tests (#85),不加 count metric (per cluster A 學到的反 rotting 教訓)。**Verification**: `grep -F "#85" CHANGELOG.md` 至少 1 hit; 新增的行不含「N tests」之類數字; 風格與相鄰 [Unreleased] entries 一致。
+- [x] 3.3 跑 `spectra validate sanitize-links-spec-coverage --strict` 通過 (specs delta 對齊 ADDED Requirement、tasks 涵蓋 Requirement title)。**Verification**: command exit code 0; output 不含 Critical / Warning。
