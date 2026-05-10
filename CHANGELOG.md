@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.7.2] - 2026-05-10
 
 ### Added
 - **Attachment count cap (50) in `validateAttachmentPaths`** ([#63](https://github.com/PsychQuant/che-apple-mail-mcp/issues/63)). Caller passing `attachments.count > 50` now throws `MailError.invalidParameter` with a clear "exceeds cap" message. Mitigates DoS amplification: post-#60 each attachment adds ≈0.3s AppleScript dispatch latency + 0.5s trailing drain, so N=1000 would block Mail.app for ≈300s. The 64KB osascript script soft cap already capped practical N to ~200-400 (≈60-120s ceiling), but explicit count cap is cleaner, gives predictable error instead of opaque AppleScript truncation, and matches the input-validation hardening series (#38 / #41 / #50). 50 is well above realistic legitimate use (typical mail attachments ≤ 10) but below the script-size cliff.
