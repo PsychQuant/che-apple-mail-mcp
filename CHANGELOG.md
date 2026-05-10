@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **`get_email_metadata` SQLite path now falls back to AppleScript on error** ([#71](https://github.com/PsychQuant/che-apple-mail-mcp/issues/71)). Pre-fix, `Server.swift get_email_metadata` was the only read tool whose SQLite fast path lacked a `do/catch` fallback wrapper — a throw from `reader.getEmailMetadata(messageId:)` (corrupt DB row, schema drift, lock contention during sync) propagated to the caller instead of falling through to the AppleScript path 3 lines below. By contrast, all 7 sister read tools (`get_email`, `get_emails_batch`, `get_email_headers`, `get_email_source`, `save_attachment`, `list_attachments`, `search_emails`) wrap the SQLite call in `do/catch` with stderr log and fallback. Pre-existing inconsistency surfaced during #69 (PR #70) verify by Codex CLI + Devil's Advocate independently. Fix: mirror the canonical pattern from `save_attachment` (#12) — log to stderr `SQLite get_email_metadata fast path failed for rowId=<N>: <error>; falling through to AppleScript` and fall through. README "fallback parity" table updated; EWS / Exchange paragraph now says all 8 read tools (instead of "7 read tools, get_email_metadata is the gap").
+
 ## [2.7.1] - 2026-05-09
 
 ### Fixed

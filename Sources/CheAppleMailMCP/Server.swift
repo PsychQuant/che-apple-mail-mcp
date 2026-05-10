@@ -1200,9 +1200,22 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("mailbox, and account_name are required")
             }
+            // Issue #71: hybrid fallback parity with the other 7 read tools.
+            // Pre-fix, SQLite path throw escaped to caller without falling
+            // through to AppleScript — the only read tool with this gap.
+            // Surfaced by #69 (PR #70) verify (Codex CLI + Devil's Advocate
+            // both flagged independently). Mirror canonical pattern from
+            // save_attachment (#12) and the 6 other read tools.
             if let reader = indexReader, let rowId = Int(id) {
-                let metadata = try reader.getEmailMetadata(messageId: rowId)
-                return formatJSON(metadata)
+                do {
+                    let metadata = try reader.getEmailMetadata(messageId: rowId)
+                    return formatJSON(metadata)
+                } catch {
+                    let message = "SQLite get_email_metadata fast path failed for "
+                        + "rowId=\(rowId): \(error.localizedDescription); "
+                        + "falling through to AppleScript\n"
+                    FileHandle.standardError.write(Data(message.utf8))
+                }
             }
             let metadata = try await mailController.getEmailMetadata(id: id, mailbox: mailbox, accountName: accountName)
             return formatJSON(metadata)

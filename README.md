@@ -343,7 +343,7 @@ Most read tools prefer Apple Mail's local Envelope Index (SQLite) and on-disk `.
 | `search_emails` | ✓ | ✓ when reader unavailable |
 | `list_attachments` | ✓ | ✓ on any error |
 | `save_attachment` | ✓ | ✓ on any error |
-| `get_email_metadata` | ✓ | ⚠ does **not** fall back today (see [#69](https://github.com/PsychQuant/che-apple-mail-mcp/issues/69) follow-up) |
+| `get_email_metadata` | ✓ | ✓ on any error (since [#71](https://github.com/PsychQuant/che-apple-mail-mcp/issues/71)) |
 
 For `save_attachment`'s read path the fast path is **10–100× faster** than AppleScript (per [#12](https://github.com/PsychQuant/che-apple-mail-mcp/issues/12) measurements). Other tools' speedup ratios depend on request shape; in general, large bulk reads see the biggest gain.
 
@@ -355,7 +355,7 @@ The fast path requires:
 
 ### EWS / Exchange accounts intentionally bypass the fast path
 
-Exchange (EWS) accounts in Apple Mail **do not materialize `.emlx` files** — message bodies live on the server and are fetched on demand. For these accounts, the read tools listed above as having an AppleScript fallback transparently degrade to AppleScript IPC (which is correct but slower); `get_email_metadata` will surface the error today (see follow-up). Symptoms:
+Exchange (EWS) accounts in Apple Mail **do not materialize `.emlx` files** — message bodies live on the server and are fetched on demand. For these accounts, all 8 read tools (including `get_email_metadata` since [#71](https://github.com/PsychQuant/che-apple-mail-mcp/issues/71)) transparently degrade to AppleScript IPC (which is correct but slower). Symptoms:
 
 - A bulk fetch of 500 EWS messages will be noticeably slower than 500 IMAP/Gmail messages
 - This is **not a bug** — it's an Apple Mail storage architecture constraint (see [#9](https://github.com/PsychQuant/che-apple-mail-mcp/issues/9))
