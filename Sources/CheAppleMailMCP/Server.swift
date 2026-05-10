@@ -1348,6 +1348,45 @@ class CheAppleMailMCPServer {
                     results.append(["error": "Missing required fields (id, mailbox, account_name)"])
                     continue
                 }
+                // SQLite + .emlx fast path with #24 cross-validation: filter
+                // out stale SQLite attachment rows that don't actually exist
+                // in the .emlx body. Mirrors the single-message handler at
+                // `case "list_attachments"` above. Per-message graceful
+                // degradation — if .emlx parse fails for one message, fall
+                // through to AppleScript for THAT message only, preserving
+                // the rest of the batch (issue #25).
+                if let reader = indexReader, let rowId = Int(id) {
+                    do {
+                        let sqliteAttachments = try reader.listAttachments(messageId: rowId)
+                        var attachments = sqliteAttachments
+                        if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
+                            do {
+                                let realNames = try EmlxParser.attachmentNames(
+                                    rowId: rowId,
+                                    mailboxURL: mailboxUrl
+                                )
+                                attachments = sqliteAttachments.filter { entry in
+                                    guard let name = entry["name"] as? String else { return false }
+                                    return realNames.contains(name)
+                                }
+                            } catch {
+                                let message = "list_attachments_batch emlx validation failed for "
+                                    + "rowId=\(rowId): \(error.localizedDescription); "
+                                    + "returning unvalidated SQLite metadata for this item\n"
+                                FileHandle.standardError.write(Data(message.utf8))
+                            }
+                        }
+                        results.append(["id": id, "mailbox": mailbox, "account_name": accountName, "attachments": attachments])
+                        continue
+                    } catch {
+                        // SQLite query itself failed — fall through to AppleScript.
+                        let message = "list_attachments_batch SQLite fast path failed for "
+                            + "rowId=\(rowId): \(error.localizedDescription); "
+                            + "falling through to AppleScript for this item\n"
+                        FileHandle.standardError.write(Data(message.utf8))
+                    }
+                }
+                // Tier 2: AppleScript fallback (legacy path, preserved unchanged).
                 do {
                     let attachments = try await mailController.listAttachments(id: id, mailbox: mailbox, accountName: accountName)
                     results.append(["id": id, "mailbox": mailbox, "account_name": accountName, "attachments": attachments])
