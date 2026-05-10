@@ -523,6 +523,88 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertFalse(script.contains("set html content to"))
     }
 
+    // MARK: - sanitize_links wiring contract (#85, sister of #19)
+    //
+    // These tests pin the END-TO-END forwarding of the `sanitizeLinks` parameter
+    // from the script-builder layer down through `renderBody` to the emitted
+    // AppleScript. Each test exercises both arms (default-off passthrough +
+    // sanitize_links=true block) so a future regression that drops
+    // `sanitizeLinks: sanitizeLinks` forwarding in any of the 5 sites
+    // (compose/draft/reply/forward MailController methods + composeReplyHTML)
+    // will fail at least one assertion. The unit-level
+    // `MarkdownRenderingTests` already cover the algorithm; these tests cover
+    // the WIRING. Verify with fault injection: set any `sanitizeLinks: ...`
+    // call site to hardcoded `false` and re-run — corresponding test must fail.
+
+    func testBuildComposeEmailScript_sanitizeLinks_blocksJavaScriptURL() throws {
+        let body = "[click](javascript:alert(1))"
+        let scriptOff = try buildComposeEmailScript(
+            to: ["a@b.c"], subject: "S", body: body, format: .markdown, sanitizeLinks: false
+        )
+        XCTAssertTrue(scriptOff.contains("href=\\\"javascript:"),
+                      "default-off arm: AppleScript MUST contain href=\"javascript: when sanitizeLinks=false; got: \(scriptOff)")
+        let scriptOn = try buildComposeEmailScript(
+            to: ["a@b.c"], subject: "S", body: body, format: .markdown, sanitizeLinks: true
+        )
+        XCTAssertFalse(scriptOn.contains("href=\\\"javascript:"),
+                       "sanitize_links=true arm: AppleScript MUST NOT contain href=\"javascript:; got: \(scriptOn)")
+        XCTAssertTrue(scriptOn.contains("click"),
+                      "anchor text 'click' MUST be preserved when scheme is dropped")
+    }
+
+    func testBuildCreateDraftScript_sanitizeLinks_blocksJavaScriptURL() throws {
+        let body = "[click](javascript:alert(1))"
+        let scriptOff = try buildCreateDraftScript(
+            to: ["a@b.c"], subject: "S", body: body, format: .markdown, sanitizeLinks: false
+        )
+        XCTAssertTrue(scriptOff.contains("href=\\\"javascript:"),
+                      "default-off arm: createDraft AppleScript MUST contain href=\"javascript: when sanitizeLinks=false")
+        let scriptOn = try buildCreateDraftScript(
+            to: ["a@b.c"], subject: "S", body: body, format: .markdown, sanitizeLinks: true
+        )
+        XCTAssertFalse(scriptOn.contains("href=\\\"javascript:"),
+                       "sanitize_links=true arm: createDraft AppleScript MUST NOT contain href=\"javascript:")
+        XCTAssertTrue(scriptOn.contains("click"))
+    }
+
+    func testBuildReplyEmailScript_sanitizeLinks_blocksJavaScriptURL() throws {
+        let userBody = "[click](javascript:alert(1))"
+        let scriptOff = try buildReplyEmailScript(
+            messageRef: "msgRef", userBody: userBody, userFormat: .markdown,
+            replyAll: false, originalHTML: nil, originalPlain: "orig",
+            sanitizeLinks: false
+        )
+        XCTAssertTrue(scriptOff.contains("href=\\\"javascript:"),
+                      "default-off arm: replyEmail AppleScript MUST contain href=\"javascript: when sanitizeLinks=false")
+        let scriptOn = try buildReplyEmailScript(
+            messageRef: "msgRef", userBody: userBody, userFormat: .markdown,
+            replyAll: false, originalHTML: nil, originalPlain: "orig",
+            sanitizeLinks: true
+        )
+        XCTAssertFalse(scriptOn.contains("href=\\\"javascript:"),
+                       "sanitize_links=true arm: replyEmail AppleScript MUST NOT contain href=\"javascript:")
+        XCTAssertTrue(scriptOn.contains("click"))
+    }
+
+    func testBuildForwardEmailScript_sanitizeLinks_blocksJavaScriptURL() throws {
+        let userBody = "[click](javascript:alert(1))"
+        let scriptOff = try buildForwardEmailScript(
+            messageRef: "msgRef", to: ["x@y.z"], userBody: userBody,
+            userFormat: .markdown, originalHTML: nil, originalPlain: "orig",
+            sanitizeLinks: false
+        )
+        XCTAssertTrue(scriptOff.contains("href=\\\"javascript:"),
+                      "default-off arm: forwardEmail AppleScript MUST contain href=\"javascript: when sanitizeLinks=false")
+        let scriptOn = try buildForwardEmailScript(
+            messageRef: "msgRef", to: ["x@y.z"], userBody: userBody,
+            userFormat: .markdown, originalHTML: nil, originalPlain: "orig",
+            sanitizeLinks: true
+        )
+        XCTAssertFalse(scriptOn.contains("href=\\\"javascript:"),
+                       "sanitize_links=true arm: forwardEmail AppleScript MUST NOT contain href=\"javascript:")
+        XCTAssertTrue(scriptOn.contains("click"))
+    }
+
     // MARK: - parseFetchedOriginalContent
 
     func testParseFetchedOriginalContent_bothFieldsSeparated() {
