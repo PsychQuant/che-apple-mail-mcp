@@ -242,7 +242,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "reply_email",
-                description: "Reply to an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). 'plain' embeds the original message as RFC 3676 `> `-prefixed quoted lines; 'markdown'/'html' wrap the original in a `<blockquote>`. Optionally add extra CC, attach files, and save as draft instead of sending.",
+                description: "Reply to an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). 'plain' embeds the original message as RFC 3676 `> `-prefixed quoted lines (signature + rich text preserved by Mail.app); 'markdown'/'html' wrap the original's PLAIN-TEXT content (HTML-escaped) in a `<blockquote>` — Apple's AppleScript denies read access to the original message's HTML on current macOS, so signature / rich-text formatting is NOT preserved in non-plain modes. Use 'plain' if signature preservation matters. Optionally add extra CC, attach files, and save as draft instead of sending.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -254,14 +254,14 @@ class CheAppleMailMCPServer {
                         "cc_additional": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Extra CC recipients to add on top of those derived from 'reply_all'. Email addresses (RFC 5322 addr-spec).")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach to the reply.")]),
                         "save_as_draft": .object(["type": .string("boolean"), "description": .string("If true, save the reply as a draft instead of sending it (default: false). Use when you want a human to review before send.")]),
-                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) prepends the user body to the original message quoted with RFC 3676 `> ` line prefix; 'markdown'/'html' produce rich text and wrap the original in a `<blockquote>`.")])
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) prepends the user body to the original message quoted with RFC 3676 `> ` line prefix — preserves signature + rich text; 'markdown'/'html' produce rich text user body but wrap the original's plain-text (HTML-escaped) in a `<blockquote>` because AppleScript denies html-content read on current macOS — signature lost.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("body")])
                 ])
             ),
             Tool(
                 name: "forward_email",
-                description: "Forward an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). 'plain' embeds the original message as RFC 3676 `> `-prefixed quoted lines (when body is provided); 'markdown'/'html' wrap the original in a `<blockquote>`. Body is optional (omit for a bare forward without commentary).",
+                description: "Forward an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). 'plain' embeds the original message as RFC 3676 `> `-prefixed quoted lines when body is provided (signature + rich text preserved); 'markdown'/'html' wrap the original's PLAIN-TEXT content (HTML-escaped) in a `<blockquote>` — Apple's AppleScript denies read access to the original's HTML on current macOS, so signature / rich-text formatting is NOT preserved in non-plain modes. Body is optional (omit for a bare forward without commentary).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
