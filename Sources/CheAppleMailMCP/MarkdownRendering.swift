@@ -24,19 +24,41 @@ enum MarkdownRenderingError: Error, Equatable {
     case markdownParseFailure(reason: String)
 }
 
-func renderBody(_ body: String, format: BodyFormat) throws -> ComposedBody {
+/// URL schemes considered "safe" — anchor will be emitted in
+/// `<a href="...">` form. Schemes outside this set are stripped to text-
+/// only when `sanitizeLinks: true` is passed to `renderBody`. List is
+/// intentionally narrow (#19): `javascript:`, `data:`, `file:`, `vbscript:`
+/// etc. are all rejected by default-off (preserves backwards compat) and
+/// blocked by opt-in. Update `messageCompositionSafeURLSchemes` if a new
+/// scheme proves universally safe across mail clients.
+let messageCompositionSafeURLSchemes: Set<String> = ["http", "https", "mailto", "tel"]
+
+/// Render a composing body to HTML / plain output.
+///
+/// - Parameters:
+///   - body: caller-provided body text. Interpretation depends on `format`.
+///   - format: `.plain` / `.markdown` / `.html`.
+///   - sanitizeLinks: if `true`, link URLs whose scheme is not in
+///     `messageCompositionSafeURLSchemes` are downgraded to plain text
+///     (no anchor). Applies in `.markdown` mode (where `AttributedString`
+///     parses link syntax and could surface `javascript:` or `data:` URLs
+///     — see issue #19). `.plain` and `.html` modes are not affected:
+///     plain doesn't render links, and html mode is by-design caller-
+///     trusted (caller is responsible for sanitizing their own raw HTML).
+///     Default `false` preserves pre-#19 behavior.
+func renderBody(_ body: String, format: BodyFormat, sanitizeLinks: Bool = false) throws -> ComposedBody {
     switch format {
     case .plain:
         return ComposedBody(htmlContent: nil, plainContent: body)
     case .html:
         return ComposedBody(htmlContent: body, plainContent: body)
     case .markdown:
-        let html = try markdownToHTML(body)
+        let html = try markdownToHTML(body, sanitizeLinks: sanitizeLinks)
         return ComposedBody(htmlContent: html, plainContent: body)
     }
 }
 
-private func markdownToHTML(_ markdown: String) throws -> String {
+private func markdownToHTML(_ markdown: String, sanitizeLinks: Bool) throws -> String {
     let options = AttributedString.MarkdownParsingOptions(
         interpretedSyntax: .full,
         failurePolicy: .throwError
@@ -48,10 +70,10 @@ private func markdownToHTML(_ markdown: String) throws -> String {
         throw MarkdownRenderingError.markdownParseFailure(reason: String(describing: error))
     }
 
-    return attributedStringToHTML(attr)
+    return attributedStringToHTML(attr, sanitizeLinks: sanitizeLinks)
 }
 
-private func attributedStringToHTML(_ attr: AttributedString) -> String {
+private func attributedStringToHTML(_ attr: AttributedString, sanitizeLinks: Bool) -> String {
     var paragraphs: [(text: String, kind: BlockKind)] = []
     var currentBuffer = ""
     var currentKind: BlockKind = .paragraph
@@ -79,7 +101,7 @@ private func attributedStringToHTML(_ attr: AttributedString) -> String {
         currentIntent = intent
         currentIntentInitialized = true
 
-        currentBuffer += inlineHTML(text: text, run: run)
+        currentBuffer += inlineHTML(text: text, run: run, sanitizeLinks: sanitizeLinks)
     }
 
     if !currentBuffer.isEmpty {
@@ -132,7 +154,7 @@ private func blockKind(of intent: PresentationIntent?) -> BlockKind {
     return .paragraph
 }
 
-private func inlineHTML(text: String, run: AttributedString.Runs.Run) -> String {
+private func inlineHTML(text: String, run: AttributedString.Runs.Run, sanitizeLinks: Bool) -> String {
     var fragment = htmlEscape(text)
 
     if let intent = run.inlinePresentationIntent {
@@ -143,7 +165,18 @@ private func inlineHTML(text: String, run: AttributedString.Runs.Run) -> String 
     }
 
     if let link = run.link {
-        fragment = "<a href=\"\(link.absoluteString)\">\(fragment)</a>"
+        // #19 — opt-in URL scheme allowlist. When sanitizeLinks=true and
+        // the scheme is outside the allowlist (e.g. javascript:, data:,
+        // file:, vbscript:), drop the anchor and emit text only —
+        // AttributedString(markdown:) faithfully parses any URL the caller
+        // typed, so without this guard a `[click](javascript:alert(1))`
+        // would produce a clickable XSS vector in the rendered email.
+        let scheme = link.scheme?.lowercased() ?? ""
+        if sanitizeLinks && !messageCompositionSafeURLSchemes.contains(scheme) {
+            // fragment stays as plain (escaped) text — no anchor wrapped
+        } else {
+            fragment = "<a href=\"\(link.absoluteString)\">\(fragment)</a>"
+        }
     }
 
     return fragment

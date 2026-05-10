@@ -150,4 +150,54 @@ final class MarkdownRenderingTests: XCTestCase {
         }
         XCTAssertEqual(reason, "underlying detail")
     }
+
+    // MARK: - Scenario (#19): sanitize_links opt-in URL scheme allowlist
+
+    func testRenderBody_markdown_sanitizeLinksOff_passesJavaScriptURLThrough() throws {
+        // Default behavior — backwards compat. javascript: link surfaces
+        // unsanitized. Same input as #19's repro example.
+        let result = try renderBody("[click](javascript:alert('xss'))", format: .markdown)
+        let html = result.htmlContent ?? ""
+        XCTAssertTrue(html.contains("href=\"javascript:"),
+                      "default sanitizeLinks=false must preserve link as-is for backwards compat; got: \(html)")
+    }
+
+    func testRenderBody_markdown_sanitizeLinksOn_dropsAnchorOnJavaScriptURL() throws {
+        let result = try renderBody("[click](javascript:alert('xss'))", format: .markdown, sanitizeLinks: true)
+        let html = result.htmlContent ?? ""
+        XCTAssertFalse(html.contains("javascript:"),
+                       "sanitizeLinks=true must NOT emit javascript: URL; got: \(html)")
+        XCTAssertFalse(html.contains("<a href"),
+                       "sanitizeLinks=true must NOT emit anchor for unsafe scheme; got: \(html)")
+        XCTAssertTrue(html.contains("click"),
+                      "anchor text must still be present (just no anchor wrap); got: \(html)")
+    }
+
+    func testRenderBody_markdown_sanitizeLinksOn_preservesHttpsLink() throws {
+        let result = try renderBody("[example](https://example.com/path?q=1)", format: .markdown, sanitizeLinks: true)
+        let html = result.htmlContent ?? ""
+        XCTAssertTrue(html.contains("href=\"https://example.com/path?q=1\""),
+                      "https URL must survive sanitize_links allowlist; got: \(html)")
+        XCTAssertTrue(html.contains(">example</a>"),
+                      "anchor wrap must be preserved for safe scheme; got: \(html)")
+    }
+
+    func testRenderBody_markdown_sanitizeLinksOn_preservesMailtoAndTel() throws {
+        let mailto = try renderBody("[mail](mailto:foo@example.com)", format: .markdown, sanitizeLinks: true)
+        XCTAssertTrue(mailto.htmlContent!.contains("href=\"mailto:foo@example.com\""),
+                      "mailto: must survive allowlist")
+        let tel = try renderBody("[call](tel:+15551234)", format: .markdown, sanitizeLinks: true)
+        XCTAssertTrue(tel.htmlContent!.contains("href=\"tel:+15551234\""),
+                      "tel: must survive allowlist")
+    }
+
+    func testRenderBody_markdown_sanitizeLinksOn_blocksDataURL() throws {
+        // data: URLs can carry inline images / scripts — explicit block
+        // even though some clients accept them. Issue #19 lists data:
+        // alongside javascript: as unsafe schemes.
+        let result = try renderBody("[img](data:text/html,<script>alert(1)</script>)", format: .markdown, sanitizeLinks: true)
+        let html = result.htmlContent ?? ""
+        XCTAssertFalse(html.contains("data:"),
+                       "data: URL must NOT survive sanitize_links allowlist; got: \(html)")
+    }
 }
