@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**The most comprehensive Apple Mail MCP server** - 47 tools with SQLite-powered millisecond search across 250K+ emails.
+**The most comprehensive Apple Mail MCP server** - 48 tools with SQLite-powered millisecond search across 250K+ emails.
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -52,7 +52,39 @@ Then grant Automation permission in **System Settings > Privacy & Security > Aut
 
 ---
 
-## All 42 Tools
+## Recent Releases
+
+For full details see [CHANGELOG.md](CHANGELOG.md).
+
+### v2.7.2 (2026-05-10) — `attachmentFragment` cluster + fallback parity
+- Hardened `attachmentFragment` indent across all 3 callers + removed dead `MailController.attachmentScript` helper that bypassed v2.7.0's race-mitigation delays ([#61](https://github.com/PsychQuant/che-apple-mail-mcp/issues/61), [#62](https://github.com/PsychQuant/che-apple-mail-mcp/issues/62))
+- Attachment count cap (50) + env-configurable delays via `CHE_MAIL_ATTACHMENT_DELAY_BETWEEN` / `_TRAILING` ([#63](https://github.com/PsychQuant/che-apple-mail-mcp/issues/63), [#64](https://github.com/PsychQuant/che-apple-mail-mcp/issues/64))
+- `get_email_metadata` SQLite path now falls back to AppleScript on error — last read-tool gap closed; all 8 SQLite-first read tools now have parity fallback ([#71](https://github.com/PsychQuant/che-apple-mail-mcp/issues/71))
+
+### v2.7.1 (2026-05-09) — base64 fix + `.partial.emlx` + observability
+- **Critical**: RFC822 header/body split was returning a relative array index instead of an absolute `Data` index, causing `html_body` to begin with `"sion: 1.0\n\n<base64>"` for some Android Gmail messages — raw base64 leaked into LLM context and triggered AUP false-positives downstream ([#72](https://github.com/PsychQuant/che-apple-mail-mcp/issues/72))
+- `save_attachment` now reads from `Attachments/<rowId>/<part_id>/<filename>` cache when `.partial.emlx` body is empty — no more silent 0-byte writes for IMAP messages with stripped binaries ([#66](https://github.com/PsychQuant/che-apple-mail-mcp/issues/66))
+- SQLite fast-path failures now log to stderr (`SQLite ... fast path failed for rowId=...; falling through to AppleScript`) ([#69](https://github.com/PsychQuant/che-apple-mail-mcp/issues/69))
+
+### v2.7.0 (2026-05-04) — Mail.app race mitigation
+- Multi-attachment AppleScript paced with 0.3s between + 0.5s trailing delays to mitigate Mail.app silently dropping attachments under fast IPC ([#60](https://github.com/PsychQuant/che-apple-mail-mcp/issues/60))
+
+### v2.6.0 (2026-05-03) — Security & validation hardening (8 PRs, 16 issues)
+- `forward_email` plain mode now embeds RFC 3676 `> ` quoted original (parity with `reply_email`'s #43 fix) ([#44](https://github.com/PsychQuant/che-apple-mail-mcp/issues/44))
+- Hard-fail on tool param type mismatch — `bool` / `[String]` no longer silently coerced ([#35](https://github.com/PsychQuant/che-apple-mail-mcp/issues/35))
+- Recipient email validation rejects header injection (control chars, missing/multiple `@`) ([#41](https://github.com/PsychQuant/che-apple-mail-mcp/issues/41))
+- `cc_additional` deduplicates case-insensitively ([#34](https://github.com/PsychQuant/che-apple-mail-mcp/issues/34))
+- Attachment path deny-list (`~/.ssh`, Keychains, TCC db, browser cookies) + symlink-resolved + new `MAIL_MCP_ATTACHMENT_ROOTS` env allow-list ([#38](https://github.com/PsychQuant/che-apple-mail-mcp/issues/38))
+- All 17 id-taking tools hard-validate `id` as Int at handler boundary — defeats AppleScript predicate injection ([#50](https://github.com/PsychQuant/che-apple-mail-mcp/issues/50))
+- Gated integration tests for `reply_email` runtime ([#37](https://github.com/PsychQuant/che-apple-mail-mcp/issues/37), [#45](https://github.com/PsychQuant/che-apple-mail-mcp/issues/45)) + smoke matrix templates ([#46](https://github.com/PsychQuant/che-apple-mail-mcp/issues/46), [#47](https://github.com/PsychQuant/che-apple-mail-mcp/issues/47))
+
+### v2.5.0 (2026-04-17) — Composing `format` parameter
+- All 4 composing tools (`compose_email` / `create_draft` / `reply_email` / `forward_email`) gain `format: "plain" | "markdown" | "html"` param (closes [#14](https://github.com/PsychQuant/che-apple-mail-mcp/issues/14), [#15](https://github.com/PsychQuant/che-apple-mail-mcp/issues/15))
+- New `message-composition` capability spec
+
+---
+
+## All 48 Tools
 
 <details>
 <summary><b>Accounts (2)</b></summary>
