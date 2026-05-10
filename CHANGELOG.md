@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **AppleScript fallback `extractHTMLBody` now decodes base64 HTML parts** ([#73](https://github.com/PsychQuant/che-apple-mail-mcp/issues/73)). Sister bug to #72: when SQLite cache misses or `EmlxParser.readEmail` throws, `getEmail(format='html')` falls through to `MailController.extractHTMLBody`, which only handled `quoted-printable` content-transfer-encoding. For Android Gmail / Outlook Mobile messages — which commonly use `base64` for the HTML part — this returned raw base64 to the caller. Fix: walk the per-part headers, capture `Content-Transfer-Encoding`, and branch on the value. Both `base64` (with `\r\n`/`\n`/`\r`/space/tab whitespace stripped before `Data(base64Encoded:)`) and `quoted-printable` are decoded; `7bit` / `8bit` / `binary` / unknown values pass through unchanged. Malformed base64 degrades gracefully to raw passthrough rather than crashing.
+- **`decodeQuotedPrintable` no longer mojibakes UTF-8 multi-byte sequences** (regression surfaced by #73's tests). Pre-fix code appended each `=XX`-decoded byte as `Character(Unicode.Scalar(byte))`, treating a UTF-8 multi-byte sequence (e.g. `é` = `0xC3 0xA9`) as two separate codepoints `Ã ©` — classic mojibake. Fix: collect all decoded bytes (literal + `=XX`) into a `[UInt8]` buffer, then decode the buffer as UTF-8 once at the end. `extractHTMLBody` was promoted from `private` to internal access so `MailControllerHtmlExtractionTests` can hit the parser directly without spinning up AppleScript — 5 regression tests covering the QP-UTF-8, base64, base64-with-line-wrapping, 7bit-passthrough, and malformed-base64-graceful-degrade scenarios.
+
 ## [2.7.2] - 2026-05-10
 
 ### Added

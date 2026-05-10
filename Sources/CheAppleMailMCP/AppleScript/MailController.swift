@@ -377,8 +377,14 @@ actor MailController {
         ]
     }
 
-    /// Extract HTML body from MIME source, falling back to plain text content
-    private func extractHTMLBody(from mimeSource: String) -> String {
+    /// Extract HTML body from MIME source, falling back to plain text content.
+    ///
+    /// Honors `Content-Transfer-Encoding` of the HTML part — both
+    /// `quoted-printable` (legacy path) and `base64` (#73, common on
+    /// Android Gmail / Outlook Mobile). 7bit / 8bit / binary pass through
+    /// unchanged. This used to be private; promoted to internal so unit
+    /// tests can hit the parser directly without spinning up AppleScript.
+    func extractHTMLBody(from mimeSource: String) -> String {
         // Look for text/html part in multipart message
         // Find the HTML content between Content-Type: text/html and the next boundary
         let lines = mimeSource.components(separatedBy: "\n")
@@ -386,6 +392,7 @@ actor MailController {
         var pastHTMLHeaders = false
         var htmlLines: [String] = []
         var boundary: String?
+        var transferEncoding = "7bit"  // tracked per HTML part — reset on each match
 
         // Find boundary from Content-Type header
         for line in lines {
@@ -406,10 +413,21 @@ actor MailController {
             if line.contains("Content-Type: text/html") {
                 inHTMLPart = true
                 pastHTMLHeaders = false
+                transferEncoding = "7bit"  // reset for the new HTML part's headers
                 continue
             }
 
             if inHTMLPart && !pastHTMLHeaders {
+                // Capture Content-Transfer-Encoding from the part headers
+                // (case-insensitive prefix match — RFC 2045 doesn't require
+                // exact case for header field names).
+                let lowered = line.trimmingCharacters(in: .whitespaces).lowercased()
+                if lowered.hasPrefix("content-transfer-encoding:") {
+                    transferEncoding = lowered
+                        .replacingOccurrences(of: "content-transfer-encoding:", with: "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+
                 // Skip headers until empty line
                 if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     pastHTMLHeaders = true
@@ -432,21 +450,56 @@ actor MailController {
 
         var html = htmlLines.joined(separator: "\n")
 
-        // Decode quoted-printable encoding
-        html = decodeQuotedPrintable(html)
+        // Decode according to Content-Transfer-Encoding declared by the
+        // HTML part. Falls through to passthrough on unrecognized values
+        // (7bit/8bit/binary or anything we don't speak), and to raw-html
+        // if base64 decoding fails — degrades gracefully rather than
+        // corrupting the output.
+        switch transferEncoding {
+        case "base64":
+            // Strip every kind of whitespace base64 might be wrapped with.
+            // Splitting on "\n" leaves trailing "\r" attached; without
+            // that strip, Data(base64Encoded:) returns nil and we leak
+            // raw base64 to the caller (the very bug #73 was filed for).
+            let cleaned = html
+                .replacingOccurrences(of: "\r\n", with: "")
+                .replacingOccurrences(of: "\n", with: "")
+                .replacingOccurrences(of: "\r", with: "")
+                .replacingOccurrences(of: " ", with: "")
+                .replacingOccurrences(of: "\t", with: "")
+            if let data = Data(base64Encoded: cleaned),
+               let decoded = String(data: data, encoding: .utf8) {
+                html = decoded
+            }
+            // else: leave html as raw base64 — at least no worse than pre-fix
+
+        case "quoted-printable":
+            html = decodeQuotedPrintable(html)
+
+        default:
+            break  // 7bit / 8bit / binary / unknown → passthrough
+        }
 
         return html
     }
 
-    /// Decode quoted-printable encoded string
+    /// Decode quoted-printable encoded string.
+    ///
+    /// Collects all decoded bytes (both literal characters and `=XX` hex
+    /// escapes) into a `[UInt8]` buffer first, then interprets the buffer
+    /// as UTF-8. This is required because non-ASCII characters in QP
+    /// content arrive as multi-byte UTF-8 sequences split across separate
+    /// `=XX` escapes (e.g. `é` = `=C3=A9`). The pre-fix code appended
+    /// each byte directly as `Character(Unicode.Scalar(byte))`, which
+    /// treated `0xC3 0xA9` as two separate codepoints `Ã ©` — classic
+    /// mojibake. Surfaced by #73's regression tests.
     private func decodeQuotedPrintable(_ input: String) -> String {
         var result = input
         // Remove soft line breaks (= at end of line)
         result = result.replacingOccurrences(of: "=\r\n", with: "")
         result = result.replacingOccurrences(of: "=\n", with: "")
 
-        // Decode =XX hex sequences
-        var output = ""
+        var bytes: [UInt8] = []
         var i = result.startIndex
         while i < result.endIndex {
             if result[i] == "=" && result.distance(from: i, to: result.endIndex) >= 3 {
@@ -454,18 +507,20 @@ actor MailController {
                 let hexEnd = result.index(hexStart, offsetBy: 2)
                 let hex = String(result[hexStart..<hexEnd])
                 if let byte = UInt8(hex, radix: 16) {
-                    output.append(Character(Unicode.Scalar(byte)))
+                    bytes.append(byte)
                 } else {
-                    output.append(result[i])
+                    // Malformed `=XX` — pass the literal `=` through as
+                    // its UTF-8 encoding (1 byte for ASCII).
+                    bytes.append(contentsOf: result[i].utf8)
                 }
                 i = hexEnd
             } else {
-                output.append(result[i])
+                bytes.append(contentsOf: result[i].utf8)
                 i = result.index(after: i)
             }
         }
 
-        return output
+        return String(decoding: bytes, as: UTF8.self)
     }
 
     /// Search emails
