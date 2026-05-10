@@ -97,7 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **New `message-composition` capability spec** at `openspec/specs/message-composition/spec.md` — first formal spec covering all four composing tools' input schemas, format semantics, reply/forward merge rules, and the AppleScript `html content` read-denial limitation.
 - **`Sources/CheAppleMailMCP/MarkdownRendering.swift`** — new helper module exposing `BodyFormat`, `ComposedBody`, `renderBody(_:format:)`, and `htmlEscape(_:)`. Zero new Swift Package dependencies.
 - **`Sources/CheAppleMailMCP/AppleScript/ComposeScriptBuilder.swift`** — extracted nonisolated script builders for all four composing tools, making script output unit-testable without executing Mail.app.
-- **45 new unit tests** across `MarkdownRenderingTests` (14), `BodyFormatTests` (5), `MailControllerComposeTests` (20), `ServerSchemaTests` (8, including `parseBodyFormatArgument` type validation).
+- **New unit-test suites** introduced: `MarkdownRenderingTests` (markdown parser behavior), `BodyFormatTests` (parameter type parsing), `MailControllerComposeTests` (script-builder output), `ServerSchemaTests` (tool-schema invariants + `parseBodyFormatArgument` validation). [Note: original entry stated specific counts that drifted from reality as later releases added tests to these files; counts removed to prevent rot. Current counts: `swift test` reports them in the run output.]
 - **4 integration tests** in `MailAppIntegrationTests` (gated by `MAIL_APP_INTEGRATION_TESTS=1`) that create real drafts in Mail.app, confirm `html content` write succeeds, and assert the inbox read-denial behavior — produces the spec's empirical ground truth.
 
 ### Changed
