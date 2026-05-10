@@ -715,6 +715,24 @@ actor MailController {
     func validateAttachmentPaths(_ paths: [String]) throws {
         guard !paths.isEmpty else { return }
 
+        // Issue #63: cap attachment count to mitigate DoS amplification.
+        // Post-#60, each attachment adds ≈0.3s AppleScript dispatch latency
+        // (between-attachment pacing) + 0.5s trailing drain. A pathological
+        // caller passing N=1000 paths would block Mail.app for ≈300s. The
+        // 64KB osascript script soft cap (per MailControllerComposeTests:782)
+        // already caps practical N to ~200-400 before script truncation
+        // kicks in (≈60-120s ceiling), but explicit count cap is cleaner and
+        // matches the input-validation hardening series (#38 / #41 / #50).
+        // 50 is well above realistic legitimate use cases (typical mail
+        // attachments ≤ 10) but below the script-size cliff.
+        let attachmentCountCap = 50
+        guard paths.count <= attachmentCountCap else {
+            throw MailError.invalidParameter(
+                "attachments.count exceeds cap (\(paths.count) > \(attachmentCountCap)). "
+                + "Mail.app cannot reliably attach this many files in a single call."
+            )
+        }
+
         let home = NSHomeDirectory()
         let denyList: [String] = [
             "\(home)/.ssh",
