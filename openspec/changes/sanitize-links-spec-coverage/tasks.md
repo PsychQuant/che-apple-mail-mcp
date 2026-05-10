@@ -1,6 +1,6 @@
 ## 1. Spec coverage (Gap B)
 
-- [ ] 1.1 在 `openspec/specs/message-composition/spec.md` 新增 Requirement 區塊「Markdown mode honors opt-in URL scheme allowlist via `sanitize_links`」(connect to existing requirements at the same heading depth `### Requirement:`),內容對應 change delta `specs/message-composition/spec.md` 的 ADDED Requirements,包含 5 個 scenarios (default-off passthrough、`sanitize_links=true` 阻擋 javascript:、allowlist 保留、no-op in plain/html、wiring contract end-to-end)。**Verification**: `grep -c "Markdown mode honors opt-in URL scheme allowlist" openspec/specs/message-composition/spec.md` 回 ≥ 1; `spectra validate sanitize-links-spec-coverage --strict` 通過; `grep -c "sanitize" openspec/specs/message-composition/spec.md` 從 0 變 ≥ 5 (Requirement title + 4 scenario titles minimum)。
+- [x] 1.1 在 `openspec/specs/message-composition/spec.md` 新增 Requirement 區塊「Markdown mode honors opt-in URL scheme allowlist via `sanitize_links`」(connect to existing requirements at the same heading depth `### Requirement:`),內容對應 change delta `specs/message-composition/spec.md` 的 ADDED Requirements,包含 5 個 scenarios (default-off passthrough、`sanitize_links=true` 阻擋 javascript:、allowlist 保留、no-op in plain/html、wiring contract end-to-end)。**Verification**: `grep -c "Markdown mode honors opt-in URL scheme allowlist" openspec/specs/message-composition/spec.md` 回 ≥ 1; `spectra validate sanitize-links-spec-coverage --strict` 通過; `grep -c "sanitize" openspec/specs/message-composition/spec.md` 從 0 變 ≥ 5 (Requirement title + 4 scenario titles minimum)。
 
 ## 2. Wiring contract test (Gap A)
 
