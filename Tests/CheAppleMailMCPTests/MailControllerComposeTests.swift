@@ -548,8 +548,12 @@ final class MailControllerComposeTests: XCTestCase {
         )
         XCTAssertFalse(scriptOn.contains("href=\\\"javascript:"),
                        "sanitize_links=true arm: AppleScript MUST NOT contain href=\"javascript:; got: \(scriptOn)")
-        XCTAssertTrue(scriptOn.contains("click"),
-                      "anchor text 'click' MUST be preserved when scheme is dropped")
+        // The body contains exactly one link (the javascript: one). When sanitizeLinks=true,
+        // that one anchor must be dropped → zero `<a` tags should appear in the rendered HTML.
+        // Note: the literal "click" appears in the AppleScript `content:` plainFallback too, so
+        // asserting `contains("click")` is trivially satisfied — we assert anchor absence instead.
+        XCTAssertFalse(scriptOn.contains("<a "),
+                       "sanitize_links=true arm: no <a> element MUST be emitted for the dropped javascript: link; got: \(scriptOn)")
     }
 
     func testBuildCreateDraftScript_sanitizeLinks_blocksJavaScriptURL() throws {
@@ -564,7 +568,8 @@ final class MailControllerComposeTests: XCTestCase {
         )
         XCTAssertFalse(scriptOn.contains("href=\\\"javascript:"),
                        "sanitize_links=true arm: createDraft AppleScript MUST NOT contain href=\"javascript:")
-        XCTAssertTrue(scriptOn.contains("click"))
+        XCTAssertFalse(scriptOn.contains("<a "),
+                       "sanitize_links=true arm: no <a> element MUST be emitted for the dropped javascript: link")
     }
 
     func testBuildReplyEmailScript_sanitizeLinks_blocksJavaScriptURL() throws {

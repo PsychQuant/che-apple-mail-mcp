@@ -103,12 +103,13 @@ When `format` is `"markdown"`, the system SHALL accept an optional boolean param
 - **THEN** the system SHALL assign the body verbatim to the AppleScript `html content` property
 - **AND** the system SHALL NOT parse, transform, or filter URLs in the supplied HTML
 
-#### Scenario: sanitize_links wiring contract holds end-to-end across all four composing tools
+#### Scenario: sanitize_links wiring contract holds at the script-builder seam
 
-- **WHEN** a caller invokes `compose_email`, `create_draft`, `reply_email`, or `forward_email` with `format: "markdown"`, `sanitize_links: true`, and a body containing `[click](javascript:alert(1))`
-- **THEN** the AppleScript text produced by the corresponding script-builder function (`buildComposeEmailScript`, `buildCreateDraftScript`, `buildReplyEmailScript`, `buildForwardEmailScript`) SHALL NOT contain the substring `href="javascript:`
-- **AND** when the same call is made with `sanitize_links: false` (or omitted), the produced AppleScript text SHALL contain `href="javascript:`
-- **AND** the contract SHALL be enforced by automated tests at the script-builder layer, ensuring that any future change which drops the `sanitizeLinks` parameter forwarding through the controller / builder / renderer chain will fail the test suite
+- **WHEN** any of the four script-builder functions (`buildComposeEmailScript`, `buildCreateDraftScript`, `buildReplyEmailScript`, `buildForwardEmailScript`) is invoked with `format: "markdown"`, `sanitizeLinks: true`, and a body containing `[click](javascript:alert(1))`
+- **THEN** the produced AppleScript text SHALL NOT contain the substring `href="javascript:`
+- **AND** when the same builder is invoked with `sanitizeLinks: false` (or omitted), the produced AppleScript text SHALL contain `href="javascript:`
+- **AND** the produced AppleScript text in both arms SHALL contain the anchor text `click` (either as plain text when scheme is dropped, or wrapped in `<a href="javascript:...">` when not)
+- **AND** this builder→renderer seam pins the most security-relevant forwarding link in the chain; the controller→builder one-line forwarding inside `MailController.{composeEmail, createDraft, replyEmail, forwardEmail}` and the MCP-schema→handler `requireBool` parsing are explicitly NOT covered by this scenario and require separate test surfaces
 
 ---
 ### Requirement: HTML mode writes body to AppleScript html content
