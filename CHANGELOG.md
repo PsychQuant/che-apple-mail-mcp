@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.1] - 2026-05-11
+
 ### Changed
 - **`sanitize_links` schema description consistency across 4 composing tools** ([#86](https://github.com/PsychQuant/che-apple-mail-mcp/issues/86)). Cluster A shipped `sanitize_links` opt-in but only `compose_email`'s schema description carried the XSS rationale; `create_draft`, `reply_email`, `forward_email` had a truncated "Same semantics as compose_email" pointer. LLMs tool-selecting against those 3 schemas couldn't see the security-relevant note. All 4 descriptions now use identical unified text that (a) repeats the XSS rationale (defends against `[click](javascript:...)`, `data:`, `file:`, `vbscript:`), (b) explicitly states "only applies when `format` is `markdown`; no effect in plain/html modes" — preventing the silent-no-op trap where a caller passes `format: "html", sanitize_links: true` and assumes protection. Pure schema text change, zero behavior impact. swift test 313/0/8 unchanged.
 
