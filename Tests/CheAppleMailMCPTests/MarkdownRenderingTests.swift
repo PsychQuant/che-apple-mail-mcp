@@ -393,4 +393,81 @@ final class MarkdownRenderingTests: XCTestCase {
         let liCount = html.components(separatedBy: "<li>").count - 1
         XCTAssertEqual(liCount, 2, "flat 2-item list MUST emit 2 <li>; got HTML: \(html)")
     }
+
+    // MARK: - Scenario (#17): markdown table rendering
+
+    func testRenderBody_markdown_basicTable_emitsHeadAndBody() throws {
+        // Canonical #15 DA-5 reproducer. Pre-#17 collapsed to `<p>ab12</p>`.
+        // Post-#17: proper <table><thead><tr><th>...</th></tr></thead><tbody>
+        // <tr><td>...</td></tr></tbody></table>.
+        let md = "| a | b |\n|---|---|\n| 1 | 2 |"
+        let result = try renderBody(md, format: .markdown)
+        let html = result.htmlContent ?? ""
+        XCTAssertTrue(html.contains("<table>"), "table MUST emit <table>; got: \(html)")
+        XCTAssertTrue(html.contains("<thead>"), "table MUST emit <thead> for header row; got: \(html)")
+        XCTAssertTrue(html.contains("<tbody>"), "table MUST emit <tbody> for data rows; got: \(html)")
+        XCTAssertTrue(html.contains("<th"), "header cells MUST emit <th>; got: \(html)")
+        XCTAssertTrue(html.contains("<td"), "data cells MUST emit <td>; got: \(html)")
+        XCTAssertTrue(html.contains("</table>"), "table MUST close </table>; got: \(html)")
+        // All 4 cell values present
+        for token in ["a", "b", "1", "2"] {
+            XCTAssertTrue(html.contains(token), "cell content '\(token)' must be preserved; got: \(html)")
+        }
+    }
+
+    func testRenderBody_markdown_tableWithAlignments_emitsStyleAttr() throws {
+        // `:---` = left (default, no style), `:---:` = center, `---:` = right.
+        // Left columns emit no `style` attr (browser default).
+        let md = """
+        | L | C | R |
+        |:--|:-:|--:|
+        | a | b | c |
+        """
+        let result = try renderBody(md, format: .markdown)
+        let html = result.htmlContent ?? ""
+        // Left col: no style attribute
+        XCTAssertFalse(html.contains("style=\"text-align: left\""),
+                       "left alignment MUST NOT emit a style attribute (browser default); got: \(html)")
+        // Center col: emits style
+        XCTAssertTrue(html.contains("style=\"text-align: center\""),
+                      "center alignment MUST emit style=\"text-align: center\"; got: \(html)")
+        // Right col: emits style
+        XCTAssertTrue(html.contains("style=\"text-align: right\""),
+                      "right alignment MUST emit style=\"text-align: right\"; got: \(html)")
+    }
+
+    func testRenderBody_markdown_tableExit_closesTableTags() throws {
+        // After a table, a paragraph block MUST close the table cleanly,
+        // not leave `<table>` / `<tbody>` / `<tr>` dangling.
+        let md = """
+        | x | y |
+        |---|---|
+        | 1 | 2 |
+
+        After.
+        """
+        let result = try renderBody(md, format: .markdown)
+        let html = result.htmlContent ?? ""
+        let openCount = html.components(separatedBy: "<table>").count - 1
+        let closeCount = html.components(separatedBy: "</table>").count - 1
+        XCTAssertEqual(openCount, closeCount,
+                       "table opens and closes MUST balance; got opens=\(openCount) closes=\(closeCount); HTML: \(html)")
+        XCTAssertTrue(html.contains("<p>After.</p>"),
+                      "paragraph after table MUST render as own <p>; got: \(html)")
+    }
+
+    func testRenderBody_markdown_tableWithMultipleDataRows() throws {
+        // Two data rows means we need to emit </tr><tr> between them.
+        let md = """
+        | h |
+        |---|
+        | 1 |
+        | 2 |
+        """
+        let result = try renderBody(md, format: .markdown)
+        let html = result.htmlContent ?? ""
+        // Should have 3 <tr> opens total: header + 2 data rows
+        let trCount = html.components(separatedBy: "<tr>").count - 1
+        XCTAssertEqual(trCount, 3, "multi-row table MUST emit 3 <tr> opens (1 header + 2 data); got HTML: \(html)")
+    }
 }
