@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`sanitize_links` hardening grab-bag** ([#87](https://github.com/PsychQuant/che-apple-mail-mcp/issues/87)). Five independent hygiene items from cluster A's verify follow-up triage: (1) allowlist **tripwire** test pinning the exact contents `{http, https, mailto, tel}` — accidental expansion (e.g. adding `vbscript`, `file`, `chrome`) now fails the test immediately rather than silently unblocking schemes; (2) **bypass-class regression tests** for case-mix `JaVaScRiPt:`, `file://`, `vbscript:`, `chrome://`, `blob:`, plus relative + empty URLs — all 6 bypass classes now have explicit assertions; (3) **defense-in-depth `htmlEscape`** wrap on `link.absoluteString` in the rendered anchor `href` attribute — Foundation already percent-encodes, so this is a no-op today but pins the contract that the href value MUST be HTML-safe independent of Foundation behavior; (4) **empty-scheme behavior documented** in all 4 `sanitize_links` schema descriptions (Non-absolute URLs like `[home](/relative/path)` or `[text]()` also have their anchor dropped under sanitize_links=true since they lack an allowlisted scheme) — closes the silent-no-op trap surfaced by cluster A's logic finding L#19a; (5) **payload-scaling latency test** for `attachmentNames` — synthesizes an .emlx with 10×5MB base64 attachments and asserts the names-only walker stays under 1s (measured: ~85ms). Catches the regression class where the walker is swapped back to eager-decode `parseAllParts` — previously the existing 200ms ceiling on the small ASCII fixture wouldn't trip on this class of regression. Zero behavior change for production code; 8 new tests (suite: 313 → 321).
+
 ## [2.8.1] - 2026-05-11
 
 ### Changed

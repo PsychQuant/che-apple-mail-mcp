@@ -175,7 +175,15 @@ private func inlineHTML(text: String, run: AttributedString.Runs.Run, sanitizeLi
         if sanitizeLinks && !messageCompositionSafeURLSchemes.contains(scheme) {
             // fragment stays as plain (escaped) text — no anchor wrapped
         } else {
-            fragment = "<a href=\"\(link.absoluteString)\">\(fragment)</a>"
+            // Foundation's `URL.absoluteString` reliably percent-encodes characters
+            // unsafe in URL syntax (including `"`), so today this interpolation is
+            // safe. Wrap with `htmlEscape` anyway for defense-in-depth — pins the
+            // contract that the href attribute value MUST be HTML-safe, independent
+            // of Foundation's encoding behavior. See #87 (cluster A verify L#19b /
+            // S2 follow-up). No-op for normal URLs; activates if a future
+            // constructed URL ever produces a literal `"` / `<` / `&` / `>` in
+            // `absoluteString` (theoretical).
+            fragment = "<a href=\"\(htmlEscape(link.absoluteString))\">\(fragment)</a>"
         }
     }
 

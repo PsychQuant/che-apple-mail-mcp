@@ -713,4 +713,89 @@ final class AttachmentExtractorTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Scenario (#87 Item 5): attachmentNames latency is O(structure), not O(payload)
+    //
+    // The existing `testListAttachments_latencyBudget` test asserts a 200ms
+    // absolute ceiling on the existing small fixture (1 attachment,
+    // ~500 bytes of base64). A regression that swaps the names-only walker
+    // back to eager-decode `parseAllParts` would still complete sub-200ms
+    // on that fixture (small payload). To catch the regression at scale,
+    // synthesize a fixture with 10 large base64 parts (~5MB each) and
+    // assert latency stays well under 1s. Eager-decode would take many
+    // seconds on this payload.
+
+    func testAttachmentNames_latencyIsIndependentOfPayloadSize() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // rowId chosen so the hash path resolves to `2/6/2` (depth 3), matching
+        // the layout `installFixture` lays down for the ASCII fixture above.
+        // See `EmlxParser.hashPath`: d4 = (262654/1000)%10 = 2 ✓, d5 = 6 ✓, d6 = 2 ✓.
+        let rowId = 262654
+        let accountUUID = "ABCE3A85-06BE-43BC-9B84-2CA6F325612F"
+        let mailboxLeaf = "INBOX"
+        let storeUUID = "5FCC6F13-2CE3-48B1-907D-686244C0229A"
+        let mailV10 = root.appendingPathComponent("Library/Mail/V10", isDirectory: true)
+        let messagesDir = mailV10
+            .appendingPathComponent(accountUUID)
+            .appendingPathComponent("\(mailboxLeaf).mbox")
+            .appendingPathComponent(storeUUID)
+            .appendingPathComponent("Data/2/6/2/Messages", isDirectory: true)
+        try FileManager.default.createDirectory(at: messagesDir, withIntermediateDirectories: true)
+
+        // Synthesize an .emlx with 10 base64 attachments of ~5MB each.
+        // String(repeating:) + base64 is fast; we want big-on-disk so the
+        // walker has real work to skip past.
+        let boundary = "----=_BOUNDARY_LARGE_PAYLOAD"
+        let partPayload = Data(repeating: 0x41, count: 5_000_000)  // 5MB of 'A'
+        let base64Body = partPayload.base64EncodedString()
+
+        var message = "From: sender@example.com\r\n"
+        message += "To: recipient@example.com\r\n"
+        message += "Subject: Large payload structure test\r\n"
+        message += "Content-Type: multipart/mixed; boundary=\"\(boundary)\"\r\n"
+        message += "MIME-Version: 1.0\r\n\r\n"
+        message += "--\(boundary)\r\n"
+        message += "Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        message += "Test message with 10 large attachments.\r\n"
+
+        for i in 1...10 {
+            let name = "large-attachment-\(i).bin"
+            message += "--\(boundary)\r\n"
+            message += "Content-Type: application/octet-stream; name=\"\(name)\"\r\n"
+            message += "Content-Disposition: attachment; filename=\"\(name)\"\r\n"
+            message += "Content-Transfer-Encoding: base64\r\n\r\n"
+            message += base64Body
+            message += "\r\n"
+        }
+        message += "--\(boundary)--\r\n"
+
+        // .emlx format: first line is byte count of the RFC822 message.
+        let rfc822Data = message.data(using: .utf8)!
+        let emlxContent = "\(rfc822Data.count)\n".data(using: .utf8)! + rfc822Data
+        let emlxPath = messagesDir.appendingPathComponent("\(rowId).emlx")
+        try emlxContent.write(to: emlxPath)
+        EnvelopeIndexReader.mailStoragePathOverride = mailV10.path
+        let mailboxURL = "ews://\(accountUUID)/\(mailboxLeaf)"
+
+        // Warm up (Foundation lazy init), then measure.
+        _ = try EmlxParser.attachmentNames(rowId: rowId, mailboxURL: mailboxURL)
+
+        let start = Date()
+        let names = try EmlxParser.attachmentNames(rowId: rowId, mailboxURL: mailboxURL)
+        let elapsedMs = Date().timeIntervalSince(start) * 1000
+
+        XCTAssertEqual(names.count, 10, "expected 10 attachment names from synthesized fixture, got \(names)")
+
+        // 1s ceiling on a ~50MB structure (10 × 5MB base64-wrapped payload).
+        // Names-only walker must skip past payload bytes — eager-decode would
+        // take 5-10 seconds. Generous ceiling to avoid CI flake while still
+        // catching the regression class.
+        XCTAssertLessThan(
+            elapsedMs,
+            1000,
+            "attachmentNames latency \(elapsedMs)ms on 10×5MB structure exceeds 1s — names-only walker (commit 99c7f54) likely regressed to eager-decode parseAllParts"
+        )
+    }
 }
