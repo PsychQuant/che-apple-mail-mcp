@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Chore cluster: 3 sister bugs from cluster A's Step 5.7 sweep** ([#82](https://github.com/PsychQuant/che-apple-mail-mcp/issues/82), [#83](https://github.com/PsychQuant/che-apple-mail-mcp/issues/83), [#84](https://github.com/PsychQuant/che-apple-mail-mcp/issues/84)). (#82) Removed 4 dead `let script = ...` AppleScript declarations in `MailController.swift` (`getAccountInfo`, `listMailboxes`, `listEmails`, `listAttachments`) — each shadowed by a more specific `*Script` variable downstream and never executed; warning count drops by 4. (#83) Migrated 3 deprecated `text(_:metadata:)` MCP SDK factory calls in `Server.swift` to the canonical `.text(text:annotations:_meta:)` enum case; semantically identical (deprecated factory forwards to same case with `annotations: nil, _meta: nil`); deprecation-warning count drops by 3. (#84) Retrofitted 31 of 57 lenient `XCTAssertTrue(script.contains(...))` assertions in `MailControllerComposeTests.swift` to `assertOrdered(script, needle, between:, and:)` — defends against regressions that move a property outside its expected `tell ... end tell` block (which previously passed contains() silently but crashed Mail.app at runtime). Targets compose/createDraft recipient + html content, reply/forward plain + markdown + html branches. Remaining 24 stay lenient with documented rationale (boundary tokens, top-level dispatch verbs, first-occurrence substring collisions). Pure test-tightening; production behavior unaffected. swift test 321/0/8 unchanged.
+
 ## [2.8.2] - 2026-05-11
 
 ### Added
