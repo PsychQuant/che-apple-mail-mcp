@@ -120,13 +120,6 @@ actor MailController {
 
     /// Get account details
     func getAccountInfo(accountName: String) throws -> [String: Any] {
-        let script = """
-        tell application "Mail"
-            set acc to account "\(escapeForAppleScript(accountName))"
-            return {|name|:name of acc, |enabled|:enabled of acc, |email|:email addresses of acc}
-        end tell
-        """
-
         let enabledScript = """
         tell application "Mail"
             get enabled of account "\(escapeForAppleScript(accountName))"
@@ -153,33 +146,6 @@ actor MailController {
 
     /// List mailboxes for an account
     func listMailboxes(accountName: String? = nil) throws -> [[String: Any]] {
-        let script: String
-        if let account = accountName {
-            script = """
-            tell application "Mail"
-                set mbList to {}
-                repeat with mb in mailboxes of account "\(escapeForAppleScript(account))"
-                    set mbInfo to {|name|:name of mb, |unreadCount|:unread count of mb, |messageCount|:count of messages of mb}
-                    set end of mbList to mbInfo
-                end repeat
-                return mbList
-            end tell
-            """
-        } else {
-            script = """
-            tell application "Mail"
-                set mbList to {}
-                repeat with acc in accounts
-                    repeat with mb in mailboxes of acc
-                        set mbInfo to {|name|:name of mb, |account|:name of acc, |unreadCount|:unread count of mb}
-                        set end of mbList to mbInfo
-                    end repeat
-                end repeat
-                return mbList
-            end tell
-            """
-        }
-
         // Simplified: get mailbox names
         let namesScript: String
         if let account = accountName {
@@ -238,19 +204,6 @@ actor MailController {
 
     /// List emails in a mailbox
     func listEmails(mailbox: String, accountName: String, limit: Int = 50) throws -> [[String: Any]] {
-        let script = """
-        tell application "Mail"
-            set mb to \(mailboxRef(mailbox, account: accountName))
-            set msgs to messages 1 thru \(limit) of mb
-            set msgList to {}
-            repeat with msg in msgs
-                set msgInfo to {|id|:id of msg, |subject|:subject of msg, |sender|:sender of msg, |dateReceived|:date received of msg as string, |read|:read status of msg}
-                set end of msgList to msgInfo
-            end repeat
-            return msgList
-        end tell
-        """
-
         // Simplified approach: get basic info (clamp limit to actual message count)
         let subjectsScript = """
         tell application "Mail"
@@ -998,18 +951,6 @@ actor MailController {
     /// List attachments of an email
     func listAttachments(id: String, mailbox: String, accountName: String) throws -> [[String: Any]] {
         let ref = msgRef(id, mailbox: mailbox, account: accountName)
-        let script = """
-        tell application "Mail"
-            set msg to \(ref)
-            set attachmentList to {}
-            repeat with att in mail attachments of msg
-                set attInfo to {|name|:name of att, |size|:file size of att}
-                set end of attachmentList to attInfo
-            end repeat
-            return attachmentList
-        end tell
-        """
-
         let namesScript = """
         tell application "Mail"
             get name of every mail attachment of \(ref)
