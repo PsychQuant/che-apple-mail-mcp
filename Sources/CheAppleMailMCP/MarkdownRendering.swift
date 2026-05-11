@@ -113,8 +113,14 @@ private func attributedStringToHTML(_ attr: AttributedString, sanitizeLinks: Boo
 
 private enum BlockKind: Equatable {
     case paragraph
-    case unorderedListItem
-    case orderedListItem
+    /// Unordered list item at the given nesting `depth` (1 = top-level,
+    /// 2 = nested once, etc.). Pre-#16 used flat `.unorderedListItem`
+    /// which collapsed nested items into the outer list. Depth comes
+    /// from counting `listItem` components in the run's PresentationIntent.
+    case unorderedListItem(depth: Int)
+    /// Ordered list item at the given nesting `depth` (1 = top-level, etc.).
+    /// Same depth semantics as `.unorderedListItem`.
+    case orderedListItem(depth: Int)
     /// Code block. `languageHint` is the language tag from the fence
     /// (` ```swift ` → `"swift"`); nil for fences without a language tag
     /// (` ```\nfoo\n``` `). When non-nil, the emitted `<pre><code>` gets a
@@ -128,36 +134,66 @@ private enum BlockKind: Equatable {
 
 private func blockKind(of intent: PresentationIntent?) -> BlockKind {
     guard let intent = intent else { return .paragraph }
-    // Inspect the components (outermost first)
+    // Foundation emits `intent.components` INNER → OUTER (innermost block
+    // kind first). For nested lists like:
+    //     - A           [paragraph, listItem, unorderedList]
+    //       1. B        [paragraph, listItem, orderedList, listItem, unorderedList]
+    // the inner B's components start with the orderedList that DIRECTLY
+    // contains it, then unwind out through the outer unorderedList.
+    //
+    // For list items we need:
+    //   - depth = count of `listItem` components (one per nesting level)
+    //   - kind = INNERMOST list type — the FIRST `*List` component seen
+    //     (since iteration is inner→outer, the first wins).
+    // For non-list blocks (paragraph/codeBlock/blockQuote/header) the first
+    // such component seen wins.
+    var listItemCount = 0
+    var innermostListKind: PresentationIntent.Kind? = nil  // first list-kind in chain
+    var firstNonListBlockKind: BlockKind? = nil
+
     for component in intent.components {
         switch component.kind {
         case .listItem:
-            // Determine whether we're in an ordered or unordered list by
-            // scanning the remaining components for the list type.
-            for inner in intent.components where inner.kind != component.kind {
-                switch inner.kind {
-                case .orderedList:
-                    return .orderedListItem
-                case .unorderedList:
-                    return .unorderedListItem
-                default:
-                    continue
-                }
+            listItemCount += 1
+        case .orderedList, .unorderedList:
+            // First list-kind seen is the innermost — freeze it.
+            if innermostListKind == nil {
+                innermostListKind = component.kind
             }
-            return .unorderedListItem
         case .codeBlock(let languageHint):
-            return .codeBlock(languageHint: languageHint)
+            if firstNonListBlockKind == nil {
+                firstNonListBlockKind = .codeBlock(languageHint: languageHint)
+            }
         case .blockQuote:
-            return .blockquote
+            if firstNonListBlockKind == nil {
+                firstNonListBlockKind = .blockquote
+            }
         case .header(level: let level):
-            return .heading(level)
+            if firstNonListBlockKind == nil {
+                firstNonListBlockKind = .heading(level)
+            }
         case .paragraph:
             continue
         default:
             continue
         }
     }
-    return .paragraph
+
+    // List-item blocks take precedence — a `listItem` in the chain means the
+    // block lives inside a list, even if a `paragraph` or `header` component
+    // also appears.
+    if listItemCount > 0 {
+        let isOrdered: Bool
+        if case .orderedList? = innermostListKind {
+            isOrdered = true
+        } else {
+            isOrdered = false
+        }
+        return isOrdered
+            ? .orderedListItem(depth: listItemCount)
+            : .unorderedListItem(depth: listItemCount)
+    }
+    return firstNonListBlockKind ?? .paragraph
 }
 
 private func inlineHTML(text: String, run: AttributedString.Runs.Run, sanitizeLinks: Bool) -> String {
@@ -198,32 +234,60 @@ private func inlineHTML(text: String, run: AttributedString.Runs.Run, sanitizeLi
 
 private func assembleBlocks(_ blocks: [(text: String, kind: BlockKind)]) -> String {
     var html = ""
-    var listOpen: BlockKind? = nil
+    // #16: stack of currently-open list kinds (one entry per nesting depth).
+    // listStack[0] = outermost open list (depth 1), listStack[N-1] = innermost
+    // (depth N). Each entry tracks whether that level is ordered or unordered
+    // so we can emit the right close tag.
+    var listStack: [BlockKind] = []
+
+    // Helper: close lists from the top of the stack down to (but not
+    // including) the target depth. Optionally also close the entry AT
+    // target depth IF its kind differs from `requiredKind` (handles
+    // same-depth UL→OL transitions). When stack.count < targetDepth
+    // (we need to OPEN deeper levels), the kind check is skipped — the
+    // outer lists stay open regardless of their kind.
+    func closeListsTo(targetDepth: Int, requiredKind: BlockKind? = nil) {
+        while listStack.count > targetDepth {
+            html += closeList(listStack.removeLast())
+        }
+        // Same-depth kind transition check: only when we're EXACTLY at
+        // targetDepth (not when we need to open deeper levels).
+        if listStack.count == targetDepth,
+           let required = requiredKind,
+           let top = listStack.last,
+           !sameListKind(top, required) {
+            html += closeList(listStack.removeLast())
+        }
+    }
 
     for (text, kind) in blocks {
         switch kind {
-        case .unorderedListItem:
-            if listOpen != .unorderedListItem {
-                if listOpen != nil { html += closeList(listOpen!) }
-                html += "<ul>\n"
-                listOpen = .unorderedListItem
+        case .unorderedListItem(let depth), .orderedListItem(let depth):
+            // Close any open lists deeper than this block's depth, and any
+            // same-depth list whose kind doesn't match (UL→OL transition).
+            closeListsTo(targetDepth: depth, requiredKind: kind)
+
+            // Open new lists from current stack height up to this block's depth.
+            while listStack.count < depth {
+                let openKind = (listStack.count + 1 == depth) ? kind : kind  // same kind at each new level
+                if case .orderedListItem = openKind {
+                    html += "<ol>\n"
+                } else {
+                    html += "<ul>\n"
+                }
+                listStack.append(openKind)
             }
+
             html += "<li>\(text)</li>\n"
-        case .orderedListItem:
-            if listOpen != .orderedListItem {
-                if listOpen != nil { html += closeList(listOpen!) }
-                html += "<ol>\n"
-                listOpen = .orderedListItem
-            }
-            html += "<li>\(text)</li>\n"
+
         case .paragraph:
-            if listOpen != nil { html += closeList(listOpen!); listOpen = nil }
+            closeListsTo(targetDepth: 0)
             html += "<p>\(text)</p>\n"
         case .blockquote:
-            if listOpen != nil { html += closeList(listOpen!); listOpen = nil }
+            closeListsTo(targetDepth: 0)
             html += "<blockquote>\(text)</blockquote>\n"
         case .codeBlock(let languageHint):
-            if listOpen != nil { html += closeList(listOpen!); listOpen = nil }
+            closeListsTo(targetDepth: 0)
             // #22 Item D: honor the language hint from the fence (e.g.
             // ` ```swift `) by emitting `class="language-swift"` on the
             // inner `<code>` element — CommonMark recommended pattern,
@@ -236,14 +300,26 @@ private func assembleBlocks(_ blocks: [(text: String, kind: BlockKind)]) -> Stri
                 html += "<pre><code>\(text)</code></pre>\n"
             }
         case .heading(let level):
-            if listOpen != nil { html += closeList(listOpen!); listOpen = nil }
+            closeListsTo(targetDepth: 0)
             let clamped = max(1, min(6, level))
             html += "<h\(clamped)>\(text)</h\(clamped)>\n"
         }
     }
 
-    if listOpen != nil { html += closeList(listOpen!) }
+    // Close any remaining open lists at end of document.
+    closeListsTo(targetDepth: 0)
     return html
+}
+
+/// Compare two list-item BlockKinds by their list type (ordered vs unordered),
+/// ignoring depth. Used by `closeListsTo` to detect UL→OL transitions at the
+/// same depth.
+private func sameListKind(_ a: BlockKind, _ b: BlockKind) -> Bool {
+    switch (a, b) {
+    case (.unorderedListItem, .unorderedListItem): return true
+    case (.orderedListItem, .orderedListItem): return true
+    default: return false
+    }
 }
 
 private func closeList(_ kind: BlockKind) -> String {
