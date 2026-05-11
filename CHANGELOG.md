@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Cross-validation filter extracted to testable helper** ([#28](https://github.com/PsychQuant/che-apple-mail-mcp/issues/28)). The inline filter closure at `Server.swift` `list_attachments` (single-message) and `list_attachments_batch` (per-message) — `sqliteAttachments.filter { entry in ... realNames.contains(name) }` — was identical in both handlers but untested at the handler level (#24's verify DA-2 / Codex P3 finding). Extracted to a top-level `crossValidateAttachments(sqliteAttachments:realNames:)` helper that both call sites now use. Added 6 tests covering: matching entries kept; empty realNames drops everything (Mail.app stale-cache scenario); empty SQLite returns empty; entries without `name` field dropped; entries with non-String `name` (NSNull, Int) dropped; matched entries preserve all fields (size, mimeType, rowId). A bug in the filter logic (inverted condition, missing as? String cast, omitted call) would now fail at least one of the 6 tests immediately. Pure refactor + test addition; zero behavior change.
+
 ## [2.8.3] - 2026-05-11
 
 ### Changed

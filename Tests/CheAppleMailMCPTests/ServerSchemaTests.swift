@@ -368,4 +368,86 @@ final class ServerSchemaTests: XCTestCase {
         assertSchemaProperty(props, key: "attachments", hasType: "array", itemsType: "string")
         assertSchemaProperty(props, key: "format", hasType: "string")
     }
+
+    // MARK: - Scenario (#28): cross-validation filter (issue #24 follow-up)
+    //
+    // `crossValidateAttachments` is the helper extracted from the inline
+    // filter closures at Server.swift list_attachments (single-message)
+    // and list_attachments_batch (per-message). Both handlers must apply
+    // identical filtering: keep only SQLite entries whose `name` field
+    // appears in the .emlx-parsed `realNames` set; drop entries with no
+    // name field. These tests pin the filter behavior directly — a bug
+    // in the filter logic (inverted condition, missing as? String cast,
+    // omitted call) would not be caught by per-helper tests on
+    // `attachmentNames` / `listAttachments` alone.
+
+    func testCrossValidateAttachments_keepsOnlyEntriesWithMatchingName() {
+        let sqlite: [[String: Any]] = [
+            ["name": "real.pdf", "size": 12345],
+            ["name": "stale.pdf", "size": 67890]  // SQLite has this but .emlx doesn't
+        ]
+        let realNames: Set<String> = ["real.pdf"]
+        let result = crossValidateAttachments(sqliteAttachments: sqlite, realNames: realNames)
+        XCTAssertEqual(result.count, 1, "filter must drop stale.pdf which is absent from .emlx")
+        XCTAssertEqual(result.first?["name"] as? String, "real.pdf")
+    }
+
+    func testCrossValidateAttachments_emptyRealNames_dropsEverything() {
+        // Edge: .emlx had no attachments but SQLite has stale rows
+        // (Mail.app stripped the binary on Sent / IMAP lazy-load).
+        let sqlite: [[String: Any]] = [
+            ["name": "ghost1.pdf"],
+            ["name": "ghost2.pdf"]
+        ]
+        let result = crossValidateAttachments(sqliteAttachments: sqlite, realNames: [])
+        XCTAssertTrue(result.isEmpty, "empty realNames must filter out all SQLite entries (#24 stale-cache scenario)")
+    }
+
+    func testCrossValidateAttachments_emptySQLite_returnsEmpty() {
+        // Edge: SQLite has no rows but .emlx parser found names (impossible
+        // in practice — would mean Mail.app missed indexing — but filter
+        // must handle it gracefully).
+        let result = crossValidateAttachments(sqliteAttachments: [], realNames: ["something.pdf"])
+        XCTAssertTrue(result.isEmpty, "empty SQLite input must yield empty result regardless of realNames")
+    }
+
+    func testCrossValidateAttachments_dropsEntriesWithoutNameField() {
+        // Defensive: SQLite rows missing the `name` field must be dropped
+        // (otherwise they pass through unvalidated).
+        let sqlite: [[String: Any]] = [
+            ["size": 100],  // no name field
+            ["name": "real.pdf"]
+        ]
+        let result = crossValidateAttachments(sqliteAttachments: sqlite, realNames: ["real.pdf"])
+        XCTAssertEqual(result.count, 1, "entries missing the 'name' field MUST be dropped")
+        XCTAssertEqual(result.first?["name"] as? String, "real.pdf")
+    }
+
+    func testCrossValidateAttachments_dropsEntriesWithNonStringName() {
+        // Defensive: if `name` is non-String (e.g. NSNull, Int), the
+        // `as? String` cast fails — entry must be dropped, not crashed.
+        let sqlite: [[String: Any]] = [
+            ["name": 42],  // numeric, not String
+            ["name": NSNull()],
+            ["name": "real.pdf"]
+        ]
+        let result = crossValidateAttachments(sqliteAttachments: sqlite, realNames: ["real.pdf"])
+        XCTAssertEqual(result.count, 1, "non-String 'name' values MUST be dropped, not coerced")
+        XCTAssertEqual(result.first?["name"] as? String, "real.pdf")
+    }
+
+    func testCrossValidateAttachments_preservesAllFieldsOfMatchedEntries() {
+        // The filter must not mutate the matched entries — full row
+        // (name, size, mimeType, etc.) is passed through unchanged.
+        let sqlite: [[String: Any]] = [
+            ["name": "real.pdf", "size": 12345, "mimeType": "application/pdf", "rowId": 999]
+        ]
+        let result = crossValidateAttachments(sqliteAttachments: sqlite, realNames: ["real.pdf"])
+        XCTAssertEqual(result.count, 1)
+        let entry = result[0]
+        XCTAssertEqual(entry["name"] as? String, "real.pdf")
+        XCTAssertEqual(entry["size"] as? Int, 12345)
+        XCTAssertEqual(entry["mimeType"] as? String, "application/pdf")
+        XCTAssertEqual(entry["rowId"] as? Int, 999)
+    }
 }
