@@ -98,9 +98,11 @@ final class MailControllerComposeTests: XCTestCase {
             bcc: ["bcc@x.y"],
             format: .plain
         )
-        XCTAssertTrue(script.contains("to recipient"))
-        XCTAssertTrue(script.contains("cc recipient"))
-        XCTAssertTrue(script.contains("bcc recipient"))
+        // #84: recipient fragments MUST live inside `tell newMessage … end tell`
+        // (outside the block Mail.app rejects the script at runtime).
+        assertOrdered(script, "to recipient", between: "tell newMessage", and: "end tell")
+        assertOrdered(script, "cc recipient", between: "tell newMessage", and: "end tell")
+        assertOrdered(script, "bcc recipient", between: "tell newMessage", and: "end tell")
     }
 
     // MARK: - buildCreateDraftScript
@@ -123,9 +125,12 @@ final class MailControllerComposeTests: XCTestCase {
             body: "*italic*",
             format: .markdown
         )
-        XCTAssertTrue(script.contains("save newMessage"))
-        XCTAssertTrue(script.contains("set html content to"))
-        XCTAssertTrue(script.contains("<em>italic</em>"))
+        // #84: `set html content to` MUST live inside `tell newMessage` block;
+        // `save newMessage` is the top-level command and stays as a lenient
+        // boundary-token contains() check.
+        XCTAssertTrue(script.contains("save newMessage"))  // top-level command — boundary token
+        assertOrdered(script, "set html content to", between: "tell newMessage", and: "end tell")
+        assertOrdered(script, "<em>italic</em>", between: "tell newMessage", and: "end tell")
     }
 
     func testBuildCreateDraftScript_htmlMode_embedsRawHTML() throws {
@@ -135,8 +140,13 @@ final class MailControllerComposeTests: XCTestCase {
             body: "<a href=\"https://example.com\">link</a>",
             format: .html
         )
-        XCTAssertTrue(script.contains("set html content to"))
-        XCTAssertTrue(script.contains("href=\\\"https://example.com\\\""))
+        // #84: `set html content to` MUST live inside `tell newMessage`.
+        // The href substring appears TWICE in html mode (once in the
+        // plain `content:` property literal at the top, then again
+        // inside `set html content to`) so first-occurrence ordering
+        // would trip — stays as a lenient contains() check.
+        assertOrdered(script, "set html content to", between: "tell newMessage", and: "end tell")
+        XCTAssertTrue(script.contains("href=\\\"https://example.com\\\""))  // appears in both plain + html — lenient
     }
 
     // MARK: - composeReplyHTML (reply/forward HTML composition)
@@ -272,9 +282,10 @@ final class MailControllerComposeTests: XCTestCase {
             originalHTML: nil,
             originalPlain: "Original line 1\nOriginal line 2"
         )
-        XCTAssertTrue(script.contains("set content to"), "plain mode still uses `set content to`")
-        XCTAssertTrue(script.contains("> Original line 1"), "quoted original line must appear in the script literal")
-        XCTAssertTrue(script.contains("> Original line 2"), "every original line must be quoted")
+        // #84: plain-mode body construction MUST live inside `tell replyMsg`.
+        assertOrdered(script, "set content to", between: "tell replyMsg", and: "end tell")
+        assertOrdered(script, "> Original line 1", between: "tell replyMsg", and: "end tell")
+        assertOrdered(script, "> Original line 2", between: "tell replyMsg", and: "end tell")
         XCTAssertFalse(script.contains("& return & return & content"), "broken AppleScript `& content` pattern MUST be removed (#43)")
         XCTAssertFalse(script.contains("html content"), "plain mode MUST NOT touch html content")
         XCTAssertFalse(script.contains("<blockquote>"), "plain mode MUST NOT wrap in blockquote (HTML tag)")
@@ -291,8 +302,9 @@ final class MailControllerComposeTests: XCTestCase {
             originalHTML: nil,
             originalPlain: ""
         )
-        XCTAssertTrue(script.contains("set content to"), "plain mode still uses `set content to`")
-        XCTAssertTrue(script.contains("Reply body"), "user body must appear")
+        // #84: even with empty original, content-set MUST stay inside `tell replyMsg`.
+        assertOrdered(script, "set content to", between: "tell replyMsg", and: "end tell")
+        assertOrdered(script, "Reply body", between: "tell replyMsg", and: "end tell")
         XCTAssertFalse(script.contains("> "), "empty originalPlain MUST NOT emit `> ` quote prefix")
         XCTAssertFalse(script.contains("& return & return & content"), "broken AppleScript `& content` pattern MUST be removed (#43)")
     }
@@ -306,9 +318,11 @@ final class MailControllerComposeTests: XCTestCase {
             originalHTML: "<p>Can you review?</p>",
             originalPlain: "Can you review?"
         )
-        XCTAssertTrue(script.contains("set html content to"))
-        XCTAssertTrue(script.contains("<blockquote>"), "non-plain reply script MUST contain <blockquote>")
-        XCTAssertTrue(script.contains("Thanks, noted."))
+        // #84: markdown reply payload (html content + blockquote + user body)
+        // MUST live inside `tell replyMsg` block.
+        assertOrdered(script, "set html content to", between: "tell replyMsg", and: "end tell")
+        assertOrdered(script, "<blockquote>", between: "tell replyMsg", and: "end tell")
+        assertOrdered(script, "Thanks, noted.", between: "tell replyMsg", and: "end tell")
     }
 
     func testBuildReplyEmailScript_replyAll_usesReplyAllVerb() throws {
@@ -335,9 +349,10 @@ final class MailControllerComposeTests: XCTestCase {
             originalHTML: nil,
             originalPlain: ""
         )
-        XCTAssertTrue(script.contains("make new cc recipient"), "cc_additional MUST emit AppleScript cc recipient fragments")
-        XCTAssertTrue(script.contains("a@b.com"))
-        XCTAssertTrue(script.contains("c@d.com"))
+        // #84: cc recipient fragments MUST be inside `tell replyMsg`.
+        assertOrdered(script, "make new cc recipient", between: "tell replyMsg", and: "end tell")
+        assertOrdered(script, "a@b.com", between: "tell replyMsg", and: "end tell")
+        assertOrdered(script, "c@d.com", between: "tell replyMsg", and: "end tell")
     }
 
     func testBuildReplyEmailScript_attachments_emitsAttachmentFragment() throws {
@@ -350,9 +365,10 @@ final class MailControllerComposeTests: XCTestCase {
             originalHTML: nil,
             originalPlain: ""
         )
-        XCTAssertTrue(script.contains("make new attachment"), "attachments MUST emit AppleScript attachment fragment")
-        XCTAssertTrue(script.contains("POSIX file \"/tmp/cv.pdf\""))
-        XCTAssertTrue(script.contains("POSIX file \"/tmp/cert.pdf\""))
+        // #84: attachment fragments MUST live inside `tell replyMsg`.
+        assertOrdered(script, "make new attachment", between: "tell replyMsg", and: "end tell")
+        assertOrdered(script, "POSIX file \"/tmp/cv.pdf\"", between: "tell replyMsg", and: "end tell")
+        assertOrdered(script, "POSIX file \"/tmp/cert.pdf\"", between: "tell replyMsg", and: "end tell")
     }
 
     func testBuildReplyEmailScript_saveAsDraft_replacesSendWithSave() throws {
@@ -399,10 +415,13 @@ final class MailControllerComposeTests: XCTestCase {
             originalHTML: "<p>Can you review?</p>",
             originalPlain: "Can you review?"
         )
-        XCTAssertTrue(script.contains("set html content to"), "html branch should still set html content")
-        XCTAssertTrue(script.contains("make new cc recipient"), "html branch must also support cc_additional")
-        XCTAssertTrue(script.contains("make new attachment"), "html branch must also support attachments")
-        XCTAssertTrue(script.contains("save replyMsg"), "html branch must also support save_as_draft")
+        // #84: html branch payload + cc + attachment MUST live inside `tell replyMsg`.
+        // `save replyMsg` is the top-level dispatch verb (outside the block) and
+        // stays as a lenient boundary-token contains() check.
+        assertOrdered(script, "set html content to", between: "tell replyMsg", and: "end tell")
+        assertOrdered(script, "make new cc recipient", between: "tell replyMsg", and: "end tell")
+        assertOrdered(script, "make new attachment", between: "tell replyMsg", and: "end tell")
+        XCTAssertTrue(script.contains("save replyMsg"), "html branch must also support save_as_draft")  // top-level command — boundary token
         XCTAssertFalse(script.contains("send replyMsg"))
     }
 
@@ -468,11 +487,14 @@ final class MailControllerComposeTests: XCTestCase {
             originalHTML: nil,
             originalPlain: "Original line 1\nOriginal line 2"
         )
-        XCTAssertTrue(script.contains("forward originalMsg"))
-        XCTAssertTrue(script.contains("to recipient"))
-        XCTAssertTrue(script.contains("set content to"))
-        XCTAssertTrue(script.contains("> Original line 1"), "quoted original must appear in script")
-        XCTAssertTrue(script.contains("> Original line 2"), "every original line must be quoted")
+        // #84: `forward originalMsg` is a top-level command (boundary token);
+        // `set content to` and the quoted lines MUST live inside `tell fwdMsg`;
+        // `to recipient` (forward target) also inside `tell fwdMsg`.
+        XCTAssertTrue(script.contains("forward originalMsg"))  // top-level command — boundary token
+        assertOrdered(script, "to recipient", between: "tell fwdMsg", and: "end tell")
+        assertOrdered(script, "set content to", between: "tell fwdMsg", and: "end tell")
+        assertOrdered(script, "> Original line 1", between: "tell fwdMsg", and: "end tell")
+        assertOrdered(script, "> Original line 2", between: "tell fwdMsg", and: "end tell")
         XCTAssertFalse(script.contains("& return & return & content"), "broken `& content` AppleScript pattern MUST be removed (#44)")
         XCTAssertFalse(script.contains("html content"), "plain mode MUST NOT touch html content")
     }
@@ -490,8 +512,9 @@ final class MailControllerComposeTests: XCTestCase {
             originalHTML: nil,
             originalPlain: ""
         )
-        XCTAssertTrue(script.contains("set content to"))
-        XCTAssertTrue(script.contains("FYI"))
+        // #84: empty-original forward still has user body content inside `tell fwdMsg`.
+        assertOrdered(script, "set content to", between: "tell fwdMsg", and: "end tell")
+        assertOrdered(script, "FYI", between: "tell fwdMsg", and: "end tell")
         XCTAssertFalse(script.contains("> "), "empty originalPlain MUST NOT emit `> ` quote prefix")
         XCTAssertFalse(script.contains("html content"))
     }
@@ -505,8 +528,10 @@ final class MailControllerComposeTests: XCTestCase {
             originalHTML: "<p>Original</p>",
             originalPlain: "Original"
         )
-        XCTAssertTrue(script.contains("set html content to"))
-        XCTAssertTrue(script.contains("<blockquote>"))
+        // #84: html-mode forward payload (html content + blockquote) MUST live
+        // inside `tell fwdMsg` block.
+        assertOrdered(script, "set html content to", between: "tell fwdMsg", and: "end tell")
+        assertOrdered(script, "<blockquote>", between: "tell fwdMsg", and: "end tell")
     }
 
     func testBuildForwardEmailScript_noBody_omitsContentMutation() throws {
