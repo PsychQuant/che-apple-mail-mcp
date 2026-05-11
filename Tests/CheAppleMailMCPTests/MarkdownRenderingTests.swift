@@ -302,4 +302,95 @@ final class MarkdownRenderingTests: XCTestCase {
         XCTAssertTrue(html.contains("plain code"),
                       "code body must be preserved; got: \(html)")
     }
+
+    // MARK: - Scenario (#16): nested list rendering
+
+    func testRenderBody_markdown_nestedUnorderedList_twoLevels() throws {
+        // Canonical case from #15 DA #2 reproducer: inner list was previously
+        // collapsed into outer (`<ul><li>OuterInner</li></ul>`). Post-#16 must
+        // emit proper `<ul><li>Outer<ul><li>Inner</li></ul></li></ul>` shape.
+        let result = try renderBody("- Outer\n  - Inner", format: .markdown)
+        let html = result.htmlContent ?? ""
+        // Two distinct <ul> opens (outer + inner)
+        let ulOpenCount = html.components(separatedBy: "<ul>").count - 1
+        XCTAssertEqual(ulOpenCount, 2, "nested unordered list MUST emit 2 <ul> opens; got HTML: \(html)")
+        let ulCloseCount = html.components(separatedBy: "</ul>").count - 1
+        XCTAssertEqual(ulCloseCount, 2, "nested unordered list MUST emit 2 </ul> closes; got HTML: \(html)")
+        // Both Outer and Inner text appear as separate <li> items
+        XCTAssertTrue(html.contains("Outer"), "outer item text must be preserved")
+        XCTAssertTrue(html.contains("Inner"), "inner item text must be preserved")
+        // Inner must be inside (after) outer's <li>
+        guard let outerIdx = html.range(of: "Outer")?.lowerBound,
+              let innerIdx = html.range(of: "Inner")?.lowerBound else {
+            XCTFail("missing required tokens")
+            return
+        }
+        XCTAssertLessThan(outerIdx, innerIdx, "outer item must appear before inner")
+    }
+
+    func testRenderBody_markdown_nestedOrderedList_twoLevels() throws {
+        let result = try renderBody("1. Outer\n   1. Inner", format: .markdown)
+        let html = result.htmlContent ?? ""
+        let olOpenCount = html.components(separatedBy: "<ol>").count - 1
+        XCTAssertEqual(olOpenCount, 2, "nested ordered list MUST emit 2 <ol> opens; got HTML: \(html)")
+        let olCloseCount = html.components(separatedBy: "</ol>").count - 1
+        XCTAssertEqual(olCloseCount, 2, "nested ordered list MUST emit 2 </ol> closes; got HTML: \(html)")
+        XCTAssertTrue(html.contains("Outer"))
+        XCTAssertTrue(html.contains("Inner"))
+    }
+
+    func testRenderBody_markdown_mixedNesting_unorderedOuterOrderedInner() throws {
+        // Mixed nesting: unordered outer + ordered inner. Both list types
+        // must open + close their own elements at the right depths.
+        let result = try renderBody("- A\n  1. B", format: .markdown)
+        let html = result.htmlContent ?? ""
+        XCTAssertTrue(html.contains("<ul>"), "outer unordered list opened; got: \(html)")
+        XCTAssertTrue(html.contains("</ul>"), "outer unordered list closed; got: \(html)")
+        XCTAssertTrue(html.contains("<ol>"), "inner ordered list opened; got: \(html)")
+        XCTAssertTrue(html.contains("</ol>"), "inner ordered list closed; got: \(html)")
+        // Inner <ol> must come BEFORE outer </ul> (i.e. nested inside)
+        guard let olOpen = html.range(of: "<ol>")?.lowerBound,
+              let ulClose = html.range(of: "</ul>")?.lowerBound else {
+            XCTFail("missing required tokens")
+            return
+        }
+        XCTAssertLessThan(olOpen, ulClose, "inner <ol> must open BEFORE outer </ul> (nested, not sibling)")
+    }
+
+    func testRenderBody_markdown_threeLevelNesting() throws {
+        let result = try renderBody("- A\n  - B\n    - C", format: .markdown)
+        let html = result.htmlContent ?? ""
+        let ulOpenCount = html.components(separatedBy: "<ul>").count - 1
+        XCTAssertEqual(ulOpenCount, 3, "three-level nested list MUST emit 3 <ul> opens; got HTML: \(html)")
+        let ulCloseCount = html.components(separatedBy: "</ul>").count - 1
+        XCTAssertEqual(ulCloseCount, 3, "three-level nested list MUST emit 3 </ul> closes; got HTML: \(html)")
+        for token in ["A", "B", "C"] {
+            XCTAssertTrue(html.contains(token), "expected token '\(token)' preserved; got: \(html)")
+        }
+    }
+
+    func testRenderBody_markdown_listExit_closesAllLists() throws {
+        // After a nested list, a paragraph block must close ALL open lists,
+        // not just the innermost. Otherwise we'd leak `<ul>` opens.
+        let result = try renderBody("- A\n  - B\n\nParagraph after.", format: .markdown)
+        let html = result.htmlContent ?? ""
+        let ulOpenCount = html.components(separatedBy: "<ul>").count - 1
+        let ulCloseCount = html.components(separatedBy: "</ul>").count - 1
+        XCTAssertEqual(ulOpenCount, ulCloseCount,
+                       "list opens and closes MUST balance after exit; got opens=\(ulOpenCount) closes=\(ulCloseCount); HTML: \(html)")
+        XCTAssertTrue(html.contains("<p>Paragraph after.</p>"),
+                      "paragraph after nested list MUST render as own <p>; got: \(html)")
+    }
+
+    func testRenderBody_markdown_flatList_backwardsCompatRegressionBaseline() throws {
+        // #16 backwards-compat: a flat (depth-1) list must render byte-identical
+        // to pre-refactor output. This pins the regression baseline so future
+        // changes to the nesting state machine can't silently break flat lists.
+        let result = try renderBody("- A\n- B", format: .markdown)
+        let html = result.htmlContent ?? ""
+        let ulOpenCount = html.components(separatedBy: "<ul>").count - 1
+        XCTAssertEqual(ulOpenCount, 1, "flat list MUST emit exactly 1 <ul> open; got HTML: \(html)")
+        let liCount = html.components(separatedBy: "<li>").count - 1
+        XCTAssertEqual(liCount, 2, "flat 2-item list MUST emit 2 <li>; got HTML: \(html)")
+    }
 }

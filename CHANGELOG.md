@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Nested markdown lists render with proper `<ul>`/`<ol>` nesting** ([#16](https://github.com/PsychQuant/che-apple-mail-mcp/issues/16)). Previously `"- A\n  - B"` collapsed inner items into the outer list (`<ul><li>A<li>B</li></li></ul>` or similar, per #15 verify DA-2). Now renders correctly as `<ul><li>A<ul><li>B</li></ul></li></ul>` with proper nesting depth tracking. Implementation: extended `BlockKind` enum with depth-aware list cases (`.unorderedListItem(depth:)` / `.orderedListItem(depth:)`); rewrote `assembleBlocks` state machine from single `listOpen` to depth-stack-based tracking; rewrote `blockKind(of:)` to count `listItem` components in `PresentationIntent.components` and freeze the INNERMOST list kind (Foundation emits inner→outer). Supports arbitrary nesting depth + mixed nesting (UL containing OL or vice versa) + outdent jumps + flat-list backwards compat (regression baseline pinned). 6 new tests covering 2-level nested unordered, 2-level nested ordered, mixed UL→OL nesting, 3-level deep nesting, list-exit-to-paragraph cleanup, flat-list regression baseline.
+
 ## [2.8.4] - 2026-05-11
 
 ### Added
