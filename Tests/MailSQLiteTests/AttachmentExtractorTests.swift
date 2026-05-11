@@ -798,4 +798,166 @@ final class AttachmentExtractorTests: XCTestCase {
             "attachmentNames latency \(elapsedMs)ms on 10×5MB structure exceeds 1s — names-only walker (commit 99c7f54) likely regressed to eager-decode parseAllParts"
         )
     }
+
+    // MARK: - Scenario (#26): malformed multipart throws instead of returning empty
+    //
+    // Pre-#26 behavior: `enumerateAttachmentNames` silently returned an
+    // empty Set when the multipart structure was malformed (missing
+    // boundary, all children unparseable). The Server.swift cross-
+    // validation filter would then use that empty set to drop ALL SQLite
+    // attachment rows — net effect: users saw 0 attachments on
+    // legitimately-broken .emlx files even though SQLite had cached
+    // metadata.
+    //
+    // Post-#26: malformed top-level multipart throws
+    // `MailSQLiteError.emlxParseFailed`. Server.swift handlers already
+    // wrap the call in do/catch and fall back to unvalidated SQLite
+    // metadata, so users now see the SQLite-cached names instead of
+    // the empty post-filter result.
+
+    func testAttachmentNames_throwsOnMalformedMultipart_missingBoundary() throws {
+        // Synthesize an .emlx where the top-level Content-Type claims
+        // multipart/mixed but provides NO boundary parameter — Foundation
+        // can't split the body at all. Pre-#26 this returned Set(),
+        // post-#26 must throw.
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262655  // hash path "2/6/2" same family as ascii fixture
+        let accountUUID = "ABCE3A85-06BE-43BC-9B84-2CA6F325612F"
+        let mailboxLeaf = "INBOX"
+        let storeUUID = "5FCC6F13-2CE3-48B1-907D-686244C0229A"
+        let mailV10 = root.appendingPathComponent("Library/Mail/V10", isDirectory: true)
+        let messagesDir = mailV10
+            .appendingPathComponent(accountUUID)
+            .appendingPathComponent("\(mailboxLeaf).mbox")
+            .appendingPathComponent(storeUUID)
+            .appendingPathComponent("Data/2/6/2/Messages", isDirectory: true)
+        try FileManager.default.createDirectory(at: messagesDir, withIntermediateDirectories: true)
+
+        // Note: Content-Type claims multipart/mixed but `boundary=` is missing.
+        // No way for splitMultipart to work.
+        let message = """
+        From: sender@example.com\r
+        To: recipient@example.com\r
+        Subject: Malformed multipart (no boundary)\r
+        Content-Type: multipart/mixed\r
+        MIME-Version: 1.0\r
+        \r
+        Some body content that the parser cannot meaningfully split.\r
+        """
+        let rfc822Data = message.data(using: .utf8)!
+        let emlxContent = "\(rfc822Data.count)\n".data(using: .utf8)! + rfc822Data
+        let emlxPath = messagesDir.appendingPathComponent("\(rowId).emlx")
+        try emlxContent.write(to: emlxPath)
+        EnvelopeIndexReader.mailStoragePathOverride = mailV10.path
+        let mailboxURL = "ews://\(accountUUID)/\(mailboxLeaf)"
+
+        XCTAssertThrowsError(
+            try EmlxParser.attachmentNames(rowId: rowId, mailboxURL: mailboxURL),
+            "malformed multipart (missing boundary) MUST throw, not return empty set"
+        ) { error in
+            guard let mailErr = error as? MailSQLiteError else {
+                XCTFail("expected MailSQLiteError, got \(type(of: error))")
+                return
+            }
+            if case .emlxParseFailed(let msg) = mailErr {
+                XCTAssertTrue(msg.contains("multipart"),
+                              "error message must mention multipart context; got: \(msg)")
+            } else {
+                XCTFail("expected .emlxParseFailed, got \(mailErr)")
+            }
+        }
+    }
+
+    func testAttachmentNames_doesNotThrow_validMultipartWithZeroAttachments() throws {
+        // Regression baseline for #26: a VALID multipart that legitimately
+        // has 0 attachments (all children are text parts with no filename)
+        // must NOT throw — pre-#26 behavior preserved for the "0
+        // attachments is a legitimate state" case.
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262656
+        let accountUUID = "ABCE3A85-06BE-43BC-9B84-2CA6F325612F"
+        let mailboxLeaf = "INBOX"
+        let storeUUID = "5FCC6F13-2CE3-48B1-907D-686244C0229A"
+        let mailV10 = root.appendingPathComponent("Library/Mail/V10", isDirectory: true)
+        let messagesDir = mailV10
+            .appendingPathComponent(accountUUID)
+            .appendingPathComponent("\(mailboxLeaf).mbox")
+            .appendingPathComponent(storeUUID)
+            .appendingPathComponent("Data/2/6/2/Messages", isDirectory: true)
+        try FileManager.default.createDirectory(at: messagesDir, withIntermediateDirectories: true)
+
+        // Valid multipart with proper boundary; two child parts both
+        // text/plain with no filename — no attachments, parses fine.
+        let boundary = "----=_BOUNDARY_VALID_ZERO"
+        let message = """
+        From: sender@example.com\r
+        To: recipient@example.com\r
+        Subject: Valid multipart, zero attachments\r
+        Content-Type: multipart/alternative; boundary="\(boundary)"\r
+        MIME-Version: 1.0\r
+        \r
+        --\(boundary)\r
+        Content-Type: text/plain; charset=utf-8\r
+        \r
+        Plain text version.\r
+        --\(boundary)\r
+        Content-Type: text/html; charset=utf-8\r
+        \r
+        <p>HTML version.</p>\r
+        --\(boundary)--\r
+        """
+        let rfc822Data = message.data(using: .utf8)!
+        let emlxContent = "\(rfc822Data.count)\n".data(using: .utf8)! + rfc822Data
+        let emlxPath = messagesDir.appendingPathComponent("\(rowId).emlx")
+        try emlxContent.write(to: emlxPath)
+        EnvelopeIndexReader.mailStoragePathOverride = mailV10.path
+        let mailboxURL = "ews://\(accountUUID)/\(mailboxLeaf)"
+
+        let names = try EmlxParser.attachmentNames(rowId: rowId, mailboxURL: mailboxURL)
+        XCTAssertTrue(names.isEmpty,
+                      "valid zero-attachment multipart must return empty set without throwing; got: \(names)")
+    }
+
+    func testAttachmentNames_doesNotThrow_nonMultipartSinglePart() throws {
+        // Non-multipart input (single-part text/plain) must not trigger
+        // the malformed-multipart throw path. Pre-#26 behavior preserved.
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262657
+        let accountUUID = "ABCE3A85-06BE-43BC-9B84-2CA6F325612F"
+        let mailboxLeaf = "INBOX"
+        let storeUUID = "5FCC6F13-2CE3-48B1-907D-686244C0229A"
+        let mailV10 = root.appendingPathComponent("Library/Mail/V10", isDirectory: true)
+        let messagesDir = mailV10
+            .appendingPathComponent(accountUUID)
+            .appendingPathComponent("\(mailboxLeaf).mbox")
+            .appendingPathComponent(storeUUID)
+            .appendingPathComponent("Data/2/6/2/Messages", isDirectory: true)
+        try FileManager.default.createDirectory(at: messagesDir, withIntermediateDirectories: true)
+
+        let message = """
+        From: sender@example.com\r
+        To: recipient@example.com\r
+        Subject: Plain text only\r
+        Content-Type: text/plain; charset=utf-8\r
+        MIME-Version: 1.0\r
+        \r
+        Just plain text, no MIME structure to traverse.\r
+        """
+        let rfc822Data = message.data(using: .utf8)!
+        let emlxContent = "\(rfc822Data.count)\n".data(using: .utf8)! + rfc822Data
+        let emlxPath = messagesDir.appendingPathComponent("\(rowId).emlx")
+        try emlxContent.write(to: emlxPath)
+        EnvelopeIndexReader.mailStoragePathOverride = mailV10.path
+        let mailboxURL = "ews://\(accountUUID)/\(mailboxLeaf)"
+
+        let names = try EmlxParser.attachmentNames(rowId: rowId, mailboxURL: mailboxURL)
+        XCTAssertTrue(names.isEmpty,
+                      "non-multipart single-part text/plain must return empty set without throwing")
+    }
 }

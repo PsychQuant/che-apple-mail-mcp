@@ -246,6 +246,10 @@ extension EmlxParser {
             )
         }
         let bodyData = Data(messageData[bodyOffset...])
-        return MIMEParser.enumerateAttachmentNames(bodyData, headers: headers)
+        // #26: enumerateAttachmentNames now throws emlxParseFailed when the
+        // top-level multipart cannot be split at all — propagates here so
+        // the caller's do/catch in Server.swift falls back to unvalidated
+        // SQLite metadata instead of showing 0 attachments.
+        return try MIMEParser.enumerateAttachmentNames(bodyData, headers: headers)
     }
 }
