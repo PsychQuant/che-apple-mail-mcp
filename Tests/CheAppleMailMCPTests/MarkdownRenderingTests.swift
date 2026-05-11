@@ -271,4 +271,35 @@ final class MarkdownRenderingTests: XCTestCase {
         XCTAssertFalse(emptyHtml.contains("<a "),
                        "empty URLs must have anchor dropped under sanitize_links=true; got: \(emptyHtml)")
     }
+
+    // MARK: - Scenario (#22 Item D): code block language hint
+
+    func testRenderBody_markdown_codeBlockWithLanguageHint_emitsClassAttribute() throws {
+        // ` ```swift\nlet x = 1\n``` ` should emit
+        // `<pre><code class="language-swift">let x = 1\n</code></pre>` —
+        // CommonMark recommended pattern, honored by Prism / Pygments /
+        // highlight.js / mail clients with syntax-highlight plugins.
+        let result = try renderBody("```swift\nlet x = 1\n```", format: .markdown)
+        let html = result.htmlContent ?? ""
+        XCTAssertTrue(html.contains("class=\"language-swift\""),
+                      "code block with language hint MUST emit class=\"language-swift\"; got: \(html)")
+        XCTAssertTrue(html.contains("<pre><code class=\"language-swift\">"),
+                      "class attribute MUST be on the inner <code> element; got: \(html)")
+        XCTAssertTrue(html.contains("let x = 1"),
+                      "code body must be preserved; got: \(html)")
+    }
+
+    func testRenderBody_markdown_codeBlockWithoutLanguage_omitsClassAttribute() throws {
+        // ` ```\nplain code\n``` ` (no language tag) keeps the original
+        // `<pre><code>...` form without class attribute (#22 Item D
+        // backwards compat — fences without language stay byte-identical).
+        let result = try renderBody("```\nplain code\n```", format: .markdown)
+        let html = result.htmlContent ?? ""
+        XCTAssertTrue(html.contains("<pre><code>"),
+                      "fence without language tag MUST emit plain <pre><code> (no class); got: \(html)")
+        XCTAssertFalse(html.contains("class=\"language-"),
+                       "fence without language tag MUST NOT emit a language class; got: \(html)")
+        XCTAssertTrue(html.contains("plain code"),
+                      "code body must be preserved; got: \(html)")
+    }
 }
