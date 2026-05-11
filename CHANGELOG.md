@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.4] - 2026-05-11
+
 ### Added
 - **Code fence language hint → `class="language-<hint>"` on `<pre><code>`** ([#22 Item D](https://github.com/PsychQuant/che-apple-mail-mcp/issues/22)). Markdown fences with a language tag (e.g. ` ```swift `, ` ```python `) now emit `<pre><code class="language-swift">…</code></pre>` instead of the previous `<pre><code>…</code></pre>`. CommonMark recommended pattern; honored by Prism / Pygments / highlight.js / mail clients with syntax-highlight plugins. Plain fences without a language tag continue to emit `<pre><code>` unchanged (backwards compatible). Spec.md formally documents this contract.
 
