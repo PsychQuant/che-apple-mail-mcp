@@ -130,6 +130,25 @@ private enum BlockKind: Equatable {
     case codeBlock(languageHint: String?)
     case blockquote
     case heading(Int)
+    /// Table cell from a GFM markdown table. See #17.
+    ///
+    /// - `rowIndex`: row position. `nil` for cells in `tableHeaderRow`, integer
+    ///   (>=1) for cells in regular `tableRow` (Foundation numbers data rows
+    ///   from 1).
+    /// - `columnIndex`: column position within the row (0-based).
+    /// - `alignments`: per-column alignment from the GFM separator row
+    ///   (`|---|:---|---:|:---:|` → [.left, .left, .right, .center]).
+    ///   Used to emit `style="text-align: <align>"` on `<th>`/`<td>`.
+    case tableCell(rowIndex: Int?, columnIndex: Int, alignments: [TableCellAlignment])
+}
+
+/// Per-column alignment from a GFM markdown table's separator row.
+/// Mirrors `PresentationIntent.TableColumn.Alignment` without leaking
+/// Foundation's nested type out of the file.
+enum TableCellAlignment: Equatable {
+    case left
+    case center
+    case right
 }
 
 private func blockKind(of intent: PresentationIntent?) -> BlockKind {
@@ -150,6 +169,14 @@ private func blockKind(of intent: PresentationIntent?) -> BlockKind {
     var listItemCount = 0
     var innermostListKind: PresentationIntent.Kind? = nil  // first list-kind in chain
     var firstNonListBlockKind: BlockKind? = nil
+    // #17: table cell detection. Foundation emits cells as
+    // `tableCell N > tableHeaderRow > table [...columns]` (header row) or
+    // `tableCell N > tableRow M > table [...columns]` (data row).
+    var tableColumnIndex: Int? = nil
+    var tableRowIndex: Int? = nil       // nil for header row, >=1 for data rows
+    var inTableHeaderRow: Bool = false
+    var tableAlignments: [TableCellAlignment] = []
+    var inTable: Bool = false
 
     for component in intent.components {
         switch component.kind {
@@ -172,6 +199,22 @@ private func blockKind(of intent: PresentationIntent?) -> BlockKind {
             if firstNonListBlockKind == nil {
                 firstNonListBlockKind = .heading(level)
             }
+        case .tableCell(let columnIndex):
+            tableColumnIndex = columnIndex
+        case .tableHeaderRow:
+            inTableHeaderRow = true
+        case .tableRow(let rowIndex):
+            tableRowIndex = rowIndex
+        case .table(let columns):
+            inTable = true
+            tableAlignments = columns.map { col in
+                switch col.alignment {
+                case .left:   return TableCellAlignment.left
+                case .center: return .center
+                case .right:  return .right
+                @unknown default: return .left
+                }
+            }
         case .paragraph:
             continue
         default:
@@ -179,6 +222,14 @@ private func blockKind(of intent: PresentationIntent?) -> BlockKind {
         }
     }
 
+    // Table cells take highest precedence (data layout, not text block).
+    if inTable, let col = tableColumnIndex {
+        return .tableCell(
+            rowIndex: inTableHeaderRow ? nil : tableRowIndex,
+            columnIndex: col,
+            alignments: tableAlignments
+        )
+    }
     // List-item blocks take precedence — a `listItem` in the chain means the
     // block lives inside a list, even if a `paragraph` or `header` component
     // also appears.
@@ -240,6 +291,18 @@ private func assembleBlocks(_ blocks: [(text: String, kind: BlockKind)]) -> Stri
     // so we can emit the right close tag.
     var listStack: [BlockKind] = []
 
+    // #17: table state machine. Tracks the currently-open `<table>` (if any).
+    // Foundation emits cells in row-major order; we open `<table><thead>` on
+    // the first header cell, close `</tr></thead><tbody>` when we see the
+    // first data row, transition `</tr><tr>` when row index changes, and
+    // close `</tr></tbody></table>` when leaving table context.
+    enum TableState {
+        case none
+        case inHeader(currentColumn: Int, alignments: [TableCellAlignment])
+        case inBody(currentRow: Int, currentColumn: Int, alignments: [TableCellAlignment])
+    }
+    var tableState: TableState = .none
+
     // Helper: close lists from the top of the stack down to (but not
     // including) the target depth. Optionally also close the entry AT
     // target depth IF its kind differs from `requiredKind` (handles
@@ -260,9 +323,85 @@ private func assembleBlocks(_ blocks: [(text: String, kind: BlockKind)]) -> Stri
         }
     }
 
+    // Helper: close the currently-open table (if any), emitting the proper
+    // closing sequence for whichever sub-element the state machine is in.
+    func closeTable() {
+        switch tableState {
+        case .none:
+            return
+        case .inHeader:
+            html += "</tr></thead></table>\n"
+        case .inBody:
+            html += "</tr></tbody></table>\n"
+        }
+        tableState = .none
+    }
+
+    // Helper: alignment style attribute for a column. Default `.left` emits
+    // no style attribute (browser default), which keeps simple tables clean.
+    func styleAttr(_ align: TableCellAlignment) -> String {
+        switch align {
+        case .left:   return ""
+        case .center: return " style=\"text-align: center\""
+        case .right:  return " style=\"text-align: right\""
+        }
+    }
+
     for (text, kind) in blocks {
         switch kind {
+        case .tableCell(let rowIndex, let columnIndex, let alignments):
+            // Non-table blocks below (paragraph/heading/etc.) all call
+            // closeTable() to leave table context — so if we get here we're
+            // either continuing an open table or starting a new one.
+            closeListsTo(targetDepth: 0)  // tables don't nest inside lists in this renderer
+
+            let alignment = alignments.indices.contains(columnIndex) ? alignments[columnIndex] : .left
+
+            switch tableState {
+            case .none:
+                // First cell — open table + thead/tr
+                html += "<table>\n"
+                if rowIndex == nil {
+                    html += "<thead><tr>"
+                    html += "<th\(styleAttr(alignment))>\(text)</th>"
+                    tableState = .inHeader(currentColumn: columnIndex, alignments: alignments)
+                } else {
+                    // Skipping straight to data row (no header) — open tbody.
+                    html += "<tbody><tr>"
+                    html += "<td\(styleAttr(alignment))>\(text)</td>"
+                    tableState = .inBody(currentRow: rowIndex!, currentColumn: columnIndex, alignments: alignments)
+                }
+            case .inHeader(let currentCol, let stateAlignments):
+                if rowIndex == nil {
+                    // Still in header row
+                    if columnIndex > currentCol {
+                        html += "<th\(styleAttr(alignment))>\(text)</th>"
+                    } else {
+                        // Shouldn't happen — but if columnIndex regresses, keep going
+                        html += "<th\(styleAttr(alignment))>\(text)</th>"
+                    }
+                    tableState = .inHeader(currentColumn: columnIndex, alignments: stateAlignments)
+                } else {
+                    // Header → data row transition
+                    html += "</tr></thead>\n<tbody><tr>"
+                    html += "<td\(styleAttr(alignment))>\(text)</td>"
+                    tableState = .inBody(currentRow: rowIndex!, currentColumn: columnIndex, alignments: stateAlignments)
+                }
+            case .inBody(let currentRow, _, let stateAlignments):
+                if let newRow = rowIndex, newRow != currentRow {
+                    html += "</tr>\n<tr>"
+                    html += "<td\(styleAttr(alignment))>\(text)</td>"
+                    tableState = .inBody(currentRow: newRow, currentColumn: columnIndex, alignments: stateAlignments)
+                } else {
+                    html += "<td\(styleAttr(alignment))>\(text)</td>"
+                    if let r = rowIndex {
+                        tableState = .inBody(currentRow: r, currentColumn: columnIndex, alignments: stateAlignments)
+                    }
+                }
+            }
+
         case .unorderedListItem(let depth), .orderedListItem(let depth):
+            closeTable()
             // Close any open lists deeper than this block's depth, and any
             // same-depth list whose kind doesn't match (UL→OL transition).
             closeListsTo(targetDepth: depth, requiredKind: kind)
@@ -281,12 +420,15 @@ private func assembleBlocks(_ blocks: [(text: String, kind: BlockKind)]) -> Stri
             html += "<li>\(text)</li>\n"
 
         case .paragraph:
+            closeTable()
             closeListsTo(targetDepth: 0)
             html += "<p>\(text)</p>\n"
         case .blockquote:
+            closeTable()
             closeListsTo(targetDepth: 0)
             html += "<blockquote>\(text)</blockquote>\n"
         case .codeBlock(let languageHint):
+            closeTable()
             closeListsTo(targetDepth: 0)
             // #22 Item D: honor the language hint from the fence (e.g.
             // ` ```swift `) by emitting `class="language-swift"` on the
@@ -300,13 +442,15 @@ private func assembleBlocks(_ blocks: [(text: String, kind: BlockKind)]) -> Stri
                 html += "<pre><code>\(text)</code></pre>\n"
             }
         case .heading(let level):
+            closeTable()
             closeListsTo(targetDepth: 0)
             let clamped = max(1, min(6, level))
             html += "<h\(clamped)>\(text)</h\(clamped)>\n"
         }
     }
 
-    // Close any remaining open lists at end of document.
+    // Close any remaining open table + lists at end of document.
+    closeTable()
     closeListsTo(targetDepth: 0)
     return html
 }
