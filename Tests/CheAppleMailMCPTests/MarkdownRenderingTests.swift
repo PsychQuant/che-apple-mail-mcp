@@ -200,4 +200,75 @@ final class MarkdownRenderingTests: XCTestCase {
         XCTAssertFalse(html.contains("data:"),
                        "data: URL must NOT survive sanitize_links allowlist; got: \(html)")
     }
+
+    // MARK: - Scenario (#87 Item 1): Allowlist tripwire — pin exact contents
+
+    func testMessageCompositionSafeURLSchemes_exactContents() {
+        // Tripwires accidental allowlist expansion. A future PR adding
+        // `vbscript`, `file`, `chrome`, etc. to the set would silently
+        // unblock those schemes (the existing per-bypass tests only
+        // exercise canonical attacks). This test fails immediately on
+        // any change to the allowlist — forcing a deliberate decision
+        // with audit trail. See #87 (cluster A verify DA-4 follow-up).
+        XCTAssertEqual(messageCompositionSafeURLSchemes,
+                       Set(["http", "https", "mailto", "tel"]),
+                       "allowlist contents changed — was this deliberate? Schemes outside this set MUST stay blocked under sanitize_links=true.")
+    }
+
+    // MARK: - Scenario (#87 Item 2): Bypass-class regression tests
+
+    func testRenderBody_markdown_sanitizeLinksOn_blocksCaseMixedJavaScript() throws {
+        // Defense relies on `.lowercased()` normalization at MarkdownRendering.swift:174.
+        // A regression removing it would silently unblock case-mixed bypasses.
+        let result = try renderBody("[click](JaVaScRiPt:alert(1))", format: .markdown, sanitizeLinks: true)
+        let html = result.htmlContent ?? ""
+        XCTAssertFalse(html.lowercased().contains("javascript:"),
+                       "case-mixed JaVaScRiPt: URL must NOT survive allowlist; got: \(html)")
+    }
+
+    func testRenderBody_markdown_sanitizeLinksOn_blocksFileURL() throws {
+        // file:// URLs can disclose local files via mail client interpretation.
+        // Not in allowlist; must be blocked.
+        let result = try renderBody("[leak](file:///etc/passwd)", format: .markdown, sanitizeLinks: true)
+        let html = result.htmlContent ?? ""
+        XCTAssertFalse(html.contains("file:"),
+                       "file:// URL must NOT survive allowlist; got: \(html)")
+    }
+
+    func testRenderBody_markdown_sanitizeLinksOn_blocksVBScriptURL() throws {
+        // Legacy IE attack vector. Not in allowlist.
+        let result = try renderBody("[click](vbscript:msgbox(1))", format: .markdown, sanitizeLinks: true)
+        let html = result.htmlContent ?? ""
+        XCTAssertFalse(html.contains("vbscript:"),
+                       "vbscript: URL must NOT survive allowlist; got: \(html)")
+    }
+
+    func testRenderBody_markdown_sanitizeLinksOn_blocksChromeURL() throws {
+        // chrome:// triggers internal browser pages — not appropriate in email content.
+        let result = try renderBody("[settings](chrome://flags/)", format: .markdown, sanitizeLinks: true)
+        let html = result.htmlContent ?? ""
+        XCTAssertFalse(html.contains("chrome:"),
+                       "chrome:// URL must NOT survive allowlist; got: \(html)")
+    }
+
+    func testRenderBody_markdown_sanitizeLinksOn_blocksBlobURL() throws {
+        // blob: URLs reference in-memory objects — useless and risky in email.
+        let result = try renderBody("[file](blob:https://evil.example/abc-123)", format: .markdown, sanitizeLinks: true)
+        let html = result.htmlContent ?? ""
+        XCTAssertFalse(html.contains("blob:"),
+                       "blob: URL must NOT survive allowlist; got: \(html)")
+    }
+
+    func testRenderBody_markdown_sanitizeLinksOn_blocksRelativeAndEmptyURLs() throws {
+        // Empty / relative URLs lack a scheme → scheme=empty → not in allowlist
+        // → anchor dropped. This is documented expected behavior (#87 Item 4 doc).
+        let relativeResult = try renderBody("[home](/relative/path)", format: .markdown, sanitizeLinks: true)
+        let relHtml = relativeResult.htmlContent ?? ""
+        XCTAssertFalse(relHtml.contains("<a "),
+                       "non-absolute URLs must have anchor dropped under sanitize_links=true; got: \(relHtml)")
+        let emptyResult = try renderBody("[text]()", format: .markdown, sanitizeLinks: true)
+        let emptyHtml = emptyResult.htmlContent ?? ""
+        XCTAssertFalse(emptyHtml.contains("<a "),
+                       "empty URLs must have anchor dropped under sanitize_links=true; got: \(emptyHtml)")
+    }
 }
