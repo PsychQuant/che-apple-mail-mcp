@@ -92,53 +92,107 @@ public enum MIMEParser {
     /// so a 50-MB base64-encoded attachment is not allocated into memory
     /// just to read its `filename` parameter.
     ///
-    /// Honors the same `maxMultipartDepth=8` guard as `parseAllParts`. Returns
-    /// an empty set for malformed multipart (missing boundary / depth limit
-    /// exceeded) — semantics intentionally match `parseAllParts`.
+    /// Honors the same `maxMultipartDepth=8` guard as `parseAllParts`.
+    ///
+    /// **Malformed multipart handling** (#26 fix, was #24 verify-finding):
+    /// When the top-level Content-Type declares a `multipart/*` body but
+    /// the parser cannot extract any meaningful structure (missing
+    /// boundary, header/body split fails on every child, depth limit
+    /// exceeded), this function **throws `MailSQLiteError.emlxParseFailed`**
+    /// instead of silently returning an empty set. Rationale:
+    ///
+    /// - Pre-#26 behavior returned `Set()` for malformed input, which the
+    ///   `list_attachments` cross-validation filter then used to drop ALL
+    ///   SQLite rows. Net effect: users saw 0 attachments on legitimately-
+    ///   broken `.emlx` files with cached SQLite metadata.
+    /// - Throwing surfaces the parse failure to the handler, which already
+    ///   has a `do/catch` wrapper that falls back to unvalidated SQLite
+    ///   metadata (`Server.swift:list_attachments` and
+    ///   `list_attachments_batch` per-message paths). User now sees the
+    ///   SQLite-cached names instead of the empty post-filter result.
+    /// - For NON-multipart inputs (single-part `text/plain`, etc.), or
+    ///   multipart inputs that yield ≥1 leaf, behavior is unchanged
+    ///   (returns the collected names; may legitimately be empty if no
+    ///   leaf has a filename — that's an attachment-less message, not a
+    ///   parse failure).
     ///
     /// - Parameters:
     ///   - bodyData: The raw body bytes (after header/body split).
     ///   - headers: Parsed headers from `RFC822Parser` (top-level message).
     /// - Returns: Set of attachment names (deduplicated).
+    /// - Throws: `MailSQLiteError.emlxParseFailed` if the top-level
+    ///           declared multipart cannot be split at all.
     public static func enumerateAttachmentNames(
         _ bodyData: Data,
         headers: [String: String]
-    ) -> Set<String> {
+    ) throws -> Set<String> {
         let contentType = headers["content-type"] ?? "text/plain"
 
         var names = Set<String>()
+        var topLevelMultipartSplitFailed = false
         collectAttachmentNames(
             body: bodyData,
             partHeaders: headers,
             contentType: contentType,
             depth: 0,
-            out: &names
+            out: &names,
+            topLevelMultipartSplitFailed: &topLevelMultipartSplitFailed
         )
+        // Distinguish "legitimately empty multipart" (some splits succeeded,
+        // no leaves with filenames) from "all splits failed" (the parser
+        // never made it past the top-level boundary). The latter is what
+        // #26 calls "malformed multipart" — surface as throw so the handler
+        // can fall through to SQLite-cached metadata.
+        if topLevelMultipartSplitFailed {
+            throw MailSQLiteError.emlxParseFailed(
+                "MIMEParser: top-level multipart declared in Content-Type but "
+                + "no parseable structure recovered (missing/wrong boundary, "
+                + "all children unparseable, or depth limit exceeded). "
+                + "Caller should fall back to unvalidated SQLite metadata."
+            )
+        }
         return names
     }
 
     /// Recursive walker mirroring `collectParts`, but skipping the
     /// `decodeTransferEncoding` call on leaf parts. See
     /// `enumerateAttachmentNames` docstring for rationale.
+    ///
+    /// `topLevelMultipartSplitFailed` is an out-param the top-level call
+    /// inspects after recursion. It's set to `true` only when the TOP-level
+    /// body (`depth == 0`) is declared `multipart/*` but no child split
+    /// succeeded — distinguishes #26's malformed case from legitimately
+    /// empty multiparts where some children parsed but had no filenames.
     private static func collectAttachmentNames(
         body: Data,
         partHeaders: [String: String],
         contentType: String,
         depth: Int,
-        out: inout Set<String>
+        out: inout Set<String>,
+        topLevelMultipartSplitFailed: inout Bool
     ) {
-        guard depth < maxMultipartDepth else { return }
+        guard depth < maxMultipartDepth else {
+            // Depth exceeded at non-top level — just stop recursion.
+            // Top-level depth-exceeded is impossible (depth starts at 0).
+            return
+        }
 
         let (mimeType, params) = parseContentType(contentType)
 
         if mimeType.hasPrefix("multipart/") {
             guard let boundary = params["boundary"], !boundary.isEmpty else {
+                // Declared multipart but no boundary — at top level this is
+                // the #26 malformed signal.
+                if depth == 0 { topLevelMultipartSplitFailed = true }
                 return
             }
-            splitMultipart(body, boundary: boundary).forEach { childData in
+            let children = splitMultipart(body, boundary: boundary)
+            var anyChildParsed = false
+            children.forEach { childData in
                 guard let split = RFC822Parser.headerBodySplitOffset(in: childData) else {
                     return
                 }
+                anyChildParsed = true
                 let childHeaders = RFC822Parser.parseHeaders(from: childData)
                 let childBody = Data(childData[split...])
                 let childCT = childHeaders["content-type"] ?? "text/plain"
@@ -147,8 +201,15 @@ public enum MIMEParser {
                     partHeaders: childHeaders,
                     contentType: childCT,
                     depth: depth + 1,
-                    out: &out
+                    out: &out,
+                    topLevelMultipartSplitFailed: &topLevelMultipartSplitFailed
                 )
+            }
+            // Top-level multipart declared but NO child parsed (split
+            // returned 0 chunks OR every chunk missing header/body split)
+            // — this is the #26 malformed signal.
+            if depth == 0 && !anyChildParsed {
+                topLevelMultipartSplitFailed = true
             }
             return
         }
