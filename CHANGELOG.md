@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.8.5] - 2026-05-11
+
 ### Added
 - **Markdown tables now render as `<table>` instead of silently collapsing** ([#17](https://github.com/PsychQuant/che-apple-mail-mcp/issues/17)). Pre-fix: `"| a | b |\n|---|---|\n| 1 | 2 |"` rendered as `<p>ab12</p>` — cells were concatenated into a single paragraph, no warning, structure lost (per #15 verify DA-5). Post-fix: proper `<table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>`. Foundation's `AttributedString(markdown:)` exposes table structure via `PresentationIntent` components (`tableCell` / `tableHeaderRow` / `tableRow` / `table` with column alignments) — same pattern as #16 nested lists, now consumed by the walker. Per-column alignment from the GFM separator row (`:---` / `:---:` / `---:`) propagates to `style="text-align: left|center|right"` on `<th>` and `<td>` elements; left alignment (default) emits no style attr to keep simple tables clean. Multi-row, header-only, and no-header data-only tables all handled. 4 new tests covering basic table, alignments, table-exit cleanup, multi-row.
 
