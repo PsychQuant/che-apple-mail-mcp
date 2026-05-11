@@ -123,6 +123,37 @@ When `format` is `"html"`, the system SHALL assign the `body` string directly to
 - **AND** the text "link" SHALL be rendered as a clickable hyperlink to `https://example.com`
 
 ---
+### Requirement: Markdown rendering has documented Foundation parser limitations
+
+When `format` is `"markdown"`, the system relies on Swift Foundation's `AttributedString(markdown:)` initializer for parsing. This initializer has known limitations that the system SHALL NOT attempt to work around — instead it documents them so callers know what to expect.
+
+#### Scenario: Inline emphasis inside a markdown link is collapsed
+
+- **WHEN** a caller invokes `compose_email` with `body: "[**bold** text](https://example.com)"` and `format: "markdown"`
+- **THEN** Foundation's `AttributedString(markdown:)` MAY collapse the nested emphasis and emit a single anchor with plain text (e.g. `<a href="https://example.com">bold text</a>` instead of `<a href="https://example.com"><strong>bold</strong> text</a>`)
+- **AND** the system SHALL NOT pre-process the markdown body to preserve nested emphasis inside links — callers wanting bolded link text SHALL use `format: "html"` and supply the desired markup directly, or restructure the markdown to put the emphasis outside the link (e.g. `**[bold text](https://example.com)**`)
+
+#### Scenario: Code block language hint propagates to HTML class attribute
+
+- **WHEN** a caller invokes `compose_email` with a markdown body containing a fenced code block with a language tag (e.g. ` ```swift\nlet x = 1\n``` `) and `format: "markdown"`
+- **THEN** the rendered HTML SHALL emit `<pre><code class="language-swift">let x = 1\n</code></pre>` with the language hint as a `language-<hint>` class on the inner `<code>` element (CommonMark recommended pattern; honored by Prism / Pygments / highlight.js / mail clients with syntax-highlight plugins)
+- **AND** when the fence has no language tag (e.g. ` ```\nplain\n``` `), the rendered HTML SHALL emit `<pre><code>plain\n</code></pre>` without any `class` attribute (backwards compatible)
+
+##### Example: code fence rendering
+
+| Markdown input | Expected HTML output |
+| -------------- | -------------------- |
+| `` ```swift\nlet x = 1\n``` `` | `<pre><code class="language-swift">let x = 1\n</code></pre>` |
+| `` ```python\nprint(x)\n``` `` | `<pre><code class="language-python">print(x)\n</code></pre>` |
+| `` ```\nplain code\n``` `` (no tag) | `<pre><code>plain code\n</code></pre>` |
+
+#### Scenario: Control characters in body are not round-trip safe
+
+- **WHEN** a caller invokes any composing tool with `format: "markdown"` and a body containing C0 control characters (U+0000 through U+001F, e.g. U+001E RECORD SEPARATOR or U+0008 BACKSPACE)
+- **THEN** Foundation's `AttributedString(markdown:)` MAY strip or replace these characters during parsing
+- **AND** the system SHALL NOT escape control characters before parsing; callers needing exact byte-for-byte preservation SHALL use `format: "html"` with HTML entity references (e.g. `&#x1E;` for U+001E) or `format: "plain"` to bypass markdown parsing entirely
+
+---
 ### Requirement: Reply and forward wrap original content in HTML blockquote
 
 When `reply_email` or `forward_email` is invoked with `format` set to `"markdown"` or `"html"`, the system SHALL construct the outgoing message body such that the user-supplied body appears first (rendered per the format rules above), followed by an `<hr>` separator, followed by the original message content wrapped inside an HTML `<blockquote>` element. The system SHALL attempt to read `html content of originalMsg` via AppleScript first; when that read succeeds and returns non-empty content, the system SHALL place that HTML directly inside the blockquote. When the read is denied by the AppleScript runtime (a known macOS limitation — see Requirement: AppleScript html content read is denied on messages) or returns empty, the system SHALL HTML-escape the plain-text content of the original message, convert newlines to `<br>`, and place the result inside the blockquote.

@@ -115,7 +115,13 @@ private enum BlockKind: Equatable {
     case paragraph
     case unorderedListItem
     case orderedListItem
-    case codeBlock
+    /// Code block. `languageHint` is the language tag from the fence
+    /// (` ```swift ` → `"swift"`); nil for fences without a language tag
+    /// (` ```\nfoo\n``` `). When non-nil, the emitted `<pre><code>` gets a
+    /// `class="language-<hint>"` attribute (CommonMark recommended pattern,
+    /// honored by Prism / Pygments / highlight.js / Mail clients with
+    /// syntax-highlight plugins). See #22 Item D.
+    case codeBlock(languageHint: String?)
     case blockquote
     case heading(Int)
 }
@@ -139,8 +145,8 @@ private func blockKind(of intent: PresentationIntent?) -> BlockKind {
                 }
             }
             return .unorderedListItem
-        case .codeBlock:
-            return .codeBlock
+        case .codeBlock(let languageHint):
+            return .codeBlock(languageHint: languageHint)
         case .blockQuote:
             return .blockquote
         case .header(level: let level):
@@ -216,9 +222,19 @@ private func assembleBlocks(_ blocks: [(text: String, kind: BlockKind)]) -> Stri
         case .blockquote:
             if listOpen != nil { html += closeList(listOpen!); listOpen = nil }
             html += "<blockquote>\(text)</blockquote>\n"
-        case .codeBlock:
+        case .codeBlock(let languageHint):
             if listOpen != nil { html += closeList(listOpen!); listOpen = nil }
-            html += "<pre><code>\(text)</code></pre>\n"
+            // #22 Item D: honor the language hint from the fence (e.g.
+            // ` ```swift `) by emitting `class="language-swift"` on the
+            // inner `<code>` element — CommonMark recommended pattern,
+            // honored by Prism / highlight.js / mail clients with
+            // syntax-highlight plugins. Plain fences (` ``` ` with no
+            // language tag) keep the original `<pre><code>...` form.
+            if let hint = languageHint, !hint.isEmpty {
+                html += "<pre><code class=\"language-\(htmlEscape(hint))\">\(text)</code></pre>\n"
+            } else {
+                html += "<pre><code>\(text)</code></pre>\n"
+            }
         case .heading(let level):
             if listOpen != nil { html += closeList(listOpen!); listOpen = nil }
             let clamped = max(1, min(6, level))
