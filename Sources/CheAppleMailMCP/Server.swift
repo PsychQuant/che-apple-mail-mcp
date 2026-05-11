@@ -979,10 +979,10 @@ class CheAppleMailMCPServer {
                             rowId: rowId,
                             mailboxURL: mailboxUrl
                         )
-                        let validated = sqliteAttachments.filter { entry in
-                            guard let name = entry["name"] as? String else { return false }
-                            return realNames.contains(name)
-                        }
+                        let validated = crossValidateAttachments(
+                            sqliteAttachments: sqliteAttachments,
+                            realNames: realNames
+                        )
                         return formatJSON(validated)
                     } catch {
                         // .emlx unreadable / parse failed — log and fall back
@@ -1373,10 +1373,10 @@ class CheAppleMailMCPServer {
                                     rowId: rowId,
                                     mailboxURL: mailboxUrl
                                 )
-                                attachments = sqliteAttachments.filter { entry in
-                                    guard let name = entry["name"] as? String else { return false }
-                                    return realNames.contains(name)
-                                }
+                                attachments = crossValidateAttachments(
+                                    sqliteAttachments: sqliteAttachments,
+                                    realNames: realNames
+                                )
                             } catch {
                                 let message = "list_attachments_batch emlx validation failed for "
                                     + "rowId=\(rowId): \(error.localizedDescription); "
@@ -1555,4 +1555,29 @@ func parseBodyFormatArgument(_ raw: Value?) throws -> BodyFormat {
         throw MailError.invalidParameter("format must be a string (plain, markdown, or html)")
     }
     return try parseBodyFormat(str)
+}
+
+/// Cross-validate SQLite attachment metadata against actual .emlx contents.
+/// Shared between `list_attachments` (single-message) and `list_attachments_batch`
+/// handlers — both must apply identical filtering semantics to keep the response
+/// shape consistent. Extracted from inline closures so test code can drive the
+/// filter directly without spinning up the full MCP server (issue #28).
+///
+/// Filter rule: keep only SQLite entries whose `name` field appears in the
+/// `realNames` set parsed from the .emlx body. Entries without a `name` field
+/// (or non-String name) are dropped — this matches the original closure's
+/// `guard let name = entry["name"] as? String else { return false }`.
+///
+/// Issue #24 background: SQLite caches attachment metadata even after Mail.app
+/// strips the binary on Sent / IMAP lazy-load, leaving stale entries that
+/// `save_attachment` then fails to extract. This filter returns only entries
+/// the parser confirms are actually present.
+func crossValidateAttachments(
+    sqliteAttachments: [[String: Any]],
+    realNames: Set<String>
+) -> [[String: Any]] {
+    return sqliteAttachments.filter { entry in
+        guard let name = entry["name"] as? String else { return false }
+        return realNames.contains(name)
+    }
 }
