@@ -680,7 +680,7 @@ class CheAppleMailMCPServer {
 
         await server.withMethodHandler(CallTool.self) { [weak self] params in
             guard let self = self else {
-                return CallTool.Result(content: [.text("Server unavailable")], isError: true)
+                return CallTool.Result(content: [.text(text: "Server unavailable", annotations: nil, _meta: nil)], isError: true)
             }
             return await self.handleToolCall(name: params.name, arguments: params.arguments ?? [:])
         }
@@ -691,9 +691,9 @@ class CheAppleMailMCPServer {
     private func handleToolCall(name: String, arguments: [String: Value]) async -> CallTool.Result {
         do {
             let result = try await executeToolCall(name: name, arguments: arguments)
-            return CallTool.Result(content: [.text(result)])
+            return CallTool.Result(content: [.text(text: result, annotations: nil, _meta: nil)])
         } catch {
-            return CallTool.Result(content: [.text("Error: \(error.localizedDescription)")], isError: true)
+            return CallTool.Result(content: [.text(text: "Error: \(error.localizedDescription)", annotations: nil, _meta: nil)], isError: true)
         }
     }
 
