@@ -762,9 +762,33 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("mailbox and account_name are required")
             }
             let limit = arguments["limit"]?.intValue ?? 50
+            // #89: SQLite fast path is O(LIMIT) regardless of mailbox size
+            // (proper LIMIT clause + indexed query on Envelope Index). The
+            // AppleScript fallback below runs `count of messages of mb` +
+            // `messages 1 thru limit` × 3 separate IPC calls — on Gmail
+            // INBOX with 92k messages, the count operation alone can take
+            // 14+ minutes (per #89 bug report on v2.1.0 pre-SQLite).
+            //
+            // Pre-#89: SQLite was already the default path but had NO
+            // do/catch wrapper — a SQLite throw (corrupt row, schema drift)
+            // would propagate to the caller instead of falling through to
+            // the AppleScript path. Stderr log was also missing, so silent
+            // SQLite failures had no observability.
+            //
+            // Post-#89: mirror the canonical pattern from save_attachment
+            // (#12) / get_email_metadata (#71) — try SQLite, on throw log
+            // to stderr + fall through to AppleScript. Matches the
+            // "list_attachments emlx validation failed" pattern (#24).
             if let reader = indexReader {
-                let emails = try reader.listEmails(mailbox: mailbox, accountName: accountName, limit: limit)
-                return formatJSON(emails)
+                do {
+                    let emails = try reader.listEmails(mailbox: mailbox, accountName: accountName, limit: limit)
+                    return formatJSON(emails)
+                } catch {
+                    let message = "SQLite list_emails fast path failed for "
+                        + "mailbox='\(mailbox)' account='\(accountName)': "
+                        + "\(error.localizedDescription); falling through to AppleScript\n"
+                    FileHandle.standardError.write(Data(message.utf8))
+                }
             }
             let emails = try await mailController.listEmails(mailbox: mailbox, accountName: accountName, limit: limit)
             return formatJSON(emails)
