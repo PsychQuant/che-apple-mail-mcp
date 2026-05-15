@@ -213,7 +213,7 @@ public final class EnvelopeIndexReader {
         var bindings: [String] = []
 
         if let accountName = accountName {
-            if let uuid = accountMap.first(where: { $0.value == accountName })?.key {
+            if let uuid = accountUUIDs(forName: accountName).first {
                 sql += " WHERE url LIKE ?"
                 bindings.append("%://\(uuid)/%")
             }
@@ -256,7 +256,7 @@ public final class EnvelopeIndexReader {
         var bindings: [String] = []
 
         // Account filter
-        if let uuid = accountMap.first(where: { $0.value == accountName })?.key {
+        if let uuid = accountUUIDs(forName: accountName).first {
             conditions.append("mb.url LIKE ?")
             bindings.append("%://\(uuid)/%")
         }
@@ -315,7 +315,7 @@ public final class EnvelopeIndexReader {
         var conditions: [String] = []
         var bindings: [String] = []
 
-        if let accountName = accountName, let uuid = accountMap.first(where: { $0.value == accountName })?.key {
+        if let accountName = accountName, let uuid = accountUUIDs(forName: accountName).first {
             conditions.append("url LIKE ?")
             bindings.append("%://\(uuid)/%")
         }
@@ -505,8 +505,7 @@ public final class EnvelopeIndexReader {
 
         // Account filter via mailbox URL
         if let accountName = params.accountName {
-            // Find UUID for account name (reverse lookup)
-            if let uuid = accountMap.first(where: { $0.value == accountName })?.key {
+            if let uuid = accountUUIDs(forName: accountName).first {
                 conditions.append("mb.url LIKE ?")
                 bindings.append("%://\(uuid)/%")
             }
