@@ -1,7 +1,44 @@
 import XCTest
+import SQLite3
 @testable import MailSQLite
 
 final class EnvelopeIndexReaderTests: XCTestCase {
+
+    // MARK: - Hermetic Test Fixture (#106 verify follow-up)
+
+    /// Create an empty SQLite file in a temp directory + register cleanup.
+    /// Returns the path, which is suitable for `EnvelopeIndexReader(databasePath:)`
+    /// init (read-only open succeeds on any valid SQLite file, including empty).
+    ///
+    /// Lets the reverse-lookup tests run hermetically — independent of whether
+    /// the host machine has a real Apple Mail Envelope Index. The reader's
+    /// init only needs the file to be a parseable SQLite database; downstream
+    /// queries are never run (we only test the in-memory accountMap /
+    /// reverseAccountMap pair).
+    private func makeEmptyTestDB() throws -> String {
+        let fm = FileManager.default
+        let tmpDir = fm.temporaryDirectory.appendingPathComponent(
+            "EnvelopeIndexReaderTests-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        try fm.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? fm.removeItem(at: tmpDir)
+        }
+
+        let dbPath = tmpDir.appendingPathComponent("Envelope Index").path
+        var db: OpaquePointer?
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX
+        guard sqlite3_open_v2(dbPath, &db, flags, nil) == SQLITE_OK else {
+            throw NSError(
+                domain: "EnvelopeIndexReaderTests",
+                code: Int(SQLITE_ERROR),
+                userInfo: [NSLocalizedDescriptionKey: "Failed to create empty test SQLite file at \(dbPath)"]
+            )
+        }
+        sqlite3_close(db)
+        return dbPath
+    }
 
     // MARK: - Connection Management
 
@@ -68,57 +105,52 @@ final class EnvelopeIndexReaderTests: XCTestCase {
     }
 
     // MARK: - Account UUID Reverse Lookup (#106)
+    //
+    // Tests use a hermetic temp SQLite fixture (see `makeEmptyTestDB`)
+    // instead of `EnvelopeIndexReader.defaultDatabasePath` + `XCTSkip` —
+    // so CI environments without real Apple Mail data still run the verification.
+    // Addresses Codex P3 follow-up from /idd-verify --pr 108 review.
 
     func testAccountUUIDs_unambiguous_returnsSingleUUID() throws {
-        let path = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Envelope Index not available")
-        }
         let reader = try EnvelopeIndexReader(
-            databasePath: path,
+            databasePath: try makeEmptyTestDB(),
             accountMapping: ["UUID-A": "Alice"]
         )
         XCTAssertEqual(reader.accountUUIDs(forName: "Alice"), ["UUID-A"])
     }
 
     func testAccountUUIDs_collision_returnsAllUUIDs() throws {
-        let path = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Envelope Index not available")
-        }
         let reader = try EnvelopeIndexReader(
-            databasePath: path,
+            databasePath: try makeEmptyTestDB(),
             accountMapping: [
                 "UUID-A": "Same",
                 "UUID-B": "Same",
                 "UUID-C": "Other"
             ]
         )
-        let collisionUUIDs = Set(reader.accountUUIDs(forName: "Same"))
-        XCTAssertEqual(collisionUUIDs, Set(["UUID-A", "UUID-B"]),
+        let collisionList = reader.accountUUIDs(forName: "Same")
+        // Count assertion first — catches duplicate-UUID regression that the
+        // downstream Set comparison would silently swallow (Devil's Advocate
+        // P3 finding from /idd-verify --pr 108: if impl ever returned
+        // [UUID-A, UUID-A, UUID-B] the Set check would still pass).
+        XCTAssertEqual(collisionList.count, 2,
+                       "Collision result must contain exactly 2 UUIDs — no duplicates")
+        XCTAssertEqual(Set(collisionList), Set(["UUID-A", "UUID-B"]),
                        "Collision case must surface BOTH UUIDs (callers detect via .count > 1)")
         XCTAssertEqual(reader.accountUUIDs(forName: "Other"), ["UUID-C"])
     }
 
     func testAccountUUIDs_unknown_returnsEmpty() throws {
-        let path = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Envelope Index not available")
-        }
         let reader = try EnvelopeIndexReader(
-            databasePath: path,
+            databasePath: try makeEmptyTestDB(),
             accountMapping: ["UUID-A": "Alice"]
         )
         XCTAssertEqual(reader.accountUUIDs(forName: "Nobody"), [])
     }
 
     func testAccountUUIDs_reflectsUpdateAccountMapping() throws {
-        let path = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Envelope Index not available")
-        }
         let reader = try EnvelopeIndexReader(
-            databasePath: path,
+            databasePath: try makeEmptyTestDB(),
             accountMapping: ["UUID-A": "Alice"]
         )
         XCTAssertEqual(reader.accountUUIDs(forName: "Alice"), ["UUID-A"])
