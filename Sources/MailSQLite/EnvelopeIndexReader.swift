@@ -65,6 +65,11 @@ public final class EnvelopeIndexReader {
     /// Mapping from account UUID to human-readable account name.
     private var accountMap: [String: String]
 
+    /// Reverse index: display_name → list of UUIDs. Rebuilt whenever
+    /// `accountMap` is set. List form (not single value) surfaces
+    /// multi-account-same-display-name collisions to callers — see #101.
+    private var reverseAccountMap: [String: [String]]
+
     // MARK: - Initialization
 
     /// Open the Envelope Index database in read-only mode.
@@ -76,7 +81,9 @@ public final class EnvelopeIndexReader {
     /// - Throws: `MailSQLiteError.databaseNotAccessible` if the file
     ///   does not exist or cannot be opened (e.g., missing Full Disk Access).
     public init(databasePath: String, accountMapping: [String: String]? = nil) throws {
-        self.accountMap = accountMapping ?? AccountMapper.buildMapping()
+        let mapping = accountMapping ?? AccountMapper.buildMapping()
+        self.accountMap = mapping
+        self.reverseAccountMap = Self.buildReverseMap(from: mapping)
 
         guard FileManager.default.fileExists(atPath: databasePath) else {
             throw MailSQLiteError.databaseNotAccessible(
@@ -117,6 +124,31 @@ public final class EnvelopeIndexReader {
     /// Update the account mapping (e.g., after querying AppleScript).
     public func updateAccountMapping(_ mapping: [String: String]) {
         accountMap = mapping
+        reverseAccountMap = Self.buildReverseMap(from: mapping)
+    }
+
+    /// Reverse lookup: display name → list of UUIDs that map to it.
+    ///
+    /// Returns an empty array for unknown names. When 2+ UUIDs share the
+    /// same display name (e.g., iCloud catch-all alias + Gmail with the
+    /// same address), all are returned — callers can detect collision via
+    /// `.count > 1` and decide whether to surface a disambiguation hint.
+    ///
+    /// Backs the 4 previously-duplicated O(n) reverse-lookup callsites
+    /// inside this file. Externally, sets up the collision-aware path for
+    /// the `#101` `account_id` fix.
+    public func accountUUIDs(forName name: String) -> [String] {
+        reverseAccountMap[name] ?? []
+    }
+
+    /// Build the reverse index in O(n). Called from `init` and
+    /// `updateAccountMapping` to keep the index in sync with `accountMap`.
+    private static func buildReverseMap(from mapping: [String: String]) -> [String: [String]] {
+        var rev: [String: [String]] = [:]
+        for (uuid, name) in mapping {
+            rev[name, default: []].append(uuid)
+        }
+        return rev
     }
 
     /// Build account mapping by scanning the mail storage directory
@@ -181,7 +213,7 @@ public final class EnvelopeIndexReader {
         var bindings: [String] = []
 
         if let accountName = accountName {
-            if let uuid = accountMap.first(where: { $0.value == accountName })?.key {
+            if let uuid = accountUUIDs(forName: accountName).first {
                 sql += " WHERE url LIKE ?"
                 bindings.append("%://\(uuid)/%")
             }
@@ -224,7 +256,7 @@ public final class EnvelopeIndexReader {
         var bindings: [String] = []
 
         // Account filter
-        if let uuid = accountMap.first(where: { $0.value == accountName })?.key {
+        if let uuid = accountUUIDs(forName: accountName).first {
             conditions.append("mb.url LIKE ?")
             bindings.append("%://\(uuid)/%")
         }
@@ -283,7 +315,7 @@ public final class EnvelopeIndexReader {
         var conditions: [String] = []
         var bindings: [String] = []
 
-        if let accountName = accountName, let uuid = accountMap.first(where: { $0.value == accountName })?.key {
+        if let accountName = accountName, let uuid = accountUUIDs(forName: accountName).first {
             conditions.append("url LIKE ?")
             bindings.append("%://\(uuid)/%")
         }
@@ -473,8 +505,7 @@ public final class EnvelopeIndexReader {
 
         // Account filter via mailbox URL
         if let accountName = params.accountName {
-            // Find UUID for account name (reverse lookup)
-            if let uuid = accountMap.first(where: { $0.value == accountName })?.key {
+            if let uuid = accountUUIDs(forName: accountName).first {
                 conditions.append("mb.url LIKE ?")
                 bindings.append("%://\(uuid)/%")
             }
