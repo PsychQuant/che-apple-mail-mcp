@@ -66,4 +66,69 @@ final class EnvelopeIndexReaderTests: XCTestCase {
             XCTAssertEqual(uuid.count, 36, "UUID should be 36 chars: \(uuid)")
         }
     }
+
+    // MARK: - Account UUID Reverse Lookup (#106)
+
+    func testAccountUUIDs_unambiguous_returnsSingleUUID() throws {
+        let path = EnvelopeIndexReader.defaultDatabasePath
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("Envelope Index not available")
+        }
+        let reader = try EnvelopeIndexReader(
+            databasePath: path,
+            accountMapping: ["UUID-A": "Alice"]
+        )
+        XCTAssertEqual(reader.accountUUIDs(forName: "Alice"), ["UUID-A"])
+    }
+
+    func testAccountUUIDs_collision_returnsAllUUIDs() throws {
+        let path = EnvelopeIndexReader.defaultDatabasePath
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("Envelope Index not available")
+        }
+        let reader = try EnvelopeIndexReader(
+            databasePath: path,
+            accountMapping: [
+                "UUID-A": "Same",
+                "UUID-B": "Same",
+                "UUID-C": "Other"
+            ]
+        )
+        let collisionUUIDs = Set(reader.accountUUIDs(forName: "Same"))
+        XCTAssertEqual(collisionUUIDs, Set(["UUID-A", "UUID-B"]),
+                       "Collision case must surface BOTH UUIDs (callers detect via .count > 1)")
+        XCTAssertEqual(reader.accountUUIDs(forName: "Other"), ["UUID-C"])
+    }
+
+    func testAccountUUIDs_unknown_returnsEmpty() throws {
+        let path = EnvelopeIndexReader.defaultDatabasePath
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("Envelope Index not available")
+        }
+        let reader = try EnvelopeIndexReader(
+            databasePath: path,
+            accountMapping: ["UUID-A": "Alice"]
+        )
+        XCTAssertEqual(reader.accountUUIDs(forName: "Nobody"), [])
+    }
+
+    func testAccountUUIDs_reflectsUpdateAccountMapping() throws {
+        let path = EnvelopeIndexReader.defaultDatabasePath
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw XCTSkip("Envelope Index not available")
+        }
+        let reader = try EnvelopeIndexReader(
+            databasePath: path,
+            accountMapping: ["UUID-A": "Alice"]
+        )
+        XCTAssertEqual(reader.accountUUIDs(forName: "Alice"), ["UUID-A"])
+        XCTAssertEqual(reader.accountUUIDs(forName: "Bob"), [])
+
+        // Replace mapping — reverse map MUST rebuild, not stay stale.
+        // Regression-locks the "lazy var staleness" bug pattern flagged in #106 body.
+        reader.updateAccountMapping(["UUID-Z": "Bob"])
+        XCTAssertEqual(reader.accountUUIDs(forName: "Alice"), [],
+                       "After updateAccountMapping, old name 'Alice' must not resolve to any UUID")
+        XCTAssertEqual(reader.accountUUIDs(forName: "Bob"), ["UUID-Z"])
+    }
 }
