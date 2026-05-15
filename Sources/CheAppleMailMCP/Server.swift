@@ -324,13 +324,14 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "save_attachment",
-                description: "Save an email attachment to disk",
+                description: "Save an email attachment to disk. Optionally accepts `account_id` (UUID) for disambiguation when multiple Mail.app accounts share the same `display_name` (e.g., iCloud catch-all alias + Gmail with the same address — #101). When provided, the AppleScript fallback path uses Mail.app's globally-unique `account id` selector; when omitted, falls back to the legacy `account_name` (display_name) form for backward compatibility.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account (display_name). Required, but may be ambiguous if multiple accounts share the same display_name — prefer passing `account_id` alongside for disambiguation.")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional: Mail.app account UUID for disambiguation. Discoverable from search_emails results (the `account_id` field) or from list_accounts (the `id` / `uuid` field). When non-empty, takes precedence over account_name in the AppleScript fallback path.")]),
                         "attachment_name": .object(["type": .string("string"), "description": .string("Name of the attachment to save")]),
                         "save_path": .object(["type": .string("string"), "description": .string("Full path where to save the file")])
                     ]),
@@ -1034,6 +1035,13 @@ class CheAppleMailMCPServer {
                   let savePath = arguments["save_path"]?.stringValue else {
                 throw MailError.invalidParameter("mailbox, account_name, attachment_name, and save_path are required")
             }
+            // Optional #101 disambiguation parameter. When provided AND non-empty,
+            // the Tier 2 AppleScript fallback uses Mail.app's `(account id "<UUID>")`
+            // selector — globally unique — bypassing the display_name collision
+            // that produces -1728 / -1719 errors. When absent, Tier 2 falls back
+            // to the legacy `account "<display_name>"` form for backward compat.
+            // Tier 1 fast path is unaffected (never touches account_name).
+            let accountId = arguments["account_id"]?.stringValue
             // Tier 1: SQLite + .emlx fast path (see openspec/changes/save-attachment-fast-path).
             // Wraps in its own do/catch so any failure falls through to the
             // AppleScript tier in the trailing `mailController.saveAttachment`
@@ -1060,8 +1068,17 @@ class CheAppleMailMCPServer {
                     FileHandle.standardError.write(Data(message.utf8))
                 }
             }
-            // Tier 2: AppleScript fallback (legacy path, preserved unchanged).
-            return try await mailController.saveAttachment(id: id, mailbox: mailbox, accountName: accountName, attachmentName: attachmentName, savePath: savePath)
+            // Tier 2: AppleScript fallback. Use the #101 6-arg overload (preferring
+            // account_id when provided) — when account_id is nil/empty, behavior
+            // is identical to the legacy 5-arg path (display_name selector).
+            return try await mailController.saveAttachment(
+                id: id,
+                mailbox: mailbox,
+                accountId: accountId,
+                accountName: accountName,
+                attachmentName: attachmentName,
+                savePath: savePath
+            )
 
         // VIP Tools
         case "list_vip_senders":
