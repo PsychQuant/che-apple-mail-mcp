@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`EnvelopeIndexReader` extracts 4 duplicated O(n) reverse-lookups behind cached `accountUUIDs(forName:) -> [String]` primitive** ([#106](https://github.com/PsychQuant/che-apple-mail-mcp/issues/106)). Pre-refactor, `accountMap.first(where: { $0.value == accountName })?.key` appeared in 4 callsites (`listMailboxes`, `listEmails`, `getUnreadCount`, `searchEmails`) — each O(n) over `accountMap.count`, each silently picking ONE UUID non-deterministically when 2+ accounts share a display_name (the latent ambiguity surfaced by [#101](https://github.com/PsychQuant/che-apple-mail-mcp/issues/101)). Post-refactor: a private `reverseAccountMap: [String: [String]]` is built in `init` (and rebuilt in `updateAccountMapping`, regression-locked against lazy-var staleness); the new public `accountUUIDs(forName name: String) -> [String]` returns `[]` for unknown / `[UUID]` for unambiguous / `[UUID-A, UUID-B]` for collision — callers detect collision via `.count > 1`. Zero behavior change for existing callsites (`.first` of the array reproduces the previous non-deterministic single-UUID pick), but sets up the collision-aware path for the upcoming `#101` `account_id` fix without duplicating the primitive across 5 places. 4 new tests cover unambiguous / collision / unknown / `updateAccountMapping`-rebuild. `grep 'accountMap.first(where:' Sources/MailSQLite/EnvelopeIndexReader.swift` now returns 0 hits.
+
 ## [2.8.5] - 2026-05-11
 
 ### Added
