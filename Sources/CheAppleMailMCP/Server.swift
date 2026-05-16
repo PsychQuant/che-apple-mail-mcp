@@ -174,7 +174,8 @@ class CheAppleMailMCPServer {
                     "properties": .object([
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account (display_name)")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
                         "read": .object(["type": .string("boolean"), "description": .string("true=read, false=unread")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("read")])
@@ -188,7 +189,8 @@ class CheAppleMailMCPServer {
                     "properties": .object([
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account (display_name)")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
                         "flagged": .object(["type": .string("boolean"), "description": .string("true=flag, false=unflag")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("flagged")])
@@ -446,7 +448,8 @@ class CheAppleMailMCPServer {
                     "properties": .object([
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account (display_name)")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
                         "color_index": .object(["type": .string("integer"), "description": .string("Flag color index (0-6, or -1 to clear)")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("color_index")])
@@ -460,7 +463,8 @@ class CheAppleMailMCPServer {
                     "properties": .object([
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account (display_name)")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
                         "color": .object(["type": .string("string"), "description": .string("Background color: blue, gray, green, none, orange, purple, red, yellow")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("color")])
@@ -474,7 +478,8 @@ class CheAppleMailMCPServer {
                     "properties": .object([
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account (display_name)")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
                         "is_junk": .object(["type": .string("boolean"), "description": .string("true=junk, false=not junk")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("is_junk")])
@@ -883,7 +888,8 @@ class CheAppleMailMCPServer {
                   let read = arguments["read"]?.boolValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and read are required")
             }
-            return try await mailController.markRead(id: id, mailbox: mailbox, accountName: accountName, read: read)
+            let accountId = arguments["account_id"]?.stringValue
+            return try await mailController.markRead(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, read: read)
 
         case "flag_email":
             let id = try requireMessageId(arguments)
@@ -892,7 +898,8 @@ class CheAppleMailMCPServer {
                   let flagged = arguments["flagged"]?.boolValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and flagged are required")
             }
-            return try await mailController.flagEmail(id: id, mailbox: mailbox, accountName: accountName, flagged: flagged)
+            let accountId = arguments["account_id"]?.stringValue
+            return try await mailController.flagEmail(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, flagged: flagged)
 
         case "move_email":
             let id = try requireMessageId(arguments)
@@ -1155,7 +1162,8 @@ class CheAppleMailMCPServer {
                   let colorIndex = arguments["color_index"]?.intValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and color_index are required")
             }
-            return try await mailController.setFlagColor(id: id, mailbox: mailbox, accountName: accountName, colorIndex: colorIndex)
+            let accountId = arguments["account_id"]?.stringValue
+            return try await mailController.setFlagColor(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, colorIndex: colorIndex)
 
         case "set_background_color":
             let id = try requireMessageId(arguments)
@@ -1164,7 +1172,8 @@ class CheAppleMailMCPServer {
                   let color = arguments["color"]?.stringValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and color are required")
             }
-            return try await mailController.setBackgroundColor(id: id, mailbox: mailbox, accountName: accountName, color: color)
+            let accountId = arguments["account_id"]?.stringValue
+            return try await mailController.setBackgroundColor(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, color: color)
 
         case "mark_as_junk":
             let id = try requireMessageId(arguments)
@@ -1173,7 +1182,8 @@ class CheAppleMailMCPServer {
                   let isJunk = arguments["is_junk"]?.boolValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and is_junk are required")
             }
-            return try await mailController.markAsJunk(id: id, mailbox: mailbox, accountName: accountName, isJunk: isJunk)
+            let accountId = arguments["account_id"]?.stringValue
+            return try await mailController.markAsJunk(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, isJunk: isJunk)
 
         case "get_email_headers":
             let id = try requireMessageId(arguments)

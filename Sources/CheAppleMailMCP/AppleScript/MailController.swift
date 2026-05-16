@@ -621,26 +621,14 @@ actor MailController {
     // MARK: - Email Actions
 
     /// Mark email as read/unread
-    func markRead(id: String, mailbox: String, accountName: String, read: Bool) throws -> String {
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
-        let script = """
-        tell application "Mail"
-            set read status of \(ref) to \(read)
-            return "Email marked as \(read ? "read" : "unread")"
-        end tell
-        """
+    func markRead(id: String, mailbox: String, accountName: String, accountId: String? = nil, read: Bool) throws -> String {
+        let script = buildMarkReadScript(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, read: read)
         return try runScript(script)
     }
 
     /// Flag email
-    func flagEmail(id: String, mailbox: String, accountName: String, flagged: Bool) throws -> String {
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
-        let script = """
-        tell application "Mail"
-            set flagged status of \(ref) to \(flagged)
-            return "Email \(flagged ? "flagged" : "unflagged")"
-        end tell
-        """
+    func flagEmail(id: String, mailbox: String, accountName: String, accountId: String? = nil, flagged: Bool) throws -> String {
+        let script = buildFlagEmailScript(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, flagged: flagged)
         return try runScript(script)
     }
 
@@ -1229,42 +1217,21 @@ actor MailController {
     }
 
     /// Set flag color (0-6: red, orange, yellow, green, blue, purple, gray; -1 to clear)
-    func setFlagColor(id: String, mailbox: String, accountName: String, colorIndex: Int) throws -> String {
-        let colors = ["red", "orange", "yellow", "green", "blue", "purple", "gray"]
-        let colorName = colorIndex >= 0 && colorIndex < colors.count ? colors[colorIndex] : "none"
-
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
-        let script = """
-        tell application "Mail"
-            set flag index of \(ref) to \(colorIndex)
-            return "Flag color set to \(colorName)"
-        end tell
-        """
+    func setFlagColor(id: String, mailbox: String, accountName: String, accountId: String? = nil, colorIndex: Int) throws -> String {
+        let script = buildSetFlagColorScript(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, colorIndex: colorIndex)
         return try runScript(script)
     }
 
     /// Set email background color
-    func setBackgroundColor(id: String, mailbox: String, accountName: String, color: String) throws -> String {
+    func setBackgroundColor(id: String, mailbox: String, accountName: String, accountId: String? = nil, color: String) throws -> String {
         // Valid colors: blue, gray, green, none, orange, purple, red, yellow
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
-        let script = """
-        tell application "Mail"
-            set background color of \(ref) to \(color)
-            return "Background color set to \(color)"
-        end tell
-        """
+        let script = buildSetBackgroundColorScript(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, color: color)
         return try runScript(script)
     }
 
     /// Mark email as junk or not junk
-    func markAsJunk(id: String, mailbox: String, accountName: String, isJunk: Bool) throws -> String {
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
-        let script = """
-        tell application "Mail"
-            set junk mail status of \(ref) to \(isJunk)
-            return "Email marked as \(isJunk ? "junk" : "not junk")"
-        end tell
-        """
+    func markAsJunk(id: String, mailbox: String, accountName: String, accountId: String? = nil, isJunk: Bool) throws -> String {
+        let script = buildMarkAsJunkScript(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, isJunk: isJunk)
         return try runScript(script)
     }
 
