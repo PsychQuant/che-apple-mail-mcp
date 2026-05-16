@@ -137,7 +137,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "search_emails",
-                description: "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include account_name and mailbox so you know where each email was found.",
+                description: "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -858,17 +858,7 @@ class CheAppleMailMCPServer {
                     sort: sortOrder, limit: limit
                 )
                 let results = try reader.search(params)
-                let formatted: [[String: Any]] = results.map { r in
-                    [
-                        "id": String(r.id),
-                        "subject": r.subject,
-                        "sender": r.senderAddress.isEmpty ? r.senderName : "\(r.senderName) <\(r.senderAddress)>",
-                        "date_received": ISO8601DateFormatter().string(from: r.dateReceived),
-                        "account_name": r.accountName,
-                        "mailbox": r.mailboxPath,
-                        "to": r.toRecipients
-                    ]
-                }
+                let formatted: [[String: Any]] = results.map(Self.formatSearchResultForJSON)
                 return formatJSON(formatted)
             }
             // Fallback to AppleScript
@@ -1451,6 +1441,33 @@ class CheAppleMailMCPServer {
     }
 
     // MARK: - Helpers
+
+    /// Format a `SearchResult` as a JSON-serializable dictionary for the
+    /// `search_emails` tool response. `internal` (not `private`) so tests
+    /// can directly assert the contract — particularly that `account_id`
+    /// is exposed when present (#101: documented disambiguation discovery
+    /// path; LLM agents read `account_id` from search results and pass
+    /// it through to `save_attachment` / other AppleScript-routed tools).
+    ///
+    /// `account_id` is **conditionally** included — when SearchResult's
+    /// `accountId` is `nil` or empty (e.g., corrupted mailbox URL upstream),
+    /// the key is omitted entirely rather than emitting JSON-null. Callers
+    /// can use `if "account_id" in result` to detect presence cleanly.
+    static func formatSearchResultForJSON(_ r: SearchResult) -> [String: Any] {
+        var dict: [String: Any] = [
+            "id": String(r.id),
+            "subject": r.subject,
+            "sender": r.senderAddress.isEmpty ? r.senderName : "\(r.senderName) <\(r.senderAddress)>",
+            "date_received": ISO8601DateFormatter().string(from: r.dateReceived),
+            "account_name": r.accountName,
+            "mailbox": r.mailboxPath,
+            "to": r.toRecipients
+        ]
+        if let aid = r.accountId, !aid.isEmpty {
+            dict["account_id"] = aid
+        }
+        return dict
+    }
 
     private static func parseDate(_ string: String) -> Date? {
         // Try ISO 8601 with time
