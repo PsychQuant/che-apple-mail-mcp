@@ -412,6 +412,37 @@ Both cases transparently fall through to AppleScript with `... falling through t
 | Mail.app not responding | Ensure Mail.app is running with configured accounts |
 | Commands timing out | Large mailboxes take longer; try specific searches |
 | Bulk fetch slower than expected | Watch stderr for `... falling through to AppleScript` lines. EWS/Exchange accounts always fall back (see [Performance & Storage](#performance--storage)); other accounts logging fallback indicate a fixable .emlx issue |
+| `save_attachment` fails with `-1728 "Can't get account"` or `-1719 "Invalid mailbox index"` | Two Mail.app accounts share the same `display_name` (e.g., iCloud catch-all alias + Gmail with the same address). See [Account Disambiguation](#account-disambiguation) below. |
+
+---
+
+## Account Disambiguation
+
+Mail.app's AppleScript `account "<display_name>"` selector is **not unique** when two accounts share the same `display_name` — a common pattern when an iCloud catch-all alias forwards a Gmail address back to itself, or when Google Workspace + personal Gmail overlap. Any AppleScript-routed tool (`save_attachment` fallback, `get_email`, `mark_read`, etc.) will then non-deterministically pick the wrong account → `-1728 / -1719` errors.
+
+**The fix**: pass `account_id` (Mail.app's globally-unique UUID) alongside `account_name`. When provided, `save_attachment` uses Mail.app's `account id "<UUID>"` selector instead, bypassing the ambiguity:
+
+```jsonc
+// Tool call: save_attachment with account_id
+{
+    "id": "273214",
+    "mailbox": "[Gmail]/全部郵件",
+    "account_name": "kiki830621@gmail.com",
+    "account_id": "C38E0583-47F8-4468-BE70-43155C15549D",  // ← disambiguates
+    "attachment_name": "report.pdf",
+    "save_path": "/tmp/report.pdf"
+}
+```
+
+**Discovering `account_id`**:
+
+- **From `search_emails` results** — each `SearchResult` carries an `account_id` field alongside `account_name` (populated from the `mailboxes.account_id` SQLite join). Recommended: pass it through directly.
+- **Manually** — read `~/Library/Mail/V10/MailData/Signatures/AccountsMap.plist`. The top-level keys are the UUIDs; the `AccountURL` value contains the matching email address percent-encoded in the authority.
+- **In AppleScript** — `tell application "Mail" to get id of every account` returns the UUID list.
+
+**Backward compatibility**: `account_id` is **optional**. When omitted (or empty), `save_attachment` falls back to the legacy `account "<display_name>"` path — behavior identical to pre-#101. Existing callers continue to work unchanged.
+
+**Scope**: as of this release, only `save_attachment` accepts `account_id`. The same disambiguation pattern will be applied to the other ~14 AppleScript-routed tools (`get_email`, `mark_read`, etc.) in a follow-up sweep tracked at [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104).
 
 ---
 

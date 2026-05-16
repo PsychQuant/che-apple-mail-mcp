@@ -562,6 +562,7 @@ public final class EnvelopeIndexReader {
 
             let parsed = MailboxURL.decode(mailboxUrl)
             let acctName = parsed.map { accountName(for: $0.accountUUID) } ?? ""
+            let acctId = parsed?.accountUUID  // #101: surface UUID for disambiguation
             let mbPath = parsed?.mailboxPath ?? mailboxUrl
 
             // Fetch To recipients for this message
@@ -574,6 +575,7 @@ public final class EnvelopeIndexReader {
                 senderName: senderName,
                 dateReceived: dateReceived,
                 accountName: acctName,
+                accountId: acctId,
                 mailboxPath: mbPath,
                 isRead: isRead,
                 isFlagged: isFlagged,

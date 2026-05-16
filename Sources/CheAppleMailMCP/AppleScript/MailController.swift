@@ -1011,6 +1011,37 @@ actor MailController {
         return try runScript(script)
     }
 
+    /// `save_attachment` overload with optional `accountId` (UUID) for
+    /// multi-account-same-display_name disambiguation (#101).
+    ///
+    /// When `accountId` is non-nil and non-empty, the underlying AppleScript
+    /// uses Mail.app's `(account id "<UUID>")` selector — globally unique,
+    /// no collision risk. Otherwise behavior is identical to the 5-arg
+    /// `saveAttachment(id:mailbox:accountName:...)` overload above.
+    ///
+    /// Script construction is delegated to `buildSaveAttachmentScript` (in
+    /// `SaveAttachmentScriptBuilder.swift`) so the AppleScript generation
+    /// is testable without spinning up the actor — same pattern as
+    /// `ComposeScriptBuilder`.
+    func saveAttachment(
+        id: String,
+        mailbox: String,
+        accountId: String?,
+        accountName: String,
+        attachmentName: String,
+        savePath: String
+    ) throws -> String {
+        let script = buildSaveAttachmentScript(
+            id: id,
+            mailbox: mailbox,
+            accountId: accountId,
+            accountName: accountName,
+            attachmentName: attachmentName,
+            savePath: savePath
+        )
+        return try runScript(script)
+    }
+
     // MARK: - VIP Operations
 
     /// List VIP senders

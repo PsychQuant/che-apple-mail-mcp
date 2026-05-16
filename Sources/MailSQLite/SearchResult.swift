@@ -7,11 +7,44 @@ public struct SearchResult: Sendable {
     public let senderAddress: String
     public let senderName: String
     public let dateReceived: Date
+    /// Account's display name (from AccountsMap.plist, may collide across accounts).
     public let accountName: String
+    /// Account's globally unique UUID (from `mailboxes.account_id` SQLite join).
+    /// Optional for backward compat with callers that construct `SearchResult`
+    /// directly. When populated, callers should prefer this over `accountName`
+    /// for downstream lookups — `accountName` is the display name which is
+    /// non-unique under multi-account-same-display-name configurations (#101).
+    public let accountId: String?
     public let mailboxPath: String
     public let isRead: Bool
     public let isFlagged: Bool
     public let toRecipients: [String]
+
+    public init(
+        id: Int,
+        subject: String,
+        senderAddress: String,
+        senderName: String,
+        dateReceived: Date,
+        accountName: String,
+        accountId: String? = nil,
+        mailboxPath: String,
+        isRead: Bool,
+        isFlagged: Bool,
+        toRecipients: [String]
+    ) {
+        self.id = id
+        self.subject = subject
+        self.senderAddress = senderAddress
+        self.senderName = senderName
+        self.dateReceived = dateReceived
+        self.accountName = accountName
+        self.accountId = accountId
+        self.mailboxPath = mailboxPath
+        self.isRead = isRead
+        self.isFlagged = isFlagged
+        self.toRecipients = toRecipients
+    }
 }
 
 /// Parameters for searching emails via SQLite.
