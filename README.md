@@ -440,9 +440,9 @@ Mail.app's AppleScript `account "<display_name>"` selector is **not unique** whe
 - **Manually** — read `~/Library/Mail/V10/MailData/Signatures/AccountsMap.plist`. The top-level keys are the UUIDs; the `AccountURL` value contains the matching email address percent-encoded in the authority.
 - **In AppleScript** — `tell application "Mail" to get id of every account` returns the UUID list.
 
-**Backward compatibility**: `account_id` is **optional**. When omitted (or empty), `save_attachment` falls back to the legacy `account "<display_name>"` path — behavior identical to pre-#101. Existing callers continue to work unchanged.
+**Backward compatibility**: `account_id` is **optional**. When omitted (or empty), tools fall back to the legacy `account "<display_name>"` path — behavior identical to pre-#101. Existing callers continue to work unchanged.
 
-**Scope**: as of this release, only `save_attachment` accepts `account_id`. The same disambiguation pattern will be applied to the other ~14 AppleScript-routed tools (`get_email`, `mark_read`, etc.) in a follow-up sweep tracked at [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104).
+**Scope**: as of this release, `account_id` is accepted by `save_attachment` plus the 5 single-message mutation tools `mark_read`, `flag_email`, `set_flag_color`, `set_background_color`, and `mark_as_junk` (PR-A of the [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104) sweep). The same disambiguation pattern will be applied to the remaining AppleScript-routed tools (move/copy/delete, compose, mailbox CRUD) in subsequent PRs tracked at [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104).
 
 ---
 
