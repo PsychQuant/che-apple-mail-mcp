@@ -1,0 +1,91 @@
+import Foundation
+
+/// Shared AppleScript reference builders for account-UUID disambiguation
+/// (the multi-account-same-display_name defect, #101 / #104 sweep).
+///
+/// `account id "..."` AppleScript syntax was verified empirically on
+/// macOS 14 (2026-05-15):
+///
+/// ```applescript
+/// tell application "Mail"
+///     set m to first mailbox of (account id "<UUID>") whose name is "INBOX"
+///     return name of m
+/// end tell
+/// -- → "INBOX"  (positive case)
+/// -- → -1719 "索引錯誤" when mailbox name doesn't exist under that account
+/// -- → -1728 when UUID doesn't match any account
+/// ```
+///
+/// Both error modes match the legacy `account "<display_name>"` path's
+/// error codes (`-1719` / `-1728`), so `MailController.runScript` error
+/// handling continues to apply unchanged.
+///
+/// The `resolveMsgRef` / `resolveMailboxRef` functions are the **single
+/// chokepoint** every AppleScript-routed tool calls — when `accountId` is
+/// supplied they use the globally-unique UUID selector; when nil/empty they
+/// fall back to the legacy display_name form, byte-identical to the
+/// pre-sweep `MailController.msgRef` / `mailboxRef` output.
+///
+/// Free functions (not methods on `MailController`) so they're testable
+/// without spinning up the actor — same pattern as `ComposeScriptBuilder.swift`.
+
+// MARK: - UUID-form builders
+
+/// Build an AppleScript reference to a mailbox using the account's globally
+/// unique UUID. Avoids the display_name ambiguity that plagues
+/// `account "<display_name>"` selectors when multiple accounts share the
+/// same display name.
+///
+/// - Parameters:
+///   - mailbox: Mailbox name (e.g. "INBOX", "[Gmail]/全部郵件"). Escaped via `appleScriptEscape`.
+///   - accountId: Account UUID. Caller must ensure non-empty — use
+///     `resolveMailboxRef` for nil/empty handling.
+/// - Returns: `(first mailbox of (account id "<escaped UUID>") whose name is "<escaped mailbox>")`
+func mailboxRefByAccountId(_ mailbox: String, accountId: String) -> String {
+    return "(first mailbox of (account id \"\(appleScriptEscape(accountId))\") whose name is \"\(appleScriptEscape(mailbox))\")"
+}
+
+/// Build an AppleScript reference to a message by ROWID, using account UUID
+/// for disambiguation. See `mailboxRefByAccountId` for the syntax rationale.
+///
+/// - Note: Apple Mail's `id` of a message is a numeric internal identifier
+///   (not the RFC 822 Message-ID string), so `whose id is <N>` is
+///   interpolated unquoted. `assert` catches non-numeric `id` at debug
+///   time — Server-layer `requireMessageId` is the user-facing contract.
+func msgRefByAccountId(_ id: String, mailbox: String, accountId: String) -> String {
+    assert(Int(id) != nil, "msgRefByAccountId called with non-numeric id '\(id)' — Server.swift handler missed validation (#50)")
+    return "(first message of \(mailboxRefByAccountId(mailbox, accountId: accountId)) whose id is \(id))"
+}
+
+// MARK: - Resolvers (UUID path with display_name fallback)
+
+/// Resolve a mailbox AppleScript reference, preferring the account UUID
+/// when available and falling back to the legacy display_name form.
+///
+/// - Parameters:
+///   - mailbox: Mailbox name.
+///   - accountId: Optional account UUID. Non-nil AND non-empty → UUID path.
+///   - accountName: Display name. Used only in the fallback path.
+/// - Returns: `(first mailbox of (account id "...") whose name is "...")`
+///   when `accountId` is usable, else `(first mailbox of account "<display_name>" whose name is "...")`
+///   — the latter byte-identical to `MailController.mailboxRef`.
+func resolveMailboxRef(mailbox: String, accountId: String?, accountName: String) -> String {
+    if let aid = accountId, !aid.isEmpty {
+        return mailboxRefByAccountId(mailbox, accountId: aid)
+    }
+    return "(first mailbox of account \"\(appleScriptEscape(accountName))\" whose name is \"\(appleScriptEscape(mailbox))\")"
+}
+
+/// Resolve a message AppleScript reference (by ROWID), preferring the
+/// account UUID when available and falling back to the legacy display_name
+/// form. See `resolveMailboxRef` for the fallback rationale.
+///
+/// - Returns: byte-identical to `MailController.msgRef` when `accountId`
+///   is nil/empty.
+func resolveMsgRef(id: String, mailbox: String, accountId: String?, accountName: String) -> String {
+    if let aid = accountId, !aid.isEmpty {
+        return msgRefByAccountId(id, mailbox: mailbox, accountId: aid)
+    }
+    assert(Int(id) != nil, "resolveMsgRef called with non-numeric id '\(id)' — Server.swift handler missed validation (#50)")
+    return "(first message of \(resolveMailboxRef(mailbox: mailbox, accountId: nil, accountName: accountName)) whose id is \(id))"
+}
