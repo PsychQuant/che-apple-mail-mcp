@@ -402,10 +402,14 @@ final class MIMEParserTests: XCTestCase {
 
     func testResolveFilename_rfc5987_withNestedRfc2047() {
         // Defensive variant: RFC 5987 single-segment filename* whose
-        // percent-decoded value is itself an encoded-word. Same Outlook 16
-        // shape but without continuation split.
+        // percent-decoded value is itself a complete encoded-word. Same
+        // Outlook 16 double-encoding shape but without RFC 2231 continuation
+        // split. The base64 payload `5Lit5paHLnBkZg==` is `中文.pdf` in UTF-8
+        // (filename including extension is inside the encoded-word, matching
+        // the real Outlook 16 fixture from issue body which packs the whole
+        // name including `.pdf` inside the base64 segments).
         let params: [String: String] = [
-            "filename*": "UTF-8''%3D%3Futf%2D8%3FB%3F5Lit5paH%3F%3D.pdf",
+            "filename*": "UTF-8''%3D%3Futf%2D8%3FB%3F5Lit5paHLnBkZg%3D%3D%3F%3D",
         ]
         let result = MIMEParser.resolveFilename(
             dispositionParams: params,

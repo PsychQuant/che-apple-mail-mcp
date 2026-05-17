@@ -379,13 +379,22 @@ public enum MIMEParser {
     /// RFC 2231 continuation (`filename*0`, `filename*1`) is also
     /// supported: multi-segment filenames are concatenated in numeric
     /// order and percent-decoded if any segment has the trailing `*`.
+    ///
+    /// **#99 — nested RFC 2047 decode**: Outlook 16 Windows clients sometimes
+    /// double-encode Chinese filenames by embedding an RFC 2047 encoded-word
+    /// inside the RFC 2231 percent-encoded payload (or inside a plain
+    /// `filename=` value). After resolving the outer layer, this function
+    /// runs an idempotent RFC 2047 second pass via `decodeRFC2047IfApplicable`
+    /// (strict full-string pattern gate prevents false-positive corruption
+    /// of names containing literal `=?...?=` substrings).
     static func resolveFilename(
         dispositionParams: [String: String],
         contentTypeParams: [String: String]
     ) -> String? {
         // 1. RFC 5987 encoded filename (highest priority).
         if let extValue = dispositionParams["filename*"] {
-            return decodeRFC5987(extValue) ?? extValue
+            let decoded = decodeRFC5987(extValue) ?? extValue
+            return decodeRFC2047IfApplicable(decoded)
         }
 
         // 2. RFC 2231 continuation: filename*0, filename*1, filename*2...
@@ -414,23 +423,50 @@ public enum MIMEParser {
                     assembled += segment
                 }
             }
-            if let decoded = decodePercentEncoded(assembled, charset: firstCharset ?? "utf-8") {
-                return decoded
-            }
-            return assembled
+            let decoded = decodePercentEncoded(assembled, charset: firstCharset ?? "utf-8")
+                ?? assembled
+            return decodeRFC2047IfApplicable(decoded)
         }
 
         // 3. Content-Disposition filename= (plain).
         if let filename = dispositionParams["filename"] {
-            return filename
+            return decodeRFC2047IfApplicable(filename)
         }
 
         // 4. Content-Type name= (legacy, pre-Content-Disposition).
         if let name = contentTypeParams["name"] {
-            return name
+            return decodeRFC2047IfApplicable(name)
         }
 
         return nil
+    }
+
+    /// RFC 2047 encoded-word grammar (strict full-string match):
+    ///
+    /// ```
+    /// =?charset?B|Q?text?=  (one or more, whitespace-separated)
+    /// ```
+    ///
+    /// Used as a gate before second-pass decode in `resolveFilename` —
+    /// without it, a filename literally containing `=?...?=` as a substring
+    /// (rare but possible, e.g. `report=?bogus.pdf`) could be corrupted
+    /// when `decodeRFC2047` partially matches and replaces the substring
+    /// with a base64-decode failure result. Strict full-string anchor
+    /// prevents that class of false positive.
+    private static let rfc2047FullEncodedWordPattern: NSRegularExpression? = {
+        let pattern = #"^=\?[^?\s]+\?[BQbq]\?[^?]*\?=(\s*=\?[^?\s]+\?[BQbq]\?[^?]*\?=)*$"#
+        return try? NSRegularExpression(pattern: pattern)
+    }()
+
+    /// Apply `RFC822Parser.decodeRFC2047` only when `value` is **entirely**
+    /// composed of one or more RFC 2047 encoded-words (possibly
+    /// whitespace-separated per RFC 2047 §6.2). See
+    /// `rfc2047FullEncodedWordPattern` for the rationale.
+    static func decodeRFC2047IfApplicable(_ value: String) -> String {
+        guard let regex = rfc2047FullEncodedWordPattern else { return value }
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        guard regex.firstMatch(in: value, range: range) != nil else { return value }
+        return RFC822Parser.decodeRFC2047(value)
     }
 
     /// Parse RFC 5987 ext-value: `charset'language'percent-encoded`.
