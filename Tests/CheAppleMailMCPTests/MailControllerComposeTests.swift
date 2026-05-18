@@ -548,6 +548,78 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertFalse(script.contains("set html content to"))
     }
 
+    // MARK: - account_id messageRef propagation (#104 PR-C)
+    //
+    // reply_email / forward_email keep the `buildReplyEmailScript` /
+    // `buildForwardEmailScript` signature unchanged (opaque `messageRef: String`).
+    // The #104 account_id disambiguation happens upstream in
+    // `MailController.{reply,forward}Email`, which swaps `msgRef` →
+    // `resolveMsgRef`. These tests pin that the builders embed whatever
+    // resolved ref they are handed VERBATIM into the script — so a future
+    // refactor that re-derived the ref internally (reintroducing the
+    // display_name-collision bug) would be caught.
+
+    private let prcUUID = "C38E0583-47F8-4468-BE70-43155C15549D"
+
+    func testBuildReplyEmailScript_uuidMessageRef_embedsAccountIdSelector() throws {
+        let uuidRef = resolveMsgRef(
+            id: "42", mailbox: "INBOX",
+            accountId: prcUUID, accountName: "alice@example.com"
+        )
+        let script = try buildReplyEmailScript(
+            messageRef: uuidRef,
+            userBody: "thanks",
+            userFormat: .plain,
+            replyAll: false,
+            originalHTML: nil,
+            originalPlain: "original"
+        )
+        XCTAssertTrue(script.contains("(account id \"\(prcUUID)\")"),
+                      "reply script must embed the UUID-form messageRef verbatim; got:\n\(script)")
+        XCTAssertTrue(script.contains("set originalMsg to (first message"),
+                      "messageRef must land in the `set originalMsg to` binding")
+        XCTAssertFalse(script.contains("account \"alice@example.com\""),
+                       "display_name must not appear when a UUID ref is supplied")
+    }
+
+    func testBuildReplyEmailScript_displayNameMessageRef_embedsLegacySelector() throws {
+        let legacyRef = resolveMsgRef(
+            id: "42", mailbox: "INBOX",
+            accountId: nil, accountName: "alice@example.com"
+        )
+        let script = try buildReplyEmailScript(
+            messageRef: legacyRef,
+            userBody: "thanks",
+            userFormat: .plain,
+            replyAll: false,
+            originalHTML: nil,
+            originalPlain: "original"
+        )
+        XCTAssertTrue(script.contains("account \"alice@example.com\""),
+                      "nil accountId must produce the legacy display_name ref")
+        XCTAssertFalse(script.contains("(account id"),
+                       "UUID form must not appear when accountId is nil")
+    }
+
+    func testBuildForwardEmailScript_uuidMessageRef_embedsAccountIdSelector() throws {
+        let uuidRef = resolveMsgRef(
+            id: "99", mailbox: "INBOX",
+            accountId: prcUUID, accountName: "bob@example.com"
+        )
+        let script = try buildForwardEmailScript(
+            messageRef: uuidRef,
+            to: ["x@y.z"],
+            userBody: "FYI",
+            userFormat: .plain,
+            originalHTML: nil,
+            originalPlain: "original"
+        )
+        XCTAssertTrue(script.contains("(account id \"\(prcUUID)\")"),
+                      "forward script must embed the UUID-form messageRef verbatim; got:\n\(script)")
+        XCTAssertTrue(script.contains("set originalMsg to (first message"))
+        XCTAssertFalse(script.contains("account \"bob@example.com\""))
+    }
+
     // MARK: - sanitize_links wiring contract (#85, sister of #19)
     //
     // These tests pin the END-TO-END forwarding of the `sanitizeLinks` parameter
