@@ -442,7 +442,7 @@ Mail.app's AppleScript `account "<display_name>"` selector is **not unique** whe
 
 **Backward compatibility**: `account_id` is **optional**. When omitted (or empty), tools fall back to the legacy `account "<display_name>"` path — behavior identical to pre-#101. Existing callers continue to work unchanged.
 
-**Scope**: as of this release, `account_id` is accepted by `save_attachment` plus the 5 single-message mutation tools `mark_read`, `flag_email`, `set_flag_color`, `set_background_color`, and `mark_as_junk` (PR-A of the [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104) sweep). The same disambiguation pattern will be applied to the remaining AppleScript-routed tools (move/copy/delete, compose, mailbox CRUD) in subsequent PRs tracked at [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104).
+**Scope**: as of this release, `account_id` is accepted by `save_attachment`, the 5 single-message mutation tools (`mark_read`, `flag_email`, `set_flag_color`, `set_background_color`, `mark_as_junk` — PR-A of [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104)), plus the 3 movement/destruction tools (`move_email`, `copy_email`, `delete_email` — PR-B of [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104)). The same disambiguation pattern will be applied to the remaining AppleScript-routed tools (compose, mailbox CRUD) in subsequent PRs tracked at [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104).
 
 ---
 

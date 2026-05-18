@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **3 movement/destruction tools (`move_email`, `copy_email`, `delete_email`) now accept `account_id` for multi-account-same-display_name disambiguation** ([#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104) PR-B). Same `-1728 / -1719` failure mode as PR-A's 5 mutation tools — `msgRef`'s `account "<display_name>"` AppleScript selector non-deterministically picks the wrong account when two accounts share a display_name. Pre-fix: any of these 3 tools could fail or operate on the wrong account's message. Post-fix: each tool accepts an optional `account_id`; when provided, AppleScript uses `(account id "<UUID>")` selector. `move_email` and `copy_email` are particularly subtle because they emit TWO refs in one script (source `msgRef` + destination `mailboxRef`) — both refs flow through the same `accountId` since move/copy operations stay within a single account. Implementation: new `MoveCopyDeleteScriptBuilder.swift` with 3 free builder functions that delegate to Phase 0's `AppleScriptRefBuilder.resolveMsgRef` / `resolveMailboxRef` chokepoint. **Backward compat preserved**: omitting `account_id` falls back to the legacy display_name path. 6 new tests (2 per builder: UUID path verifies UUID in BOTH ref points for move/copy; display_name fallback verifies legacy form).
+
 ## [2.9.0] - 2026-05-18
 
 ### Fixed
