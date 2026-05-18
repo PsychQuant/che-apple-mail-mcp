@@ -99,4 +99,48 @@ final class AppleScriptRefBuilderTests: XCTestCase {
         XCTAssertTrue(dnPath.contains("has\\\"quote@x"),
                       "Quote in display_name must be escaped in fallback path")
     }
+
+    // MARK: - resolveAccountRef (#104 PR-D)
+    //
+    // Account-only selector resolver. Unlike resolveMsgRef / resolveMailboxRef
+    // (which return a full message / mailbox reference), resolveAccountRef
+    // returns just the account selector — needed by `create_mailbox`, whose
+    // AppleScript addresses an account directly (`... at account "<name>"`)
+    // rather than referencing an existing mail item.
+
+    func testResolveAccountRef_uuidPath_whenAccountIdProvided() {
+        let ref = resolveAccountRef(accountId: "UUID-A", accountName: "kiki830621@gmail.com")
+        XCTAssertEqual(
+            ref,
+            "(account id \"UUID-A\")",
+            "Non-nil accountId MUST use the (account id \"...\") UUID selector"
+        )
+        XCTAssertFalse(ref.contains("kiki830621@gmail.com"),
+                       "display_name must not leak into the UUID-path ref")
+    }
+
+    func testResolveAccountRef_displayNameFallback_whenAccountIdNil() {
+        XCTAssertEqual(
+            resolveAccountRef(accountId: nil, accountName: "kiki830621@gmail.com"),
+            "account \"kiki830621@gmail.com\"",
+            "Nil accountId MUST fall back to the legacy account \"<display_name>\" form"
+        )
+    }
+
+    func testResolveAccountRef_displayNameFallback_whenAccountIdEmpty() {
+        XCTAssertEqual(
+            resolveAccountRef(accountId: "", accountName: "alice@example.com"),
+            "account \"alice@example.com\"",
+            "Empty-string accountId MUST be treated the same as nil"
+        )
+    }
+
+    func testResolveAccountRef_escapesQuotes_inBothPaths() {
+        let uuidPath = resolveAccountRef(accountId: "uuid\"x", accountName: "a@b")
+        XCTAssertTrue(uuidPath.contains("uuid\\\"x"),
+                      "Quote in accountId must be escaped in UUID path")
+        let dnPath = resolveAccountRef(accountId: nil, accountName: "has\"quote@x")
+        XCTAssertTrue(dnPath.contains("has\\\"quote@x"),
+                      "Quote in display_name must be escaped in fallback path")
+    }
 }

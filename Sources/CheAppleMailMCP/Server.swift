@@ -89,7 +89,8 @@ class CheAppleMailMCPServer {
                     "type": .string("object"),
                     "properties": .object([
                         "name": .object(["type": .string("string"), "description": .string("Name of the new mailbox")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The account to create the mailbox in")])
+                        "account_name": .object(["type": .string("string"), "description": .string("The account to create the mailbox in")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")])
                     ]),
                     "required": .array([.string("name"), .string("account_name")])
                 ])
@@ -101,7 +102,8 @@ class CheAppleMailMCPServer {
                     "type": .string("object"),
                     "properties": .object([
                         "name": .object(["type": .string("string"), "description": .string("Name of the mailbox to delete")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The account containing the mailbox")])
+                        "account_name": .object(["type": .string("string"), "description": .string("The account containing the mailbox")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")])
                     ]),
                     "required": .array([.string("name"), .string("account_name")])
                 ])
@@ -758,14 +760,16 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("name and account_name are required")
             }
-            return try await mailController.createMailbox(name: name, accountName: accountName)
+            let accountId = arguments["account_id"]?.stringValue
+            return try await mailController.createMailbox(name: name, accountName: accountName, accountId: accountId)
 
         case "delete_mailbox":
             guard let name = arguments["name"]?.stringValue,
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("name and account_name are required")
             }
-            return try await mailController.deleteMailbox(name: name, accountName: accountName)
+            let accountId = arguments["account_id"]?.stringValue
+            return try await mailController.deleteMailbox(name: name, accountName: accountName, accountId: accountId)
 
         // Email Reading Tools
         case "list_emails":

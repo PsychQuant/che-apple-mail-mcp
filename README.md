@@ -442,7 +442,15 @@ Mail.app's AppleScript `account "<display_name>"` selector is **not unique** whe
 
 **Backward compatibility**: `account_id` is **optional**. When omitted (or empty), tools fall back to the legacy `account "<display_name>"` path — behavior identical to pre-#101. Existing callers continue to work unchanged.
 
-**Scope**: as of this release, `account_id` is accepted by `save_attachment`, the 5 single-message mutation tools (`mark_read`, `flag_email`, `set_flag_color`, `set_background_color`, `mark_as_junk` — PR-A of [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104)), the 3 movement/destruction tools (`move_email`, `copy_email`, `delete_email` — PR-B of [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104)), plus the 3 message-relay tools (`reply_email`, `forward_email`, `redirect_email` — PR-C of [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104)). The remaining AppleScript-routed mailbox CRUD tools (`create_mailbox`, `delete_mailbox`) are tracked as PR-D at [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104). `compose_email` / `create_draft` do **not** exhibit the display_name-collision defect — they `make new outgoing message` rather than referencing existing mail by account, so they never emit an `account "<display_name>"` selector; their separate sender-account-selection gap is tracked at [#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131).
+**Scope**: `account_id` is accepted by all 13 AppleScript-routed tools that reference mail by account — the [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104) sweep is complete:
+
+- `save_attachment` ([#101](https://github.com/PsychQuant/che-apple-mail-mcp/issues/101))
+- **PR-A** — 5 single-message mutation tools: `mark_read`, `flag_email`, `set_flag_color`, `set_background_color`, `mark_as_junk`
+- **PR-B** — 3 movement/destruction tools: `move_email`, `copy_email`, `delete_email`
+- **PR-C** — 3 message-relay tools: `reply_email`, `forward_email`, `redirect_email`
+- **PR-D** — 2 mailbox CRUD tools: `create_mailbox`, `delete_mailbox`
+
+`compose_email` / `create_draft` do **not** exhibit the display_name-collision defect — they `make new outgoing message` rather than referencing existing mail by account, so they never emit an `account "<display_name>"` selector; their separate sender-account-selection gap is tracked at [#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131). R-tool AppleScript fallbacks (PR-E) are deferred — the SQLite Tier 1 fast path dominates, so their fallback rarely fires; revisit only on evidence.
 
 ---
 
