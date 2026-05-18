@@ -1133,6 +1133,18 @@ class CheAppleMailMCPServer {
                 }
                 return dict
             } ?? []
+            // #140 — guard each condition's qualifier against the Apple Mail
+            // RuleQualifier whitelist before delegating. Conditions missing
+            // qualifier (or header / expression) are filtered out downstream
+            // by the builder; only present-but-non-whitelisted values throw.
+            for condition in conditions {
+                if let qualifier = condition["qualifier"], !ruleQualifierWhitelist.contains(qualifier) {
+                    throw MailError.invalidParameter(
+                        "condition qualifier must be one of: begins with value, does contain value, "
+                        + "does not contain value, ends with value, equal to value, less than value, "
+                        + "greater than value, none (got: \"\(qualifier)\")")
+                }
+            }
             let actions = arguments["actions"]?.objectValue?.reduce(into: [String: Any]()) { result, pair in
                 if let str = pair.value.stringValue {
                     result[pair.key] = str
