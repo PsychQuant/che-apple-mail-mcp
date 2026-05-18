@@ -44,8 +44,32 @@ func buildSetFlagColorScript(id: String, mailbox: String, accountId: String?, ac
     """
 }
 
+/// Canonical whitelist of Apple Mail background colors (#116 — AppleScript
+/// injection hardening). Single source of truth used by both
+/// `Server.swift`'s `set_background_color` handler (user-facing reject with
+/// `MailError.invalidParameter`) and `buildSetBackgroundColorScript` below
+/// (defense-in-depth `precondition`).
+///
+/// Membership is lowercase-strict and exact-match — no case-folding, no
+/// trim. Drift between this constant and `Server.swift`'s schema description
+/// (`Sources/CheAppleMailMCP/Server.swift:467,475`) is a bug;
+/// `MutationToolScriptBuilderTests.testBackgroundColorWhitelist_containsAllAppleMailEnumValues`
+/// pins it.
+let backgroundColorWhitelist: Set<String> = [
+    "blue", "gray", "green", "none", "orange", "purple", "red", "yellow"
+]
+
 /// `set_background_color` — set the background color of a message.
+///
+/// `color` is interpolated raw into AppleScript at the `to \(color)` line, so
+/// callers MUST pass a value in `backgroundColorWhitelist`. The `precondition`
+/// is defense-in-depth; the user-facing reject lives in the handler. A
+/// precondition firing here means a programmer (test, internal refactor)
+/// bypassed the handler gate — better to crash than silently inject.
 func buildSetBackgroundColorScript(id: String, mailbox: String, accountId: String?, accountName: String, color: String) -> String {
+    precondition(backgroundColorWhitelist.contains(color),
+                 "buildSetBackgroundColorScript called with non-whitelisted color '\(color)' — "
+                 + "Server.swift handler must guard via backgroundColorWhitelist before delegating (#116)")
     let ref = resolveMsgRef(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName)
     return """
     tell application "Mail"
