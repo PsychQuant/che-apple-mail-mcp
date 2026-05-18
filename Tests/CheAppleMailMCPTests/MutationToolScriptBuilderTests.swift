@@ -96,4 +96,61 @@ final class MutationToolScriptBuilderTests: XCTestCase {
         XCTAssertTrue(s.contains("account \"g@h\""))
         XCTAssertFalse(s.contains("account id "))
     }
+
+    // MARK: - background color whitelist (#116 — AppleScript injection hardening)
+    //
+    // `buildSetBackgroundColorScript` accepts an externally-supplied `color: String`
+    // and raw-interpolates it into the AppleScript template. Without a whitelist,
+    // a malicious or buggy caller passing `color = "red\n        do shell script
+    // \"…\""` injects arbitrary AppleScript into osascript. The shared
+    // `backgroundColorWhitelist` constant is the single source of truth gating
+    // both the handler (Server.swift) and the builder (precondition).
+    //
+    // The 8 enum values come from Apple Mail's background color set + are
+    // duplicated in `Server.swift:467` schema description — these tests pin
+    // the constant against drift in both directions.
+
+    func testBackgroundColorWhitelist_containsAllAppleMailEnumValues() {
+        let expected: Set<String> = ["blue", "gray", "green", "none",
+                                     "orange", "purple", "red", "yellow"]
+        XCTAssertEqual(backgroundColorWhitelist, expected,
+                       "whitelist must exactly match Apple Mail's documented enum;"
+                       + " drift in either direction (missing or extra entries) is a bug")
+    }
+
+    func testBackgroundColorWhitelist_rejectsInjectionPayloads() {
+        // Newline-based AppleScript verb injection — the original CVE shape
+        XCTAssertFalse(
+            backgroundColorWhitelist.contains("red\n        do shell script \"rm -rf ~\""),
+            "newline-bearing payload must not be a whitelist member")
+
+        // Quote-bearing injection
+        XCTAssertFalse(
+            backgroundColorWhitelist.contains("red\""),
+            "quote-bearing payload must not be a whitelist member")
+
+        // Semicolon / verb chaining
+        XCTAssertFalse(
+            backgroundColorWhitelist.contains("blue; set foo to evil"),
+            "semicolon-chained payload must not be a whitelist member")
+    }
+
+    func testBackgroundColorWhitelist_isCaseStrict() {
+        // Case-folding would let `"Blue"` / `"BLUE"` through, eroding the
+        // schema-description contract (lowercase canonical set).
+        XCTAssertFalse(backgroundColorWhitelist.contains("Blue"),
+                       "case-variant must be rejected — whitelist is lowercase-strict")
+        XCTAssertFalse(backgroundColorWhitelist.contains("BLUE"),
+                       "case-variant must be rejected — whitelist is lowercase-strict")
+    }
+
+    func testBackgroundColorWhitelist_rejectsTrailingWhitespace() {
+        // Whitespace-padded values would also escape AppleScript validation
+        // (the trailing-space form parses as a malformed enum reference);
+        // the contract is exact-match against the canonical lowercase set.
+        XCTAssertFalse(backgroundColorWhitelist.contains("blue "),
+                       "trailing-whitespace variant must be rejected")
+        XCTAssertFalse(backgroundColorWhitelist.contains(""),
+                       "empty string must be rejected (placeholder / lazy-default trap)")
+    }
 }

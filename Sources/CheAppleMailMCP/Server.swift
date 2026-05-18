@@ -1199,6 +1199,10 @@ class CheAppleMailMCPServer {
                   let color = arguments["color"]?.stringValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and color are required")
             }
+            guard backgroundColorWhitelist.contains(color) else {
+                throw MailError.invalidParameter(
+                    "color must be one of: blue, gray, green, none, orange, purple, red, yellow (got: \"\(color)\")")
+            }
             let accountId = arguments["account_id"]?.stringValue
             return try await mailController.setBackgroundColor(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, color: color)
 
