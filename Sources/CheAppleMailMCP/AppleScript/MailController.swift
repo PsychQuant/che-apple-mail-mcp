@@ -633,27 +633,20 @@ actor MailController {
     }
 
     /// Move email to another mailbox
-    func moveEmail(id: String, fromMailbox: String, toMailbox: String, accountName: String) throws -> String {
-        let ref = msgRef(id, mailbox: fromMailbox, account: accountName)
-        let script = """
-        tell application "Mail"
-            set msg to \(ref)
-            move msg to \(mailboxRef(toMailbox, account: accountName))
-            return "Email moved to \(escapeForAppleScript(toMailbox))"
-        end tell
-        """
+    func moveEmail(id: String, fromMailbox: String, toMailbox: String, accountName: String, accountId: String? = nil) throws -> String {
+        let script = buildMoveEmailScript(
+            id: id, fromMailbox: fromMailbox, toMailbox: toMailbox,
+            accountId: accountId, accountName: accountName
+        )
         return try runScript(script)
     }
 
     /// Delete email (move to trash)
-    func deleteEmail(id: String, mailbox: String, accountName: String) throws -> String {
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
-        let script = """
-        tell application "Mail"
-            delete \(ref)
-            return "Email deleted"
-        end tell
-        """
+    func deleteEmail(id: String, mailbox: String, accountName: String, accountId: String? = nil) throws -> String {
+        let script = buildDeleteEmailScript(
+            id: id, mailbox: mailbox,
+            accountId: accountId, accountName: accountName
+        )
         return try runScript(script)
     }
 
@@ -1204,15 +1197,11 @@ actor MailController {
     // MARK: - Advanced Email Operations
 
     /// Copy email to another mailbox
-    func copyEmail(id: String, fromMailbox: String, toMailbox: String, accountName: String) throws -> String {
-        let ref = msgRef(id, mailbox: fromMailbox, account: accountName)
-        let script = """
-        tell application "Mail"
-            set msg to \(ref)
-            duplicate msg to \(mailboxRef(toMailbox, account: accountName))
-            return "Email copied to \(escapeForAppleScript(toMailbox))"
-        end tell
-        """
+    func copyEmail(id: String, fromMailbox: String, toMailbox: String, accountName: String, accountId: String? = nil) throws -> String {
+        let script = buildCopyEmailScript(
+            id: id, fromMailbox: fromMailbox, toMailbox: toMailbox,
+            accountId: accountId, accountName: accountName
+        )
         return try runScript(script)
     }
 
