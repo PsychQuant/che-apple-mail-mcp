@@ -380,6 +380,67 @@ final class MIMEParserTests: XCTestCase {
         XCTAssertEqual(decoded, "中文.pdf")
     }
 
+    // MARK: - RFC 2231 + nested RFC 2047 (#99)
+
+    func testResolveFilename_outlook16_rfc2231WithNestedRfc2047() {
+        // Outlook 16 Windows double-encodes Chinese filenames as
+        // RFC 2231 §3 continuation (filename*0*, filename*1*) where the
+        // percent-decoded payload is itself an RFC 2047 encoded-word
+        // (=?utf-8?B?...?= sequence with literal tab between segments).
+        // Fixture is the exact byte sequence captured from message id 272713
+        // (see issue body).
+        let params: [String: String] = [
+            "filename*0*": "us-ascii''%3D%3Futf%2D8%3FB%3F5Lit5aSu56CU56m26Zmi5paw6YCy6IGY5YOx5Lq65ZOh6auU5qC85q",
+            "filename*1*": "qi5p%2Bl%3F%3D%09%3D%3Futf%2D8%3FB%3F6KGoLTExMTAzMzHoo73ooagucGRm%3F%3D",
+        ]
+        let result = MIMEParser.resolveFilename(
+            dispositionParams: params,
+            contentTypeParams: [:]
+        )
+        XCTAssertEqual(result, "中央研究院新進聘僱人員體格檢查表-1110331製表.pdf")
+    }
+
+    func testResolveFilename_rfc5987_withNestedRfc2047() {
+        // Defensive variant: RFC 5987 single-segment filename* whose
+        // percent-decoded value is itself a complete encoded-word. Same
+        // Outlook 16 double-encoding shape but without RFC 2231 continuation
+        // split. The base64 payload `5Lit5paHLnBkZg==` is `中文.pdf` in UTF-8
+        // (filename including extension is inside the encoded-word, matching
+        // the real Outlook 16 fixture from issue body which packs the whole
+        // name including `.pdf` inside the base64 segments).
+        let params: [String: String] = [
+            "filename*": "UTF-8''%3D%3Futf%2D8%3FB%3F5Lit5paHLnBkZg%3D%3D%3F%3D",
+        ]
+        let result = MIMEParser.resolveFilename(
+            dispositionParams: params,
+            contentTypeParams: [:]
+        )
+        XCTAssertEqual(result, "中文.pdf")
+    }
+
+    func testResolveFilename_plainFilename_unchangedWhenNotEncodedWord() {
+        // Regression: plain `filename="report.pdf"` must pass through
+        // unchanged — no false-positive RFC 2047 second pass.
+        let params: [String: String] = ["filename": "report.pdf"]
+        let result = MIMEParser.resolveFilename(
+            dispositionParams: params,
+            contentTypeParams: [:]
+        )
+        XCTAssertEqual(result, "report.pdf")
+    }
+
+    func testResolveFilename_plainFilename_containingPartialEncodedWordSubstring_unchanged() {
+        // Defensive: filename literally containing `=?...?=` as a substring
+        // (not a full encoded-word) must NOT be corrupted by the second-pass
+        // decode. Strict full-string pattern gate should reject this.
+        let params: [String: String] = ["filename": "report=?bogus.pdf"]
+        let result = MIMEParser.resolveFilename(
+            dispositionParams: params,
+            contentTypeParams: [:]
+        )
+        XCTAssertEqual(result, "report=?bogus.pdf")
+    }
+
     // MARK: - Base64-encoded multipart parts (#72)
 
     /// Single-layer multipart/alternative with base64-encoded HTML part.
