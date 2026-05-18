@@ -178,25 +178,23 @@ actor MailController {
         }
     }
 
-    /// Create a new mailbox
-    func createMailbox(name: String, accountName: String) throws -> String {
-        let script = """
-        tell application "Mail"
-            make new mailbox with properties {name:"\(escapeForAppleScript(name))"} at account "\(escapeForAppleScript(accountName))"
-            return "Created mailbox: \(escapeForAppleScript(name))"
-        end tell
-        """
+    /// Create a new mailbox.
+    ///
+    /// `accountId` (UUID), when non-nil/non-empty, disambiguates accounts that
+    /// share a display_name (#104 sweep). Script construction is delegated to
+    /// `buildCreateMailboxScript` (`MailboxCrudScriptBuilder.swift`).
+    func createMailbox(name: String, accountName: String, accountId: String? = nil) throws -> String {
+        let script = buildCreateMailboxScript(name: name, accountId: accountId, accountName: accountName)
         return try runScript(script)
     }
 
-    /// Delete a mailbox
-    func deleteMailbox(name: String, accountName: String) throws -> String {
-        let script = """
-        tell application "Mail"
-            delete \(mailboxRef(name, account: accountName))
-            return "Deleted mailbox: \(escapeForAppleScript(name))"
-        end tell
-        """
+    /// Delete a mailbox.
+    ///
+    /// `accountId` (UUID), when non-nil/non-empty, disambiguates accounts that
+    /// share a display_name (#104 sweep). Script construction is delegated to
+    /// `buildDeleteMailboxScript` (`MailboxCrudScriptBuilder.swift`).
+    func deleteMailbox(name: String, accountName: String, accountId: String? = nil) throws -> String {
+        let script = buildDeleteMailboxScript(name: name, accountId: accountId, accountName: accountName)
         return try runScript(script)
     }
 
