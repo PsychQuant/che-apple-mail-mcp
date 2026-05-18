@@ -254,6 +254,7 @@ class CheAppleMailMCPServer {
                         "id": .object(["type": .string("string"), "description": .string("The email ID to reply to")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
                         "body": .object(["type": .string("string"), "description": .string("Reply content (interpreted according to 'format')")]),
                         "reply_all": .object(["type": .string("boolean"), "description": .string("Reply to all recipients (default: false)")]),
                         "cc_additional": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Extra CC recipients to add on top of those derived from 'reply_all'. Email addresses (RFC 5322 addr-spec).")]),
@@ -274,6 +275,7 @@ class CheAppleMailMCPServer {
                         "id": .object(["type": .string("string"), "description": .string("The email ID to forward")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
                         "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipients to forward to")]),
                         "body": .object(["type": .string("string"), "description": .string("Optional message to add (interpreted according to 'format')")]),
                         "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default), 'markdown', or 'html'.")]),
@@ -523,6 +525,7 @@ class CheAppleMailMCPServer {
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
                         "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipients to redirect to")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("to")])
@@ -945,13 +948,14 @@ class CheAppleMailMCPServer {
                   let body = arguments["body"]?.stringValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and body are required")
             }
+            let accountId = arguments["account_id"]?.stringValue
             let replyAll = try requireBool(arguments, key: "reply_all", default: false)
             let ccAdditional = try optionalStringArray(arguments, key: "cc_additional")
             let replyAttachments = try optionalStringArray(arguments, key: "attachments")
             let saveAsDraft = try requireBool(arguments, key: "save_as_draft", default: false)
             let format = try parseBodyFormatArgument(arguments["format"])
             let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
-            return try await mailController.replyEmail(id: id, mailbox: mailbox, accountName: accountName, body: body, replyAll: replyAll, ccAdditional: ccAdditional, attachments: replyAttachments, saveAsDraft: saveAsDraft, format: format, sanitizeLinks: sanitizeLinks)
+            return try await mailController.replyEmail(id: id, mailbox: mailbox, accountName: accountName, body: body, replyAll: replyAll, ccAdditional: ccAdditional, attachments: replyAttachments, saveAsDraft: saveAsDraft, format: format, sanitizeLinks: sanitizeLinks, accountId: accountId)
 
         case "forward_email":
             let id = try requireMessageId(arguments)
@@ -960,11 +964,12 @@ class CheAppleMailMCPServer {
                   let toArray = arguments["to"]?.arrayValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and to are required")
             }
+            let accountId = arguments["account_id"]?.stringValue
             let to = toArray.compactMap { $0.stringValue }
             let body = arguments["body"]?.stringValue
             let format = try parseBodyFormatArgument(arguments["format"])
             let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
-            return try await mailController.forwardEmail(id: id, mailbox: mailbox, accountName: accountName, to: to, body: body, format: format, sanitizeLinks: sanitizeLinks)
+            return try await mailController.forwardEmail(id: id, mailbox: mailbox, accountName: accountName, to: to, body: body, format: format, sanitizeLinks: sanitizeLinks, accountId: accountId)
 
         // Draft Tools
         case "list_drafts":
@@ -1246,8 +1251,9 @@ class CheAppleMailMCPServer {
                   let toArray = arguments["to"]?.arrayValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and to are required")
             }
+            let accountId = arguments["account_id"]?.stringValue
             let to = toArray.compactMap { $0.stringValue }
-            return try await mailController.redirectEmail(id: id, mailbox: mailbox, accountName: accountName, to: to)
+            return try await mailController.redirectEmail(id: id, mailbox: mailbox, accountName: accountName, to: to, accountId: accountId)
 
         case "get_email_metadata":
             let id = try requireMessageId(arguments)
