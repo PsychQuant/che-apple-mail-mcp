@@ -1094,56 +1094,21 @@ actor MailController {
         ]
     }
 
-    /// Create a simple mail rule
+    /// Create a simple mail rule.
+    ///
+    /// Delegates AppleScript generation to `buildCreateRuleScript` in
+    /// `CreateRuleScriptBuilder.swift` (#140 — sister fix to #116). The
+    /// builder enforces `ruleQualifierWhitelist` membership via
+    /// `precondition` as defense-in-depth; the user-facing reject path
+    /// lives in `Server.swift`'s `create_rule` handler, which validates
+    /// before reaching this method.
+    ///
+    /// Signature unchanged from pre-extraction (#140 commit `... → ...`);
+    /// for valid inputs the AppleScript output is byte-identical to the
+    /// pre-extraction inline string (pinned by
+    /// `CreateRuleScriptBuilderTests.testBuildCreateRuleScript_byteEquivalenceWithInlineImplementation`).
     func createRule(name: String, conditions: [[String: String]], actions: [String: Any]) throws -> String {
-        var script = """
-        tell application "Mail"
-            set newRule to make new rule with properties {name:"\(escapeForAppleScript(name))"}
-        """
-
-        // Add conditions
-        for condition in conditions {
-            if let header = condition["header"],
-               let qualifier = condition["qualifier"],
-               let expression = condition["expression"] {
-                script += "\n" + """
-                    tell newRule
-                        make new rule condition with properties {rule type:header rule, header:"\(escapeForAppleScript(header))", qualifier:\(qualifier), expression:"\(escapeForAppleScript(expression))"}
-                    end tell
-                """
-            }
-        }
-
-        // Add actions
-        if let moveMailbox = actions["move_message"] as? String {
-            script += "\n" + """
-                set move message of newRule to (first mailbox whose name is "\(escapeForAppleScript(moveMailbox))")
-            """
-        }
-
-        if let markRead = actions["mark_read"] as? Bool {
-            script += "\n" + """
-                set mark read of newRule to \(markRead)
-            """
-        }
-
-        if let markFlagged = actions["mark_flagged"] as? Bool {
-            script += "\n" + """
-                set mark flagged of newRule to \(markFlagged)
-            """
-        }
-
-        if let deleteMessage = actions["delete_message"] as? Bool {
-            script += "\n" + """
-                set delete message of newRule to \(deleteMessage)
-            """
-        }
-
-        script += "\n" + """
-            return "Rule '\(escapeForAppleScript(name))' created successfully"
-        end tell
-        """
-
+        let script = buildCreateRuleScript(name: name, conditions: conditions, actions: actions)
         return try runScript(script)
     }
 
