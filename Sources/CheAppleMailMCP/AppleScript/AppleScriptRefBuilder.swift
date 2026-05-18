@@ -89,3 +89,22 @@ func resolveMsgRef(id: String, mailbox: String, accountId: String?, accountName:
     assert(Int(id) != nil, "resolveMsgRef called with non-numeric id '\(id)' — Server.swift handler missed validation (#50)")
     return "(first message of \(resolveMailboxRef(mailbox: mailbox, accountId: nil, accountName: accountName)) whose id is \(id))"
 }
+
+/// Resolve an **account-only** AppleScript selector — just the account, not a
+/// mailbox or message reference. Needed by tools that address an account
+/// directly (`create_mailbox`: `make new mailbox ... at <accountRef>`) rather
+/// than referencing an existing mail item (#104 PR-D).
+///
+/// - Parameters:
+///   - accountId: Optional account UUID. Non-nil AND non-empty → UUID path.
+///   - accountName: Display name. Used only in the fallback path.
+/// - Returns: `(account id "<escaped UUID>")` when `accountId` is usable,
+///   else `account "<escaped display_name>"` — the latter byte-identical to
+///   the legacy `account "<display_name>"` selector used by
+///   `MailController.createMailbox` before the sweep.
+func resolveAccountRef(accountId: String?, accountName: String) -> String {
+    if let aid = accountId, !aid.isEmpty {
+        return "(account id \"\(appleScriptEscape(aid))\")"
+    }
+    return "account \"\(appleScriptEscape(accountName))\""
+}
