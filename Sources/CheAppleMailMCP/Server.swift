@@ -205,7 +205,8 @@ class CheAppleMailMCPServer {
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "from_mailbox": .object(["type": .string("string"), "description": .string("Source mailbox")]),
                         "to_mailbox": .object(["type": .string("string"), "description": .string("Destination mailbox")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")])
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account (display_name)")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")])
                     ]),
                     "required": .array([.string("id"), .string("from_mailbox"), .string("to_mailbox"), .string("account_name")])
                 ])
@@ -218,7 +219,8 @@ class CheAppleMailMCPServer {
                     "properties": .object([
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")])
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account (display_name)")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name")])
                 ])
@@ -435,7 +437,8 @@ class CheAppleMailMCPServer {
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "from_mailbox": .object(["type": .string("string"), "description": .string("Source mailbox")]),
                         "to_mailbox": .object(["type": .string("string"), "description": .string("Destination mailbox")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")])
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account (display_name)")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")])
                     ]),
                     "required": .array([.string("id"), .string("from_mailbox"), .string("to_mailbox"), .string("account_name")])
                 ])
@@ -908,7 +911,8 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("from_mailbox, to_mailbox, and account_name are required")
             }
-            return try await mailController.moveEmail(id: id, fromMailbox: fromMailbox, toMailbox: toMailbox, accountName: accountName)
+            let accountId = arguments["account_id"]?.stringValue
+            return try await mailController.moveEmail(id: id, fromMailbox: fromMailbox, toMailbox: toMailbox, accountName: accountName, accountId: accountId)
 
         case "delete_email":
             let id = try requireMessageId(arguments)
@@ -916,7 +920,8 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("mailbox, and account_name are required")
             }
-            return try await mailController.deleteEmail(id: id, mailbox: mailbox, accountName: accountName)
+            let accountId = arguments["account_id"]?.stringValue
+            return try await mailController.deleteEmail(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId)
 
         // Compose Tools
         case "compose_email":
@@ -1153,7 +1158,8 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("from_mailbox, to_mailbox, and account_name are required")
             }
-            return try await mailController.copyEmail(id: id, fromMailbox: fromMailbox, toMailbox: toMailbox, accountName: accountName)
+            let accountId = arguments["account_id"]?.stringValue
+            return try await mailController.copyEmail(id: id, fromMailbox: fromMailbox, toMailbox: toMailbox, accountName: accountName, accountId: accountId)
 
         case "set_flag_color":
             let id = try requireMessageId(arguments)
