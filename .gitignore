@@ -31,3 +31,4 @@ logs/
 
 # MCP Registry tokens
 .mcpregistry_*
+*.code-workspace
