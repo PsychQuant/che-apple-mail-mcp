@@ -554,10 +554,17 @@ final class MailControllerComposeTests: XCTestCase {
     // `buildForwardEmailScript` signature unchanged (opaque `messageRef: String`).
     // The #104 account_id disambiguation happens upstream in
     // `MailController.{reply,forward}Email`, which swaps `msgRef` →
-    // `resolveMsgRef`. These tests pin that the builders embed whatever
-    // resolved ref they are handed VERBATIM into the script — so a future
-    // refactor that re-derived the ref internally (reintroducing the
-    // display_name-collision bug) would be caught.
+    // `resolveMsgRef`.
+    //
+    // SCOPE OF THESE TESTS (honest): they pin only *builder transparency* —
+    // that the builder embeds whatever `messageRef` string it is handed
+    // verbatim into `set originalMsg to ...`, without re-deriving or mangling
+    // it. They do NOT lock the actual `msgRef → resolveMsgRef` call-site swap
+    // inside `MailController` — that swap is the real #104 disambiguation
+    // point but `MailController` is an `actor` whose methods shell out to
+    // `osascript`, so it is not unit-testable without a live Mail.app.
+    // A regression that reverted `resolveMsgRef` → `msgRef` in the controller
+    // would NOT fail these tests. That coverage gap is tracked as a follow-up.
 
     private let prcUUID = "C38E0583-47F8-4468-BE70-43155C15549D"
 
