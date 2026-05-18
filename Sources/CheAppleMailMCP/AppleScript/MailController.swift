@@ -830,7 +830,7 @@ actor MailController {
     }
 
     /// Reply to an email. Optionally add extra CC, attach files, and/or save as draft instead of sending.
-    func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]? = nil, saveAsDraft: Bool = false, format: BodyFormat = .plain, sanitizeLinks: Bool = false) throws -> String {
+    func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]? = nil, saveAsDraft: Bool = false, format: BodyFormat = .plain, sanitizeLinks: Bool = false, accountId: String? = nil) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41 + #34: validate cc_additional then dedup case-insensitively
         // (within the user-supplied list; cross-list dedup vs reply_all-derived
@@ -842,7 +842,7 @@ actor MailController {
         } else {
             dedupedCC = nil
         }
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
+        let ref = resolveMsgRef(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName)
 
         // Issue #43: pre-fetch unconditionally — plain mode also needs originalPlain
         // so composeReplyPlainText can build RFC 3676 quoted body. AppleScript's
@@ -882,10 +882,10 @@ actor MailController {
     }
 
     /// Forward an email
-    func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false) throws -> String {
+    func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false, accountId: String? = nil) throws -> String {
         // Issue #41: validate forward recipients at the boundary.
         try validateEmailAddresses(to, field: "to")
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
+        let ref = resolveMsgRef(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName)
 
         // Issue #44 (mirrors #43): pre-fetch unconditionally when body is provided.
         // Plain mode also needs originalPlain so composeReplyPlainText can build
@@ -1246,29 +1246,19 @@ actor MailController {
         return try runScript(script)
     }
 
-    /// Redirect email (different from forward - keeps original sender)
-    func redirectEmail(id: String, mailbox: String, accountName: String, to: [String]) throws -> String {
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
-        var script = """
-        tell application "Mail"
-            set originalMsg to \(ref)
-            set redirectMsg to redirect originalMsg with opening window
-            tell redirectMsg
-        """
-
-        for recipient in to {
-            script += "\n" + """
-                make new to recipient at end of to recipients with properties {address:"\(escapeForAppleScript(recipient))"}
-            """
-        }
-
-        script += "\n" + """
-            end tell
-            send redirectMsg
-            return "Email redirected successfully"
-        end tell
-        """
-
+    /// Redirect email (different from forward - keeps original sender).
+    ///
+    /// `accountId` (UUID), when non-nil/non-empty, disambiguates accounts that
+    /// share a display_name (#104 sweep). Script construction is delegated to
+    /// `buildRedirectEmailScript` (`RedirectEmailScriptBuilder.swift`).
+    func redirectEmail(id: String, mailbox: String, accountName: String, to: [String], accountId: String? = nil) throws -> String {
+        let script = buildRedirectEmailScript(
+            id: id,
+            mailbox: mailbox,
+            accountId: accountId,
+            accountName: accountName,
+            to: to
+        )
         return try runScript(script)
     }
 
