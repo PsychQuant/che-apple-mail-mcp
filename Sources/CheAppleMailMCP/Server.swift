@@ -712,6 +712,10 @@ class CheAppleMailMCPServer {
     }
 
     private func executeToolCall(name: String, arguments: [String: Value]) async throws -> String {
+        // Stable tool-name capture: several cases rebind `name` as a local
+        // (`guard let name = arguments["name"]?...`), so `decodeAccountId`'s
+        // diagnostics use `invokedTool` rather than the shadowed parameter.
+        let invokedTool = name
         switch name {
         // Account Tools
         case "list_accounts":
@@ -760,7 +764,7 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("name and account_name are required")
             }
-            let accountId = arguments["account_id"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
             return try await mailController.createMailbox(name: name, accountName: accountName, accountId: accountId)
 
         case "delete_mailbox":
@@ -768,7 +772,7 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("name and account_name are required")
             }
-            let accountId = arguments["account_id"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
             return try await mailController.deleteMailbox(name: name, accountName: accountName, accountId: accountId)
 
         // Email Reading Tools
@@ -898,7 +902,7 @@ class CheAppleMailMCPServer {
                   let read = arguments["read"]?.boolValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and read are required")
             }
-            let accountId = arguments["account_id"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
             return try await mailController.markRead(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, read: read)
 
         case "flag_email":
@@ -908,7 +912,7 @@ class CheAppleMailMCPServer {
                   let flagged = arguments["flagged"]?.boolValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and flagged are required")
             }
-            let accountId = arguments["account_id"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
             return try await mailController.flagEmail(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, flagged: flagged)
 
         case "move_email":
@@ -918,7 +922,7 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("from_mailbox, to_mailbox, and account_name are required")
             }
-            let accountId = arguments["account_id"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
             return try await mailController.moveEmail(id: id, fromMailbox: fromMailbox, toMailbox: toMailbox, accountName: accountName, accountId: accountId)
 
         case "delete_email":
@@ -927,7 +931,7 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("mailbox, and account_name are required")
             }
-            let accountId = arguments["account_id"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
             return try await mailController.deleteEmail(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId)
 
         // Compose Tools
@@ -952,7 +956,7 @@ class CheAppleMailMCPServer {
                   let body = arguments["body"]?.stringValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and body are required")
             }
-            let accountId = arguments["account_id"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
             let replyAll = try requireBool(arguments, key: "reply_all", default: false)
             let ccAdditional = try optionalStringArray(arguments, key: "cc_additional")
             let replyAttachments = try optionalStringArray(arguments, key: "attachments")
@@ -968,7 +972,7 @@ class CheAppleMailMCPServer {
                   let toArray = arguments["to"]?.arrayValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and to are required")
             }
-            let accountId = arguments["account_id"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
             let to = toArray.compactMap { $0.stringValue }
             let body = arguments["body"]?.stringValue
             let format = try parseBodyFormatArgument(arguments["format"])
@@ -1052,7 +1056,7 @@ class CheAppleMailMCPServer {
             // that produces -1728 / -1719 errors. When absent, Tier 2 falls back
             // to the legacy `account "<display_name>"` form for backward compat.
             // Tier 1 fast path is unaffected (never touches account_name).
-            let accountId = arguments["account_id"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
             // Tier 1: SQLite + .emlx fast path (see openspec/changes/save-attachment-fast-path).
             // Wraps in its own do/catch so any failure falls through to the
             // AppleScript tier in the trailing `mailController.saveAttachment`
@@ -1179,7 +1183,7 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("from_mailbox, to_mailbox, and account_name are required")
             }
-            let accountId = arguments["account_id"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
             return try await mailController.copyEmail(id: id, fromMailbox: fromMailbox, toMailbox: toMailbox, accountName: accountName, accountId: accountId)
 
         case "set_flag_color":
@@ -1189,7 +1193,7 @@ class CheAppleMailMCPServer {
                   let colorIndex = arguments["color_index"]?.intValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and color_index are required")
             }
-            let accountId = arguments["account_id"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
             return try await mailController.setFlagColor(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, colorIndex: colorIndex)
 
         case "set_background_color":
@@ -1203,7 +1207,7 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter(
                     "color must be one of: blue, gray, green, none, orange, purple, red, yellow (got: \"\(color)\")")
             }
-            let accountId = arguments["account_id"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
             return try await mailController.setBackgroundColor(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, color: color)
 
         case "mark_as_junk":
@@ -1213,7 +1217,7 @@ class CheAppleMailMCPServer {
                   let isJunk = arguments["is_junk"]?.boolValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and is_junk are required")
             }
-            let accountId = arguments["account_id"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
             return try await mailController.markAsJunk(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, isJunk: isJunk)
 
         case "get_email_headers":
@@ -1271,7 +1275,7 @@ class CheAppleMailMCPServer {
                   let toArray = arguments["to"]?.arrayValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and to are required")
             }
-            let accountId = arguments["account_id"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
             let to = toArray.compactMap { $0.stringValue }
             return try await mailController.redirectEmail(id: id, mailbox: mailbox, accountName: accountName, to: to, accountId: accountId)
 
@@ -1646,6 +1650,26 @@ func requireMessageId(_ arguments: [String: Value]) throws -> String {
         throw MailError.invalidParameter("id must be a numeric message id (got: '\(raw)')")
     }
     return raw
+}
+
+/// Decode the optional `account_id` argument shared by every account-referencing
+/// tool. When the key is present but the value is neither a string nor JSON
+/// `null` (e.g. a lenient client serialized a UUID-shaped value as an int), emit
+/// an actionable stderr warning and fall back to `nil` — without the warning the
+/// handler would silently degrade to the `account_name` (display_name) path and
+/// re-surface the #101 collision the caller was trying to escape (#111).
+///
+/// Absent key and explicit JSON `null` both return `nil` with no warning — both
+/// legitimately mean "no account_id supplied".
+func decodeAccountId(_ arguments: [String: Value], tool: String) -> String? {
+    guard let raw = arguments["account_id"] else { return nil }
+    if let value = raw.stringValue { return value }
+    if raw.isNull { return nil }
+    let warning = "WARN: \(tool) received non-string account_id "
+        + "(got: \(typeName(of: raw))); ignoring — falling back to the account_name "
+        + "(display_name) path, which may surface the #101 collision behavior.\n"
+    FileHandle.standardError.write(Data(warning.utf8))
+    return nil
 }
 
 func parseBodyFormatArgument(_ raw: Value?) throws -> BodyFormat {

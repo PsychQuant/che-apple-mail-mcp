@@ -1,4 +1,5 @@
 import XCTest
+import Foundation
 import MCP
 @testable import CheAppleMailMCP
 
@@ -194,6 +195,80 @@ final class ServerSchemaTests: XCTestCase {
         assertInvalidMessageId(["id": .int(123)], expectedFragment: "required")
         assertInvalidMessageId(["id": .bool(true)], expectedFragment: "required")
         assertInvalidMessageId(["id": .null], expectedFragment: "required")
+    }
+
+    // MARK: - decodeAccountId (#111 — non-string account_id silent-degrade)
+
+    func testDecodeAccountId_stringValueReturned() {
+        XCTAssertEqual(
+            decodeAccountId(["account_id": .string("UUID-A")], tool: "save_attachment"),
+            "UUID-A")
+    }
+
+    func testDecodeAccountId_absentKeyReturnsNil() {
+        // No account_id supplied — legitimate "use the legacy path", no warning.
+        XCTAssertNil(decodeAccountId([:], tool: "save_attachment"))
+    }
+
+    func testDecodeAccountId_explicitNullReturnsNil() {
+        // JSON null is an explicit "no account_id" — nil, no warning.
+        XCTAssertNil(decodeAccountId(["account_id": .null], tool: "save_attachment"))
+    }
+
+    func testDecodeAccountId_nonStringTypesReturnNil() {
+        // Present-but-non-string: the #111 silent-degrade trap. decodeAccountId
+        // returns nil (falls back to account_name) AND emits a stderr warning —
+        // the return contract is pinned here; the warning is a stderr side effect.
+        XCTAssertNil(decodeAccountId(["account_id": .int(12345)], tool: "save_attachment"))
+        XCTAssertNil(decodeAccountId(["account_id": .bool(true)], tool: "mark_read"))
+        XCTAssertNil(decodeAccountId(["account_id": .double(3.14)], tool: "move_email"))
+        XCTAssertNil(decodeAccountId(["account_id": .array([.string("x")])], tool: "delete_email"))
+    }
+
+    func testDecodeAccountId_emptyStringReturnedVerbatim() {
+        // Empty string is still a string — returned as-is; resolveMsgRef /
+        // resolveMailboxRef treat "" the same as nil downstream (the !isEmpty guard).
+        XCTAssertEqual(decodeAccountId(["account_id": .string("")], tool: "save_attachment"), "")
+    }
+
+    /// Capture everything written to stderr (fd 2) while `body` runs. The #111
+    /// fix's whole purpose is a *side effect* (the `WARN:` line) — a
+    /// return-value-only assertion cannot tell the fix from its absence, so the
+    /// two tests below redirect fd 2 through a pipe to pin the warning itself.
+    private func captureStderr(_ body: () -> Void) -> String {
+        let pipe = Pipe()
+        let savedFD = dup(STDERR_FILENO)
+        dup2(pipe.fileHandleForWriting.fileDescriptor, STDERR_FILENO)
+        body()
+        dup2(savedFD, STDERR_FILENO)
+        close(savedFD)
+        try? pipe.fileHandleForWriting.close()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    func testDecodeAccountId_nonStringEmitsStderrWarning() {
+        // A present-but-non-string account_id MUST produce an actionable stderr
+        // warning — not degrade silently (the #111 defect). Pins the write
+        // against a future edit that drops it or blanks the message.
+        let captured = captureStderr {
+            _ = decodeAccountId(["account_id": .int(12345)], tool: "save_attachment")
+        }
+        XCTAssertTrue(captured.contains("WARN:"), "expected a WARN line, got: \(captured)")
+        XCTAssertTrue(captured.contains("save_attachment"), "warning must name the offending tool")
+        XCTAssertTrue(captured.contains("integer"), "warning must name the received type")
+    }
+
+    func testDecodeAccountId_nullAndAbsentEmitNoWarning() {
+        // Explicit JSON null and an absent key both legitimately mean "no
+        // account_id supplied" — they must stay silent. Pins the `isNull`
+        // guard against removal, which would spuriously warn on every null.
+        XCTAssertEqual(
+            captureStderr { _ = decodeAccountId(["account_id": .null], tool: "save_attachment") },
+            "", "explicit JSON null must not warn")
+        XCTAssertEqual(
+            captureStderr { _ = decodeAccountId([:], tool: "save_attachment") },
+            "", "absent account_id must not warn")
     }
 
     // MARK: - parseBodyFormatArgument (handles MCP Value type)
