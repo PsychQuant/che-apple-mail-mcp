@@ -143,9 +143,11 @@ public enum MIMEParser {
     /// `savable` field (#105).
     ///
     /// Same no-decode tree walk as `enumerateAttachmentNames` — inline
-    /// presence is `!body.isEmpty` on the raw leaf bytes, so a 50-MB base64
-    /// attachment is still never decoded just to answer this question (the
-    /// #24 perf property is preserved).
+    /// presence is "the raw leaf body has any non-whitespace byte" (a
+    /// `.partial.emlx` strips an attachment body down to the lone CRLF before
+    /// the next boundary, and base64/QP of whitespace-only input decodes to
+    /// empty), so a 50-MB base64 attachment is still never decoded just to
+    /// answer this question (the #24 perf property is preserved).
     ///
     /// - Throws: `MailSQLiteError.emlxParseFailed` on the same malformed
     ///   top-level-multipart condition as `enumerateAttachmentNames` (#26).
@@ -190,10 +192,14 @@ public enum MIMEParser {
     /// body (`depth == 0`) is declared `multipart/*` but no child split
     /// succeeded — distinguishes #26's malformed case from legitimately
     /// empty multiparts where some children parsed but had no filenames.
-    /// `out` maps each attachment name to whether its part carries a non-empty
-    /// inline body (`!body.isEmpty`). When the same name appears on multiple
-    /// parts (or via both `filename` and `Content-Type: name`), presence is
-    /// OR-combined — savable if *any* occurrence has an inline body (#105).
+    /// `out` maps each attachment name to whether its part carries an inline
+    /// body — defined as "the raw leaf body has any non-whitespace byte". When
+    /// the same name appears on multiple parts, the **first occurrence in
+    /// document order wins** — this mirrors `AttachmentExtractor.saveAttachment`,
+    /// which saves `parts.first(where: matchesAttachmentName)`. OR-combining
+    /// instead would overstate savability: a `savable: true` driven by a later
+    /// duplicate while `save_attachment` resolves the first (stripped) part and
+    /// fails (#105, Codex verify finding).
     private static func collectAttachmentNames(
         body: Data,
         partHeaders: [String: String],
@@ -258,14 +264,16 @@ public enum MIMEParser {
         let (_, dispositionParams) = parseContentDisposition(
             partHeaders["content-disposition"]
         )
+        // First occurrence in document order wins — see the docstring: this
+        // mirrors saveAttachment's `parts.first(where:)` selection (#105).
         if let filename = resolveFilename(
             dispositionParams: dispositionParams,
             contentTypeParams: params
-        ) {
-            out[filename] = (out[filename] ?? false) || inlinePresent
+        ), out[filename] == nil {
+            out[filename] = inlinePresent
         }
-        if let name = params["name"] {
-            out[name] = (out[name] ?? false) || inlinePresent
+        if let name = params["name"], out[name] == nil {
+            out[name] = inlinePresent
         }
     }
 

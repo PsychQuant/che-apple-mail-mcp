@@ -155,6 +155,18 @@ extension EmlxParser {
         rowId: Int,
         attachmentName: String
     ) -> URL? {
+        // #105 security: `attachmentName` is the email-sender-controlled MIME
+        // filename. A name bearing a path separator or `.`/`..` is never a
+        // valid single-segment attachment filename — and joining it via
+        // `appendingPathComponent` would let a crafted email probe (and, via
+        // `saveAttachment`, read) files outside `Attachments/<rowId>/`. Since
+        // `list_attachments` now calls this for *every* attachment name, an
+        // unguarded join would turn a passive listing into a filesystem
+        // existence-oracle. Reject path-bearing names outright.
+        guard !attachmentName.contains("/"),
+              attachmentName != ".", attachmentName != ".." else {
+            return nil
+        }
         // emlxPath is `<hashDir>/Messages/<rowId>.{partial.,}emlx`. Walk up
         // two levels to get the hash dir, then descend into Attachments.
         let messagesDir = URL(fileURLWithPath: emlxPath).deletingLastPathComponent()
@@ -267,6 +279,15 @@ extension EmlxParser {
     /// The returned map's keys are exactly the attachment names that
     /// `attachmentNames` would return — callers needing both can derive the
     /// name set from `Set(result.keys)` and avoid a second `.emlx` parse.
+    ///
+    /// > **Known limitation**: inline presence is a *no-decode* check (the
+    /// > raw transfer-encoded body has a non-whitespace byte), whereas the
+    /// > actual `saveAttachment` decides on `decodedData.isEmpty` *after*
+    /// > transfer-decoding. They diverge only for a pathological `7bit`/
+    /// > `8bit`/`binary` attachment whose content is genuinely whitespace —
+    /// > reported `savable: false` though a save would succeed. The error is
+    /// > in the *safe* direction (a caller skips a save that would have
+    /// > worked; it never promises a save that would fail with `-10000`).
     ///
     /// - Throws: `MailSQLiteError.emlxNotFound` / `.emlxParseFailed` — same
     ///   conditions as `attachmentNames`.

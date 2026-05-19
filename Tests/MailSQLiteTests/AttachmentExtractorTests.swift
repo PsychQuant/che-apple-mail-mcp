@@ -644,6 +644,36 @@ final class AttachmentExtractorTests: XCTestCase {
                        "the savability map's keys are exactly the envelope's attachment names")
     }
 
+    /// #105 security: a path-traversal attachment name must NOT let the
+    /// external-cache lookup escape `Attachments/<rowId>/`. A decoy file is
+    /// planted exactly where `Attachments/<rowId>/<partId>/../../decoy.pdf`
+    /// would resolve; without the `externalAttachmentURL` guard the crafted
+    /// name would find it and report `savable: true`, leaking a filesystem
+    /// existence bit. With the guard the name resolves to nothing → `false`.
+    func testAttachmentSavability_pathTraversalNameIsRejected() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262400
+        let craftedName = "../../decoy.pdf"
+        let (mailboxURL, attachmentsDir) = try installPartialEmlxWithStrippedAttachment(
+            rowId: rowId, attachmentFilename: craftedName, in: root
+        )
+        // A real partId subdir must exist so externalAttachmentURL's loop runs.
+        let partDir = attachmentsDir.appendingPathComponent("2", isDirectory: true)
+        try FileManager.default.createDirectory(at: partDir, withIntermediateDirectories: true)
+        // Plant the decoy where `<rowId>/2/../../decoy.pdf` would land:
+        // attachmentsDir is `.../Attachments/<rowId>`, so two levels up from
+        // the `2/` partDir is `.../Attachments/`.
+        let escapeTarget = attachmentsDir.deletingLastPathComponent()
+            .appendingPathComponent("decoy.pdf")
+        try Data("decoy".utf8).write(to: escapeTarget)
+
+        let savability = try EmlxParser.attachmentSavability(rowId: rowId, mailboxURL: mailboxURL)
+        XCTAssertEqual(savability[craftedName], false,
+                       "a path-traversal attachment name must not resolve to an out-of-tree file")
+    }
+
     /// Mirror of the happy path but exercising the external-folder match
     /// against the legacy `Content-Type: name` parameter (some senders
     /// only set `name=`, not `Content-Disposition: filename=`).

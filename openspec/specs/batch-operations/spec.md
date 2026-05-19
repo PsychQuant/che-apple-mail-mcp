@@ -319,7 +319,7 @@ The system SHALL provide a `list_attachments_batch` MCP tool that accepts an arr
 #### Scenario: Batch list attachments
 
 - **WHEN** `list_attachments_batch` is called with `emails: [{"id": "100", "mailbox": "INBOX", "account_name": "Gmail"}, {"id": "200", "mailbox": "Sent", "account_name": "Gmail"}]`
-- **THEN** the system returns an array where each entry contains the email identifier and its list of attachments (name, size, MIME type)
+- **THEN** the system returns an array where each entry contains the email identifier and its list of attachments (name, size, MIME type), each attachment additionally carrying the `savable` flag per the `sqlite-query-engine` `list_attachments` contract (present when the per-message `.emlx` is parseable, omitted otherwise)
 
 #### Scenario: Batch list with email having no attachments
 

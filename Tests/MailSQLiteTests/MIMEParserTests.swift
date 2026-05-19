@@ -623,4 +623,26 @@ final class MIMEParserTests: XCTestCase {
         let names = try MIMEParser.enumerateAttachmentNames(Data(body.utf8), headers: headers)
         XCTAssertEqual(names, ["a.pdf", "b.png"])
     }
+
+    func testEnumerateAttachmentInlinePresence_duplicateName_firstOccurrenceWins() throws {
+        // Two parts share a filename: the FIRST is stripped, the SECOND has
+        // bytes. saveAttachment resolves `parts.first(where:)` → the stripped
+        // one → fails. So presence must be `false` (first wins), NOT `true`
+        // (OR-combined) — an OR would overstate savability (#105 Codex finding).
+        let boundary = "b105dup"
+        let headers = ["content-type": "multipart/mixed; boundary=\"\(boundary)\""]
+        let body = "--\(boundary)\r\n"
+            + "Content-Type: application/pdf; name=\"dup.pdf\"\r\n"
+            + "Content-Disposition: attachment; filename=\"dup.pdf\"\r\n"
+            + "Content-Transfer-Encoding: base64\r\n\r\n\r\n"   // stripped (first)
+            + "--\(boundary)\r\n"
+            + "Content-Type: application/pdf; name=\"dup.pdf\"\r\n"
+            + "Content-Disposition: attachment; filename=\"dup.pdf\"\r\n"
+            + "Content-Transfer-Encoding: base64\r\n\r\nSGVsbG8=\r\n"  // has bytes (later)
+            + "--\(boundary)--\r\n"
+        let presence = try MIMEParser.enumerateAttachmentInlinePresence(
+            Data(body.utf8), headers: headers)
+        XCTAssertEqual(presence["dup.pdf"], false,
+                       "first (stripped) occurrence must win — matches saveAttachment's parts.first")
+    }
 }
