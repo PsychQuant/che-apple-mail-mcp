@@ -808,12 +808,24 @@ actor MailController {
     }
 
     /// Compose and send a new email
-    func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false) throws -> String {
+    func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false, fromAddress: String? = nil) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41: validate every recipient field (to / cc / bcc) at the boundary.
         try validateEmailAddresses(to, field: "to")
         if let cc = cc { try validateEmailAddresses(cc, field: "cc") }
         if let bcc = bcc { try validateEmailAddresses(bcc, field: "bcc") }
+        // Issue #131: validate from_address with the same address-format
+        // discipline applied to recipients. Mail.app's `sender` property
+        // accepts plain addr-spec; multiple-@ / control-char inputs would
+        // fail with opaque AppleScript errors otherwise.
+        if let from = fromAddress, !from.isEmpty {
+            try validateEmailAddresses([from], field: "from_address")
+        }
+        // Note: `accountName` parameter is intentionally accepted but unused
+        // here (legacy/dead since the tool was added — see #131 issue body).
+        // The actual sender selection is wired through `fromAddress`. Kept
+        // for backward compat with any Swift caller still passing it; no
+        // production caller does so.
         let script = try buildComposeEmailScript(
             to: to,
             subject: subject,
@@ -822,7 +834,8 @@ actor MailController {
             bcc: bcc,
             attachments: attachments,
             format: format,
-            sanitizeLinks: sanitizeLinks
+            sanitizeLinks: sanitizeLinks,
+            fromAddress: fromAddress
         )
         return try runScript(script)
     }
@@ -953,12 +966,16 @@ actor MailController {
     }
 
     /// Create a draft
-    func createDraft(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false) throws -> String {
+    func createDraft(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false, fromAddress: String? = nil) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41: validate every recipient field (to / cc / bcc) at the boundary (#107).
         try validateEmailAddresses(to, field: "to")
         if let cc = cc { try validateEmailAddresses(cc, field: "cc") }
         if let bcc = bcc { try validateEmailAddresses(bcc, field: "bcc") }
+        // #131: validate sender address (see composeEmail).
+        if let from = fromAddress, !from.isEmpty {
+            try validateEmailAddresses([from], field: "from_address")
+        }
         let script = try buildCreateDraftScript(
             to: to,
             subject: subject,
@@ -967,7 +984,8 @@ actor MailController {
             bcc: bcc,
             attachments: attachments,
             format: format,
-            sanitizeLinks: sanitizeLinks
+            sanitizeLinks: sanitizeLinks,
+            fromAddress: fromAddress
         )
         return try runScript(script)
     }

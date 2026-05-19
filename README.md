@@ -144,7 +144,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 
 | Tool | Description |
 |------|-------------|
-| `compose_email` | Send new email (supports cc/bcc/attachments; `format`: plain/markdown/html) |
+| `compose_email` | Send new email (supports cc/bcc/attachments; `format`: plain/markdown/html; optional `from_address` for multi-account sender selection — see [#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131)) |
 | `reply_email` | Reply to email. Optional: `cc_additional`, `attachments`, `save_as_draft`, `format` (since v2.4.0). Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0 / #43) |
 | `forward_email` | Forward email. Optional `body` + `format`. Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0+ / #44) |
 | `redirect_email` | Redirect email (keeps original sender) |
@@ -174,7 +174,7 @@ reply_email(
 | Tool | Description |
 |------|-------------|
 | `list_drafts` | List draft emails |
-| `create_draft` | Create a draft (supports attachments) |
+| `create_draft` | Create a draft (supports attachments; optional `from_address` for multi-account sender selection — see [#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131)) |
 
 </details>
 
@@ -450,7 +450,7 @@ Mail.app's AppleScript `account "<display_name>"` selector is **not unique** whe
 - **PR-C** — 3 message-relay tools: `reply_email`, `forward_email`, `redirect_email`
 - **PR-D** — 2 mailbox CRUD tools: `create_mailbox`, `delete_mailbox`
 
-`compose_email` / `create_draft` do **not** exhibit the display_name-collision defect — they `make new outgoing message` rather than referencing existing mail by account, so they never emit an `account "<display_name>"` selector; their separate sender-account-selection gap is tracked at [#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131). R-tool AppleScript fallbacks (PR-E) are deferred — the SQLite Tier 1 fast path dominates, so their fallback rarely fires; revisit only on evidence.
+`compose_email` / `create_draft` do **not** exhibit the display_name-collision defect — they `make new outgoing message` rather than referencing existing mail by account, so they never emit an `account "<display_name>"` selector. Multi-account sender selection is now available via the optional `from_address` parameter ([#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131)) — pass any one of your configured Mail.app email addresses (`"alice@example.com"` or RFC 5322 form `"Alice <alice@example.com>"`) to set the `sender` of the outgoing message; omit to use Mail.app's default account. Use `list_accounts` to discover the addresses configured on the running Mac. R-tool AppleScript fallbacks (PR-E) are deferred — the SQLite Tier 1 fast path dominates, so their fallback rarely fires; revisit only on evidence.
 
 **Cross-account move/copy is not supported via `account_id`** ([#129](https://github.com/PsychQuant/che-apple-mail-mcp/issues/129) — from #127 verify). `move_email` and `copy_email` accept a single `account_id`, which is threaded through **both** the source `msgRef` and the destination `mailboxRef`. The architectural choice is correct (movement stays within one account, because Mail.app's AppleScript verb `move msg to <mailboxRef>` requires the destination mailbox to be expressed relative to a single account context). Mail.app's UI permits cross-account move via drag-and-drop, but the AppleScript-routed `move_email` / `copy_email` tools cannot replicate that — calling `move_email` with `account_id` of one account while expecting the destination `to_mailbox` to be resolved against a different account silently picks the wrong account's mailbox of that name (if both accounts happen to have one) or raises `-1719 "Invalid mailbox index"`. If you need a copy of the message's contents under a different account, you can manually rebuild it via `save_attachment` + `compose_email` — note this is **not** a true move/copy: original metadata (Message-ID, received-date, flags, labels) and message identity are not preserved.
 

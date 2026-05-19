@@ -242,7 +242,8 @@ class CheAppleMailMCPServer {
                         "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("BCC recipients (optional)")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")]),
                         "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is; 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML.")]),
-                        "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true AND `format` is `markdown`, link URLs whose scheme is not in {http, https, mailto, tel} are rendered as plain text (no `<a>` wrapper) — defends against `[click](javascript:...)` and `data:`/`file:`/`vbscript:` XSS injection. Default false (preserves backward compat). No effect when `format` is `plain` (no link parsing happens) or `html` (caller-trusted raw HTML — you must sanitize your own anchors). Non-absolute URLs (e.g. `[home](/relative/path)` or empty `[text]()`) also have their anchor dropped under sanitize_links=true since they lack an allowlisted scheme.")])
+                        "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true AND `format` is `markdown`, link URLs whose scheme is not in {http, https, mailto, tel} are rendered as plain text (no `<a>` wrapper) — defends against `[click](javascript:...)` and `data:`/`file:`/`vbscript:` XSS injection. Default false (preserves backward compat). No effect when `format` is `plain` (no link parsing happens) or `html` (caller-trusted raw HTML — you must sanitize your own anchors). Non-absolute URLs (e.g. `[home](/relative/path)` or empty `[text]()`) also have their anchor dropped under sanitize_links=true since they lack an allowlisted scheme.")]),
+                        "from_address": .object(["type": .string("string"), "description": .string("Optional — email address (or 'Name <email>') of the account to send FROM. Must match one of your Mail.app accounts' addresses. Omit to use Mail.app's default account. Use list_accounts to discover available email addresses.")])
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
@@ -312,7 +313,8 @@ class CheAppleMailMCPServer {
                         "body": .object(["type": .string("string"), "description": .string("Email body content (interpreted according to 'format')")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")]),
                         "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is; 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML.")]),
-                        "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true AND `format` is `markdown`, link URLs whose scheme is not in {http, https, mailto, tel} are rendered as plain text (no `<a>` wrapper) — defends against `[click](javascript:...)` and `data:`/`file:`/`vbscript:` XSS injection. Default false (preserves backward compat). No effect when `format` is `plain` (no link parsing happens) or `html` (caller-trusted raw HTML — you must sanitize your own anchors). Non-absolute URLs (e.g. `[home](/relative/path)` or empty `[text]()`) also have their anchor dropped under sanitize_links=true since they lack an allowlisted scheme.")])
+                        "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true AND `format` is `markdown`, link URLs whose scheme is not in {http, https, mailto, tel} are rendered as plain text (no `<a>` wrapper) — defends against `[click](javascript:...)` and `data:`/`file:`/`vbscript:` XSS injection. Default false (preserves backward compat). No effect when `format` is `plain` (no link parsing happens) or `html` (caller-trusted raw HTML — you must sanitize your own anchors). Non-absolute URLs (e.g. `[home](/relative/path)` or empty `[text]()`) also have their anchor dropped under sanitize_links=true since they lack an allowlisted scheme.")]),
+                        "from_address": .object(["type": .string("string"), "description": .string("Optional — email address of the account to save the draft UNDER (sender selection). Must match one of your Mail.app accounts' addresses. Omit to use Mail.app's default account. Use list_accounts to discover available email addresses.")])
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
@@ -952,7 +954,9 @@ class CheAppleMailMCPServer {
             let attachments = try optionalStringArray(arguments, key: "attachments")
             let format = try parseBodyFormatArgument(arguments["format"])
             let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
-            return try await mailController.composeEmail(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, sanitizeLinks: sanitizeLinks)
+            // #131: sender account selection. Optional — omit to use Mail.app's default account.
+            let fromAddress = arguments["from_address"]?.stringValue
+            return try await mailController.composeEmail(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, sanitizeLinks: sanitizeLinks, fromAddress: fromAddress)
 
         case "reply_email":
             let id = try requireMessageId(arguments)
@@ -1004,7 +1008,9 @@ class CheAppleMailMCPServer {
             let attachments = try optionalStringArray(arguments, key: "attachments")
             let format = try parseBodyFormatArgument(arguments["format"])
             let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
-            return try await mailController.createDraft(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, sanitizeLinks: sanitizeLinks)
+            // #131: sender account selection (see compose_email).
+            let fromAddress = arguments["from_address"]?.stringValue
+            return try await mailController.createDraft(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, sanitizeLinks: sanitizeLinks, fromAddress: fromAddress)
 
         // Attachment Tools
         case "list_attachments":
