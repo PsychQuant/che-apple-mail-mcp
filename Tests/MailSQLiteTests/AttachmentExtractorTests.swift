@@ -674,6 +674,38 @@ final class AttachmentExtractorTests: XCTestCase {
                        "a path-traversal attachment name must not resolve to an out-of-tree file")
     }
 
+    /// #124 security defence-in-depth: an attacker sending a path-traversal
+    /// payload **encoded as an RFC 2047 encoded-word** (the new attack shape
+    /// #99 / #115 round-2 enabled by RFC 2047-decoding filename params at the
+    /// per-parameter layer) must still be rejected by the `#105` guard. The
+    /// post-decode canonical name is exactly the literal traversal string —
+    /// so the decode-then-guard chain catches it the same way as the literal
+    /// case above. Same decoy plant; only the on-wire filename shape differs.
+    /// Base64 `Li4vLi4vZGVjb3kucGRm` decodes to `../../decoy.pdf`.
+    func testAttachmentSavability_pathTraversalNameIsRejected_rfc2047EncodedPayload() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262401
+        // On-wire MIME header: filename="=?utf-8?B?Li4vLi4vZGVjb3kucGRm?="
+        let encodedFilename = "=?utf-8?B?Li4vLi4vZGVjb3kucGRm?="
+        let decodedCanonicalName = "../../decoy.pdf"
+        let (mailboxURL, attachmentsDir) = try installPartialEmlxWithStrippedAttachment(
+            rowId: rowId, attachmentFilename: encodedFilename, in: root
+        )
+        let partDir = attachmentsDir.appendingPathComponent("2", isDirectory: true)
+        try FileManager.default.createDirectory(at: partDir, withIntermediateDirectories: true)
+        // Same decoy plant as the literal case — escape would land at
+        // .../Attachments/decoy.pdf if the guard were missing.
+        let escapeTarget = attachmentsDir.deletingLastPathComponent()
+            .appendingPathComponent("decoy.pdf")
+        try Data("decoy".utf8).write(to: escapeTarget)
+
+        let savability = try EmlxParser.attachmentSavability(rowId: rowId, mailboxURL: mailboxURL)
+        XCTAssertEqual(savability[decodedCanonicalName], false,
+                       "an RFC 2047-encoded path-traversal payload must still be rejected after the decode pipeline canonicalises it")
+    }
+
     /// Mirror of the happy path but exercising the external-folder match
     /// against the legacy `Content-Type: name` parameter (some senders
     /// only set `name=`, not `Content-Disposition: filename=`).
