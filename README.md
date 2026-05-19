@@ -436,7 +436,7 @@ Mail.app's AppleScript `account "<display_name>"` selector is **not unique** whe
 
 **Discovering `account_id`**:
 
-- **From `search_emails` results** — each `SearchResult` carries an `account_id` field alongside `account_name` (populated from the `mailboxes.account_id` SQLite join). Recommended: pass it through directly.
+- **From `search_emails` results** — each `SearchResult` carries an `account_id` field alongside `account_name` (populated by decoding the account UUID from the SQLite `mailboxes.url` authority via `MailboxURL.decode` — Mail.app's storage convention encodes the account UUID in the mailbox URL authority; there is no direct `SELECT mailboxes.account_id`). Recommended: pass it through directly.
 - **Manually** — read `~/Library/Mail/V10/MailData/Signatures/AccountsMap.plist`. The top-level keys are the UUIDs; the `AccountURL` value contains the matching email address percent-encoded in the authority.
 - **In AppleScript** — `tell application "Mail" to get id of every account` returns the UUID list.
 
