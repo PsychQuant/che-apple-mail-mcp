@@ -30,20 +30,20 @@ final class AppleScriptRefBuilderTests: XCTestCase {
     // MARK: - resolveMailboxRef
 
     func testResolveMailboxRef_uuidPath_whenAccountIdProvided() {
-        let ref = resolveMailboxRef(mailbox: "INBOX", accountId: "UUID-A", accountName: "kiki830621@gmail.com")
+        let ref = resolveMailboxRef(mailbox: "INBOX", accountId: "UUID-A", accountName: "alice@example.com")
         XCTAssertEqual(
             ref,
             "(first mailbox of (account id \"UUID-A\") whose name is \"INBOX\")",
             "Non-nil accountId MUST use the (account id \"...\") UUID selector — display_name must NOT appear"
         )
-        XCTAssertFalse(ref.contains("kiki830621@gmail.com"),
+        XCTAssertFalse(ref.contains("alice@example.com"),
                        "display_name must not leak into the UUID-path ref")
     }
 
     func testResolveMailboxRef_displayNameFallback_whenAccountIdNil() {
         XCTAssertEqual(
-            resolveMailboxRef(mailbox: "INBOX", accountId: nil, accountName: "kiki830621@gmail.com"),
-            "(first mailbox of account \"kiki830621@gmail.com\" whose name is \"INBOX\")",
+            resolveMailboxRef(mailbox: "INBOX", accountId: nil, accountName: "alice@example.com"),
+            "(first mailbox of account \"alice@example.com\" whose name is \"INBOX\")",
             "Nil accountId MUST fall back to the legacy account \"<display_name>\" form — "
             + "byte-identical to pre-sweep MailController.mailboxRef output"
         )
@@ -61,21 +61,21 @@ final class AppleScriptRefBuilderTests: XCTestCase {
 
     func testResolveMsgRef_uuidPath_whenAccountIdProvided() {
         let ref = resolveMsgRef(id: "263385", mailbox: "收件匣", accountId: "UUID-A",
-                                accountName: "kiki830621@gmail.com")
+                                accountName: "alice@example.com")
         XCTAssertEqual(
             ref,
             "(first message of (first mailbox of (account id \"UUID-A\") whose name is \"收件匣\") whose id is 263385)",
             "Non-nil accountId MUST chain msgRefByAccountId"
         )
-        XCTAssertFalse(ref.contains("kiki830621@gmail.com"),
+        XCTAssertFalse(ref.contains("alice@example.com"),
                        "display_name must not leak into the UUID-path ref")
     }
 
     func testResolveMsgRef_displayNameFallback_whenAccountIdNil() {
         XCTAssertEqual(
             resolveMsgRef(id: "263385", mailbox: "INBOX", accountId: nil,
-                          accountName: "kiki830621@gmail.com"),
-            "(first message of (first mailbox of account \"kiki830621@gmail.com\" whose name is \"INBOX\") whose id is 263385)",
+                          accountName: "alice@example.com"),
+            "(first message of (first mailbox of account \"alice@example.com\" whose name is \"INBOX\") whose id is 263385)",
             "Nil accountId MUST fall back to the legacy form — byte-identical to "
             + "pre-sweep MailController.msgRef output"
         )
@@ -160,20 +160,20 @@ final class AppleScriptRefBuilderTests: XCTestCase {
     // rather than referencing an existing mail item.
 
     func testResolveAccountRef_uuidPath_whenAccountIdProvided() {
-        let ref = resolveAccountRef(accountId: "UUID-A", accountName: "kiki830621@gmail.com")
+        let ref = resolveAccountRef(accountId: "UUID-A", accountName: "alice@example.com")
         XCTAssertEqual(
             ref,
             "(account id \"UUID-A\")",
             "Non-nil accountId MUST use the (account id \"...\") UUID selector"
         )
-        XCTAssertFalse(ref.contains("kiki830621@gmail.com"),
+        XCTAssertFalse(ref.contains("alice@example.com"),
                        "display_name must not leak into the UUID-path ref")
     }
 
     func testResolveAccountRef_displayNameFallback_whenAccountIdNil() {
         XCTAssertEqual(
-            resolveAccountRef(accountId: nil, accountName: "kiki830621@gmail.com"),
-            "account \"kiki830621@gmail.com\"",
+            resolveAccountRef(accountId: nil, accountName: "alice@example.com"),
+            "account \"alice@example.com\"",
             "Nil accountId MUST fall back to the legacy account \"<display_name>\" form"
         )
     }
