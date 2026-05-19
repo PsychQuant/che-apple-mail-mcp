@@ -431,14 +431,55 @@ final class MIMEParserTests: XCTestCase {
 
     func testResolveFilename_plainFilename_containingPartialEncodedWordSubstring_unchanged() {
         // Defensive: filename literally containing `=?...?=` as a substring
-        // (not a full encoded-word) must NOT be corrupted by the second-pass
-        // decode. Strict full-string pattern gate should reject this.
+        // (not a well-formed encoded-word) must NOT be corrupted by the
+        // second-pass decode — `=?bogus.pdf` has no `?encoding?text?=`, so the
+        // encoded-word pattern gate rejects it.
         let params: [String: String] = ["filename": "report=?bogus.pdf"]
         let result = MIMEParser.resolveFilename(
             dispositionParams: params,
             contentTypeParams: [:]
         )
         XCTAssertEqual(result, "report=?bogus.pdf")
+    }
+
+    func testEnumerateAttachmentNames_contentTypeNameEncodedWord_decodedAtCollectPoint() throws {
+        // #115 verify (Codex): with the raw-header-level decode gone for
+        // Content-*, a leaf part carrying `Content-Type: …; name="=?…?="`
+        // (no Content-Disposition filename) must still emit the *decoded*
+        // attachment name from `collectAttachmentNames`'s name-add point —
+        // the second add point at the leaf was previously inserting raw
+        // params["name"], leaving a spurious encoded-word entry in the set.
+        let boundary = "b115ct"
+        let headers = ["content-type": "multipart/mixed; boundary=\"\(boundary)\""]
+        let body = "--\(boundary)\r\n"
+            + "Content-Type: application/pdf;\r\n"
+            + "\tname=\"=?UTF-8?Q?=E6=B8=AC=E8=A9=A6.pdf?=\"\r\n"
+            + "Content-Transfer-Encoding: base64\r\n\r\n"
+            + "ZGF0YQ==\r\n"
+            + "--\(boundary)--\r\n"
+        let names = try MIMEParser.enumerateAttachmentNames(Data(body.utf8), headers: headers)
+        XCTAssertTrue(names.contains("測試.pdf"),
+                      "Content-Type name encoded-word must decode at the name-add path; got \(names)")
+        XCTAssertFalse(names.contains("=?UTF-8?Q?=E6=B8=AC=E8=A9=A6.pdf?="),
+                       "raw encoded-word must NOT leak into the name set; got \(names)")
+    }
+
+    func testResolveFilename_encodedWordWithLiteralExtensionSuffix() {
+        // #115 verify (Devil's Advocate): a `filename=` value whose basename is
+        // an RFC 2047 encoded-word but whose extension is a literal ASCII
+        // suffix (`=?UTF-8?Q?…?=.pdf`) — a real non-conformant client pattern.
+        // Before #115 the eager header-level RFC 2047 scan decoded it (a
+        // partial, in-place scan); #115 moved decoding to the per-parameter
+        // layer, so `resolveFilename`'s second pass must also be a partial
+        // in-place decode — a strict whole-string-is-encoded-words gate would
+        // refuse this value and re-introduce the silent-drop symptom.
+        let params: [String: String] = ["filename": "=?UTF-8?Q?=E6=B8=AC=E8=A9=A6?=.pdf"]
+        let result = MIMEParser.resolveFilename(
+            dispositionParams: params,
+            contentTypeParams: [:]
+        )
+        XCTAssertEqual(result, "測試.pdf",
+                       "encoded-word basename + literal extension must decode in place")
     }
 
     // MARK: - Base64-encoded multipart parts (#72)

@@ -272,8 +272,15 @@ public enum MIMEParser {
         ), out[filename] == nil {
             out[filename] = inlinePresent
         }
-        if let name = params["name"], out[name] == nil {
-            out[name] = inlinePresent
+        // Legacy `Content-Type: name=` add point. Apply the same per-parameter
+        // RFC 2047 decode as `resolveFilename` path 4 — symmetric — so the
+        // emitted name set never contains a spurious raw `=?…?=` entry once
+        // raw-header-level decoding is gone for Content-* (#115 verify, Codex).
+        if let name = params["name"] {
+            let decoded = decodeRFC2047IfApplicable(name)
+            if out[decoded] == nil {
+                out[decoded] = inlinePresent
+            }
         }
     }
 
@@ -489,29 +496,35 @@ public enum MIMEParser {
         return nil
     }
 
-    /// RFC 2047 encoded-word grammar (strict full-string match):
+    /// RFC 2047 encoded-word grammar — a single well-formed encoded-word:
     ///
     /// ```
-    /// =?charset?B|Q?text?=  (one or more, whitespace-separated)
+    /// =?charset?B|Q?text?=
     /// ```
     ///
-    /// Used as a gate before second-pass decode in `resolveFilename` —
-    /// without it, a filename literally containing `=?...?=` as a substring
-    /// (rare but possible, e.g. `report=?bogus.pdf`) could be corrupted
-    /// when `decodeRFC2047` partially matches and replaces the substring
-    /// with a base64-decode failure result. Strict full-string anchor
-    /// prevents that class of false positive.
-    private static let rfc2047FullEncodedWordPattern: NSRegularExpression? = {
-        let pattern = #"^=\?[^?\s]+\?[BQbq]\?[^?]*\?=(\s*=\?[^?\s]+\?[BQbq]\?[^?]*\?=)*$"#
+    /// Used as a gate before the second-pass decode in `resolveFilename`: the
+    /// value is decoded only when it **contains** at least one well-formed
+    /// encoded-word. `RFC822Parser.decodeRFC2047` is a partial, in-place
+    /// scanner — it decodes well-formed encoded-words wherever they appear and
+    /// leaves everything else untouched (a malformed `=?…` that is not a
+    /// complete encoded-word, e.g. `report=?bogus.pdf`, fails `parseEncodedWord`
+    /// and survives verbatim; a base64-decode failure also re-emits the raw
+    /// encoded-word) — so the gate is a **substring search**, not anchored to
+    /// the whole string. Anchoring it (`^…$`) was too strict: it refused a
+    /// legitimate `=?…?=.pdf` value (encoded basename + literal extension),
+    /// which the pre-#115 raw-header-level scan used to decode — once #115
+    /// moved decoding from the header layer to this per-parameter layer, a
+    /// whole-string gate silently dropped that attachment class.
+    private static let rfc2047EncodedWordPattern: NSRegularExpression? = {
+        let pattern = #"=\?[^?\s]+\?[BQbq]\?[^?]*\?="#
         return try? NSRegularExpression(pattern: pattern)
     }()
 
-    /// Apply `RFC822Parser.decodeRFC2047` only when `value` is **entirely**
-    /// composed of one or more RFC 2047 encoded-words (possibly
-    /// whitespace-separated per RFC 2047 §6.2). See
-    /// `rfc2047FullEncodedWordPattern` for the rationale.
+    /// Apply `RFC822Parser.decodeRFC2047` (a partial, in-place encoded-word
+    /// scanner) when `value` contains at least one well-formed RFC 2047
+    /// encoded-word. See `rfc2047EncodedWordPattern` for the rationale.
     static func decodeRFC2047IfApplicable(_ value: String) -> String {
-        guard let regex = rfc2047FullEncodedWordPattern else { return value }
+        guard let regex = rfc2047EncodedWordPattern else { return value }
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
         guard regex.firstMatch(in: value, range: range) != nil else { return value }
         return RFC822Parser.decodeRFC2047(value)
