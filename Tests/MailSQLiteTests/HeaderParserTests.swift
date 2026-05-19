@@ -87,6 +87,24 @@ final class HeaderParserTests: XCTestCase {
                        + "(it mangles encoded-words split across RFC 2231 continuation); got: \(cd)")
     }
 
+    func testDecodeRFC2047_dropsCRLFBetweenConsecutiveEncodedWords() {
+        // #125: pre-fix the inter-encoded-word whitespace-skip in
+        // `decodeRFC2047` only stripped ` ` / `\t`, so a CR/LF between two
+        // encoded-words leaked through as a literal control character into
+        // the decoded result — RFC 2047 §6.2 says "linear-white-space"
+        // (RFC 822 LWS = space + tab + CRLF) between encoded-words is
+        // folded, so all four whitespace characters must be skipped.
+        let lf = "=?utf-8?B?YWJj?=\n=?utf-8?B?ZGVm?="
+        let cr = "=?utf-8?B?YWJj?=\r=?utf-8?B?ZGVm?="
+        let crlf = "=?utf-8?B?YWJj?=\r\n=?utf-8?B?ZGVm?="
+        let space = "=?utf-8?B?YWJj?= =?utf-8?B?ZGVm?="
+        let tab = "=?utf-8?B?YWJj?=\t=?utf-8?B?ZGVm?="
+        for (input, label) in [(lf, "LF"), (cr, "CR"), (crlf, "CRLF"), (space, "space"), (tab, "tab")] {
+            XCTAssertEqual(RFC822Parser.decodeRFC2047(input), "abcdef",
+                           "consecutive encoded-words separated by \(label) must concatenate cleanly")
+        }
+    }
+
     func testSubjectStillRFC2047DecodedAfterStructuredHeaderSkip() {
         // Guard: skipping decode for content-* headers must not regress the
         // legitimate decode of display headers like Subject.
