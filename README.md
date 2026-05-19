@@ -427,7 +427,7 @@ Mail.app's AppleScript `account "<display_name>"` selector is **not unique** whe
 {
     "id": "273214",
     "mailbox": "[Gmail]/全部郵件",
-    "account_name": "kiki830621@gmail.com",
+    "account_name": "alice@example.com",
     "account_id": "C38E0583-47F8-4468-BE70-43155C15549D",  // ← disambiguates
     "attachment_name": "report.pdf",
     "save_path": "/tmp/report.pdf"

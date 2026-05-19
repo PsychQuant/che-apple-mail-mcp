@@ -13,9 +13,9 @@ final class AccountsScriptParserTests: XCTestCase {
     func testParsesSingleImapAccount() {
         let raw = [
             "Gmail",
-            "kiki830621@gmail.com",
+            "alice@example.com",
             "C38E0583-47F8-4468-BE70-43155C15549D",
-            "kiki830621@gmail.com",
+            "alice@example.com",
             "true"
         ].joined(separator: US)
 
@@ -24,10 +24,10 @@ final class AccountsScriptParserTests: XCTestCase {
         XCTAssertEqual(accounts.count, 1)
         let acc = accounts[0]
         XCTAssertEqual(acc.name, "Gmail")
-        XCTAssertEqual(acc.userName, "kiki830621@gmail.com")
+        XCTAssertEqual(acc.userName, "alice@example.com")
         XCTAssertEqual(acc.id, "C38E0583-47F8-4468-BE70-43155C15549D")
-        XCTAssertEqual(acc.emailAddresses, ["kiki830621@gmail.com"])
-        XCTAssertEqual(acc.displayName, "kiki830621@gmail.com")
+        XCTAssertEqual(acc.emailAddresses, ["alice@example.com"])
+        XCTAssertEqual(acc.displayName, "alice@example.com")
         XCTAssertTrue(acc.enabled)
     }
 
@@ -35,9 +35,9 @@ final class AccountsScriptParserTests: XCTestCase {
         let ewsURL = "ews://AAMkAGE5MTZiZmU5LTAwOTMtNDM5NS1iMDY0LTJiMzRiMDMyYmVkNQ==/"
         let raw = [
             ewsURL,
-            "d06227105@ntu.edu.tw",
+            "bob@example.com",
             "ABCE3A85-06BE-43BC-9B84-2CA6F325612F",
-            "d06227105@ntu.edu.tw",
+            "bob@example.com",
             "true"
         ].joined(separator: US)
 
@@ -48,8 +48,8 @@ final class AccountsScriptParserTests: XCTestCase {
         // The raw `name` attribute is still the AccountURL (Mail.app returns it).
         XCTAssertEqual(acc.name, ewsURL)
         // But `display_name` should be the usable email, not the URL.
-        XCTAssertEqual(acc.displayName, "d06227105@ntu.edu.tw")
-        XCTAssertEqual(acc.userName, "d06227105@ntu.edu.tw")
+        XCTAssertEqual(acc.displayName, "bob@example.com")
+        XCTAssertEqual(acc.userName, "bob@example.com")
         XCTAssertFalse(
             acc.displayName.hasPrefix("ews://"),
             "display_name must not leak the ews:// URL"
@@ -58,18 +58,18 @@ final class AccountsScriptParserTests: XCTestCase {
 
     func testParsesMultipleAccountsImapPlusEws() {
         let imapRecord = [
-            "kiki830621@gmail.com",   // name
-            "kiki830621@gmail.com",   // user_name
+            "alice@example.com",   // name
+            "alice@example.com",   // user_name
             "C38E0583-47F8-4468-BE70-43155C15549D",
-            "kiki830621@gmail.com",   // email_addresses (single)
+            "alice@example.com",   // email_addresses (single)
             "true"
         ].joined(separator: US)
 
         let ewsRecord = [
             "ews://AAMkA.../",
-            "d06227105@ntu.edu.tw",
+            "bob@example.com",
             "ABCE3A85-06BE-43BC-9B84-2CA6F325612F",
-            "d06227105@ntu.edu.tw",
+            "bob@example.com",
             "true"
         ].joined(separator: US)
 
@@ -78,8 +78,8 @@ final class AccountsScriptParserTests: XCTestCase {
         let accounts = AccountsScriptParser.parse(raw)
 
         XCTAssertEqual(accounts.count, 2)
-        XCTAssertEqual(accounts[0].displayName, "kiki830621@gmail.com")
-        XCTAssertEqual(accounts[1].displayName, "d06227105@ntu.edu.tw")
+        XCTAssertEqual(accounts[0].displayName, "alice@example.com")
+        XCTAssertEqual(accounts[1].displayName, "bob@example.com")
         // Sanity: neither display_name should be a URL.
         for acc in accounts {
             XCTAssertFalse(acc.displayName.hasPrefix("ews://"))
@@ -197,19 +197,19 @@ final class AccountsScriptParserTests: XCTestCase {
     func testAsDictionaryExposesAllFields() {
         let acc = AccountInfo(
             name: "ews://AAMkA.../",
-            userName: "d06227105@ntu.edu.tw",
+            userName: "bob@example.com",
             id: "UUID-EWS",
-            emailAddresses: ["d06227105@ntu.edu.tw"],
+            emailAddresses: ["bob@example.com"],
             enabled: true
         )
 
         let dict = acc.asDictionary()
 
         XCTAssertEqual(dict["name"] as? String, "ews://AAMkA.../")
-        XCTAssertEqual(dict["user_name"] as? String, "d06227105@ntu.edu.tw")
+        XCTAssertEqual(dict["user_name"] as? String, "bob@example.com")
         XCTAssertEqual(dict["id"] as? String, "UUID-EWS")
-        XCTAssertEqual(dict["email_addresses"] as? [String], ["d06227105@ntu.edu.tw"])
-        XCTAssertEqual(dict["display_name"] as? String, "d06227105@ntu.edu.tw")
+        XCTAssertEqual(dict["email_addresses"] as? [String], ["bob@example.com"])
+        XCTAssertEqual(dict["display_name"] as? String, "bob@example.com")
         XCTAssertEqual(dict["enabled"] as? Bool, true)
     }
 }

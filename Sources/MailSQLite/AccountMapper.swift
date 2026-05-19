@@ -13,7 +13,7 @@ public enum AccountMapper {
     ///
     /// The plist maps each UUID to a dictionary with an `AccountURL` key
     /// containing the account's email (percent-encoded in the URL authority).
-    /// For example: `imap://kiki830621%40gmail.com/` → `kiki830621@gmail.com`
+    /// For example: `imap://alice%40example.com/` → `alice@example.com`
     ///
     /// - Parameter path: Override path for testing. Defaults to the standard location.
     /// - Returns: Dictionary mapping account UUIDs to email addresses.
