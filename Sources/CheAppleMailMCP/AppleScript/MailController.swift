@@ -939,14 +939,18 @@ actor MailController {
     }
 
     /// Create a draft
-    func createDraft(to: [String], subject: String, body: String, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false) throws -> String {
+    func createDraft(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
-        // Issue #41: validate draft recipients at the boundary.
+        // Issue #41: validate every recipient field (to / cc / bcc) at the boundary (#107).
         try validateEmailAddresses(to, field: "to")
+        if let cc = cc { try validateEmailAddresses(cc, field: "cc") }
+        if let bcc = bcc { try validateEmailAddresses(bcc, field: "bcc") }
         let script = try buildCreateDraftScript(
             to: to,
             subject: subject,
             body: body,
+            cc: cc,
+            bcc: bcc,
             attachments: attachments,
             format: format,
             sanitizeLinks: sanitizeLinks

@@ -72,6 +72,21 @@ final class ServerSchemaTests: XCTestCase {
         assertFormatParameter(toolName: "create_draft")
     }
 
+    func testCreateDraft_advertisesCcBccParameters() {
+        // #107: create_draft gained optional cc / bcc — both must appear in
+        // the schema's properties, and neither may be in `required`.
+        guard let t = tool(named: "create_draft"),
+              let props = propertiesObject(of: t) else {
+            XCTFail("create_draft schema missing")
+            return
+        }
+        XCTAssertNotNil(props["cc"], "create_draft must advertise a cc property")
+        XCTAssertNotNil(props["bcc"], "create_draft must advertise a bcc property")
+        let required = requiredArray(of: t) ?? []
+        XCTAssertFalse(required.contains("cc"), "cc must stay optional")
+        XCTAssertFalse(required.contains("bcc"), "bcc must stay optional")
+    }
+
     func testReplyEmail_advertisesFormatEnum() {
         assertFormatParameter(toolName: "reply_email")
     }

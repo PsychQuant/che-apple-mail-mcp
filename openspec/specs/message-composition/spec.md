@@ -216,3 +216,22 @@ The MCP tool input schema for each of `compose_email`, `create_draft`, `reply_em
 - **THEN** the returned schema for each of the four composing tools SHALL include a `format` property
 - **AND** the `format` property SHALL declare enum values exactly `["plain", "markdown", "html"]`
 - **AND** the `format` property SHALL NOT be listed as required
+
+---
+### Requirement: From-scratch composing tools accept cc and bcc recipients
+
+The `compose_email` and `create_draft` MCP tools SHALL each accept optional `cc` and `bcc` parameters, each an array of recipient email-address strings. When provided, the system SHALL set the corresponding Apple Mail `cc recipients` / `bcc recipients` of the outgoing message. The `cc` and `bcc` properties SHALL NOT appear in the `required` array of either tool schema, and omitting them SHALL produce behavior identical to the pre-existing single-recipient (`to`-only) path. Recipient addresses supplied via `cc` / `bcc` SHALL be validated at the boundary identically to `to` recipients.
+
+> `reply_email` instead exposes `cc_additional` (recipients added on top of those derived from `reply_all`) — a reply-context parameter with distinct semantics — and is not covered by this requirement. `forward_email` does not currently accept `cc` / `bcc`.
+
+#### Scenario: create_draft schema advertises cc and bcc
+
+- **WHEN** an MCP client calls `tools/list`
+- **THEN** the returned schema for `create_draft` SHALL include `cc` and `bcc` array-of-string properties
+- **AND** neither `cc` nor `bcc` SHALL be listed as required
+
+#### Scenario: Draft is created with cc and bcc recipients
+
+- **WHEN** `create_draft` is called with `cc` and/or `bcc` arrays
+- **THEN** the generated AppleScript SHALL emit `make new cc recipient` / `make new bcc recipient` fragments inside the `tell newMessage` block
+- **AND** omitting both SHALL yield AppleScript byte-identical to the pre-`cc`/`bcc` builder
