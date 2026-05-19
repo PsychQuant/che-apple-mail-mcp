@@ -440,8 +440,11 @@ public enum MIMEParser {
     /// inside the RFC 2231 percent-encoded payload (or inside a plain
     /// `filename=` value). After resolving the outer layer, this function
     /// runs an idempotent RFC 2047 second pass via `decodeRFC2047IfApplicable`
-    /// (strict full-string pattern gate prevents false-positive corruption
-    /// of names containing literal `=?...?=` substrings).
+    /// — a partial in-place decode gated on the presence of at least one
+    /// well-formed encoded-word (`decodeRFC2047` itself only rewrites
+    /// well-formed encoded-words, so a literal `=?...` substring that lacks
+    /// the closing `?encoding?text?=` structure, e.g. `report=?bogus.pdf`,
+    /// survives untouched).
     static func resolveFilename(
         dispositionParams: [String: String],
         contentTypeParams: [String: String]
