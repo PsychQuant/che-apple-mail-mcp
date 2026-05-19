@@ -687,6 +687,25 @@ final class MIMEParserTests: XCTestCase {
                        "first (stripped) occurrence must win — matches saveAttachment's parts.first")
     }
 
+    // MARK: - Gate hardening: empty payload rejection (#126)
+
+    func testResolveFilename_plainFilename_emptyEncodedWordPayload_unchanged() {
+        // #126: RFC 2047 §2 grammar requires the encoded-text to be 1+
+        // characters. The earlier gate regex used `[^?]*` (zero-or-more) so a
+        // degenerate `=?utf-8?B??=` (empty payload) matched the gate and
+        // dropped into `RFC822Parser.decodeRFC2047` for a no-op decode —
+        // wasted work + a vacuous-EW value that should never have triggered
+        // the second pass. Post-fix the gate uses `[^?]+`, so the empty
+        // payload string is left unchanged by `decodeRFC2047IfApplicable`.
+        let params: [String: String] = ["filename": "report=?utf-8?B??=.pdf"]
+        let result = MIMEParser.resolveFilename(
+            dispositionParams: params,
+            contentTypeParams: [:]
+        )
+        XCTAssertEqual(result, "report=?utf-8?B??=.pdf",
+                       "empty encoded-word payload must NOT trigger the gate (no useful decode)")
+    }
+
     // MARK: - RFC 2231 continuation on Content-Type `name*N` (#122)
 
     func testResolveFilename_contentTypeName_rfc2231WithNestedRfc2047() {
