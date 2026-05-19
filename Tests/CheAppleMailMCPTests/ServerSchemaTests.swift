@@ -196,6 +196,40 @@ final class ServerSchemaTests: XCTestCase {
         assertInvalidMessageId(["id": .null], expectedFragment: "required")
     }
 
+    // MARK: - decodeAccountId (#111 — non-string account_id silent-degrade)
+
+    func testDecodeAccountId_stringValueReturned() {
+        XCTAssertEqual(
+            decodeAccountId(["account_id": .string("UUID-A")], tool: "save_attachment"),
+            "UUID-A")
+    }
+
+    func testDecodeAccountId_absentKeyReturnsNil() {
+        // No account_id supplied — legitimate "use the legacy path", no warning.
+        XCTAssertNil(decodeAccountId([:], tool: "save_attachment"))
+    }
+
+    func testDecodeAccountId_explicitNullReturnsNil() {
+        // JSON null is an explicit "no account_id" — nil, no warning.
+        XCTAssertNil(decodeAccountId(["account_id": .null], tool: "save_attachment"))
+    }
+
+    func testDecodeAccountId_nonStringTypesReturnNil() {
+        // Present-but-non-string: the #111 silent-degrade trap. decodeAccountId
+        // returns nil (falls back to account_name) AND emits a stderr warning —
+        // the return contract is pinned here; the warning is a stderr side effect.
+        XCTAssertNil(decodeAccountId(["account_id": .int(12345)], tool: "save_attachment"))
+        XCTAssertNil(decodeAccountId(["account_id": .bool(true)], tool: "mark_read"))
+        XCTAssertNil(decodeAccountId(["account_id": .double(3.14)], tool: "move_email"))
+        XCTAssertNil(decodeAccountId(["account_id": .array([.string("x")])], tool: "delete_email"))
+    }
+
+    func testDecodeAccountId_emptyStringReturnedVerbatim() {
+        // Empty string is still a string — returned as-is; resolveMsgRef /
+        // resolveMailboxRef treat "" the same as nil downstream (the !isEmpty guard).
+        XCTAssertEqual(decodeAccountId(["account_id": .string("")], tool: "save_attachment"), "")
+    }
+
     // MARK: - parseBodyFormatArgument (handles MCP Value type)
 
     func testParseBodyFormatArgument_nilReturnsPlain() throws {
