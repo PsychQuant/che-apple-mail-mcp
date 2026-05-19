@@ -976,6 +976,54 @@ final class MailControllerComposeTests: XCTestCase {
         }
     }
 
+    // MARK: - redirectEmail boundary validation (#133)
+
+    /// #133: redirect_email must run the same #41 boundary validation as
+    /// compose/reply/forward. Pre-fix it skipped the check, letting malformed
+    /// addresses reach Mail.app and surface as opaque AppleScript errors
+    /// instead of a clean MailError.invalidParameter. The test passes an
+    /// invalid recipient — validation MUST throw before any AppleScript
+    /// dispatch attempt (we do not run on a CI worker that talks to Mail.app).
+    func testRedirectEmail_rejectsControlCharsInRecipient() async {
+        do {
+            _ = try await MailController.shared.redirectEmail(
+                id: "1", mailbox: "INBOX", accountName: "alice@example.com",
+                to: ["ok@x.com\nBcc: leak@evil.com"], accountId: nil
+            )
+            XCTFail("expected invalidParameter for control-char recipient")
+        } catch let error as MailError {
+            guard case .invalidParameter(let msg) = error else {
+                XCTFail("expected invalidParameter, got \(error)")
+                return
+            }
+            XCTAssertTrue(msg.contains("control characters"),
+                          "msg must mention control chars: \(msg)")
+            XCTAssertTrue(msg.contains("to"),
+                          "msg must include field name 'to': \(msg)")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    func testRedirectEmail_rejectsMissingAt() async {
+        do {
+            _ = try await MailController.shared.redirectEmail(
+                id: "1", mailbox: "INBOX", accountName: "alice@example.com",
+                to: ["not-an-email"], accountId: nil
+            )
+            XCTFail("expected invalidParameter for malformed recipient")
+        } catch let error as MailError {
+            guard case .invalidParameter(let msg) = error else {
+                XCTFail("expected invalidParameter, got \(error)")
+                return
+            }
+            XCTAssertTrue(msg.contains("exactly one '@'"),
+                          "msg must explain '@' rule: \(msg)")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
     // MARK: - dedupAddresses (#34)
 
     func testDedupAddresses_removesCaseInsensitiveDuplicates() async {

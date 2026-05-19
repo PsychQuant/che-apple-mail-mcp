@@ -1219,6 +1219,12 @@ actor MailController {
     /// share a display_name (#104 sweep). Script construction is delegated to
     /// `buildRedirectEmailScript` (`RedirectEmailScriptBuilder.swift`).
     func redirectEmail(id: String, mailbox: String, accountName: String, to: [String], accountId: String? = nil) throws -> String {
+        // Issue #41 (consistency with compose/reply/forward — closes #133):
+        // validate redirect recipients at the boundary. Pre-fix the AppleScript
+        // builder simply `appleScriptEscape`d the addresses (no injection
+        // vector) but a malformed address would land in Mail.app and surface
+        // as an opaque AppleScript error or silent undeliverable redirect.
+        try validateEmailAddresses(to, field: "to")
         let script = buildRedirectEmailScript(
             id: id,
             mailbox: mailbox,
