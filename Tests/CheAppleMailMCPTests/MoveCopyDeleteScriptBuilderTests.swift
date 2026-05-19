@@ -11,6 +11,13 @@ final class MoveCopyDeleteScriptBuilderTests: XCTestCase {
 
     private let uuid = "C38E0583-47F8-4468-BE70-43155C15549D"
 
+    /// #130: extract the first line containing the given verb fragment so
+    /// positional assertions can distinguish source vs. destination refs
+    /// (catches role-swap regression that count-only assertions miss).
+    private func lineContaining(_ script: String, _ needle: String) -> String {
+        script.components(separatedBy: "\n").first(where: { $0.contains(needle) }) ?? ""
+    }
+
     // MARK: - move_email (TWO refs: source + destination)
 
     func testBuildMoveEmailScript_uuidPath_bothRefsUseUuid() {
@@ -29,6 +36,19 @@ final class MoveCopyDeleteScriptBuilderTests: XCTestCase {
                        "display_name must not leak in UUID path")
         XCTAssertTrue(s.contains("move msg to"), "must contain move verb")
         XCTAssertTrue(s.contains("whose name is \"Archive\""), "destination mailbox name must appear")
+        // #130: positional pin — catch role-swap regression (mailboxRef
+        // accidentally substituted for msgRef or vice versa). count=2 alone
+        // would still pass if `resolveMailboxRef` were called twice.
+        let setLine = lineContaining(s, "set msg to")
+        XCTAssertTrue(setLine.contains("whose id is 42"),
+                      "msgRef must be on `set msg to` line; got:\n\(s)")
+        XCTAssertFalse(setLine.contains("whose name is \"Archive\""),
+                       "mailbox name must NOT be on source line (role-swap regression)")
+        let moveLine = lineContaining(s, "move msg to")
+        XCTAssertTrue(moveLine.contains("whose name is \"Archive\""),
+                      "mailboxRef must be on `move msg to` line; got:\n\(s)")
+        XCTAssertFalse(moveLine.contains("whose id is 42"),
+                       "msg id must NOT be on destination line (role-swap regression)")
     }
 
     func testBuildMoveEmailScript_displayNameFallback() {
@@ -59,6 +79,17 @@ final class MoveCopyDeleteScriptBuilderTests: XCTestCase {
         XCTAssertFalse(s.contains("account \"bob@example.com\""))
         XCTAssertTrue(s.contains("duplicate msg to"), "copy uses duplicate verb")
         XCTAssertTrue(s.contains("whose name is \"Sent\""))
+        // #130: positional pin — catch role-swap regression.
+        let setLine = lineContaining(s, "set msg to")
+        XCTAssertTrue(setLine.contains("whose id is 99"),
+                      "msgRef must be on `set msg to` line; got:\n\(s)")
+        XCTAssertFalse(setLine.contains("whose name is \"Sent\""),
+                       "mailbox name must NOT be on source line (role-swap regression)")
+        let dupLine = lineContaining(s, "duplicate msg to")
+        XCTAssertTrue(dupLine.contains("whose name is \"Sent\""),
+                      "mailboxRef must be on `duplicate msg to` line; got:\n\(s)")
+        XCTAssertFalse(dupLine.contains("whose id is 99"),
+                       "msg id must NOT be on destination line (role-swap regression)")
     }
 
     func testBuildCopyEmailScript_displayNameFallback() {
