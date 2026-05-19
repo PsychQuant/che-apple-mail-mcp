@@ -52,7 +52,7 @@ final class SaveAttachmentScriptBuilderTests: XCTestCase {
             id: "263385",
             mailbox: "收件匣",
             accountId: "C38E0583-47F8-4468-BE70-43155C15549D",
-            accountName: "kiki830621@gmail.com",   // ambiguous display_name — should NOT appear
+            accountName: "alice@example.com",   // ambiguous display_name — should NOT appear
             attachmentName: "test.pdf",
             savePath: "/tmp/test.pdf"
         )
@@ -62,7 +62,7 @@ final class SaveAttachmentScriptBuilderTests: XCTestCase {
             "UUID path MUST use (account id \"...\") selector; got:\n\(script)"
         )
         XCTAssertFalse(
-            script.contains("account \"kiki830621@gmail.com\""),
+            script.contains("account \"alice@example.com\""),
             "When accountId is provided, the display_name (ambiguous) MUST NOT "
             + "appear in the AppleScript — that defeats disambiguation. Got:\n\(script)"
         )
@@ -81,12 +81,12 @@ final class SaveAttachmentScriptBuilderTests: XCTestCase {
             id: "263385",
             mailbox: "INBOX",
             accountId: nil,
-            accountName: "kiki830621@gmail.com",
+            accountName: "alice@example.com",
             attachmentName: "test.pdf",
             savePath: "/tmp/test.pdf"
         )
         XCTAssertTrue(
-            script.contains("account \"kiki830621@gmail.com\""),
+            script.contains("account \"alice@example.com\""),
             "When accountId is nil, fall back to the legacy account \"<display_name>\" "
             + "form for backward compat. Got:\n\(script)"
         )

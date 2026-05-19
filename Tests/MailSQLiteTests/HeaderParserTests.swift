@@ -36,10 +36,10 @@ final class HeaderParserTests: XCTestCase {
     }
 
     func testDecodeQuotedPrintable() {
-        let raw = "From: =?utf-8?Q?=E9=84=AD=E6=BE=88?= <kiki830621@gmail.com>\r\n\r\n"
+        let raw = "From: =?utf-8?Q?=E6=B8=AC=E8=A9=A6?= <alice@example.com>\r\n\r\n"
         let headers = RFC822Parser.parseHeaders(from: Data(raw.utf8))
         let fromValue = headers["from"] ?? ""
-        XCTAssertTrue(fromValue.contains("鄭澈"), "Expected '鄭澈' in '\(fromValue)'")
+        XCTAssertTrue(fromValue.contains("測試"), "Expected '測試' in '\(fromValue)'")
     }
 
     func testDecodeMultipleEncodedWords() {

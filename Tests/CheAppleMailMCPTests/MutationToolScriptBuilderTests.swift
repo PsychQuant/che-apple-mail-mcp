@@ -15,10 +15,10 @@ final class MutationToolScriptBuilderTests: XCTestCase {
 
     func testBuildMarkReadScript_uuidPath() {
         let s = buildMarkReadScript(id: "42", mailbox: "INBOX",
-                                    accountId: uuid, accountName: "kiki830621@gmail.com", read: true)
+                                    accountId: uuid, accountName: "alice@example.com", read: true)
         XCTAssertTrue(s.contains("(account id \"\(uuid)\")"),
                       "accountId set → UUID selector; got:\n\(s)")
-        XCTAssertFalse(s.contains("account \"kiki830621@gmail.com\""),
+        XCTAssertFalse(s.contains("account \"alice@example.com\""),
                        "display_name must not appear in UUID path")
         XCTAssertTrue(s.contains("set read status of") && s.contains("to true"))
     }

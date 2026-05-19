@@ -32,8 +32,8 @@ final class AccountMapperTests: XCTestCase {
     // MARK: - extractEmail
 
     func testExtractEmailFromImapURL() {
-        let email = AccountMapper.extractEmail(from: "imap://kiki830621%40gmail.com/")
-        XCTAssertEqual(email, "kiki830621@gmail.com")
+        let email = AccountMapper.extractEmail(from: "imap://alice%40example.com/")
+        XCTAssertEqual(email, "alice@example.com")
     }
 
     func testExtractEmailFromEwsURL() {
