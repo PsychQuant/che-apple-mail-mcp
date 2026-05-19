@@ -639,8 +639,8 @@ The system SHALL parse RFC 822 headers from the message data, including: From, T
 
 #### Scenario: Decode Quoted-Printable header
 
-- **WHEN** the system parses a From header containing `=?utf-8?Q?=E9=84=AD=E6=BE=88?= <kiki830621@gmail.com>`
-- **THEN** the decoded display name is "鄭澈" with email address "kiki830621@gmail.com"
+- **WHEN** the system parses a From header containing `=?utf-8?Q?=E6=B8=AC=E8=A9=A6?= <alice@example.com>`
+- **THEN** the decoded display name is "測試" with email address "alice@example.com"
 
 #### Scenario: Multi-line folded header
 
