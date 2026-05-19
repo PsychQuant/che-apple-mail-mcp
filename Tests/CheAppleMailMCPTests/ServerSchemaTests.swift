@@ -331,30 +331,46 @@ final class ServerSchemaTests: XCTestCase {
 
     // MARK: - saveAttachmentAppleEventHint (#103 — actionable -10000 error)
 
-    func testSaveAttachmentAppleEventHint_minus10000ReturnsActionableMessage() {
-        let hint = saveAttachmentAppleEventHint(
+    func testSaveAttachmentAppleEventHint_minus10000_probabilistic() {
+        // localCopyConfirmedMissing=false → Tier 1 did not independently prove
+        // the cause, so the message is hedged ("usually").
+        let msg = saveAttachmentAppleEventHint(
             code: -10000, accountName: "d06227105@ntu.edu.tw",
-            rawMessage: "Mail got an error: AppleEvent handler failed.")
-        XCTAssertNotNil(hint, "-10000 must produce an actionable hint")
-        let msg = hint ?? ""
+            rawMessage: "Mail got an error: AppleEvent handler failed.",
+            localCopyConfirmedMissing: false) ?? ""
         XCTAssertTrue(msg.contains("save_attachment failed"), "got: \(msg)")
         XCTAssertTrue(msg.contains("-10000"))
         XCTAssertTrue(msg.contains("Mail got an error: AppleEvent handler failed."),
                       "must echo the raw AppleScript message")
-        XCTAssertTrue(msg.contains("d06227105@ntu.edu.tw"), "Synchronize step must name the account")
-        XCTAssertTrue(msg.contains("Take All Accounts Online"))
+        XCTAssertTrue(msg.contains("d06227105@ntu.edu.tw"), "recovery step must name the account")
+        XCTAssertTrue(msg.contains("synchronize_account"), "must cross-reference the MCP tool")
         XCTAssertTrue(msg.contains("Rebuild"))
+        XCTAssertTrue(msg.contains("usually"), "unconfirmed cause must stay hedged")
+    }
+
+    func testSaveAttachmentAppleEventHint_minus10000_definitiveWhenConfirmedMissing() {
+        // localCopyConfirmedMissing=true → Tier 1 already threw attachmentNotFound,
+        // so the MCP states the cause definitively, not "usually".
+        let msg = saveAttachmentAppleEventHint(
+            code: -10000, accountName: "d06227105@ntu.edu.tw",
+            rawMessage: "AppleEvent handler failed.",
+            localCopyConfirmedMissing: true) ?? ""
+        XCTAssertTrue(msg.contains("already confirmed"), "got: \(msg)")
+        XCTAssertTrue(msg.contains("absent from the local Mail store"))
+        XCTAssertFalse(msg.contains("usually"), "a confirmed cause must not be hedged")
     }
 
     func testSaveAttachmentAppleEventHint_otherCodesReturnNil() {
         // Only -10000 is re-worded; -1728 / -1719 / etc. rethrow unchanged so
         // the #101 / #102 disambiguation diagnostics are not masked.
         XCTAssertNil(saveAttachmentAppleEventHint(
-            code: -1728, accountName: "a@b.com", rawMessage: "Can't get account"))
+            code: -1728, accountName: "a@b.com", rawMessage: "Can't get account",
+            localCopyConfirmedMissing: false))
         XCTAssertNil(saveAttachmentAppleEventHint(
-            code: -1719, accountName: "a@b.com", rawMessage: "Invalid index"))
+            code: -1719, accountName: "a@b.com", rawMessage: "Invalid index",
+            localCopyConfirmedMissing: true))
         XCTAssertNil(saveAttachmentAppleEventHint(
-            code: 0, accountName: "a@b.com", rawMessage: ""))
+            code: 0, accountName: "a@b.com", rawMessage: "", localCopyConfirmedMissing: false))
     }
 
     func testMailErrorOperationFailed_describesVerbatim() {
