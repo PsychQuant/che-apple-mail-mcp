@@ -754,6 +754,103 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertEqual(parsed.plain, "plain only")
     }
 
+    // MARK: - #134: resolveMsgRef wiring lock for reply/forward overloads
+
+    /// #134: regression-lock test — `buildReplyEmailScript(id:mailbox:accountId:
+    /// accountName:...)` overload MUST emit `(account id "<UUID>")` when
+    /// accountId is non-empty. Reverting the internal `resolveMsgRef` call to
+    /// the legacy display_name-only `msgRef(...)` would fail this test (it
+    /// would emit `account "<display_name>"` instead). Pre-#134 this wiring
+    /// had ZERO automated regression lock — only `MailAppIntegrationTests`,
+    /// which are XCTSkip-gated and don't pass `accountId`.
+    func testBuildReplyEmailScript_overload_uuidPath_usesAccountIdSelector() throws {
+        let uuid = "C38E0583-47F8-4468-BE70-43155C15549D"
+        let script = try buildReplyEmailScript(
+            id: "42", mailbox: "INBOX",
+            accountId: uuid, accountName: "alice@example.com",
+            userBody: "Reply body",
+            userFormat: .plain,
+            replyAll: false,
+            originalHTML: nil,
+            originalPlain: "Original"
+        )
+        XCTAssertTrue(script.contains("(account id \"\(uuid)\")"),
+                      "UUID path MUST emit (account id \"...\") selector; got:\n\(script)")
+        XCTAssertFalse(script.contains("account \"alice@example.com\""),
+                       "display_name MUST NOT leak in UUID path")
+        XCTAssertTrue(script.contains("whose id is 42"),
+                      "msgRef must include the numeric id")
+        XCTAssertTrue(script.contains("reply originalMsg"),
+                      "must contain reply verb")
+    }
+
+    func testBuildReplyEmailScript_overload_displayNameFallback() throws {
+        let script = try buildReplyEmailScript(
+            id: "42", mailbox: "INBOX",
+            accountId: nil, accountName: "alice@example.com",
+            userBody: "Reply body",
+            userFormat: .plain,
+            replyAll: false,
+            originalHTML: nil,
+            originalPlain: "Original"
+        )
+        XCTAssertTrue(script.contains("account \"alice@example.com\""),
+                      "nil accountId must fall back to display_name selector")
+        XCTAssertFalse(script.contains("(account id"),
+                       "UUID form MUST NOT appear in fallback path")
+    }
+
+    func testBuildReplyEmailScript_overload_emptyStringAccountId_fallsBackLikeNil() throws {
+        // Empty-string accountId must fall back like nil (resolveMsgRef
+        // semantic — guards with `!aid.isEmpty`).
+        let script = try buildReplyEmailScript(
+            id: "42", mailbox: "INBOX",
+            accountId: "", accountName: "alice@example.com",
+            userBody: "Reply body",
+            userFormat: .plain,
+            replyAll: false,
+            originalHTML: nil,
+            originalPlain: "Original"
+        )
+        XCTAssertTrue(script.contains("account \"alice@example.com\""))
+        XCTAssertFalse(script.contains("(account id"))
+    }
+
+    /// #134: regression-lock test for forward_email's resolveMsgRef wiring.
+    func testBuildForwardEmailScript_overload_uuidPath_usesAccountIdSelector() throws {
+        let uuid = "C38E0583-47F8-4468-BE70-43155C15549D"
+        let script = try buildForwardEmailScript(
+            id: "99", mailbox: "Sent",
+            accountId: uuid, accountName: "bob@example.com",
+            to: ["forward-to@example.com"],
+            userBody: "FYI",
+            userFormat: .plain,
+            originalHTML: nil,
+            originalPlain: "Original"
+        )
+        XCTAssertTrue(script.contains("(account id \"\(uuid)\")"),
+                      "UUID path MUST emit (account id \"...\") selector; got:\n\(script)")
+        XCTAssertFalse(script.contains("account \"bob@example.com\""),
+                       "display_name MUST NOT leak in UUID path")
+        XCTAssertTrue(script.contains("whose id is 99"))
+        XCTAssertTrue(script.contains("forward originalMsg"),
+                      "must contain forward verb")
+    }
+
+    func testBuildForwardEmailScript_overload_displayNameFallback() throws {
+        let script = try buildForwardEmailScript(
+            id: "99", mailbox: "Sent",
+            accountId: nil, accountName: "bob@example.com",
+            to: ["forward-to@example.com"],
+            userBody: nil,
+            userFormat: .plain,
+            originalHTML: nil,
+            originalPlain: nil
+        )
+        XCTAssertTrue(script.contains("account \"bob@example.com\""))
+        XCTAssertFalse(script.contains("(account id"))
+    }
+
     // MARK: - validateEmailAddresses (#41)
 
     func testValidateEmailAddresses_acceptsValid() async throws {
