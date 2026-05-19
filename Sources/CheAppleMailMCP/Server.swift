@@ -1034,6 +1034,19 @@ class CheAppleMailMCPServer {
                             realNames: Set(savability.keys),
                             savability: savability
                         )
+                        // #115 observability: cross-validation silently
+                        // dropping every SQLite row is the symptom users hit
+                        // (list_attachments returns [] despite a visible
+                        // paperclip). Surface it on stderr so a parser/name
+                        // mismatch is diagnosable instead of invisible.
+                        if validated.isEmpty && !sqliteAttachments.isEmpty {
+                            let message = "WARN: list_attachments cross-validation dropped "
+                                + "all \(sqliteAttachments.count) SQLite attachment row(s) "
+                                + "for rowId=\(rowId): no SQLite name matched a .emlx-parsed "
+                                + "attachment name (parsed names: "
+                                + "\(Set(savability.keys).sorted())); returning []\n"
+                            FileHandle.standardError.write(Data(message.utf8))
+                        }
                         return formatJSON(validated)
                     } catch {
                         // .emlx unreadable / parse failed — log and fall back
@@ -1489,6 +1502,17 @@ class CheAppleMailMCPServer {
                                     realNames: Set(savability.keys),
                                     savability: savability
                                 )
+                                // #115 observability — see the single-message
+                                // `list_attachments` path for rationale.
+                                if attachments.isEmpty && !sqliteAttachments.isEmpty {
+                                    let message = "WARN: list_attachments_batch cross-validation "
+                                        + "dropped all \(sqliteAttachments.count) SQLite "
+                                        + "attachment row(s) for rowId=\(rowId): no SQLite name "
+                                        + "matched a .emlx-parsed attachment name (parsed names: "
+                                        + "\(Set(savability.keys).sorted())); returning [] "
+                                        + "for this item\n"
+                                    FileHandle.standardError.write(Data(message.utf8))
+                                }
                             } catch {
                                 let message = "list_attachments_batch emlx validation failed for "
                                     + "rowId=\(rowId): \(error.localizedDescription); "

@@ -61,6 +61,41 @@ final class HeaderParserTests: XCTestCase {
         XCTAssertEqual(headers["content-type"], "text/html; charset=utf-8")
     }
 
+    // MARK: - Structured headers left raw (#115)
+
+    func testContentDispositionWithEncodedWordParamsLeftRaw() {
+        // #115: Content-Disposition is a structured MIME header. parseHeaders
+        // must NOT RFC 2047-decode it at the raw-header level — encoded-words
+        // inside filename params belong to the parameter layer and are decoded
+        // per-parameter by MIMEParser.resolveFilename. A header-level scan
+        // decodes encoded-words fully contained in one RFC 2231 continuation
+        // segment but mangles ones whose `=?` straddles the `"; filename*N="`
+        // boundary, leaving a half-decoded value resolveFilename cannot
+        // recognise. The fixture mirrors a real Yahoo Mail email: the second
+        // encoded-word's opener is split — `=` ends filename*0, `?UTF-8…`
+        // starts filename*1.
+        let raw = "Content-Disposition: ATTACHMENT;\r\n"
+            + "\tfilename*0=\"=?UTF-8?Q?=E6=B8=AC=E8=A9=A6?= =\";\r\n"
+            + "\tfilename*1=\"?UTF-8?Q?=E9=99=84=E4=BB=B6.pdf?=\"\r\n\r\n"
+        let headers = RFC822Parser.parseHeaders(from: Data(raw.utf8))
+        let cd = headers["content-disposition"] ?? ""
+        XCTAssertTrue(cd.contains("=?UTF-8?Q?=E6=B8=AC=E8=A9=A6?="),
+                      "Content-Disposition must be left RAW — the encoded-word must "
+                      + "survive intact for per-parameter decoding; got: \(cd)")
+        XCTAssertFalse(cd.contains("測試"),
+                       "raw-header-level RFC 2047 decode must NOT run on Content-Disposition "
+                       + "(it mangles encoded-words split across RFC 2231 continuation); got: \(cd)")
+    }
+
+    func testSubjectStillRFC2047DecodedAfterStructuredHeaderSkip() {
+        // Guard: skipping decode for content-* headers must not regress the
+        // legitimate decode of display headers like Subject.
+        let raw = "Content-Type: text/plain\r\nSubject: =?utf-8?B?5pel5pys6Kqe?=\r\n\r\n"
+        let headers = RFC822Parser.parseHeaders(from: Data(raw.utf8))
+        XCTAssertEqual(headers["subject"], "日本語")
+        XCTAssertEqual(headers["content-type"], "text/plain")
+    }
+
     // MARK: - Header body split
 
     func testExtractBody() {
