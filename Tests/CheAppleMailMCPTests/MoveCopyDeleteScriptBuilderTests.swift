@@ -83,8 +83,21 @@ final class MoveCopyDeleteScriptBuilderTests: XCTestCase {
         XCTAssertTrue(s.contains("(account id \"\(uuid)\")"))
         XCTAssertFalse(s.contains("account \"dan@example.com\""),
                        "display_name must not appear in UUID path")
-        XCTAssertTrue(s.contains("delete"), "must contain delete verb")
+        // #128: anchor on the verb form, NOT the substring "delete". The
+        // script ends with `return "Email deleted"`, so a substring check
+        // on "delete" was trivially true even if the actual `delete <ref>`
+        // verb was removed or swapped for `move msg to trash`. Verb form
+        // is `\n    delete (` — leading indent + verb + space + opening
+        // paren of the ref expression.
+        XCTAssertTrue(s.contains("\n    delete ("),
+                      "must emit the AppleScript `delete <ref>` verb at the action line")
         XCTAssertTrue(s.contains("whose id is 7"))
+        // delete_email is a SINGLE-ref operation — exactly one
+        // `(account id "<UUID>")` selector must appear (no accidental
+        // destination ref emission).
+        let accountSelectorCount = s.components(separatedBy: "(account id \"").count - 1
+        XCTAssertEqual(accountSelectorCount, 1,
+                       "delete_email is single-ref — exactly one account selector expected")
     }
 
     func testBuildDeleteEmailScript_displayNameFallback() {
@@ -94,6 +107,12 @@ final class MoveCopyDeleteScriptBuilderTests: XCTestCase {
         )
         XCTAssertTrue(s.contains("account \"eve@example.com\""))
         XCTAssertFalse(s.contains("(account id"))
-        XCTAssertTrue(s.contains("delete"))
+        // #128: anchor on verb form (see UUID path test above).
+        XCTAssertTrue(s.contains("\n    delete ("),
+                      "must emit the AppleScript `delete <ref>` verb at the action line")
+        // Single-ref shape: exactly one `account "<display_name>"` selector.
+        let displayNameSelectorCount = s.components(separatedBy: "account \"eve@example.com\"").count - 1
+        XCTAssertEqual(displayNameSelectorCount, 1,
+                       "delete_email is single-ref — exactly one account selector expected")
     }
 }
