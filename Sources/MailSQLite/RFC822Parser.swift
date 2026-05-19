@@ -126,8 +126,22 @@ public enum RFC822Parser {
 
             // Text before the encoded word
             let prefix = remaining[remaining.startIndex..<startRange.lowerBound]
-            if lastWasEncodedWord && prefix.allSatisfy({ $0 == " " || $0 == "\t" }) {
-                // RFC 2047: skip whitespace between consecutive encoded-words
+            if lastWasEncodedWord && prefix.unicodeScalars.allSatisfy({
+                $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r"
+            }) {
+                // RFC 2047 §6.2: skip linear-white-space (RFC 822 LWS — space,
+                // tab, CR, LF) between consecutive encoded-words. Previously
+                // only space + tab were stripped, so a CR/LF separator leaked
+                // through as a literal control character into the decoded
+                // result (#125 — sister of #99). Header unfolding upstream
+                // (`parseHeaders`) already normalises folded continuation
+                // lines, but inter-EW CR/LF can still survive in
+                // `decodeRFC2047IfApplicable`'s per-parameter input.
+                // Iterates `unicodeScalars` because Swift treats `\r\n` as
+                // a single extended grapheme cluster that does NOT equal any
+                // individual character literal in a `Character`-level
+                // `allSatisfy` — it must be decomposed to its scalars to
+                // match the LWS set component-wise.
             } else {
                 result += prefix
             }
