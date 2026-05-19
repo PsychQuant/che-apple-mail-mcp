@@ -839,15 +839,18 @@ class CheAppleMailMCPServer {
                         if let html = content.htmlBody { result["html_body"] = html }
                         if let source = content.rawSource { result["source"] = String(data: source, encoding: .utf8) ?? "" }
                         return formatJSON(result)
+                    } else {
+                        // `mailboxURL` returned nil (rowId not in the Envelope
+                        // Index). #69 only logged the `catch` path — this
+                        // `nil`-return fall-through was silent (#100).
+                        logFastPathFallthrough(tool: "get_email", rowId: rowId, reason: .rowIdNotIndexed)
                     }
                 } catch {
                     // Log the cause so silent fallbacks are observable, then
                     // fall through to AppleScript (#69 — mirrors the
                     // save_attachment fast-path logging at Server.swift:1003).
-                    let message = "SQLite get_email fast path failed for "
-                        + "rowId=\(rowId): \(error.localizedDescription); "
-                        + "falling through to AppleScript\n"
-                    FileHandle.standardError.write(Data(message.utf8))
+                    logFastPathFallthrough(tool: "get_email", rowId: rowId,
+                                           reason: .error(error.localizedDescription))
                 }
             }
             let email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName, format: format)
@@ -1394,6 +1397,11 @@ class CheAppleMailMCPServer {
                             if let source = content.rawSource { entry["source"] = String(data: source, encoding: .utf8) ?? "" }
                             results.append(entry)
                             continue
+                        } else {
+                            // `mailboxURL` nil — same silent `nil`-return
+                            // fall-through #69 missed, per item (#100).
+                            logFastPathFallthrough(tool: "get_emails_batch", rowId: rowId,
+                                                   reason: .rowIdNotIndexed, perItem: true)
                         }
                     } catch {
                         // Log per-item failure with rowId so partial-failure
@@ -1401,10 +1409,8 @@ class CheAppleMailMCPServer {
                         // an archive of N emails may have M legitimate EWS
                         // fallbacks vs K silent Gmail failures; without rowId
                         // logging users can't tell them apart).
-                        let message = "SQLite get_emails_batch fast path failed for "
-                            + "rowId=\(rowId): \(error.localizedDescription); "
-                            + "falling through to AppleScript for this item\n"
-                        FileHandle.standardError.write(Data(message.utf8))
+                        logFastPathFallthrough(tool: "get_emails_batch", rowId: rowId,
+                                               reason: .error(error.localizedDescription), perItem: true)
                     }
                 }
                 // Fallback to AppleScript
@@ -1670,6 +1676,54 @@ func decodeAccountId(_ arguments: [String: Value], tool: String) -> String? {
         + "(display_name) path, which may surface the #101 collision behavior.\n"
     FileHandle.standardError.write(Data(warning.utf8))
     return nil
+}
+
+/// Why a read-tool SQLite + .emlx fast path fell through to the AppleScript
+/// fallback. Used by `fastPathFallthroughLog` (#100).
+enum FastPathFallthrough {
+    /// `EnvelopeIndexReader.mailboxURL(forMessageId:)` returned `nil` — the
+    /// rowId is absent from the Envelope Index, or the account has no local
+    /// `.emlx` store (legitimate for EWS/Exchange, see #9). Not an error.
+    case rowIdNotIndexed
+    /// The Envelope Index lookup or the `.emlx` parse threw; carries the
+    /// thrown error's `localizedDescription`.
+    case error(String)
+}
+
+/// Build the stderr diagnostic line for a read-tool SQLite fast-path
+/// fall-through, so the drop to AppleScript is never silent
+/// (`r-must-direct-db.md` "logged fallback" rule, #100 — completes the #69
+/// observability work for the previously-unlogged `nil`-return branch).
+///
+/// Pure (returns the string; the side-effecting write lives in
+/// `logFastPathFallthrough`) so the message contract is unit-testable.
+///
+/// - The `.error` case is byte-identical to the pre-#100 inline `catch`-branch
+///   messages — `tool="get_email"` / `perItem=false` and
+///   `tool="get_emails_batch"` / `perItem=true` reproduce them exactly.
+/// - The `.rowIdNotIndexed` case is deliberately worded as a neutral "miss",
+///   NOT a "failure": it fires legitimately for every EWS/Exchange account on
+///   every call, and must not read as an error in those setups (#9).
+func fastPathFallthroughLog(tool: String, rowId: Int, reason: FastPathFallthrough,
+                            perItem: Bool = false) -> String {
+    let suffix = perItem ? " for this item" : ""
+    switch reason {
+    case .rowIdNotIndexed:
+        return "SQLite \(tool) fast path miss for rowId=\(rowId): "
+            + "rowId not resolvable via Envelope Index (absent, or no local "
+            + ".emlx — e.g. EWS/Exchange); falling through to AppleScript\(suffix)\n"
+    case .error(let detail):
+        return "SQLite \(tool) fast path failed for rowId=\(rowId): "
+            + "\(detail); falling through to AppleScript\(suffix)\n"
+    }
+}
+
+/// Write a `fastPathFallthroughLog` line to stderr. Thin side-effecting wrapper
+/// — call this at the fast-path fall-through sites (#100).
+func logFastPathFallthrough(tool: String, rowId: Int, reason: FastPathFallthrough,
+                            perItem: Bool = false) {
+    let line = fastPathFallthroughLog(tool: tool, rowId: rowId, reason: reason, perItem: perItem)
+    FileHandle.standardError.write(Data(line.utf8))
 }
 
 func parseBodyFormatArgument(_ raw: Value?) throws -> BodyFormat {
