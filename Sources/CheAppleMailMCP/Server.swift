@@ -306,6 +306,8 @@ class CheAppleMailMCPServer {
                     "type": .string("object"),
                     "properties": .object([
                         "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipient email addresses")]),
+                        "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Carbon copy recipients (optional)")]),
+                        "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Blind carbon copy recipients (optional)")]),
                         "subject": .object(["type": .string("string"), "description": .string("Email subject")]),
                         "body": .object(["type": .string("string"), "description": .string("Email body content (interpreted according to 'format')")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")]),
@@ -997,10 +999,12 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("to, subject, and body are required")
             }
             let to = toArray.compactMap { $0.stringValue }
+            let cc = try optionalStringArray(arguments, key: "cc")
+            let bcc = try optionalStringArray(arguments, key: "bcc")
             let attachments = try optionalStringArray(arguments, key: "attachments")
             let format = try parseBodyFormatArgument(arguments["format"])
             let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
-            return try await mailController.createDraft(to: to, subject: subject, body: body, attachments: attachments, format: format, sanitizeLinks: sanitizeLinks)
+            return try await mailController.createDraft(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, sanitizeLinks: sanitizeLinks)
 
         // Attachment Tools
         case "list_attachments":

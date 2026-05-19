@@ -117,6 +117,8 @@ func buildCreateDraftScript(
     to: [String],
     subject: String,
     body: String,
+    cc: [String]? = nil,
+    bcc: [String]? = nil,
     attachments: [String]? = nil,
     format: BodyFormat = .plain,
     sanitizeLinks: Bool = false
@@ -135,6 +137,9 @@ func buildCreateDraftScript(
     }
 
     script += "\n" + recipientFragment(to, kind: "to")
+    // cc / bcc emission order mirrors buildComposeEmailScript (#107).
+    if let cc = cc { script += "\n" + recipientFragment(cc, kind: "cc") }
+    if let bcc = bcc { script += "\n" + recipientFragment(bcc, kind: "bcc") }
     if let attachments = attachments { script += "\n" + attachmentFragment(for: attachments) }
 
     script += "\n" + """

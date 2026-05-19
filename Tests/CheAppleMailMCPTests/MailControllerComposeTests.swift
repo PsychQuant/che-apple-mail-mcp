@@ -118,6 +118,30 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertFalse(script.contains("html content"))
     }
 
+    func testBuildCreateDraftScript_ccBccEmittedInsideTellBlock() throws {
+        // #107: create_draft gained cc/bcc — fragments MUST live inside
+        // `tell newMessage … end tell`, mirroring buildComposeEmailScript.
+        let script = try buildCreateDraftScript(
+            to: ["to@x.y"],
+            subject: "S",
+            body: "B",
+            cc: ["cc@x.y"],
+            bcc: ["bcc@x.y"],
+            format: .plain
+        )
+        assertOrdered(script, "make new cc recipient", between: "tell newMessage", and: "end tell")
+        assertOrdered(script, "make new bcc recipient", between: "tell newMessage", and: "end tell")
+        XCTAssertTrue(script.contains("address:\"cc@x.y\""))
+        XCTAssertTrue(script.contains("address:\"bcc@x.y\""))
+    }
+
+    func testBuildCreateDraftScript_ccBccOmittedWhenNil() throws {
+        // Backward compat: no cc/bcc supplied → no cc/bcc recipient fragments.
+        let script = try buildCreateDraftScript(to: ["a@b.c"], subject: "S", body: "B", format: .plain)
+        XCTAssertFalse(script.contains("make new cc recipient"))
+        XCTAssertFalse(script.contains("make new bcc recipient"))
+    }
+
     func testBuildCreateDraftScript_markdownMode_savesWithHTML() throws {
         let script = try buildCreateDraftScript(
             to: ["a@b.c"],
