@@ -36,13 +36,24 @@ import Foundation
 /// `account "<display_name>"` selectors when multiple accounts share the
 /// same display name.
 ///
+/// #137 refactor: composes `resolveAccountRef` instead of inlining the
+/// account-selector syntax. Three places (this, `resolveMailboxRef`, and the
+/// `resolveAccountRef` definition itself) previously knew how to build the
+/// account selector — drift risk if `(account id "...")` syntax ever needs
+/// hardening. Now there is exactly one definition.
+///
 /// - Parameters:
 ///   - mailbox: Mailbox name (e.g. "INBOX", "[Gmail]/全部郵件"). Escaped via `appleScriptEscape`.
 ///   - accountId: Account UUID. Caller must ensure non-empty — use
 ///     `resolveMailboxRef` for nil/empty handling.
 /// - Returns: `(first mailbox of (account id "<escaped UUID>") whose name is "<escaped mailbox>")`
 func mailboxRefByAccountId(_ mailbox: String, accountId: String) -> String {
-    return "(first mailbox of (account id \"\(appleScriptEscape(accountId))\") whose name is \"\(appleScriptEscape(mailbox))\")"
+    // accountName: "" is intentional — accountId is guaranteed non-empty by
+    // contract, so resolveAccountRef takes the UUID path and never consults
+    // accountName. Passing a sentinel "" surfaces any future regression
+    // (caller bypassing the contract) as a visibly wrong fallback rather
+    // than silently using a "real" name.
+    return "(first mailbox of \(resolveAccountRef(accountId: accountId, accountName: "")) whose name is \"\(appleScriptEscape(mailbox))\")"
 }
 
 /// Build an AppleScript reference to a message by ROWID, using account UUID
@@ -76,10 +87,12 @@ func msgRefByAccountId(_ id: String, mailbox: String, accountId: String) -> Stri
 ///   when `accountId` is usable, else `(first mailbox of account "<display_name>" whose name is "...")`
 ///   — the latter byte-identical to `MailController.mailboxRef`.
 func resolveMailboxRef(mailbox: String, accountId: String?, accountName: String) -> String {
-    if let aid = accountId, !aid.isEmpty {
-        return mailboxRefByAccountId(mailbox, accountId: aid)
-    }
-    return "(first mailbox of account \"\(appleScriptEscape(accountName))\" whose name is \"\(appleScriptEscape(mailbox))\")"
+    // #137 refactor: compose `resolveAccountRef` to keep account-selector
+    // syntax (UUID vs display_name) defined in exactly one place. Pre-#137
+    // both branches inlined the selector — drift risk if syntax/escaping
+    // ever needs hardening.
+    let accountRef = resolveAccountRef(accountId: accountId, accountName: accountName)
+    return "(first mailbox of \(accountRef) whose name is \"\(appleScriptEscape(mailbox))\")"
 }
 
 /// Resolve a message AppleScript reference (by ROWID), preferring the
