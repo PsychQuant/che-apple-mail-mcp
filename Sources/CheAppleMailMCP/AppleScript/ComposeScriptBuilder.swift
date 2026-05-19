@@ -83,7 +83,8 @@ func buildComposeEmailScript(
     bcc: [String]? = nil,
     attachments: [String]? = nil,
     format: BodyFormat = .plain,
-    sanitizeLinks: Bool = false
+    sanitizeLinks: Bool = false,
+    fromAddress: String? = nil
 ) throws -> String {
     let composed = try renderBody(body, format: format, sanitizeLinks: sanitizeLinks)
     let plainFallback = composed.plainContent
@@ -93,6 +94,17 @@ func buildComposeEmailScript(
         set newMessage to make new outgoing message with properties {subject:"\(appleScriptEscape(subject))", content:"\(appleScriptEscape(plainFallback))", visible:true}
         tell newMessage
     """
+
+    // #131: sender account selection. Mail.app's outgoing-message `sender`
+    // property is a STRING matching one of the user's configured email
+    // addresses (RFC 5322 addr-spec, optionally with display name —
+    // `"Name <email@example.com>"`). NOT an `account id` selector — Mail.app
+    // routes outgoing messages by matching `sender` against configured
+    // accounts. Omitted: Mail.app uses the default account (backward compat
+    // — script remains byte-identical to pre-#131 output).
+    if let from = fromAddress, !from.isEmpty {
+        script += "\n        set sender to \"\(appleScriptEscape(from))\""
+    }
 
     if let html = composed.htmlContent {
         script += "\n        set html content to \"\(appleScriptEscape(html))\""
@@ -121,7 +133,8 @@ func buildCreateDraftScript(
     bcc: [String]? = nil,
     attachments: [String]? = nil,
     format: BodyFormat = .plain,
-    sanitizeLinks: Bool = false
+    sanitizeLinks: Bool = false,
+    fromAddress: String? = nil
 ) throws -> String {
     let composed = try renderBody(body, format: format, sanitizeLinks: sanitizeLinks)
     let plainFallback = composed.plainContent
@@ -131,6 +144,11 @@ func buildCreateDraftScript(
         set newMessage to make new outgoing message with properties {subject:"\(appleScriptEscape(subject))", content:"\(appleScriptEscape(plainFallback))", visible:true}
         tell newMessage
     """
+
+    // #131: sender account selection — see buildComposeEmailScript above.
+    if let from = fromAddress, !from.isEmpty {
+        script += "\n        set sender to \"\(appleScriptEscape(from))\""
+    }
 
     if let html = composed.htmlContent {
         script += "\n        set html content to \"\(appleScriptEscape(html))\""
