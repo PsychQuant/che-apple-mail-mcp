@@ -271,6 +271,64 @@ final class ServerSchemaTests: XCTestCase {
             "", "absent account_id must not warn")
     }
 
+    // MARK: - fastPathFallthroughLog (#100 — observability for the nil-return branch)
+
+    func testFastPathFallthroughLog_rowIdNotIndexedIsNeutralMiss() {
+        // The nil-return branch fires legitimately for every EWS/Exchange
+        // account — the message must read as a neutral "miss", never "failed".
+        let line = fastPathFallthroughLog(tool: "get_email", rowId: 273214, reason: .rowIdNotIndexed)
+        XCTAssertTrue(line.contains("fast path miss"), "got: \(line)")
+        XCTAssertTrue(line.contains("get_email"))
+        XCTAssertTrue(line.contains("rowId=273214"))
+        XCTAssertTrue(line.contains("Envelope Index"))
+        XCTAssertTrue(line.contains("EWS/Exchange"), "must flag the legitimate #9 case")
+        XCTAssertFalse(line.contains("failed"), "nil-return is a miss, not a failure — must not cry wolf")
+        XCTAssertTrue(line.hasSuffix("\n"))
+    }
+
+    func testFastPathFallthroughLog_errorReportsDetail() {
+        let line = fastPathFallthroughLog(tool: "get_email", rowId: 99,
+                                          reason: .error("emlx file not found"))
+        XCTAssertTrue(line.contains("fast path failed"), "got: \(line)")
+        XCTAssertTrue(line.contains("emlx file not found"))
+        XCTAssertTrue(line.contains("rowId=99"))
+    }
+
+    func testFastPathFallthroughLog_perItemSuffix() {
+        let single = fastPathFallthroughLog(tool: "get_email", rowId: 1, reason: .rowIdNotIndexed)
+        XCTAssertTrue(single.hasSuffix("AppleScript\n"), "single-item form has no 'for this item'")
+        let batch = fastPathFallthroughLog(tool: "get_emails_batch", rowId: 1,
+                                           reason: .rowIdNotIndexed, perItem: true)
+        XCTAssertTrue(batch.hasSuffix("AppleScript for this item\n"))
+    }
+
+    func testFastPathFallthroughLog_errorByteEquivalentToLegacyInline() {
+        // The `.error` case must reproduce the pre-#100 inline catch-branch
+        // strings byte-for-byte, so routing the throw path through the helper
+        // is a pure refactor.
+        let rowId = 42
+        let detail = "boom"
+        XCTAssertEqual(
+            fastPathFallthroughLog(tool: "get_email", rowId: rowId, reason: .error(detail)),
+            "SQLite get_email fast path failed for rowId=\(rowId): "
+                + "\(detail); falling through to AppleScript\n")
+        XCTAssertEqual(
+            fastPathFallthroughLog(tool: "get_emails_batch", rowId: rowId,
+                                   reason: .error(detail), perItem: true),
+            "SQLite get_emails_batch fast path failed for rowId=\(rowId): "
+                + "\(detail); falling through to AppleScript for this item\n")
+    }
+
+    func testLogFastPathFallthrough_writesToStderr() {
+        // The whole point of #100 is that the nil-return fall-through is no
+        // longer silent — pin the actual stderr write.
+        let captured = captureStderr {
+            logFastPathFallthrough(tool: "get_email", rowId: 555, reason: .rowIdNotIndexed)
+        }
+        XCTAssertTrue(captured.contains("fast path miss"), "got: \(captured)")
+        XCTAssertTrue(captured.contains("rowId=555"))
+    }
+
     // MARK: - parseBodyFormatArgument (handles MCP Value type)
 
     func testParseBodyFormatArgument_nilReturnsPlain() throws {
