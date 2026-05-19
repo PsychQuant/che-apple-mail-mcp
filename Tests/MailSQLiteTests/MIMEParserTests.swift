@@ -645,4 +645,47 @@ final class MIMEParserTests: XCTestCase {
         XCTAssertEqual(presence["dup.pdf"], false,
                        "first (stripped) occurrence must win — matches saveAttachment's parts.first")
     }
+
+    // MARK: - RFC 2231 continuation with split RFC 2047 encoded-word (#115)
+
+    func testEnumerateAttachmentNames_rfc2231SplitEncodedWordContinuation() throws {
+        // #115: an older Yahoo Mail client (WebService/YMailNorrin) encodes a
+        // CJK attachment filename as RFC 2047 encoded-words SPLIT across RFC
+        // 2231 plain continuation segments (filename*0 / filename*1, no
+        // trailing `*`), and the segment boundary cuts through the SECOND
+        // encoded-word's `=?` opener: `=` ends filename*0, `?UTF-8…` starts
+        // filename*1.
+        //
+        // Pre-fix, RFC822Parser.parseHeaders eagerly RFC 2047-decoded the
+        // whole Content-Disposition value: it decoded the encoded-word fully
+        // contained in filename*0 but left the straddling one alone, producing
+        // a half-decoded value (`測試 =?UTF-8?Q?…?=`). resolveFilename then
+        // assembled a string no longer starting with `=?`, so its strict
+        // full-string-gated second pass refused to decode it — list_attachments
+        // cross-validated the garbage name against Mail.app's SQLite-cached
+        // name, found no intersection, and silently returned [].
+        //
+        // Uppercase MIME tokens (ATTACHMENT, APPLICATION/PDF, BASE64) mirror
+        // the real fixture — harmless (parseContentType lowercases the type)
+        // but kept for fidelity. Filename is synthetic (測試附件.pdf).
+        let boundary = "----=_Part_115_yahoo"
+        let headers = ["content-type": "multipart/mixed; boundary=\"\(boundary)\""]
+        let body = "--\(boundary)\r\n"
+            + "Content-Type: multipart/ALTERNATIVE; boundary=\"alt115\"\r\n\r\n"
+            + "--alt115\r\n"
+            + "Content-Type: TEXT/PLAIN; charset=UTF-8\r\n\r\nbody\r\n"
+            + "--alt115--\r\n"
+            + "--\(boundary)\r\n"
+            + "Content-Transfer-Encoding: BASE64\r\n"
+            + "Content-Disposition: ATTACHMENT;\r\n"
+            + "\tfilename*0=\"=?UTF-8?Q?=E6=B8=AC=E8=A9=A6?= =\";\r\n"
+            + "\tfilename*1=\"?UTF-8?Q?=E9=99=84=E4=BB=B6.pdf?=\"\r\n"
+            + "Content-Type: APPLICATION/PDF\r\n\r\n"
+            + "ZGF0YQ==\r\n"
+            + "--\(boundary)--\r\n"
+        let names = try MIMEParser.enumerateAttachmentNames(Data(body.utf8), headers: headers)
+        XCTAssertEqual(names, ["測試附件.pdf"],
+                       "RFC 2047 encoded-word filename split across RFC 2231 continuation "
+                       + "segments must decode to the full filename; got \(names)")
+    }
 }

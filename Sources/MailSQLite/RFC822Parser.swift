@@ -92,8 +92,18 @@ public enum RFC822Parser {
             guard let colonIdx = line.firstIndex(of: ":") else { continue }
             let name = String(line[line.startIndex..<colonIdx]).lowercased().trimmingCharacters(in: .whitespaces)
             let value = String(line[line.index(after: colonIdx)...]).trimmingCharacters(in: .whitespaces)
-            let decoded = decodeRFC2047(value)
-            headers[name] = decoded
+            // Structured MIME headers (Content-Type, Content-Disposition, …)
+            // are NOT RFC 2047-decoded at the raw-header level. Per RFC 2047
+            // §5 an encoded-word may not appear in a structured field body;
+            // the only place a filename encoded-word legitimately surfaces is
+            // inside a `filename`/`name` parameter, which MIMEParser decodes
+            // per-parameter (`resolveFilename` → `decodeRFC2047IfApplicable`).
+            // A header-level scan decodes encoded-words fully contained in one
+            // RFC 2231 continuation segment but mangles ones whose `=?` opener
+            // straddles the `"; filename*N="` boundary — leaving a
+            // half-decoded value the per-parameter decoder can no longer
+            // recognise, so the attachment is silently dropped (#115).
+            headers[name] = name.hasPrefix("content-") ? value : decodeRFC2047(value)
         }
         return headers
     }
