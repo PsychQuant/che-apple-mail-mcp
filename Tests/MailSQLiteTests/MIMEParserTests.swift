@@ -581,4 +581,46 @@ final class MIMEParserTests: XCTestCase {
         XCTAssertEqual(result.textBody, "Hello, world!")
         XCTAssertEqual(result.htmlBody, "<p>HTML version</p>\r\n")
     }
+
+    // MARK: - enumerateAttachmentInlinePresence (#105)
+
+    func testEnumerateAttachmentInlinePresence_reportsStrippedVsPresent() throws {
+        // A `.partial.emlx` strips the attachment body to just the CRLF before
+        // the next boundary — that must read as inline-absent, while a part
+        // with real base64 bytes reads as inline-present.
+        let boundary = "b105"
+        let headers = ["content-type": "multipart/mixed; boundary=\"\(boundary)\""]
+        let body = "--\(boundary)\r\n"
+            + "Content-Type: text/plain; charset=utf-8\r\n\r\nbody\r\n"
+            + "--\(boundary)\r\n"
+            + "Content-Type: application/pdf; name=\"present.pdf\"\r\n"
+            + "Content-Disposition: attachment; filename=\"present.pdf\"\r\n"
+            + "Content-Transfer-Encoding: base64\r\n\r\nSGVsbG8=\r\n"
+            + "--\(boundary)\r\n"
+            + "Content-Type: application/pdf; name=\"stripped.pdf\"\r\n"
+            + "Content-Disposition: attachment; filename=\"stripped.pdf\"\r\n"
+            + "Content-Transfer-Encoding: base64\r\n\r\n\r\n"
+            + "--\(boundary)--\r\n"
+        let presence = try MIMEParser.enumerateAttachmentInlinePresence(
+            Data(body.utf8), headers: headers)
+        XCTAssertEqual(presence["present.pdf"], true, "non-whitespace body → inline present")
+        XCTAssertEqual(presence["stripped.pdf"], false, "whitespace-only body → inline stripped")
+    }
+
+    func testEnumerateAttachmentNames_unchangedByInlinePresenceRefactor() throws {
+        // Regression: enumerateAttachmentNames is now derived from the
+        // inline-presence map's keys — it must still return the full name set
+        // regardless of whether each part's body is stripped.
+        let boundary = "b105n"
+        let headers = ["content-type": "multipart/mixed; boundary=\"\(boundary)\""]
+        let body = "--\(boundary)\r\n"
+            + "Content-Type: application/pdf; name=\"a.pdf\"\r\n"
+            + "Content-Disposition: attachment; filename=\"a.pdf\"\r\n\r\n\r\n"
+            + "--\(boundary)\r\n"
+            + "Content-Type: image/png; name=\"b.png\"\r\n"
+            + "Content-Disposition: attachment; filename=\"b.png\"\r\n\r\ndata\r\n"
+            + "--\(boundary)--\r\n"
+        let names = try MIMEParser.enumerateAttachmentNames(Data(body.utf8), headers: headers)
+        XCTAssertEqual(names, ["a.pdf", "b.png"])
+    }
 }

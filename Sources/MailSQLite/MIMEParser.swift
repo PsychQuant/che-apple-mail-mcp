@@ -126,16 +126,43 @@ public enum MIMEParser {
         _ bodyData: Data,
         headers: [String: String]
     ) throws -> Set<String> {
+        // Derived from the name → inline-presence map: the key set is exactly
+        // the legacy return value. Keeps a single no-decode tree walk (#105).
+        return Set(try enumerateAttachmentInlinePresence(bodyData, headers: headers).keys)
+    }
+
+    /// Like `enumerateAttachmentNames`, but reports for each attachment name
+    /// whether the part carries a non-empty **inline** body in the `.emlx`
+    /// envelope (`true`) or has had it stripped (`false`).
+    ///
+    /// A `false` here means the binary lives only in Apple Mail's external
+    /// `Attachments/<rowId>/` cache (`.partial.emlx` messages) — or nowhere at
+    /// all. It does **not** by itself mean the attachment is unsavable; the
+    /// caller still has to check the external cache (see
+    /// `AttachmentExtractor.attachmentSavability`). Used by `list_attachments`'
+    /// `savable` field (#105).
+    ///
+    /// Same no-decode tree walk as `enumerateAttachmentNames` — inline
+    /// presence is `!body.isEmpty` on the raw leaf bytes, so a 50-MB base64
+    /// attachment is still never decoded just to answer this question (the
+    /// #24 perf property is preserved).
+    ///
+    /// - Throws: `MailSQLiteError.emlxParseFailed` on the same malformed
+    ///   top-level-multipart condition as `enumerateAttachmentNames` (#26).
+    public static func enumerateAttachmentInlinePresence(
+        _ bodyData: Data,
+        headers: [String: String]
+    ) throws -> [String: Bool] {
         let contentType = headers["content-type"] ?? "text/plain"
 
-        var names = Set<String>()
+        var presence = [String: Bool]()
         var topLevelMultipartSplitFailed = false
         collectAttachmentNames(
             body: bodyData,
             partHeaders: headers,
             contentType: contentType,
             depth: 0,
-            out: &names,
+            out: &presence,
             topLevelMultipartSplitFailed: &topLevelMultipartSplitFailed
         )
         // Distinguish "legitimately empty multipart" (some splits succeeded,
@@ -151,7 +178,7 @@ public enum MIMEParser {
                 + "Caller should fall back to unvalidated SQLite metadata."
             )
         }
-        return names
+        return presence
     }
 
     /// Recursive walker mirroring `collectParts`, but skipping the
@@ -163,12 +190,16 @@ public enum MIMEParser {
     /// body (`depth == 0`) is declared `multipart/*` but no child split
     /// succeeded — distinguishes #26's malformed case from legitimately
     /// empty multiparts where some children parsed but had no filenames.
+    /// `out` maps each attachment name to whether its part carries a non-empty
+    /// inline body (`!body.isEmpty`). When the same name appears on multiple
+    /// parts (or via both `filename` and `Content-Type: name`), presence is
+    /// OR-combined — savable if *any* occurrence has an inline body (#105).
     private static func collectAttachmentNames(
         body: Data,
         partHeaders: [String: String],
         contentType: String,
         depth: Int,
-        out: inout Set<String>,
+        out: inout [String: Bool],
         topLevelMultipartSplitFailed: inout Bool
     ) {
         guard depth < maxMultipartDepth else {
@@ -214,7 +245,16 @@ public enum MIMEParser {
             return
         }
 
-        // Leaf part — extract names without decoding body.
+        // Leaf part — extract names without decoding body. Inline presence is
+        // "the raw (still transfer-encoded) leaf body has any non-whitespace
+        // byte": a `.partial.emlx` strips the attachment body down to just the
+        // CRLF before the next boundary, and base64/QP of whitespace-only input
+        // decodes to empty — so a whitespace-only body means "no inline binary"
+        // without paying for a transfer-decode (#105). `.contains` early-exits
+        // on the first content byte, so a real attachment costs O(1) here.
+        let inlinePresent = body.contains { byte in
+            byte != 0x20 && byte != 0x09 && byte != 0x0D && byte != 0x0A
+        }
         let (_, dispositionParams) = parseContentDisposition(
             partHeaders["content-disposition"]
         )
@@ -222,10 +262,10 @@ public enum MIMEParser {
             dispositionParams: dispositionParams,
             contentTypeParams: params
         ) {
-            out.insert(filename)
+            out[filename] = (out[filename] ?? false) || inlinePresent
         }
         if let name = params["name"] {
-            out.insert(name)
+            out[name] = (out[name] ?? false) || inlinePresent
         }
     }
 

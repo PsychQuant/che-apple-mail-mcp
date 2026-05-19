@@ -2818,6 +2818,13 @@ The system SHALL list email attachments by querying the `attachments` table in t
 - **WHEN** `list_attachments` is called with a message `id`
 - **THEN** the system queries the `attachments` table for rows where `message` equals the ROWID, returning attachment `name` and `attachment_id`
 
+#### Scenario: Attachment savability is reported when the `.emlx` is parseable
+
+- **WHEN** `list_attachments` cross-validates the SQLite rows against a parseable `.emlx` envelope
+- **THEN** each returned attachment entry SHALL additionally carry a `savable` boolean — `true` when the attachment binary is retrievable from the local Mail store (a non-empty inline body, or a matching file in Apple Mail's external `Attachments/<rowId>/` cache), `false` when it is in neither place (a `.partial.emlx` whose binary was never fetched)
+- **WHEN** the `.emlx` cannot be parsed and the system falls back to unvalidated SQLite metadata
+- **THEN** the `savable` field SHALL be omitted; an absent `savable` means "unknown" and callers SHALL NOT treat it as `false`
+
 
 <!-- @trace
 source: filesystem-only-reads

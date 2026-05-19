@@ -601,6 +601,49 @@ final class AttachmentExtractorTests: XCTestCase {
         )
     }
 
+    // MARK: - attachmentSavability (#105)
+
+    /// `.partial.emlx` with the external binary present → `savable: true`
+    /// (`save_attachment` would succeed via the external-cache path).
+    func testAttachmentSavability_partialEmlxWithExternal_isSavable() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262300
+        let filename = "report.pdf"
+        let (mailboxURL, attachmentsDir) = try installPartialEmlxWithStrippedAttachment(
+            rowId: rowId, attachmentFilename: filename, in: root
+        )
+        let partDir = attachmentsDir.appendingPathComponent("2", isDirectory: true)
+        try FileManager.default.createDirectory(at: partDir, withIntermediateDirectories: true)
+        try Data((0..<512).map { UInt8($0 & 0xFF) })
+            .write(to: partDir.appendingPathComponent(filename))
+
+        let savability = try EmlxParser.attachmentSavability(rowId: rowId, mailboxURL: mailboxURL)
+        XCTAssertEqual(savability[filename], true,
+                       "stripped inline body but external file present → savable")
+    }
+
+    /// `.partial.emlx` with the body stripped AND no external folder →
+    /// `savable: false` (this is exactly #103's `-10000` precursor state).
+    func testAttachmentSavability_partialEmlxNoExternal_isNotSavable() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262301
+        let filename = "report.pdf"
+        let (mailboxURL, _) = try installPartialEmlxWithStrippedAttachment(
+            rowId: rowId, attachmentFilename: filename, in: root
+        )
+        // Deliberately don't create the Attachments/<rowId>/ folder.
+
+        let savability = try EmlxParser.attachmentSavability(rowId: rowId, mailboxURL: mailboxURL)
+        XCTAssertEqual(savability[filename], false,
+                       "stripped inline body + no external file → not savable")
+        XCTAssertEqual(Set(savability.keys), [filename],
+                       "the savability map's keys are exactly the envelope's attachment names")
+    }
+
     /// Mirror of the happy path but exercising the external-folder match
     /// against the legacy `Content-Type: name` parameter (some senders
     /// only set `name=`, not `Content-Disposition: filename=`).
