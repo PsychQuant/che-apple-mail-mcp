@@ -456,34 +456,10 @@ public enum MIMEParser {
         }
 
         // 2. RFC 2231 continuation: filename*0, filename*1, filename*2...
-        //    Segments with a trailing "*" are percent-encoded.
-        let continuationKeys = dispositionParams.keys
-            .filter { $0.hasPrefix("filename*") && $0 != "filename*" }
-            .sorted { lhs, rhs in
-                let li = continuationIndex(lhs) ?? 0
-                let ri = continuationIndex(rhs) ?? 0
-                return li < ri
-            }
-        if !continuationKeys.isEmpty {
-            var assembled = ""
-            var firstCharset: String?
-            for key in continuationKeys {
-                guard let segment = dispositionParams[key] else { continue }
-                if key.hasSuffix("*") {
-                    // Percent-encoded segment.
-                    if key == continuationKeys.first, let parsed = splitRFC5987(segment) {
-                        firstCharset = parsed.charset
-                        assembled += parsed.encoded
-                    } else {
-                        assembled += segment
-                    }
-                } else {
-                    assembled += segment
-                }
-            }
-            let decoded = decodePercentEncoded(assembled, charset: firstCharset ?? "utf-8")
-                ?? assembled
-            return decodeRFC2047IfApplicable(decoded)
+        if let assembled = assembleRFC2231Continuation(
+            params: dispositionParams, paramName: "filename"
+        ) {
+            return assembled
         }
 
         // 3. Content-Disposition filename= (plain).
@@ -491,12 +467,73 @@ public enum MIMEParser {
             return decodeRFC2047IfApplicable(filename)
         }
 
-        // 4. Content-Type name= (legacy, pre-Content-Disposition).
+        // 4a. Content-Type name*= (RFC 5987 — defensive). Some non-conformant
+        //     senders emit the extended-value form on the `name` family
+        //     instead of on Content-Disposition's `filename*`.
+        if let extValue = contentTypeParams["name*"] {
+            let decoded = decodeRFC5987(extValue) ?? extValue
+            return decodeRFC2047IfApplicable(decoded)
+        }
+
+        // 4b. Content-Type name*N (RFC 2231 continuation, #122 — sister of
+        //     #99). Symmetric to step 2 for the `name` family.
+        if let assembled = assembleRFC2231Continuation(
+            params: contentTypeParams, paramName: "name"
+        ) {
+            return assembled
+        }
+
+        // 4c. Content-Type name= (legacy, pre-Content-Disposition).
         if let name = contentTypeParams["name"] {
             return decodeRFC2047IfApplicable(name)
         }
 
         return nil
+    }
+
+    /// Assemble an RFC 2231 continuation sequence (`<paramName>*0`,
+    /// `<paramName>*1`, … optionally with trailing `*` for percent-encoded
+    /// extended-value segments) from a flat `params` dict, percent-decode
+    /// using the first segment's declared charset, and apply the per-parameter
+    /// RFC 2047 second pass.
+    ///
+    /// Returns `nil` when no `<paramName>*N` keys are present (caller falls
+    /// through to the next resolution path). #122 extracted this from the
+    /// previously-duplicated inline block in step 2 so step 4b can reuse it
+    /// for `name*N` symmetric to `filename*N`.
+    private static func assembleRFC2231Continuation(
+        params: [String: String],
+        paramName: String
+    ) -> String? {
+        let prefix = "\(paramName)*"
+        let continuationKeys = params.keys
+            .filter { $0.hasPrefix(prefix) && $0 != prefix }
+            .sorted { lhs, rhs in
+                let li = continuationIndex(lhs, paramName: paramName) ?? 0
+                let ri = continuationIndex(rhs, paramName: paramName) ?? 0
+                return li < ri
+            }
+        guard !continuationKeys.isEmpty else { return nil }
+
+        var assembled = ""
+        var firstCharset: String?
+        for key in continuationKeys {
+            guard let segment = params[key] else { continue }
+            if key.hasSuffix("*") {
+                // Percent-encoded segment.
+                if key == continuationKeys.first, let parsed = splitRFC5987(segment) {
+                    firstCharset = parsed.charset
+                    assembled += parsed.encoded
+                } else {
+                    assembled += segment
+                }
+            } else {
+                assembled += segment
+            }
+        }
+        let decoded = decodePercentEncoded(assembled, charset: firstCharset ?? "utf-8")
+            ?? assembled
+        return decodeRFC2047IfApplicable(decoded)
     }
 
     /// RFC 2047 encoded-word grammar — a single well-formed encoded-word:
@@ -579,11 +616,13 @@ public enum MIMEParser {
             ?? String(data: Data(bytes), encoding: .utf8)
     }
 
-    /// Extract the numeric index from a continuation key like `filename*3*`
-    /// or `filename*0`. Returns nil for the bare `filename*` key.
-    private static func continuationIndex(_ key: String) -> Int? {
-        // key format: filename*<N>[*]
-        let afterStar = key.dropFirst("filename*".count)
+    /// Extract the numeric index from a continuation key like `<paramName>*3*`
+    /// or `<paramName>*0`. Returns nil for the bare `<paramName>*` key.
+    /// #122 generalized from the previous filename-only signature so step 4b
+    /// can sort `name*N` continuation keys symmetric to step 2's `filename*N`.
+    private static func continuationIndex(_ key: String, paramName: String) -> Int? {
+        // key format: <paramName>*<N>[*]
+        let afterStar = key.dropFirst("\(paramName)*".count)
         let digits = afterStar.prefix { $0.isNumber }
         return digits.isEmpty ? nil : Int(digits)
     }
