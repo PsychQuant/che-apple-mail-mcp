@@ -86,4 +86,87 @@ final class MailboxCrudScriptBuilderTests: XCTestCase {
         XCTAssertTrue(s.contains("account \"bob@example.com\""))
         XCTAssertFalse(s.contains("(account id"))
     }
+
+    // MARK: - #139: actor-method wiring regression lock
+
+    /// #139 — same pattern as #134 (resolveMsgRef wiring lock for reply/forward).
+    ///
+    /// `MailController.createMailbox` / `deleteMailbox` are 2-line actor wrappers
+    /// around `buildCreateMailboxScript` / `buildDeleteMailboxScript`. The
+    /// builders ARE the testable seam — they take `(name:accountId:accountName:)`
+    /// directly and the 11 PR-D tests cover both their UUID and display_name paths.
+    /// BUT the actor method's call site itself ("does createMailbox actually
+    /// call buildCreateMailboxScript with the right params?") has no
+    /// integration-free unit-test coverage.
+    ///
+    /// The realistic regression scenario this guards against: a future edit
+    /// inlines the AppleScript back into the actor (e.g. `let script = "tell
+    /// application \"Mail\" ..."`) and drops the builder call. Build still
+    /// succeeds, `swift test` stays green (the builder tests test the
+    /// FUNCTION, not the actor's USE of it), but the #104 account_id
+    /// disambiguation is silently dead.
+    ///
+    /// This structural test reads `MailController.swift` and asserts the
+    /// canonical call form is present. Brittle to renaming/restructuring —
+    /// when the wiring intentionally changes shape, this test should be
+    /// updated to reflect the new contract.
+    func testMailControllerCreateMailbox_callsBuilderNotInline() throws {
+        let source = try readMailControllerSource()
+        let createBody = try extractFunctionBody(source: source, signature: "func createMailbox(name: String,")
+        XCTAssertTrue(createBody.contains("buildCreateMailboxScript(name:"),
+                      "MailController.createMailbox MUST delegate to buildCreateMailboxScript — reverting to an inline AppleScript would silently lose #104 account_id disambiguation. Body:\n\(createBody)")
+        XCTAssertFalse(createBody.contains("tell application \"Mail\""),
+                       "MailController.createMailbox MUST NOT contain inline `tell application` — script construction belongs in buildCreateMailboxScript. Body:\n\(createBody)")
+    }
+
+    func testMailControllerDeleteMailbox_callsBuilderNotInline() throws {
+        let source = try readMailControllerSource()
+        let deleteBody = try extractFunctionBody(source: source, signature: "func deleteMailbox(name: String,")
+        XCTAssertTrue(deleteBody.contains("buildDeleteMailboxScript(name:"),
+                      "MailController.deleteMailbox MUST delegate to buildDeleteMailboxScript. Body:\n\(deleteBody)")
+        XCTAssertFalse(deleteBody.contains("tell application \"Mail\""),
+                       "MailController.deleteMailbox MUST NOT contain inline `tell application`. Body:\n\(deleteBody)")
+    }
+
+    // MARK: - Test helpers (structural source-code introspection)
+
+    /// Read the live `MailController.swift` source so the wiring tests above
+    /// reflect the current commit. Uses `#filePath` of this test file to
+    /// derive the source path (test runs under SPM build dir, source lives
+    /// adjacent).
+    private func readMailControllerSource(file: StaticString = #filePath, line: UInt = #line) throws -> String {
+        let testFile = URL(fileURLWithPath: "\(file)")
+        // Tests/CheAppleMailMCPTests/MailboxCrudScriptBuilderTests.swift
+        // → Sources/CheAppleMailMCP/AppleScript/MailController.swift
+        let pkgRoot = testFile
+            .deletingLastPathComponent()  // CheAppleMailMCPTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // repo root
+        let sourcePath = pkgRoot
+            .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift")
+        return try String(contentsOf: sourcePath, encoding: .utf8)
+    }
+
+    /// Extract a function body — the text between the opening `{` after
+    /// `signature` and its matching closing `}`. Brace-balanced; tolerates
+    /// nested blocks.
+    private func extractFunctionBody(source: String, signature: String) throws -> String {
+        guard let sigStart = source.range(of: signature) else {
+            throw NSError(domain: "MailboxCrudWiringTest", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "signature not found: \(signature)"])
+        }
+        guard let openBrace = source.range(of: "{", range: sigStart.upperBound..<source.endIndex) else {
+            throw NSError(domain: "MailboxCrudWiringTest", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "open brace not found after \(signature)"])
+        }
+        var depth = 1
+        var idx = openBrace.upperBound
+        while idx < source.endIndex && depth > 0 {
+            let ch = source[idx]
+            if ch == "{" { depth += 1 }
+            else if ch == "}" { depth -= 1 }
+            idx = source.index(after: idx)
+        }
+        return String(source[openBrace.upperBound..<idx])
+    }
 }
