@@ -50,11 +50,17 @@ func mailboxRefByAccountId(_ mailbox: String, accountId: String) -> String {
 ///
 /// - Note: Apple Mail's `id` of a message is a numeric internal identifier
 ///   (not the RFC 822 Message-ID string), so `whose id is <N>` is
-///   interpolated unquoted. `assert` catches non-numeric `id` at debug
-///   time — Server-layer `requireMessageId` is the user-facing contract.
+///   interpolated unquoted. A release-safe numeric guard (#118) rejects
+///   non-numeric `id`; Server-layer `requireMessageId` is the user-facing
+///   contract.
 func msgRefByAccountId(_ id: String, mailbox: String, accountId: String) -> String {
-    assert(Int(id) != nil, "msgRefByAccountId called with non-numeric id '\(id)' — Server.swift handler missed validation (#50)")
-    return "(first message of \(mailboxRefByAccountId(mailbox, accountId: accountId)) whose id is \(id))"
+    // Release-safe guard (#118): `id` is interpolated unquoted into `whose id is`.
+    // A debug-only `assert` compiles out under `-O`, so a caller bypassing
+    // `Server.requireMessageId` could inject an AppleScript predicate. `Int(id)`
+    // succeeds only for `[+-]?\d+` — on failure substitute an impossible id so the
+    // malicious string is never interpolated; the script fails cleanly with -1728.
+    let safeId = Int(id) != nil ? id : "-1"
+    return "(first message of \(mailboxRefByAccountId(mailbox, accountId: accountId)) whose id is \(safeId))"
 }
 
 // MARK: - Resolvers (UUID path with display_name fallback)
@@ -86,8 +92,9 @@ func resolveMsgRef(id: String, mailbox: String, accountId: String?, accountName:
     if let aid = accountId, !aid.isEmpty {
         return msgRefByAccountId(id, mailbox: mailbox, accountId: aid)
     }
-    assert(Int(id) != nil, "resolveMsgRef called with non-numeric id '\(id)' — Server.swift handler missed validation (#50)")
-    return "(first message of \(resolveMailboxRef(mailbox: mailbox, accountId: nil, accountName: accountName)) whose id is \(id))"
+    // Release-safe guard (#118) — see msgRefByAccountId for the rationale.
+    let safeId = Int(id) != nil ? id : "-1"
+    return "(first message of \(resolveMailboxRef(mailbox: mailbox, accountId: nil, accountName: accountName)) whose id is \(safeId))"
 }
 
 /// Resolve an **account-only** AppleScript selector — just the account, not a
