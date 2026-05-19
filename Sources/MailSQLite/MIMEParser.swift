@@ -555,18 +555,37 @@ public enum MIMEParser {
     /// which the pre-#115 raw-header-level scan used to decode — once #115
     /// moved decoding from the header layer to this per-parameter layer, a
     /// whole-string gate silently dropped that attachment class.
-    private static let rfc2047EncodedWordPattern: NSRegularExpression? = {
-        let pattern = #"=\?[^?\s]+\?[BQbq]\?[^?]*\?="#
-        return try? NSRegularExpression(pattern: pattern)
+    private static let rfc2047EncodedWordPattern: NSRegularExpression = {
+        // RFC 2047 §2: `encoded-text = 1*<Any printable ASCII char except "?"
+        // and SPACE>` — the payload requires AT LEAST one character. The
+        // earlier `[^?]*` (zero-or-more) accepted a degenerate `=?utf-8?B??=`
+        // with empty payload, which has no useful decoded value (#126).
+        // Tightened to `[^?]+` to match the grammar.
+        let pattern = #"=\?[^?\s]+\?[BQbq]\?[^?]+\?="#
+        // The pattern is a hardcoded compile-time constant — a successful
+        // build implies a syntactically valid regex. If a future refactor
+        // breaks the literal, we want to fail loudly at first use rather
+        // than silently disable the second-pass decode and pretend the
+        // gate is rejecting every value (#126: lift `try?` to fail-fast).
+        do {
+            return try NSRegularExpression(pattern: pattern)
+        } catch {
+            fatalError(
+                "decodeRFC2047IfApplicable: hardcoded RFC 2047 encoded-word "
+                + "pattern failed to compile — this is a programming error in "
+                + "the pattern literal: \(error)"
+            )
+        }
     }()
 
     /// Apply `RFC822Parser.decodeRFC2047` (a partial, in-place encoded-word
     /// scanner) when `value` contains at least one well-formed RFC 2047
     /// encoded-word. See `rfc2047EncodedWordPattern` for the rationale.
     static func decodeRFC2047IfApplicable(_ value: String) -> String {
-        guard let regex = rfc2047EncodedWordPattern else { return value }
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
-        guard regex.firstMatch(in: value, range: range) != nil else { return value }
+        guard rfc2047EncodedWordPattern.firstMatch(in: value, range: range) != nil else {
+            return value
+        }
         return RFC822Parser.decodeRFC2047(value)
     }
 
