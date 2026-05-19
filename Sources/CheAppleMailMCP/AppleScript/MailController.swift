@@ -1493,14 +1493,15 @@ actor MailController {
     /// but `id` is the internal numeric identifier returned by search/list.
     /// We must use `first message ... whose id is N` instead of `message id N`.
     ///
-    /// Issue #50: `id` is interpolated unescaped. Server.swift's `requireMessageId`
-    /// validates Int format at the handler boundary; this assertion catches future
-    /// internal callers that bypass that validation. Use `assert` (debug-only) not
-    /// `precondition` — Server-layer throw is the user-facing contract; release
-    /// builds should not crash on internal-caller bug.
-    private func msgRef(_ id: String, mailbox: String, account: String) -> String {
-        assert(Int(id) != nil, "msgRef called with non-numeric id '\(id)' — Server.swift handler missed validation (#50)")
-        return "(first message of \(mailboxRef(mailbox, account: account)) whose id is \(id))"
+    /// Issue #50 / #145: `id` is interpolated unquoted into `whose id is`. A
+    /// release-safe numeric guard rejects non-numeric `id` — `Int(id)` succeeds
+    /// only for `[+-]?\d+`; on failure an impossible id (-1) is substituted so the
+    /// malicious string is never interpolated and the script fails cleanly with
+    /// -1728. Server.swift's `requireMessageId` remains the user-facing contract.
+    /// `internal` (not `private`) purely as the #145 test seam.
+    func msgRef(_ id: String, mailbox: String, account: String) -> String {
+        let safeId = Int(id) != nil ? id : "-1"
+        return "(first message of \(mailboxRef(mailbox, account: account)) whose id is \(safeId))"
     }
 
     /// Escape special characters for AppleScript strings.
