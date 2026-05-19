@@ -31,11 +31,10 @@ import Foundation
 /// `/System/Applications/Mail.app/Contents/Resources/Mail.sdef`
 /// `<enumeration name="RuleQualifier" code="enrq">` — 8 enumerators.
 ///
-/// > **Note**: `appleScriptEscape` (shared free function) and the private
-/// > `MailController.escapeForAppleScript` have identical implementations
-/// > (5-stage `replacingOccurrences` chain); dedup tracked at #110. This
-/// > builder uses `appleScriptEscape` consistent with the #104 PR-B/C/D
-/// > extraction pattern.
+/// > **Note**: `appleScriptEscape` (shared free function) is the single
+/// > AppleScript-escape helper across the package — `MailController`'s former
+/// > private duplicate was removed in #110. This builder uses
+/// > `appleScriptEscape` consistent with the #104 PR-B/C/D extraction pattern.
 
 /// Canonical whitelist of Apple Mail `RuleQualifier` enum values. Single
 /// source of truth used by both `Server.swift`'s `create_rule` handler
