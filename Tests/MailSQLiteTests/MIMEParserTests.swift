@@ -687,6 +687,42 @@ final class MIMEParserTests: XCTestCase {
                        "first (stripped) occurrence must win — matches saveAttachment's parts.first")
     }
 
+    // MARK: - RFC 2231 continuation on Content-Type `name*N` (#122)
+
+    func testResolveFilename_contentTypeName_rfc2231WithNestedRfc2047() {
+        // #122: sister of #99 — Outlook 16 double-encoding pattern on the
+        // Content-Type `name` family. Before the fix, resolveFilename only
+        // assembled `filename*N` continuation; a sender that emits ONLY
+        // `name*0*`/`name*1*` (no Content-Disposition `filename` at all) hit
+        // the same #99 silent-drop, on the parameter family the original fix
+        // never covered. Fixture mirrors `testResolveFilename_outlook16_*` but
+        // lives in `contentTypeParams`, with empty `dispositionParams`.
+        let params: [String: String] = [
+            "name*0*": "us-ascii''%3D%3Futf%2D8%3FB%3F5Lit5aSu56CU56m26Zmi5paw6YCy6IGY5YOx5Lq65ZOh6auU5qC85q",
+            "name*1*": "qi5p%2Bl%3F%3D%09%3D%3Futf%2D8%3FB%3F6KGoLTExMTAzMzHoo73ooagucGRm%3F%3D",
+        ]
+        let result = MIMEParser.resolveFilename(
+            dispositionParams: [:],
+            contentTypeParams: params
+        )
+        XCTAssertEqual(result, "中央研究院新進聘僱人員體格檢查表-1110331製表.pdf")
+    }
+
+    func testResolveFilename_contentTypeName_rfc5987() {
+        // #122 defensive: Content-Type `name*=charset''percent-encoded` —
+        // RFC 5987 single-segment on the `name` family, mirroring the
+        // existing path 1 for Content-Disposition `filename*`. The bytes
+        // 5Lit5paHLnBkZg== decode to `中文.pdf` (UTF-8).
+        let params: [String: String] = [
+            "name*": "UTF-8''%3D%3Futf%2D8%3FB%3F5Lit5paHLnBkZg%3D%3D%3F%3D",
+        ]
+        let result = MIMEParser.resolveFilename(
+            dispositionParams: [:],
+            contentTypeParams: params
+        )
+        XCTAssertEqual(result, "中文.pdf")
+    }
+
     // MARK: - RFC 2231 continuation with split RFC 2047 encoded-word (#115)
 
     func testEnumerateAttachmentNames_rfc2231SplitEncodedWordContinuation() throws {
