@@ -89,6 +89,57 @@ final class AppleScriptRefBuilderTests: XCTestCase {
         )
     }
 
+    // MARK: - id injection hardening (#118 — release-safe guard, sister of #50)
+    //
+    // `resolveMsgRef` / `msgRefByAccountId` interpolate `id` unquoted into
+    // `whose id is \(id)`. The pre-#118 guard was a debug-only `assert` that
+    // compiles out under `-O`, so a release-build caller bypassing
+    // `Server.requireMessageId` could inject an AppleScript predicate. The fix:
+    // a release-safe `guard Int(id) != nil` that substitutes an impossible id
+    // (`-1`) — the malicious string is NEVER interpolated into the output.
+
+    func testMsgRefByAccountId_nonNumericId_substitutesSentinel() {
+        let ref = msgRefByAccountId("1 or true", mailbox: "INBOX", accountId: "UUID-A")
+        XCTAssertFalse(ref.contains("or true"),
+                       "non-numeric id must NOT be interpolated — predicate injection surface")
+        XCTAssertTrue(ref.contains("whose id is -1"),
+                      "non-numeric id must collapse to the impossible-id sentinel; got:\n\(ref)")
+    }
+
+    func testResolveMsgRef_uuidPath_nonNumericId_substitutesSentinel() {
+        let ref = resolveMsgRef(id: "1 or true", mailbox: "INBOX", accountId: "UUID-A",
+                                accountName: "a@b")
+        XCTAssertFalse(ref.contains("or true"),
+                       "UUID-path non-numeric id must NOT be interpolated")
+        XCTAssertTrue(ref.contains("whose id is -1"),
+                      "UUID-path non-numeric id must collapse to the sentinel; got:\n\(ref)")
+    }
+
+    func testResolveMsgRef_fallbackPath_nonNumericId_substitutesSentinel() {
+        let ref = resolveMsgRef(id: "263385) or true --", mailbox: "INBOX", accountId: nil,
+                                accountName: "alice@example.com")
+        XCTAssertFalse(ref.contains("or true"),
+                       "fallback-path non-numeric id must NOT be interpolated")
+        XCTAssertFalse(ref.contains("--"),
+                       "fallback-path injection payload must NOT survive into the script")
+        XCTAssertTrue(ref.contains("whose id is -1"),
+                      "fallback-path non-numeric id must collapse to the sentinel; got:\n\(ref)")
+    }
+
+    func testResolveMsgRef_numericId_byteEquivalencePreserved() {
+        // The valid (numeric) path must be byte-identical to pre-#118 output —
+        // the guard interpolates the ORIGINAL id string, not a round-tripped Int.
+        XCTAssertEqual(
+            resolveMsgRef(id: "263385", mailbox: "INBOX", accountId: nil,
+                          accountName: "alice@example.com"),
+            "(first message of (first mailbox of account \"alice@example.com\" whose name is \"INBOX\") whose id is 263385)"
+        )
+        XCTAssertEqual(
+            msgRefByAccountId("42", mailbox: "INBOX", accountId: "UUID-A"),
+            "(first message of (first mailbox of (account id \"UUID-A\") whose name is \"INBOX\") whose id is 42)"
+        )
+    }
+
     // MARK: - Escaping flows through both paths
 
     func testResolveMailboxRef_escapesQuotes_inBothPaths() {
