@@ -76,7 +76,7 @@ final class MutationToolScriptBuilderTests: XCTestCase {
 
     func testBuildSetBackgroundColorScript_displayNameFallback() {
         let s = buildSetBackgroundColorScript(id: "5", mailbox: "INBOX",
-                                              accountId: nil, accountName: "e@f", color: "green")
+                                              accountId: "", accountName: "e@f", color: "green")
         XCTAssertTrue(s.contains("account \"e@f\""))
         XCTAssertFalse(s.contains("account id "))
     }
