@@ -601,6 +601,79 @@ final class AttachmentExtractorTests: XCTestCase {
         )
     }
 
+    // MARK: - attachmentSavability (#105)
+
+    /// `.partial.emlx` with the external binary present → `savable: true`
+    /// (`save_attachment` would succeed via the external-cache path).
+    func testAttachmentSavability_partialEmlxWithExternal_isSavable() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262300
+        let filename = "report.pdf"
+        let (mailboxURL, attachmentsDir) = try installPartialEmlxWithStrippedAttachment(
+            rowId: rowId, attachmentFilename: filename, in: root
+        )
+        let partDir = attachmentsDir.appendingPathComponent("2", isDirectory: true)
+        try FileManager.default.createDirectory(at: partDir, withIntermediateDirectories: true)
+        try Data((0..<512).map { UInt8($0 & 0xFF) })
+            .write(to: partDir.appendingPathComponent(filename))
+
+        let savability = try EmlxParser.attachmentSavability(rowId: rowId, mailboxURL: mailboxURL)
+        XCTAssertEqual(savability[filename], true,
+                       "stripped inline body but external file present → savable")
+    }
+
+    /// `.partial.emlx` with the body stripped AND no external folder →
+    /// `savable: false` (this is exactly #103's `-10000` precursor state).
+    func testAttachmentSavability_partialEmlxNoExternal_isNotSavable() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262301
+        let filename = "report.pdf"
+        let (mailboxURL, _) = try installPartialEmlxWithStrippedAttachment(
+            rowId: rowId, attachmentFilename: filename, in: root
+        )
+        // Deliberately don't create the Attachments/<rowId>/ folder.
+
+        let savability = try EmlxParser.attachmentSavability(rowId: rowId, mailboxURL: mailboxURL)
+        XCTAssertEqual(savability[filename], false,
+                       "stripped inline body + no external file → not savable")
+        XCTAssertEqual(Set(savability.keys), [filename],
+                       "the savability map's keys are exactly the envelope's attachment names")
+    }
+
+    /// #105 security: a path-traversal attachment name must NOT let the
+    /// external-cache lookup escape `Attachments/<rowId>/`. A decoy file is
+    /// planted exactly where `Attachments/<rowId>/<partId>/../../decoy.pdf`
+    /// would resolve; without the `externalAttachmentURL` guard the crafted
+    /// name would find it and report `savable: true`, leaking a filesystem
+    /// existence bit. With the guard the name resolves to nothing → `false`.
+    func testAttachmentSavability_pathTraversalNameIsRejected() throws {
+        let root = tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let rowId = 262400
+        let craftedName = "../../decoy.pdf"
+        let (mailboxURL, attachmentsDir) = try installPartialEmlxWithStrippedAttachment(
+            rowId: rowId, attachmentFilename: craftedName, in: root
+        )
+        // A real partId subdir must exist so externalAttachmentURL's loop runs.
+        let partDir = attachmentsDir.appendingPathComponent("2", isDirectory: true)
+        try FileManager.default.createDirectory(at: partDir, withIntermediateDirectories: true)
+        // Plant the decoy where `<rowId>/2/../../decoy.pdf` would land:
+        // attachmentsDir is `.../Attachments/<rowId>`, so two levels up from
+        // the `2/` partDir is `.../Attachments/`.
+        let escapeTarget = attachmentsDir.deletingLastPathComponent()
+            .appendingPathComponent("decoy.pdf")
+        try Data("decoy".utf8).write(to: escapeTarget)
+
+        let savability = try EmlxParser.attachmentSavability(rowId: rowId, mailboxURL: mailboxURL)
+        XCTAssertEqual(savability[craftedName], false,
+                       "a path-traversal attachment name must not resolve to an out-of-tree file")
+    }
+
     /// Mirror of the happy path but exercising the external-folder match
     /// against the legacy `Content-Type: name` parameter (some senders
     /// only set `name=`, not `Content-Disposition: filename=`).

@@ -155,6 +155,18 @@ extension EmlxParser {
         rowId: Int,
         attachmentName: String
     ) -> URL? {
+        // #105 security: `attachmentName` is the email-sender-controlled MIME
+        // filename. A name bearing a path separator or `.`/`..` is never a
+        // valid single-segment attachment filename — and joining it via
+        // `appendingPathComponent` would let a crafted email probe (and, via
+        // `saveAttachment`, read) files outside `Attachments/<rowId>/`. Since
+        // `list_attachments` now calls this for *every* attachment name, an
+        // unguarded join would turn a passive listing into a filesystem
+        // existence-oracle. Reject path-bearing names outright.
+        guard !attachmentName.contains("/"),
+              attachmentName != ".", attachmentName != ".." else {
+            return nil
+        }
         // emlxPath is `<hashDir>/Messages/<rowId>.{partial.,}emlx`. Walk up
         // two levels to get the hash dir, then descend into Attachments.
         let messagesDir = URL(fileURLWithPath: emlxPath).deletingLastPathComponent()
@@ -251,5 +263,64 @@ extension EmlxParser {
         // the caller's do/catch in Server.swift falls back to unvalidated
         // SQLite metadata instead of showing 0 attachments.
         return try MIMEParser.enumerateAttachmentNames(bodyData, headers: headers)
+    }
+
+    /// For every attachment name in the `.emlx` envelope, report whether
+    /// `saveAttachment` could actually fulfill it — i.e. whether the binary is
+    /// retrievable from the local Mail store without an IMAP round-trip.
+    ///
+    /// `true` when the part carries a non-empty inline body **or** Apple
+    /// Mail's external `Attachments/<rowId>/<part_id>/<filename>` cache holds
+    /// a matching file. `false` is the #103 precursor state: the name is in
+    /// the envelope (so it survives `list_attachments`' cross-validation) but
+    /// the binary is in neither place — a subsequent `save_attachment` would
+    /// fall through to AppleScript and fail with `-10000` (#105).
+    ///
+    /// The returned map's keys are exactly the attachment names that
+    /// `attachmentNames` would return — callers needing both can derive the
+    /// name set from `Set(result.keys)` and avoid a second `.emlx` parse.
+    ///
+    /// > **Known limitation**: inline presence is a *no-decode* check (the
+    /// > raw transfer-encoded body has a non-whitespace byte), whereas the
+    /// > actual `saveAttachment` decides on `decodedData.isEmpty` *after*
+    /// > transfer-decoding. They diverge only for a pathological `7bit`/
+    /// > `8bit`/`binary` attachment whose content is genuinely whitespace —
+    /// > reported `savable: false` though a save would succeed. The error is
+    /// > in the *safe* direction (a caller skips a save that would have
+    /// > worked; it never promises a save that would fail with `-10000`).
+    ///
+    /// - Throws: `MailSQLiteError.emlxNotFound` / `.emlxParseFailed` — same
+    ///   conditions as `attachmentNames`.
+    public static func attachmentSavability(
+        rowId: Int,
+        mailboxURL: String
+    ) throws -> [String: Bool] {
+        guard let path = resolveEmlxPath(rowId: rowId, mailboxURL: mailboxURL) else {
+            throw MailSQLiteError.emlxNotFound(
+                messageId: rowId,
+                path: "Could not resolve .emlx path for message \(rowId)"
+            )
+        }
+        let fileData = try Data(contentsOf: URL(fileURLWithPath: path))
+        let messageData = try EmlxFormat.extractMessageData(from: fileData)
+        let headers = RFC822Parser.parseHeaders(from: messageData)
+        guard let bodyOffset = RFC822Parser.headerBodySplitOffset(in: messageData) else {
+            throw MailSQLiteError.emlxParseFailed(
+                "No header/body split found in message \(rowId)"
+            )
+        }
+        let bodyData = Data(messageData[bodyOffset...])
+        let inlinePresence = try MIMEParser.enumerateAttachmentInlinePresence(
+            bodyData, headers: headers
+        )
+
+        var savability = [String: Bool]()
+        for (name, inlinePresent) in inlinePresence {
+            // Inline body present → savable outright. Otherwise the binary may
+            // still live in the external `.partial.emlx` attachment cache.
+            savability[name] = inlinePresent
+                || externalAttachmentURL(emlxPath: path, rowId: rowId, attachmentName: name) != nil
+        }
+        return savability
     }
 }

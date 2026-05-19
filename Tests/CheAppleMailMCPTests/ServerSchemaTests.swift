@@ -380,6 +380,40 @@ final class ServerSchemaTests: XCTestCase {
         XCTAssertEqual(err.errorDescription, "recovery: do X then Y")
     }
 
+    // MARK: - crossValidateAttachments savable stamping (#105)
+
+    func testCrossValidateAttachments_stampsSavableAndOmitsUnknown() {
+        let rows: [[String: Any]] = [
+            ["name": "present.pdf", "attachment_id": "1"],
+            ["name": "missing.pdf", "attachment_id": "2"],
+            ["name": "unknown.pdf", "attachment_id": "3"],
+            ["name": "stale.pdf", "attachment_id": "4"],   // not in realNames → dropped
+        ]
+        let realNames: Set<String> = ["present.pdf", "missing.pdf", "unknown.pdf"]
+        // unknown.pdf is intentionally absent from the savability map.
+        let savability = ["present.pdf": true, "missing.pdf": false]
+        let out = crossValidateAttachments(
+            sqliteAttachments: rows, realNames: realNames, savability: savability)
+
+        XCTAssertEqual(out.count, 3, "stale.pdf not in realNames must be dropped")
+        func entry(_ name: String) -> [String: Any]? {
+            out.first { $0["name"] as? String == name }
+        }
+        XCTAssertEqual(entry("present.pdf")?["savable"] as? Bool, true)
+        XCTAssertEqual(entry("missing.pdf")?["savable"] as? Bool, false)
+        XCTAssertNil(entry("unknown.pdf")?["savable"],
+                     "absent from savability → savable omitted (unknown), never guessed")
+    }
+
+    func testCrossValidateAttachments_emptySavabilityOmitsField() {
+        // The .emlx-parse-failure fallback passes no savability — every entry
+        // must pass through with no `savable` key (old-caller behavior).
+        let rows: [[String: Any]] = [["name": "a.pdf", "attachment_id": "1"]]
+        let out = crossValidateAttachments(sqliteAttachments: rows, realNames: ["a.pdf"])
+        XCTAssertEqual(out.count, 1)
+        XCTAssertNil(out[0]["savable"], "empty savability → field omitted")
+    }
+
     // MARK: - parseBodyFormatArgument (handles MCP Value type)
 
     func testParseBodyFormatArgument_nilReturnsPlain() throws {

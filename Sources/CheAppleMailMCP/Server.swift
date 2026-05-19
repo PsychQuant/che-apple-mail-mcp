@@ -1018,13 +1018,17 @@ class CheAppleMailMCPServer {
                 // SQLite results to names actually present in the .emlx body.
                 if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
                     do {
-                        let realNames = try EmlxParser.attachmentNames(
+                        // #105: attachmentSavability's keys ARE the validated
+                        // names (== attachmentNames), so one .emlx parse yields
+                        // both the cross-validation set and the savable field.
+                        let savability = try EmlxParser.attachmentSavability(
                             rowId: rowId,
                             mailboxURL: mailboxUrl
                         )
                         let validated = crossValidateAttachments(
                             sqliteAttachments: sqliteAttachments,
-                            realNames: realNames
+                            realNames: Set(savability.keys),
+                            savability: savability
                         )
                         return formatJSON(validated)
                     } catch {
@@ -1470,13 +1474,16 @@ class CheAppleMailMCPServer {
                         var attachments = sqliteAttachments
                         if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
                             do {
-                                let realNames = try EmlxParser.attachmentNames(
+                                // #105: one .emlx parse → cross-validation set
+                                // (savability.keys) + the per-row `savable` field.
+                                let savability = try EmlxParser.attachmentSavability(
                                     rowId: rowId,
                                     mailboxURL: mailboxUrl
                                 )
                                 attachments = crossValidateAttachments(
                                     sqliteAttachments: sqliteAttachments,
-                                    realNames: realNames
+                                    realNames: Set(savability.keys),
+                                    savability: savability
                                 )
                             } catch {
                                 let message = "list_attachments_batch emlx validation failed for "
@@ -1814,10 +1821,19 @@ func parseBodyFormatArgument(_ raw: Value?) throws -> BodyFormat {
 /// the parser confirms are actually present.
 func crossValidateAttachments(
     sqliteAttachments: [[String: Any]],
-    realNames: Set<String>
+    realNames: Set<String>,
+    savability: [String: Bool] = [:]
 ) -> [[String: Any]] {
-    return sqliteAttachments.filter { entry in
-        guard let name = entry["name"] as? String else { return false }
-        return realNames.contains(name)
+    return sqliteAttachments.compactMap { entry in
+        guard let name = entry["name"] as? String, realNames.contains(name) else { return nil }
+        var stamped = entry
+        // #105: stamp `savable` so callers can predict save_attachment success.
+        // Absent from `savability` (e.g. the .emlx-parse-failure fallback path
+        // passes `[:]`) → the field is omitted, meaning "unknown" — callers
+        // must NOT read an absent `savable` as `false`.
+        if let savable = savability[name] {
+            stamped["savable"] = savable
+        }
+        return stamped
     }
 }
