@@ -864,8 +864,17 @@ actor MailController {
             originalPlain = ""
         }
 
+        // #134: use the (id:mailbox:accountId:accountName:) overload — the
+        // resolveMsgRef call is internalized there, so ComposeScriptBuilderTests
+        // locks the wiring (reverting resolveMsgRef→msgRef inside the overload
+        // would now fail the unit test). Pre-fetch path still computes `ref`
+        // inline because it threads through buildFetchOriginalContentScript;
+        // wiring lock for the fetch path is out of #134's scope.
         let script = try buildReplyEmailScript(
-            messageRef: ref,
+            id: id,
+            mailbox: mailbox,
+            accountId: accountId,
+            accountName: accountName,
             userBody: body,
             userFormat: format,
             replyAll: replyAll,
@@ -909,8 +918,13 @@ actor MailController {
             originalPlain = ""
         }
 
+        // #134: use the (id:mailbox:accountId:accountName:) overload — see
+        // the matching note in replyEmail above.
         let script = try buildForwardEmailScript(
-            messageRef: ref,
+            id: id,
+            mailbox: mailbox,
+            accountId: accountId,
+            accountName: accountName,
             to: to,
             userBody: body,
             userFormat: format,

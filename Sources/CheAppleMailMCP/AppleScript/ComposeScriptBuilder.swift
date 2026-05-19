@@ -319,6 +319,86 @@ func buildForwardEmailScript(
     return script
 }
 
+/// #134 — testable seam for reply_email's resolveMsgRef wiring.
+///
+/// Pre-#134 `MailController.replyEmail` computed `ref = resolveMsgRef(...)`
+/// inline and threaded `ref` into the `(messageRef:)` builder. That overload
+/// is byte-identical to what the actor produces, but the wiring step (the
+/// literal `resolveMsgRef` call that #104 PR-C added for account_id
+/// disambiguation) had **no automated regression lock** — reverting it to
+/// the legacy `msgRef(...)` helper would leave `swift test` green and
+/// silently bring back the #104 display_name-collision bug.
+///
+/// This overload internalizes the `resolveMsgRef` call so the wiring IS
+/// unit-testable: `buildReplyEmailScript(id:..., accountId: uuid, ...)`
+/// must emit `(account id "<UUID>")`, and the existing
+/// `buildReplyEmailScript(messageRef:...)` overload stays intact for the
+/// 25 legacy tests that pre-build the ref themselves.
+///
+/// `MailController.replyEmail` MUST use this overload (not the `messageRef:`
+/// one with an inline `msgRef(...)` call) — that's the discipline this seam
+/// codifies. Pre-fetch path still computes `ref` inline because it threads
+/// through `buildFetchOriginalContentScript`; #134's scope is the main
+/// reply script wiring (sibling issue can extend to the fetch path).
+func buildReplyEmailScript(
+    id: String,
+    mailbox: String,
+    accountId: String?,
+    accountName: String,
+    userBody: String,
+    userFormat: BodyFormat,
+    replyAll: Bool,
+    ccAdditional: [String]? = nil,
+    attachments: [String]? = nil,
+    saveAsDraft: Bool = false,
+    originalHTML: String?,
+    originalPlain: String,
+    sanitizeLinks: Bool = false
+) throws -> String {
+    let ref = resolveMsgRef(id: id, mailbox: mailbox,
+                            accountId: accountId, accountName: accountName)
+    return try buildReplyEmailScript(
+        messageRef: ref,
+        userBody: userBody,
+        userFormat: userFormat,
+        replyAll: replyAll,
+        ccAdditional: ccAdditional,
+        attachments: attachments,
+        saveAsDraft: saveAsDraft,
+        originalHTML: originalHTML,
+        originalPlain: originalPlain,
+        sanitizeLinks: sanitizeLinks
+    )
+}
+
+/// #134 — testable seam for forward_email's resolveMsgRef wiring.
+/// See `buildReplyEmailScript(id:mailbox:accountId:accountName:...)` for
+/// the rationale; mirrors that pattern for forward.
+func buildForwardEmailScript(
+    id: String,
+    mailbox: String,
+    accountId: String?,
+    accountName: String,
+    to: [String],
+    userBody: String?,
+    userFormat: BodyFormat,
+    originalHTML: String?,
+    originalPlain: String?,
+    sanitizeLinks: Bool = false
+) throws -> String {
+    let ref = resolveMsgRef(id: id, mailbox: mailbox,
+                            accountId: accountId, accountName: accountName)
+    return try buildForwardEmailScript(
+        messageRef: ref,
+        to: to,
+        userBody: userBody,
+        userFormat: userFormat,
+        originalHTML: originalHTML,
+        originalPlain: originalPlain,
+        sanitizeLinks: sanitizeLinks
+    )
+}
+
 func buildFetchOriginalContentScript(messageRef: String) -> String {
     return """
     tell application "Mail"
