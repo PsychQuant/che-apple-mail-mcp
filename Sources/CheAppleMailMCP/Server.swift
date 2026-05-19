@@ -899,7 +899,7 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("mailbox, account_name, and read are required")
             }
             let accountId = arguments["account_id"]?.stringValue
-            return try await mailController.markRead(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, read: read)
+            return try await mailController.markRead(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, read: read)
 
         case "flag_email":
             let id = try requireMessageId(arguments)
@@ -909,7 +909,7 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("mailbox, account_name, and flagged are required")
             }
             let accountId = arguments["account_id"]?.stringValue
-            return try await mailController.flagEmail(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, flagged: flagged)
+            return try await mailController.flagEmail(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, flagged: flagged)
 
         case "move_email":
             let id = try requireMessageId(arguments)
@@ -1190,7 +1190,7 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("mailbox, account_name, and color_index are required")
             }
             let accountId = arguments["account_id"]?.stringValue
-            return try await mailController.setFlagColor(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, colorIndex: colorIndex)
+            return try await mailController.setFlagColor(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, colorIndex: colorIndex)
 
         case "set_background_color":
             let id = try requireMessageId(arguments)
@@ -1204,7 +1204,7 @@ class CheAppleMailMCPServer {
                     "color must be one of: blue, gray, green, none, orange, purple, red, yellow (got: \"\(color)\")")
             }
             let accountId = arguments["account_id"]?.stringValue
-            return try await mailController.setBackgroundColor(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, color: color)
+            return try await mailController.setBackgroundColor(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, color: color)
 
         case "mark_as_junk":
             let id = try requireMessageId(arguments)
@@ -1214,7 +1214,7 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("mailbox, account_name, and is_junk are required")
             }
             let accountId = arguments["account_id"]?.stringValue
-            return try await mailController.markAsJunk(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, isJunk: isJunk)
+            return try await mailController.markAsJunk(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, isJunk: isJunk)
 
         case "get_email_headers":
             let id = try requireMessageId(arguments)

@@ -619,13 +619,13 @@ actor MailController {
     // MARK: - Email Actions
 
     /// Mark email as read/unread
-    func markRead(id: String, mailbox: String, accountName: String, accountId: String? = nil, read: Bool) throws -> String {
+    func markRead(id: String, mailbox: String, accountId: String? = nil, accountName: String, read: Bool) throws -> String {
         let script = buildMarkReadScript(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, read: read)
         return try runScript(script)
     }
 
     /// Flag email
-    func flagEmail(id: String, mailbox: String, accountName: String, accountId: String? = nil, flagged: Bool) throws -> String {
+    func flagEmail(id: String, mailbox: String, accountId: String? = nil, accountName: String, flagged: Bool) throws -> String {
         let script = buildFlagEmailScript(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, flagged: flagged)
         return try runScript(script)
     }
@@ -1169,20 +1169,20 @@ actor MailController {
     }
 
     /// Set flag color (0-6: red, orange, yellow, green, blue, purple, gray; -1 to clear)
-    func setFlagColor(id: String, mailbox: String, accountName: String, accountId: String? = nil, colorIndex: Int) throws -> String {
+    func setFlagColor(id: String, mailbox: String, accountId: String? = nil, accountName: String, colorIndex: Int) throws -> String {
         let script = buildSetFlagColorScript(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, colorIndex: colorIndex)
         return try runScript(script)
     }
 
     /// Set email background color
-    func setBackgroundColor(id: String, mailbox: String, accountName: String, accountId: String? = nil, color: String) throws -> String {
+    func setBackgroundColor(id: String, mailbox: String, accountId: String? = nil, accountName: String, color: String) throws -> String {
         // Valid colors: blue, gray, green, none, orange, purple, red, yellow
         let script = buildSetBackgroundColorScript(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, color: color)
         return try runScript(script)
     }
 
     /// Mark email as junk or not junk
-    func markAsJunk(id: String, mailbox: String, accountName: String, accountId: String? = nil, isJunk: Bool) throws -> String {
+    func markAsJunk(id: String, mailbox: String, accountId: String? = nil, accountName: String, isJunk: Bool) throws -> String {
         let script = buildMarkAsJunkScript(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, isJunk: isJunk)
         return try runScript(script)
     }
