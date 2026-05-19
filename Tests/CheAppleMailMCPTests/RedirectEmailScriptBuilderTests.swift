@@ -79,4 +79,93 @@ final class RedirectEmailScriptBuilderTests: XCTestCase {
         XCTAssertTrue(s.contains("evil\\\"name@example.com"),
                       "recipient quote must be backslash-escaped")
     }
+
+    // MARK: - #135 escape coverage (SEC-6 from #132 verify)
+
+    /// #135 gap 1: account_id with embedded `"` must be escaped where it
+    /// appears in the `(account id "...")` selector. Regression that dropped
+    /// `appleScriptEscape` from `msgRefByAccountId` would not be caught by
+    /// recipient-only escape tests.
+    func testBuildRedirectEmailScript_escapesAccountIdQuotes() {
+        let s = buildRedirectEmailScript(
+            id: "1", mailbox: "INBOX",
+            accountId: "abc\"123", accountName: "alice@example.com",
+            to: ["x@y.z"]
+        )
+        XCTAssertTrue(s.contains("(account id \"abc\\\"123\")"),
+                      "accountId quote must be backslash-escaped inside selector; got:\n\(s)")
+    }
+
+    /// #135 gap 1: mailbox name with embedded `"` flows into
+    /// `whose name is "..."` and must be escaped.
+    func testBuildRedirectEmailScript_escapesMailboxQuotes() {
+        let s = buildRedirectEmailScript(
+            id: "1", mailbox: "Weird\"Folder",
+            accountId: nil, accountName: "alice@example.com",
+            to: ["x@y.z"]
+        )
+        XCTAssertTrue(s.contains("whose name is \"Weird\\\"Folder\""),
+                      "mailbox name quote must be backslash-escaped; got:\n\(s)")
+    }
+
+    /// #135 gap 1: backslash in input is the classic double-escape trap —
+    /// `\` must become `\\` BEFORE `"` becomes `\"` (escape-order discipline,
+    /// see ComposeScriptBuilder.appleScriptEscape line 5).
+    func testBuildRedirectEmailScript_escapesBackslashInRecipient() {
+        let s = buildRedirectEmailScript(
+            id: "1", mailbox: "INBOX",
+            accountId: nil, accountName: "alice@example.com",
+            to: ["weird\\@example.com"]
+        )
+        // Single backslash in input → `\\` in script (AppleScript string-literal
+        // escape). The recipient line should contain `weird\\@example.com`.
+        XCTAssertTrue(s.contains("weird\\\\@example.com"),
+                      "backslash in recipient must be doubled; got:\n\(s)")
+    }
+
+    /// #135 gap 1: account_name with embedded `\` in the display_name
+    /// fallback path. Mirrors backslash-recipient discipline at the account
+    /// selector position.
+    func testBuildRedirectEmailScript_escapesBackslashInAccountName() {
+        let s = buildRedirectEmailScript(
+            id: "1", mailbox: "INBOX",
+            accountId: nil, accountName: "weird\\name",
+            to: ["x@y.z"]
+        )
+        XCTAssertTrue(s.contains("account \"weird\\\\name\""),
+                      "backslash in accountName must be doubled; got:\n\(s)")
+    }
+
+    // MARK: - #135 byte-identity golden-string fixture (DA-4 residual)
+
+    /// #135 gap 2: pin the entire `buildRedirectEmailScript(accountId: nil,
+    /// ...)` output to a hardcoded expected string. PR #132 verified
+    /// byte-identity by 3 reviewers manually compiling-and-diffing during
+    /// verify, but no automated test guards against silent drift (e.g. if
+    /// `appleScriptEscape` and `MailController.escapeForAppleScript` ever
+    /// diverged again before #110 dedup, or if any helper between layers
+    /// changes whitespace/indent semantics).
+    func testBuildRedirectEmailScript_displayNameFallback_byteIdentityGolden() {
+        let s = buildRedirectEmailScript(
+            id: "42", mailbox: "INBOX",
+            accountId: nil, accountName: "alice@example.com",
+            to: ["x@example.com"]
+        )
+        // Golden string built via concatenation to make indent levels
+        // explicit. Builder emits `make new to recipient` at 4-space indent
+        // (RedirectEmailScriptBuilder.swift line 35-37 uses `""" make new...`
+        // with closing quote at 8 spaces → 4 columns of preserved indent).
+        let expected =
+            "tell application \"Mail\"\n" +
+            "    set originalMsg to (first message of (first mailbox of account \"alice@example.com\" whose name is \"INBOX\") whose id is 42)\n" +
+            "    set redirectMsg to redirect originalMsg with opening window\n" +
+            "    tell redirectMsg\n" +
+            "    make new to recipient at end of to recipients with properties {address:\"x@example.com\"}\n" +
+            "    end tell\n" +
+            "    send redirectMsg\n" +
+            "    return \"Email redirected successfully\"\n" +
+            "end tell"
+        XCTAssertEqual(s, expected,
+                       "byte-identity drift; got:\n\(s)\n\nexpected:\n\(expected)")
+    }
 }
