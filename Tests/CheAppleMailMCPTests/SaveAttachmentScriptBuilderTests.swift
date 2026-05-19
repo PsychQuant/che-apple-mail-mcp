@@ -131,4 +131,47 @@ final class SaveAttachmentScriptBuilderTests: XCTestCase {
         XCTAssertTrue(script.contains("has\\\"quote.pdf"),
                       "Save path with quote must be escaped; got:\n\(script)")
     }
+
+    // MARK: - #112: byte-identity snapshot lock for the accountId=nil path
+
+    /// Golden-file regression lock for the `#101` README + CHANGELOG promise:
+    /// `buildSaveAttachmentScript(accountId: nil)` produces AppleScript
+    /// byte-identical to the legacy 5-arg `MailController.saveAttachment`
+    /// path. The `expected` string below was extracted from that legacy path
+    /// — `MailController.saveAttachment(id:mailbox:accountName:attachmentName:savePath:)`'s
+    /// inline template + `MailController.msgRef` — which builds the script
+    /// independently of `buildSaveAttachmentScript`. Verify-101's Devil's
+    /// Advocate flagged that nothing pinned this guarantee (#112): a future
+    /// refactor of either path could silently shift the bytes.
+    ///
+    /// If you intentionally change the `save_attachment` AppleScript shape,
+    /// update BOTH this `expected` string AND the `#101` backward-compat
+    /// clause in README / CHANGELOG — and confirm the legacy 5-arg path moved
+    /// with it (otherwise the documented byte-identity no longer holds).
+    func testBuildSaveAttachmentScript_nilAccountId_byteIdenticalToLegacyPath() {
+        let script = buildSaveAttachmentScript(
+            id: "42",
+            mailbox: "INBOX",
+            accountId: nil,
+            accountName: "alice@example.com",
+            attachmentName: "report.pdf",
+            savePath: "/tmp/report.pdf"
+        )
+        let expected = """
+        tell application "Mail"
+            set msg to (first message of (first mailbox of account "alice@example.com" whose name is "INBOX") whose id is 42)
+            repeat with att in mail attachments of msg
+                if name of att is "report.pdf" then
+                    save att in POSIX file "/tmp/report.pdf"
+                    return "Attachment saved to /tmp/report.pdf"
+                end if
+            end repeat
+            return "Attachment not found"
+        end tell
+        """
+        XCTAssertEqual(script, expected,
+                       "buildSaveAttachmentScript(accountId: nil) MUST stay byte-identical to "
+                       + "the legacy 5-arg MailController.saveAttachment path (#101 backward-compat "
+                       + "guarantee, #112 regression lock).")
+    }
 }
