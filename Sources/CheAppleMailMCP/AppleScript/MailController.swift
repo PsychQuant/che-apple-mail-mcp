@@ -122,13 +122,13 @@ actor MailController {
     func getAccountInfo(accountName: String) throws -> [String: Any] {
         let enabledScript = """
         tell application "Mail"
-            get enabled of account "\(escapeForAppleScript(accountName))"
+            get enabled of account "\(appleScriptEscape(accountName))"
         end tell
         """
 
         let emailsScript = """
         tell application "Mail"
-            get email addresses of account "\(escapeForAppleScript(accountName))"
+            get email addresses of account "\(appleScriptEscape(accountName))"
         end tell
         """
 
@@ -151,7 +151,7 @@ actor MailController {
         if let account = accountName {
             namesScript = """
             tell application "Mail"
-                get name of every mailbox of account "\(escapeForAppleScript(account))"
+                get name of every mailbox of account "\(appleScriptEscape(account))"
             end tell
             """
         } else {
@@ -505,7 +505,7 @@ actor MailController {
 
     /// Search emails
     func searchEmails(query: String, mailbox: String? = nil, accountName: String? = nil, limit: Int = 20, sort: String = "desc") throws -> [[String: Any]] {
-        let escapedQuery = escapeForAppleScript(query)
+        let escapedQuery = appleScriptEscape(query)
         let sep = "⏐"  // Separator unlikely to appear in email fields
 
         let script: String
@@ -519,7 +519,7 @@ actor MailController {
                 set counter to 0
                 repeat with msg in foundMsgs
                     if counter ≥ \(limit) then exit repeat
-                    set end of results to (id of msg as string) & "\(sep)" & (subject of msg) & "\(sep)" & (sender of msg) & "\(sep)" & (date received of msg as string) & "\(sep)" & "\(escapeForAppleScript(accountName))" & "\(sep)" & "\(escapeForAppleScript(mailbox))"
+                    set end of results to (id of msg as string) & "\(sep)" & (subject of msg) & "\(sep)" & (sender of msg) & "\(sep)" & (date received of msg as string) & "\(sep)" & "\(appleScriptEscape(accountName))" & "\(sep)" & "\(appleScriptEscape(mailbox))"
                     set counter to counter + 1
                 end repeat
                 return results
@@ -592,7 +592,7 @@ actor MailController {
             script = """
             tell application "Mail"
                 set total to 0
-                repeat with mb in mailboxes of account "\(escapeForAppleScript(account))"
+                repeat with mb in mailboxes of account "\(appleScriptEscape(account))"
                     set total to total + (unread count of mb)
                 end repeat
                 return total
@@ -979,9 +979,9 @@ actor MailController {
         tell application "Mail"
             set msg to \(ref)
             repeat with att in mail attachments of msg
-                if name of att is "\(escapeForAppleScript(attachmentName))" then
-                    save att in POSIX file "\(escapeForAppleScript(savePath))"
-                    return "Attachment saved to \(escapeForAppleScript(savePath))"
+                if name of att is "\(appleScriptEscape(attachmentName))" then
+                    save att in POSIX file "\(appleScriptEscape(savePath))"
+                    return "Attachment saved to \(appleScriptEscape(savePath))"
                 end if
             end repeat
             return "Attachment not found"
@@ -1055,8 +1055,8 @@ actor MailController {
     func enableRule(name: String, enabled: Bool) throws -> String {
         let script = """
         tell application "Mail"
-            set enabled of rule "\(escapeForAppleScript(name))" to \(enabled)
-            return "Rule '\(escapeForAppleScript(name))' \(enabled ? "enabled" : "disabled")"
+            set enabled of rule "\(appleScriptEscape(name))" to \(enabled)
+            return "Rule '\(appleScriptEscape(name))' \(enabled ? "enabled" : "disabled")"
         end tell
         """
         return try runScript(script)
@@ -1066,19 +1066,19 @@ actor MailController {
     func getRuleDetails(name: String) throws -> [String: Any] {
         let enabledScript = """
         tell application "Mail"
-            get enabled of rule "\(escapeForAppleScript(name))"
+            get enabled of rule "\(appleScriptEscape(name))"
         end tell
         """
 
         let allConditionsScript = """
         tell application "Mail"
-            get all conditions must be met of rule "\(escapeForAppleScript(name))"
+            get all conditions must be met of rule "\(appleScriptEscape(name))"
         end tell
         """
 
         let stopScript = """
         tell application "Mail"
-            get stop evaluating rules of rule "\(escapeForAppleScript(name))"
+            get stop evaluating rules of rule "\(appleScriptEscape(name))"
         end tell
         """
 
@@ -1116,8 +1116,8 @@ actor MailController {
     func deleteRule(name: String) throws -> String {
         let script = """
         tell application "Mail"
-            delete rule "\(escapeForAppleScript(name))"
-            return "Rule '\(escapeForAppleScript(name))' deleted"
+            delete rule "\(appleScriptEscape(name))"
+            return "Rule '\(appleScriptEscape(name))' deleted"
         end tell
         """
         return try runScript(script)
@@ -1131,8 +1131,8 @@ actor MailController {
         if let account = accountName {
             script = """
             tell application "Mail"
-                check for new mail for account "\(escapeForAppleScript(account))"
-                return "Checking for new mail in \(escapeForAppleScript(account))"
+                check for new mail for account "\(appleScriptEscape(account))"
+                return "Checking for new mail in \(appleScriptEscape(account))"
             end tell
             """
         } else {
@@ -1150,8 +1150,8 @@ actor MailController {
     func synchronizeAccount(accountName: String) throws -> String {
         let script = """
         tell application "Mail"
-            synchronize account "\(escapeForAppleScript(accountName))"
-            return "Synchronizing account: \(escapeForAppleScript(accountName))"
+            synchronize account "\(appleScriptEscape(accountName))"
+            return "Synchronizing account: \(appleScriptEscape(accountName))"
         end tell
         """
         return try runScript(script)
@@ -1307,7 +1307,7 @@ actor MailController {
     func getSignature(name: String) throws -> [String: Any] {
         let contentScript = """
         tell application "Mail"
-            get content of signature "\(escapeForAppleScript(name))"
+            get content of signature "\(appleScriptEscape(name))"
         end tell
         """
 
@@ -1406,7 +1406,7 @@ actor MailController {
     func extractNameFromAddress(address: String) throws -> String {
         let script = """
         tell application "Mail"
-            extract name from "\(escapeForAppleScript(address))"
+            extract name from "\(appleScriptEscape(address))"
         end tell
         """
         return try runScript(script)
@@ -1416,7 +1416,7 @@ actor MailController {
     func extractAddressFrom(address: String) throws -> String {
         let script = """
         tell application "Mail"
-            extract address from "\(escapeForAppleScript(address))"
+            extract address from "\(appleScriptEscape(address))"
         end tell
         """
         return try runScript(script)
@@ -1459,7 +1459,7 @@ actor MailController {
     func openMailtoURL(url: String) throws -> String {
         let script = """
         tell application "Mail"
-            mailto "\(escapeForAppleScript(url))"
+            mailto "\(appleScriptEscape(url))"
             return "Opened mailto URL"
         end tell
         """
@@ -1472,8 +1472,8 @@ actor MailController {
     func importMailbox(path: String) throws -> String {
         let script = """
         tell application "Mail"
-            import Mail mailbox POSIX file "\(escapeForAppleScript(path))"
-            return "Mailbox imported from \(escapeForAppleScript(path))"
+            import Mail mailbox POSIX file "\(appleScriptEscape(path))"
+            return "Mailbox imported from \(appleScriptEscape(path))"
         end tell
         """
         return try runScript(script)
@@ -1485,7 +1485,7 @@ actor MailController {
     /// `mailbox "X" of account "Y"` fails for Gmail localized names (e.g. "寄件備份").
     /// `first mailbox of account "Y" whose name is "X"` always works.
     private func mailboxRef(_ mailbox: String, account: String) -> String {
-        return "(first mailbox of account \"\(escapeForAppleScript(account))\" whose name is \"\(escapeForAppleScript(mailbox))\")"
+        return "(first mailbox of account \"\(appleScriptEscape(account))\" whose name is \"\(appleScriptEscape(mailbox))\")"
     }
 
     /// Generate AppleScript reference to find a message by its numeric id.
@@ -1502,19 +1502,6 @@ actor MailController {
     func msgRef(_ id: String, mailbox: String, account: String) -> String {
         let safeId = Int(id) != nil ? id : "-1"
         return "(first message of \(mailboxRef(mailbox, account: account)) whose id is \(safeId))"
-    }
-
-    /// Escape special characters for AppleScript strings.
-    /// AppleScript does not support C-style escape sequences (\n, \t).
-    /// Newlines must be expressed as: `" & return & "` string concatenation.
-    private func escapeForAppleScript(_ string: String) -> String {
-        return string
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\r\n", with: "\" & return & \"")
-            .replacingOccurrences(of: "\n", with: "\" & return & \"")
-            .replacingOccurrences(of: "\r", with: "\" & return & \"")
-            .replacingOccurrences(of: "\t", with: "\" & tab & \"")
     }
 }
 
