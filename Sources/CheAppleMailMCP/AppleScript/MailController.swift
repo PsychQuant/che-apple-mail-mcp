@@ -1511,6 +1511,10 @@ enum MailError: LocalizedError {
     case scriptCreationFailed
     case scriptFailed(message: String, code: Int)
     case invalidParameter(String)
+    /// A handler-level failure whose `errorDescription` is the message verbatim
+    /// — used when a raw AppleScript error (e.g. `-10000`) has been re-wrapped
+    /// with an actionable, recovery-oriented explanation for the caller (#103).
+    case operationFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -1520,6 +1524,8 @@ enum MailError: LocalizedError {
             return "AppleScript error (\(code)): \(message)"
         case .invalidParameter(let message):
             return "Invalid parameter: \(message)"
+        case .operationFailed(let message):
+            return message
         }
     }
 }

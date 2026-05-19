@@ -1089,14 +1089,24 @@ class CheAppleMailMCPServer {
             // Tier 2: AppleScript fallback. Use the #101 6-arg overload (preferring
             // account_id when provided) — when account_id is nil/empty, behavior
             // is identical to the legacy 5-arg path (display_name selector).
-            return try await mailController.saveAttachment(
-                id: id,
-                mailbox: mailbox,
-                accountId: accountId,
-                accountName: accountName,
-                attachmentName: attachmentName,
-                savePath: savePath
-            )
+            do {
+                return try await mailController.saveAttachment(
+                    id: id,
+                    mailbox: mailbox,
+                    accountId: accountId,
+                    accountName: accountName,
+                    attachmentName: attachmentName,
+                    savePath: savePath
+                )
+            } catch MailError.scriptFailed(let message, let code) {
+                // #103: re-word the generic -10000 "AppleEvent handler failed"
+                // into actionable recovery steps; any other code rethrows as-is.
+                if let hint = saveAttachmentAppleEventHint(
+                    code: code, accountName: accountName, rawMessage: message) {
+                    throw MailError.operationFailed(hint)
+                }
+                throw MailError.scriptFailed(message: message, code: code)
+            }
 
         // VIP Tools
         case "list_vip_senders":
@@ -1724,6 +1734,32 @@ func logFastPathFallthrough(tool: String, rowId: Int, reason: FastPathFallthroug
                             perItem: Bool = false) {
     let line = fastPathFallthroughLog(tool: tool, rowId: rowId, reason: reason, perItem: perItem)
     FileHandle.standardError.write(Data(line.utf8))
+}
+
+/// Re-word a `save_attachment` Tier-2 AppleScript failure into an actionable
+/// error, when (and only when) the AppleScript error code is `-10000`
+/// (`errAEEventNotHandled` — Mail.app's `save attachment` handler raised an
+/// internal exception). The raw message ("Mail got an error: AppleEvent
+/// handler failed") gives the caller nothing to act on; for `save_attachment`
+/// the dominant cause is an attachment whose binary is not in the local cache
+/// and which Mail.app cannot re-fetch from IMAP (#103).
+///
+/// - Returns: an actionable, recovery-oriented message for code `-10000`;
+///   `nil` for any other code — the caller then rethrows the original error
+///   unchanged. Pure (no I/O) so the message contract is unit-testable.
+func saveAttachmentAppleEventHint(code: Int, accountName: String, rawMessage: String) -> String? {
+    guard code == -10000 else { return nil }
+    return """
+    save_attachment failed: Mail.app's save-attachment handler raised an error \
+    (-10000, AppleEvent handler failed — "\(rawMessage)"). This usually means the \
+    attachment's binary is not present in the local Mail cache and Mail.app could \
+    not re-fetch it from the IMAP server. Recovery options:
+    (1) In Mail.app: Mailbox menu → Take All Accounts Online, then retry.
+    (2) In Mail.app: Mailbox menu → Synchronize "\(accountName)", then retry.
+    (3) In Mail.app: select the affected mailbox, then Mailbox menu → Rebuild.
+    (4) Manual fallback: open the message in Mail.app and use the attachment's \
+    "Save Attachment…" / drag-out, which forces Mail.app to fetch the binary.
+    """
 }
 
 func parseBodyFormatArgument(_ raw: Value?) throws -> BodyFormat {

@@ -329,6 +329,41 @@ final class ServerSchemaTests: XCTestCase {
         XCTAssertTrue(captured.contains("rowId=555"))
     }
 
+    // MARK: - saveAttachmentAppleEventHint (#103 — actionable -10000 error)
+
+    func testSaveAttachmentAppleEventHint_minus10000ReturnsActionableMessage() {
+        let hint = saveAttachmentAppleEventHint(
+            code: -10000, accountName: "d06227105@ntu.edu.tw",
+            rawMessage: "Mail got an error: AppleEvent handler failed.")
+        XCTAssertNotNil(hint, "-10000 must produce an actionable hint")
+        let msg = hint ?? ""
+        XCTAssertTrue(msg.contains("save_attachment failed"), "got: \(msg)")
+        XCTAssertTrue(msg.contains("-10000"))
+        XCTAssertTrue(msg.contains("Mail got an error: AppleEvent handler failed."),
+                      "must echo the raw AppleScript message")
+        XCTAssertTrue(msg.contains("d06227105@ntu.edu.tw"), "Synchronize step must name the account")
+        XCTAssertTrue(msg.contains("Take All Accounts Online"))
+        XCTAssertTrue(msg.contains("Rebuild"))
+    }
+
+    func testSaveAttachmentAppleEventHint_otherCodesReturnNil() {
+        // Only -10000 is re-worded; -1728 / -1719 / etc. rethrow unchanged so
+        // the #101 / #102 disambiguation diagnostics are not masked.
+        XCTAssertNil(saveAttachmentAppleEventHint(
+            code: -1728, accountName: "a@b.com", rawMessage: "Can't get account"))
+        XCTAssertNil(saveAttachmentAppleEventHint(
+            code: -1719, accountName: "a@b.com", rawMessage: "Invalid index"))
+        XCTAssertNil(saveAttachmentAppleEventHint(
+            code: 0, accountName: "a@b.com", rawMessage: ""))
+    }
+
+    func testMailErrorOperationFailed_describesVerbatim() {
+        // operationFailed must surface its message verbatim — no "AppleScript
+        // error (N):" prefix — so the actionable #103 hint reaches the caller intact.
+        let err = MailError.operationFailed("recovery: do X then Y")
+        XCTAssertEqual(err.errorDescription, "recovery: do X then Y")
+    }
+
     // MARK: - parseBodyFormatArgument (handles MCP Value type)
 
     func testParseBodyFormatArgument_nilReturnsPlain() throws {
