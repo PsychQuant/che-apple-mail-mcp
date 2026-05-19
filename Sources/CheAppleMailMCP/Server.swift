@@ -1065,6 +1065,10 @@ class CheAppleMailMCPServer {
             // AppleScript tier in the trailing `mailController.saveAttachment`
             // call — matches the two-tier pattern used by get_email (#9's
             // lesson: never collapse the tiers into one catch).
+            // #103: when Tier 1 throws `attachmentNotFound`, the MCP has *proved*
+            // from local `.emlx` state that the binary is absent — thread that
+            // into the Tier-2 -10000 hint so the message can be definitive.
+            var localCopyConfirmedMissing = false
             if let reader = indexReader, let rowId = Int(id) {
                 do {
                     if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
@@ -1078,6 +1082,9 @@ class CheAppleMailMCPServer {
                         return "Attachment saved to \(savePath)"
                     }
                 } catch {
+                    if case MailSQLiteError.attachmentNotFound = error {
+                        localCopyConfirmedMissing = true
+                    }
                     // Log the cause so silent fallbacks are observable,
                     // then fall through to the AppleScript fallback below.
                     let message = "SQLite save_attachment fast path failed: "
@@ -1089,14 +1096,25 @@ class CheAppleMailMCPServer {
             // Tier 2: AppleScript fallback. Use the #101 6-arg overload (preferring
             // account_id when provided) — when account_id is nil/empty, behavior
             // is identical to the legacy 5-arg path (display_name selector).
-            return try await mailController.saveAttachment(
-                id: id,
-                mailbox: mailbox,
-                accountId: accountId,
-                accountName: accountName,
-                attachmentName: attachmentName,
-                savePath: savePath
-            )
+            do {
+                return try await mailController.saveAttachment(
+                    id: id,
+                    mailbox: mailbox,
+                    accountId: accountId,
+                    accountName: accountName,
+                    attachmentName: attachmentName,
+                    savePath: savePath
+                )
+            } catch MailError.scriptFailed(let message, let code) {
+                // #103: re-word the generic -10000 "AppleEvent handler failed"
+                // into actionable recovery steps; any other code rethrows as-is.
+                if let hint = saveAttachmentAppleEventHint(
+                    code: code, accountName: accountName, rawMessage: message,
+                    localCopyConfirmedMissing: localCopyConfirmedMissing) {
+                    throw MailError.operationFailed(hint)
+                }
+                throw MailError.scriptFailed(message: message, code: code)
+            }
 
         // VIP Tools
         case "list_vip_senders":
@@ -1724,6 +1742,50 @@ func logFastPathFallthrough(tool: String, rowId: Int, reason: FastPathFallthroug
                             perItem: Bool = false) {
     let line = fastPathFallthroughLog(tool: tool, rowId: rowId, reason: reason, perItem: perItem)
     FileHandle.standardError.write(Data(line.utf8))
+}
+
+/// Re-word a `save_attachment` Tier-2 AppleScript failure into an actionable
+/// error, when (and only when) the AppleScript error code is `-10000`
+/// (`errAEEventFailed` — Mail.app's `save attachment` handler raised an
+/// internal exception). The raw message ("Mail got an error: AppleEvent
+/// handler failed") gives the caller nothing to act on (#103).
+///
+/// - Parameter localCopyConfirmedMissing: `true` when the Tier-1 SQLite +
+///   `.emlx` fast path already threw `MailSQLiteError.attachmentNotFound` for
+///   this call — i.e. the MCP itself *proved*, from local `.emlx` state, that
+///   the attachment binary is absent locally (no inline copy, no externalised
+///   copy). When `true` the message states the cause definitively; when
+///   `false` it is hedged ("usually means"), since `-10000` is a generic
+///   AppleEvent error and the cause was not independently confirmed.
+/// - Returns: an actionable, recovery-oriented message for code `-10000`;
+///   `nil` for any other code — the caller then rethrows the original error
+///   unchanged. Pure (no I/O) so the message contract is unit-testable.
+func saveAttachmentAppleEventHint(code: Int, accountName: String, rawMessage: String,
+                                  localCopyConfirmedMissing: Bool) -> String? {
+    guard code == -10000 else { return nil }
+    let cause: String
+    if localCopyConfirmedMissing {
+        cause = "The SQLite + .emlx fast path already confirmed the attachment's "
+            + "binary is absent from the local Mail store (no inline copy in the "
+            + ".emlx, no externalised copy in the Attachments cache), so Mail.app "
+            + "had to re-fetch it from the IMAP server — and that fetch failed."
+    } else {
+        cause = "For save_attachment this usually means the attachment's binary is "
+            + "not in the local Mail cache and Mail.app could not re-fetch it from "
+            + "the IMAP server."
+    }
+    return """
+    save_attachment failed: Mail.app's save-attachment handler raised an error \
+    (-10000, AppleEvent handler failed — "\(rawMessage)"). \(cause) Recovery options:
+    (1) Re-fetch the message: call the synchronize_account MCP tool for \
+    "\(accountName)" (or in Mail.app: Mailbox menu → Take All Accounts Online, then \
+    Synchronize "\(accountName)"), then retry save_attachment.
+    (2) In Mail.app: select the affected mailbox, then Mailbox menu → Rebuild.
+    (3) Manual fallback: open the message in Mail.app and use the attachment's \
+    "Save Attachment…" / drag-out, which forces Mail.app to fetch the binary.
+    If the local copy IS present, instead check that the save_path directory is \
+    writable and has free space.
+    """
 }
 
 func parseBodyFormatArgument(_ raw: Value?) throws -> BodyFormat {
