@@ -1806,30 +1806,110 @@ func logFastPathFallthrough(tool: String, rowId: Int, reason: FastPathFallthroug
 ///   unchanged. Pure (no I/O) so the message contract is unit-testable.
 func saveAttachmentAppleEventHint(code: Int, accountName: String, rawMessage: String,
                                   localCopyConfirmedMissing: Bool) -> String? {
-    guard code == -10000 else { return nil }
-    let cause: String
-    if localCopyConfirmedMissing {
-        cause = "The SQLite + .emlx fast path already confirmed the attachment's "
-            + "binary is absent from the local Mail store (no inline copy in the "
-            + ".emlx, no externalised copy in the Attachments cache), so Mail.app "
-            + "had to re-fetch it from the IMAP server — and that fetch failed."
-    } else {
-        cause = "For save_attachment this usually means the attachment's binary is "
-            + "not in the local Mail cache and Mail.app could not re-fetch it from "
-            + "the IMAP server."
+    switch code {
+    case -10000:
+        let cause: String
+        if localCopyConfirmedMissing {
+            cause = "The SQLite + .emlx fast path already confirmed the attachment's "
+                + "binary is absent from the local Mail store (no inline copy in the "
+                + ".emlx, no externalised copy in the Attachments cache), so Mail.app "
+                + "had to re-fetch it from the IMAP server — and that fetch failed."
+        } else {
+            cause = "For save_attachment this usually means the attachment's binary is "
+                + "not in the local Mail cache and Mail.app could not re-fetch it from "
+                + "the IMAP server."
+        }
+        return """
+        save_attachment failed: Mail.app's save-attachment handler raised an error \
+        (-10000, AppleEvent handler failed — "\(rawMessage)"). \(cause) Recovery options:
+        (1) Re-fetch the message: call the synchronize_account MCP tool for \
+        "\(accountName)" (or in Mail.app: Mailbox menu → Take All Accounts Online, then \
+        Synchronize "\(accountName)"), then retry save_attachment.
+        (2) In Mail.app: select the affected mailbox, then Mailbox menu → Rebuild.
+        (3) Manual fallback: open the message in Mail.app and use the attachment's \
+        "Save Attachment…" / drag-out, which forces Mail.app to fetch the binary.
+        If the local copy IS present, instead check that the save_path directory is \
+        writable and has free space.
+        """
+    case -1719:
+        // #173: mailbox resolution failed under the selected account. Since
+        // #174 nested Gmail paths ([Gmail]/全部郵件) resolve via container
+        // chains, the remaining causes are a stale/mistyped mailbox string or
+        // a mailbox/account pairing mismatch.
+        return """
+        save_attachment failed: Mail.app could not resolve the mailbox under the \
+        selected account (-1719 — "\(rawMessage)"). Nested Gmail paths like \
+        [Gmail]/全部郵件 ARE supported (#174) — this error means the mailbox string \
+        does not exist under that account. Recovery options:
+        (1) Use the mailbox value verbatim from search_emails / list_emails output \
+        (it reflects the on-disk hierarchy) and make sure it is paired with the SAME \
+        message's account.
+        (2) Pass account_id (the UUID from search_emails results or list_accounts) — \
+        a display-name selected wrong account silently changes which mailboxes exist.
+        (3) List the account's real mailbox names with list_mailboxes and compare.
+        """
+    case -1728:
+        // #173: the account selector itself failed. Mail's AppleScript
+        // `account "<name>"` matches the account DESCRIPTION (e.g. "Google"),
+        // not the email address that SQLite-path tools emit as account_name.
+        return """
+        save_attachment failed: Mail.app could not find the account (-1728 — \
+        "\(rawMessage)"). Note that account_name must match Mail's AppleScript \
+        account name (the account description shown in Mail settings, e.g. \
+        "Google"), which is often NOT the email address — SQLite-path tools like \
+        search_emails report the email, so feeding their account_name back here \
+        fails for accounts whose description differs. Recovery options:
+        (1) Pass account_id (the UUID from search_emails results or the id field \
+        in list_accounts) — it is globally unique and bypasses the name mismatch.
+        (2) Or pass the account description from list_accounts as account_name.
+        """
+    default:
+        return nil
     }
-    return """
-    save_attachment failed: Mail.app's save-attachment handler raised an error \
-    (-10000, AppleEvent handler failed — "\(rawMessage)"). \(cause) Recovery options:
-    (1) Re-fetch the message: call the synchronize_account MCP tool for \
-    "\(accountName)" (or in Mail.app: Mailbox menu → Take All Accounts Online, then \
-    Synchronize "\(accountName)"), then retry save_attachment.
-    (2) In Mail.app: select the affected mailbox, then Mailbox menu → Rebuild.
-    (3) Manual fallback: open the message in Mail.app and use the attachment's \
-    "Save Attachment…" / drag-out, which forces Mail.app to fetch the binary.
-    If the local copy IS present, instead check that the save_path directory is \
-    writable and has free space.
-    """
+}
+
+/// Normalize `save_attachment`'s account parameters before the Tier 2
+/// AppleScript fallback (#173).
+///
+/// SQLite-path tools (`search_emails` / `list_attachments`) emit the
+/// AccountsMap **email** as `account_name`, but Mail's AppleScript
+/// `account "<name>"` selector matches the account DESCRIPTION — feeding the
+/// email back fails with -1728. When the caller did not supply `account_id`
+/// and the `accountName` looks like an email, resolve it to a UUID via
+/// `AccountMapper.uuids(forEmail:)`:
+///
+/// - exactly one match → return that UUID (upgrade to the `account id` path)
+/// - multiple matches → throw an actionable error listing every candidate —
+///   the same address can front different accounts (iCloud catch-all vs
+///   Google in #173's report); auto-picking would silently target the wrong one
+/// - no match → return nil (legacy display_name path, unchanged behavior)
+///
+/// Scope note: applied at the save_attachment layer only; the chokepoint-level
+/// sweep across all AppleScript-routed tools is tracked by #176.
+///
+/// - Parameter uuidsForEmail: Injectable lookup for tests; defaults to
+///   `AccountMapper.uuids(forEmail:)`.
+func resolveSaveAttachmentAccountId(
+    accountId: String?,
+    accountName: String,
+    uuidsForEmail: (String) -> [String] = { AccountMapper.uuids(forEmail: $0) }
+) throws -> String? {
+    if let aid = accountId, !aid.isEmpty { return aid }
+    guard accountName.contains("@") else { return nil }
+    let matches = uuidsForEmail(accountName)
+    switch matches.count {
+    case 0:
+        return nil
+    case 1:
+        return matches[0]
+    default:
+        throw MailError.invalidParameter(
+            "account_name \"\(accountName)\" matches multiple Mail accounts: "
+            + matches.joined(separator: ", ")
+            + ". Pass account_id explicitly to select one — use list_accounts "
+            + "to see which UUID belongs to which account."
+        )
+    }
 }
 
 func parseBodyFormatArgument(_ raw: Value?) throws -> BodyFormat {
