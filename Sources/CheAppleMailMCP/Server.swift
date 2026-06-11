@@ -1126,11 +1126,18 @@ class CheAppleMailMCPServer {
             // Tier 2: AppleScript fallback. Use the #101 6-arg overload (preferring
             // account_id when provided) — when account_id is nil/empty, behavior
             // is identical to the legacy 5-arg path (display_name selector).
+            // #173: normalize an email-form account_name to its account UUID
+            // first — SQLite-path tools emit the AccountsMap email, which the
+            // display_name selector can never match (-1728). Ambiguity (one
+            // email fronting several accounts) throws an actionable error here
+            // instead of a raw AppleScript failure later.
+            let resolvedAccountId = try resolveSaveAttachmentAccountId(
+                accountId: accountId, accountName: accountName)
             do {
                 return try await mailController.saveAttachment(
                     id: id,
                     mailbox: mailbox,
-                    accountId: accountId,
+                    accountId: resolvedAccountId,
                     accountName: accountName,
                     attachmentName: attachmentName,
                     savePath: savePath
