@@ -46,6 +46,34 @@ public enum AccountMapper {
         return mapping
     }
 
+    /// Reverse lookup: all account UUIDs whose AccountsMap email matches the
+    /// given address (#173).
+    ///
+    /// SQLite-path tools emit AccountsMap emails as `account_name`, but
+    /// Mail's AppleScript `account "<name>"` selector matches the account
+    /// DESCRIPTION (e.g. "Google") — feeding the email back fails with
+    /// -1728. Callers use this lookup to upgrade an email-form account_name
+    /// to the collision-free `account id "<UUID>"` selector.
+    ///
+    /// The same email can map to MULTIPLE UUIDs (e.g. an iCloud catch-all
+    /// and a Google account both presenting the same address), so the full
+    /// sorted list is returned and the caller decides how to handle
+    /// ambiguity — auto-picking would silently target the wrong account.
+    ///
+    /// Comparison is case-insensitive and only considers email-shaped
+    /// mapping values (containing `@`) — EWS entries store the UUID itself
+    /// as a fallback value (#9) and must never match an email query.
+    ///
+    /// - Parameter path: Override path for testing. Defaults to the standard location.
+    /// - Returns: Sorted array of matching account UUIDs (empty when none).
+    public static func uuids(forEmail email: String, path: String? = nil) -> [String] {
+        let needle = email.lowercased()
+        return buildMapping(path: path)
+            .filter { $0.value.contains("@") && $0.value.lowercased() == needle }
+            .map(\.key)
+            .sorted()
+    }
+
     /// Extract the email address from an AccountURL string.
     ///
     /// Formats:
