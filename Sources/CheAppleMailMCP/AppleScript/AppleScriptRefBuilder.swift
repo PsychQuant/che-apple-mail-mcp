@@ -29,6 +29,35 @@ import Foundation
 /// Free functions (not methods on `MailController`) so they're testable
 /// without spinning up the actor — same pattern as `ComposeScriptBuilder.swift`.
 
+// MARK: - Nested mailbox chain (#174)
+
+/// Rewrite a slash-containing mailbox path into an AppleScript container
+/// chain. MailSQLite emits mailbox names in on-disk path form
+/// (`[Gmail]/全部郵件`), but Mail's AppleScript `name` property holds only
+/// the LEAF name — `whose name is "<full path>"` can never match a nested
+/// mailbox and fails with -1719 (#174). Empirically verified (2026-06-11):
+/// `mailbox "草稿" of mailbox "[Gmail]" of (account id "...")` resolves.
+///
+/// Only applied when the path splits into ≥ 2 non-empty segments; degenerate
+/// inputs (no "/", "/" alone, consecutive-slash collapse to one segment)
+/// keep the legacy `whose name is` form so non-nested callers stay
+/// byte-identical (#104 regression guard). "/" is always a hierarchy
+/// separator in MailSQLite output (it derives from on-disk .mbox nesting),
+/// so the rewrite never misfires for that caller; hand-crafted names that
+/// merely contain a literal "/" failed with -1719 before and keep the same
+/// failure surface.
+///
+/// - Returns: `(mailbox "leaf" of mailbox "parent" ... of <accountRef>)`,
+///   or nil when fewer than 2 non-empty segments remain.
+func nestedMailboxChain(path: String, accountRef: String) -> String? {
+    let segments = path.split(separator: "/").map(String.init).filter { !$0.isEmpty }
+    guard segments.count >= 2 else { return nil }
+    let chain = segments.reversed()
+        .map { "mailbox \"\(appleScriptEscape($0))\"" }
+        .joined(separator: " of ")
+    return "(\(chain) of \(accountRef))"
+}
+
 // MARK: - UUID-form builders
 
 /// Build an AppleScript reference to a mailbox using the account's globally
@@ -53,7 +82,11 @@ func mailboxRefByAccountId(_ mailbox: String, accountId: String) -> String {
     // accountName. Passing a sentinel "" surfaces any future regression
     // (caller bypassing the contract) as a visibly wrong fallback rather
     // than silently using a "real" name.
-    return "(first mailbox of \(resolveAccountRef(accountId: accountId, accountName: "")) whose name is \"\(appleScriptEscape(mailbox))\")"
+    let accountRef = resolveAccountRef(accountId: accountId, accountName: "")
+    if let chain = nestedMailboxChain(path: mailbox, accountRef: accountRef) {
+        return chain
+    }
+    return "(first mailbox of \(accountRef) whose name is \"\(appleScriptEscape(mailbox))\")"
 }
 
 /// Build an AppleScript reference to a message by ROWID, using account UUID
@@ -92,6 +125,12 @@ func resolveMailboxRef(mailbox: String, accountId: String?, accountName: String)
     // both branches inlined the selector — drift risk if syntax/escaping
     // ever needs hardening.
     let accountRef = resolveAccountRef(accountId: accountId, accountName: accountName)
+    // #174: slash-containing names are on-disk nested paths — address them
+    // through the container chain; single-segment names keep the legacy
+    // whose-name-is form byte-identical.
+    if let chain = nestedMailboxChain(path: mailbox, accountRef: accountRef) {
+        return chain
+    }
     return "(first mailbox of \(accountRef) whose name is \"\(appleScriptEscape(mailbox))\")"
 }
 
