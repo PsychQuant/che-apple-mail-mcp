@@ -375,17 +375,117 @@ final class ServerSchemaTests: XCTestCase {
         XCTAssertFalse(msg.contains("usually"), "a confirmed cause must not be hedged")
     }
 
-    func testSaveAttachmentAppleEventHint_otherCodesReturnNil() {
-        // Only -10000 is re-worded; -1728 / -1719 / etc. rethrow unchanged so
-        // the #101 / #102 disambiguation diagnostics are not masked.
-        XCTAssertNil(saveAttachmentAppleEventHint(
-            code: -1728, accountName: "a@b.com", rawMessage: "Can't get account",
-            localCopyConfirmedMissing: false))
-        XCTAssertNil(saveAttachmentAppleEventHint(
-            code: -1719, accountName: "a@b.com", rawMessage: "Invalid index",
-            localCopyConfirmedMissing: true))
+    func testSaveAttachmentAppleEventHint_unknownCodesReturnNil() {
+        // #173 widened the hint to -10000 / -1719 / -1728. Any OTHER code
+        // still rethrows unchanged so unanticipated diagnostics are not masked.
         XCTAssertNil(saveAttachmentAppleEventHint(
             code: 0, accountName: "a@b.com", rawMessage: "", localCopyConfirmedMissing: false))
+        XCTAssertNil(saveAttachmentAppleEventHint(
+            code: -1700, accountName: "a@b.com", rawMessage: "coercion failed",
+            localCopyConfirmedMissing: false))
+    }
+
+    // MARK: - saveAttachmentAppleEventHint #173 expansion (-1719 / -1728)
+
+    func testSaveAttachmentAppleEventHint_minus1719_actionable() {
+        let msg = saveAttachmentAppleEventHint(
+            code: -1719, accountName: "Google",
+            rawMessage: "Can't get mailbox 1 of account id \"E51B96AC\" whose name = \"[Gmail]/全部郵件\". Invalid index.",
+            localCopyConfirmedMissing: false) ?? ""
+        XCTAssertTrue(msg.contains("-1719"), "got: \(msg)")
+        XCTAssertTrue(msg.contains("Invalid index"),
+                      "must echo the raw AppleScript message so diagnostics are not masked")
+        XCTAssertTrue(msg.contains("account_id"),
+                      "recovery must point at the UUID disambiguation parameter")
+        XCTAssertTrue(msg.contains("search_emails"),
+                      "recovery must anchor the mailbox string to search_emails output")
+    }
+
+    func testSaveAttachmentAppleEventHint_minus1728_explainsNamespaceMismatch() {
+        let msg = saveAttachmentAppleEventHint(
+            code: -1728, accountName: "kiki@example.com",
+            rawMessage: "Can't get account \"kiki@example.com\".",
+            localCopyConfirmedMissing: false) ?? ""
+        XCTAssertTrue(msg.contains("-1728"), "got: \(msg)")
+        XCTAssertTrue(msg.contains("Can't get account"),
+                      "must echo the raw AppleScript message")
+        XCTAssertTrue(msg.contains("account_id"),
+                      "recovery must point at the UUID parameter")
+        XCTAssertTrue(msg.contains("list_accounts"),
+                      "recovery must say where to discover the UUID")
+        XCTAssertTrue(msg.lowercased().contains("description"),
+                      "must explain account_name matches Mail's account description, not the email")
+    }
+
+    func testSaveAttachmentAppleEventHint_minus10000_textUnchangedBy173() {
+        // The #103 contract for -10000 must stay byte-identical through the
+        // #173 guard widening — both hedged and confirmed-missing variants.
+        let hedged = saveAttachmentAppleEventHint(
+            code: -10000, accountName: "a@b", rawMessage: "x",
+            localCopyConfirmedMissing: false) ?? ""
+        XCTAssertTrue(hedged.contains("usually"))
+        let confirmed = saveAttachmentAppleEventHint(
+            code: -10000, accountName: "a@b", rawMessage: "x",
+            localCopyConfirmedMissing: true) ?? ""
+        XCTAssertTrue(confirmed.contains("already confirmed"))
+        XCTAssertFalse(confirmed.contains("usually"))
+    }
+
+    // MARK: - resolveSaveAttachmentAccountId (#173 — email→UUID normalization)
+
+    func testResolveAccountId_passthroughWhenAccountIdProvided() throws {
+        let result = try resolveSaveAttachmentAccountId(
+            accountId: "UUID-X", accountName: "anything@example.com",
+            uuidsForEmail: { _ in XCTFail("lookup must not run when accountId is given"); return [] })
+        XCTAssertEqual(result, "UUID-X")
+    }
+
+    func testResolveAccountId_nonEmailName_skipsLookup() throws {
+        let result = try resolveSaveAttachmentAccountId(
+            accountId: nil, accountName: "Google",
+            uuidsForEmail: { _ in XCTFail("lookup must not run for non-email names"); return [] })
+        XCTAssertNil(result, "Non-email account_name keeps the legacy display_name path")
+    }
+
+    func testResolveAccountId_singleMatch_upgradesToUuid() throws {
+        let result = try resolveSaveAttachmentAccountId(
+            accountId: nil, accountName: "alice@example.com",
+            uuidsForEmail: { email in
+                XCTAssertEqual(email, "alice@example.com")
+                return ["UUID-A"]
+            })
+        XCTAssertEqual(result, "UUID-A",
+                       "Exactly one match must upgrade to the account id selector")
+    }
+
+    func testResolveAccountId_emptyAccountId_treatedAsNil() throws {
+        let result = try resolveSaveAttachmentAccountId(
+            accountId: "", accountName: "alice@example.com",
+            uuidsForEmail: { _ in ["UUID-A"] })
+        XCTAssertEqual(result, "UUID-A")
+    }
+
+    func testResolveAccountId_noMatch_fallsBackToLegacy() throws {
+        let result = try resolveSaveAttachmentAccountId(
+            accountId: nil, accountName: "nobody@example.com",
+            uuidsForEmail: { _ in [] })
+        XCTAssertNil(result)
+    }
+
+    func testResolveAccountId_multipleMatches_throwsListingCandidates() {
+        // The #173 scenario: iCloud catch-all + Google both present the same
+        // address — auto-picking would silently target the wrong account.
+        XCTAssertThrowsError(try resolveSaveAttachmentAccountId(
+            accountId: nil, accountName: "dup@example.com",
+            uuidsForEmail: { _ in ["UUID-A", "UUID-Z"] })) { error in
+            let msg = String(describing: error)
+            XCTAssertTrue(msg.contains("UUID-A") && msg.contains("UUID-Z"),
+                          "error must list every candidate UUID; got: \(msg)")
+            XCTAssertTrue(msg.contains("account_id"),
+                          "error must tell the caller which parameter resolves the ambiguity")
+            XCTAssertTrue(msg.contains("list_accounts"),
+                          "error must say where to inspect the candidates")
+        }
     }
 
     func testMailErrorOperationFailed_describesVerbatim() {
