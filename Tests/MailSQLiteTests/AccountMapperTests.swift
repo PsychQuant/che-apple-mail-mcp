@@ -130,4 +130,86 @@ final class AccountMapperTests: XCTestCase {
             imapUUID
         )
     }
+
+    // MARK: - uuids(forEmail:) reverse lookup (#173)
+    //
+    // save_attachment's Tier 2 needs email → UUID normalization: SQLite-path
+    // tools emit AccountsMap emails as `account_name`, but Mail's AppleScript
+    // `account "<name>"` selector matches the account DESCRIPTION (e.g.
+    // "Google") — feeding the email back fails -1728. The same email can map
+    // to MULTIPLE UUIDs (e.g. an iCloud catch-all + a Google account both
+    // showing kiki830621@gmail.com in #173's original report), so the lookup
+    // returns a sorted array and the caller decides how to handle ambiguity.
+
+    private func writeFixture(_ plist: [String: Any]) throws -> String {
+        let fm = FileManager.default
+        let tmpDir = fm.temporaryDirectory.appendingPathComponent(
+            "accountmap-reverse-\(UUID().uuidString)", isDirectory: true
+        )
+        try fm.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        addTeardownBlock { try? fm.removeItem(at: tmpDir) }
+        let plistPath = tmpDir.appendingPathComponent("AccountsMap.plist").path
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: plist, format: .xml, options: 0
+        )
+        try data.write(to: URL(fileURLWithPath: plistPath))
+        return plistPath
+    }
+
+    func testUuidsForEmail_uniqueMatch() throws {
+        let path = try writeFixture([
+            "UUID-A": ["AccountURL": "imap://alice%40example.com/"],
+            "UUID-B": ["AccountURL": "imap://bob%40example.com/"],
+        ])
+        XCTAssertEqual(
+            AccountMapper.uuids(forEmail: "alice@example.com", path: path),
+            ["UUID-A"]
+        )
+    }
+
+    func testUuidsForEmail_duplicateEmail_returnsAllSorted() throws {
+        // The #173 scenario: two accounts share one email — both UUIDs must
+        // come back, sorted, so the caller can refuse to auto-pick.
+        let path = try writeFixture([
+            "UUID-Z": ["AccountURL": "imap://dup%40example.com/"],
+            "UUID-A": ["AccountURL": "imap://dup%40example.com/"],
+        ])
+        XCTAssertEqual(
+            AccountMapper.uuids(forEmail: "dup@example.com", path: path),
+            ["UUID-A", "UUID-Z"],
+            "Both UUIDs must be returned, sorted for determinism"
+        )
+    }
+
+    func testUuidsForEmail_noMatch_returnsEmpty() throws {
+        let path = try writeFixture([
+            "UUID-A": ["AccountURL": "imap://alice%40example.com/"],
+        ])
+        XCTAssertEqual(
+            AccountMapper.uuids(forEmail: "nobody@example.com", path: path),
+            []
+        )
+    }
+
+    func testUuidsForEmail_caseInsensitive() throws {
+        let path = try writeFixture([
+            "UUID-A": ["AccountURL": "imap://Alice%40Example.COM/"],
+        ])
+        XCTAssertEqual(
+            AccountMapper.uuids(forEmail: "alice@example.com", path: path),
+            ["UUID-A"],
+            "Email comparison must be case-insensitive"
+        )
+    }
+
+    func testUuidsForEmail_ewsOpaqueEntriesNeverMatch() throws {
+        // EWS fallback stores the UUID itself as the mapping value (no `@`);
+        // an email query must never match those entries.
+        let ewsUUID = "ABCE3A85-06BE-43BC-9B84-2CA6F325612F"
+        let path = try writeFixture([
+            ewsUUID: ["AccountURL": "ews://AAMkAGE5==/"],
+        ])
+        XCTAssertEqual(AccountMapper.uuids(forEmail: ewsUUID, path: path), [],
+                       "EWS UUID-fallback values are not emails and must not match")
+    }
 }
