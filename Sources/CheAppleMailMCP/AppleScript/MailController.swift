@@ -950,18 +950,24 @@ actor MailController {
 
     // MARK: - Draft Operations
 
-    /// List drafts
-    func listDrafts(accountName: String) throws -> [[String: Any]] {
-        let script = """
-        tell application "Mail"
-            get subject of messages of \(mailboxRef("Drafts", account: accountName))
-        end tell
-        """
-
-        let subjects = try runScriptAsList(script)
-
-        return subjects.map { subject in
-            ["subject": subject]
+    /// List drafts (#174: resolves the per-account drafts mailbox through the
+    /// unified `drafts mailbox`'s children instead of the pre-#174 hardcoded
+    /// `whose name is "Drafts"` lookup, which failed -1719 on Gmail accounts
+    /// whose drafts mailbox carries a localized name like `草稿`).
+    func listDrafts(accountName: String, accountId: String? = nil) throws -> [[String: Any]] {
+        let script = buildListDraftsScript(accountId: accountId, accountName: accountName)
+        do {
+            let subjects = try runScriptAsList(script)
+            return subjects.map { subject in
+                ["subject": subject]
+            }
+        } catch MailError.scriptFailed(_, let code) where code == listDraftsNoMatchErrorNumber {
+            throw MailError.operationFailed(
+                "No drafts mailbox found for account \"\(accountId?.isEmpty == false ? accountId! : accountName)\". "
+                + "Note: account_name must match Mail's AppleScript account name (the account "
+                + "description, e.g. \"Google\"), which often differs from the email address. "
+                + "Pass account_id (the UUID from list_accounts) for reliable matching."
+            )
         }
     }
 
