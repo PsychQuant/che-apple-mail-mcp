@@ -194,4 +194,97 @@ final class AppleScriptRefBuilderTests: XCTestCase {
         XCTAssertTrue(dnPath.contains("has\\\"quote@x"),
                       "Quote in display_name must be escaped in fallback path")
     }
+
+    // MARK: - Nested mailbox paths (#174 — Gmail [Gmail]/X container chain)
+    //
+    // MailSQLite emits mailbox names in on-disk path form (`[Gmail]/全部郵件`).
+    // Mail's AppleScript `name` property holds only the LEAF name, so the
+    // legacy `whose name is "<full path>"` form can never match a nested
+    // mailbox (-1719). Empirically verified 2026-06-11 (issue #174 plan):
+    // `mailbox "草稿" of mailbox "[Gmail]" of (account id "...")` resolves,
+    // so slash-containing names are rewritten into a container chain.
+    // Names WITHOUT "/" keep the legacy form byte-identical (#104 guard).
+
+    func testResolveMailboxRef_nestedPath_uuidPath_buildsContainerChain() {
+        XCTAssertEqual(
+            resolveMailboxRef(mailbox: "[Gmail]/全部郵件", accountId: "UUID-A",
+                              accountName: "alice@example.com"),
+            "(mailbox \"全部郵件\" of mailbox \"[Gmail]\" of (account id \"UUID-A\"))",
+            "Slash-containing mailbox must become a container chain, not whose-name-is"
+        )
+    }
+
+    func testResolveMailboxRef_nestedPath_displayNameFallback_buildsContainerChain() {
+        XCTAssertEqual(
+            resolveMailboxRef(mailbox: "[Gmail]/草稿", accountId: nil,
+                              accountName: "alice@example.com"),
+            "(mailbox \"草稿\" of mailbox \"[Gmail]\" of account \"alice@example.com\")",
+            "Chain rewrite must apply to the display_name fallback path too"
+        )
+    }
+
+    func testMailboxRefByAccountId_nestedPath_buildsContainerChain() {
+        XCTAssertEqual(
+            mailboxRefByAccountId("[Gmail]/全部郵件", accountId: "UUID-A"),
+            "(mailbox \"全部郵件\" of mailbox \"[Gmail]\" of (account id \"UUID-A\"))"
+        )
+    }
+
+    func testResolveMailboxRef_threeSegments_chainsRightToLeft() {
+        XCTAssertEqual(
+            resolveMailboxRef(mailbox: "A/B/C", accountId: "UUID-A", accountName: "a@b"),
+            "(mailbox \"C\" of mailbox \"B\" of mailbox \"A\" of (account id \"UUID-A\"))",
+            "Deeper nesting must chain leaf-first back to the account"
+        )
+    }
+
+    func testResolveMsgRef_nestedPath_chainsThroughContainer() {
+        XCTAssertEqual(
+            resolveMsgRef(id: "274368", mailbox: "[Gmail]/全部郵件", accountId: "UUID-A",
+                          accountName: "a@b"),
+            "(first message of (mailbox \"全部郵件\" of mailbox \"[Gmail]\" of (account id \"UUID-A\")) whose id is 274368)",
+            "Message refs must address nested mailboxes through the container chain"
+        )
+    }
+
+    func testResolveMailboxRef_nestedPath_escapesQuotesPerSegment() {
+        let ref = resolveMailboxRef(mailbox: "[Gmail]/Has\"Quote", accountId: "UUID-A",
+                                    accountName: "a@b")
+        XCTAssertTrue(ref.contains("Has\\\"Quote"),
+                      "Quote inside a path segment must be escaped; got:\n\(ref)")
+        XCTAssertFalse(ref.contains("whose name is"),
+                       "Slash-containing name must not fall back to whose-name-is")
+    }
+
+    func testResolveMailboxRef_consecutiveSlashes_emptySegmentsFiltered() {
+        XCTAssertEqual(
+            resolveMailboxRef(mailbox: "[Gmail]//全部郵件", accountId: "UUID-A", accountName: "a@b"),
+            "(mailbox \"全部郵件\" of mailbox \"[Gmail]\" of (account id \"UUID-A\"))",
+            "Empty segments from consecutive slashes must be dropped"
+        )
+    }
+
+    func testResolveMailboxRef_slashOnlyName_keepsLegacyForm() {
+        // Degenerate input: after filtering empty segments fewer than 2 remain —
+        // keep the legacy whole-string form (same failure surface as today,
+        // no behavior change for names that merely CONTAIN a stray slash).
+        XCTAssertEqual(
+            resolveMailboxRef(mailbox: "/", accountId: "UUID-A", accountName: "a@b"),
+            "(first mailbox of (account id \"UUID-A\") whose name is \"/\")",
+            "Fewer than 2 non-empty segments must keep the legacy whose-name-is form"
+        )
+    }
+
+    func testResolveMailboxRef_noSlash_byteIdentityGuard() {
+        // Explicit #174 regression lock on top of the existing #104 tests:
+        // names without "/" must keep the EXACT pre-#174 output in both paths.
+        XCTAssertEqual(
+            resolveMailboxRef(mailbox: "收件匣", accountId: "UUID-A", accountName: "a@b"),
+            "(first mailbox of (account id \"UUID-A\") whose name is \"收件匣\")"
+        )
+        XCTAssertEqual(
+            resolveMailboxRef(mailbox: "收件匣", accountId: nil, accountName: "alice@example.com"),
+            "(first mailbox of account \"alice@example.com\" whose name is \"收件匣\")"
+        )
+    }
 }

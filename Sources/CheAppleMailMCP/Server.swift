@@ -291,11 +291,12 @@ class CheAppleMailMCPServer {
             // Draft Tools
             Tool(
                 name: "list_drafts",
-                description: "List all draft emails",
+                description: "List all draft emails for one account. Resolves the account's real drafts mailbox via Mail's unified drafts mailbox (works with localized/provider-specific names like Gmail's [Gmail]/草稿 — no hardcoded 'Drafts' lookup, see #174).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")])
+                        "account_name": .object(["type": .string("string"), "description": .string("Mail's AppleScript account name (the account description, e.g. 'Google') — often NOT the email address. Required; may mismatch or be ambiguous — prefer passing `account_id` alongside for reliable matching (mirrors the #101 pattern; account_name is ignored when account_id is non-empty).")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional: Mail.app account UUID, used alongside account_name. Discoverable from list_accounts or search_emails results (the `account_id` field). When non-empty, takes precedence over account_name.")])
                     ]),
                     "required": .array([.string("account_name")])
                 ])
@@ -993,7 +994,9 @@ class CheAppleMailMCPServer {
             guard let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("account_name is required")
             }
-            let drafts = try await mailController.listDrafts(accountName: accountName)
+            // #174: optional UUID disambiguation, mirroring the #101 pattern.
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let drafts = try await mailController.listDrafts(accountName: accountName, accountId: accountId)
             return formatJSON(drafts)
 
         case "create_draft":
