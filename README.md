@@ -412,7 +412,7 @@ Both cases transparently fall through to AppleScript with `... falling through t
 | Mail.app not responding | Ensure Mail.app is running with configured accounts |
 | Commands timing out | Large mailboxes take longer; try specific searches |
 | Bulk fetch slower than expected | Watch stderr for `... falling through to AppleScript` lines. EWS/Exchange accounts always fall back (see [Performance & Storage](#performance--storage)); other accounts logging fallback indicate a fixable .emlx issue |
-| `save_attachment` fails with `-1728 "Can't get account"` or `-1719 "Invalid mailbox index"` | Two Mail.app accounts share the same `display_name` (e.g., iCloud catch-all alias + Gmail with the same address). See [Account Disambiguation](#account-disambiguation) below. |
+| `save_attachment` fails with `-1728 "Can't get account"` or `-1719 "Invalid mailbox index"` | Since [#173](https://github.com/PsychQuant/che-apple-mail-mcp/issues/173) both errors come back with an actionable hint naming the failing reference (account / mailbox / message). Common causes: two Mail.app accounts share the same `display_name`, or an email-form `account_name` maps to several accounts — see [Account Disambiguation](#account-disambiguation) below. |
 
 ---
 
@@ -440,7 +440,7 @@ Mail.app's AppleScript `account "<display_name>"` selector is **not unique** whe
 - **Manually** — read `~/Library/Mail/V10/MailData/Signatures/AccountsMap.plist`. The top-level keys are the UUIDs; the `AccountURL` value contains the matching email address percent-encoded in the authority.
 - **In AppleScript** — `tell application "Mail" to get id of every account` returns the UUID list.
 
-**Backward compatibility**: `account_id` is **optional**. When omitted (or empty), tools fall back to the legacy `account "<display_name>"` path — behavior identical to pre-#101. Existing callers continue to work unchanged.
+**Backward compatibility**: `account_id` is **optional**. When omitted (or empty), tools fall back to the legacy `account "<display_name>"` path — behavior identical to pre-#101 — **with one `save_attachment` exception** ([#173](https://github.com/PsychQuant/che-apple-mail-mcp/issues/173)): when `account_name` contains `@` (email-shaped, the form SQLite-path tools like `search_emails` emit), `save_attachment` first reverse-looks-it-up in AccountsMap and silently upgrades to the `account id "<UUID>"` selector (the upgrade is logged to stderr). Exactly one match → that UUID; several accounts behind one address (iCloud catch-all + Gmail) → an actionable error listing every candidate instead of a raw `-1728`; no match → the legacy display-name path, unchanged. Edge: a Mail account whose *description* legitimately contains `@` and happens to equal another account's email now resolves in the email namespace first — pass `account_id` explicitly to pin the selector. Other tools keep the strict pre-#101 fallback (the cross-tool sweep is [#176](https://github.com/PsychQuant/che-apple-mail-mcp/issues/176)).
 
 **Scope**: `account_id` is accepted by all 13 AppleScript-routed tools that reference mail by account — the [#104](https://github.com/PsychQuant/che-apple-mail-mcp/issues/104) sweep is complete:
 
