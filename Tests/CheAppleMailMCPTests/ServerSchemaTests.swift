@@ -417,18 +417,119 @@ final class ServerSchemaTests: XCTestCase {
                       "must explain account_name matches Mail's account description, not the email")
     }
 
+    // MARK: - Hint discrimination on the failing object class (verify PR #187)
+    //
+    // -1719 fires for any zero-match `first … whose` filter and -1728 for any
+    // failed named access — a single asserted cause per code misdirects
+    // recovery. The hint must route on the object class the raw AppleScript
+    // message names, with precedence message → mailbox → account.
+
+    func testHint_minus1719_staleMessageId_routesToSearchEmailsRefresh() {
+        let msg = saveAttachmentAppleEventHint(
+            code: -1719, accountName: "Google",
+            rawMessage: "Can't get message 1 of mailbox \"全部郵件\" of mailbox \"[Gmail]\" of account id \"E51B96AC\". Invalid index.",
+            localCopyConfirmedMissing: false) ?? ""
+        XCTAssertTrue(msg.contains("MESSAGE"),
+                      "a message-lookup failure must be attributed to the message, not the mailbox; got:\n\(msg)")
+        XCTAssertTrue(msg.contains("stale"),
+                      "must explain the id may be stale")
+        XCTAssertTrue(msg.contains("Re-run search_emails"),
+                      "recovery must be a fresh search, not mailbox debugging")
+    }
+
+    func testHint_minus1728_missingChainSegment_routesToMailboxNotAccount() {
+        // Post-#174, a missing nested segment fails as NAMED access → -1728
+        // ("Can't get mailbox \"X\" of …") — the old code-keyed hint lectured
+        // about the account namespace, which cannot help here.
+        let msg = saveAttachmentAppleEventHint(
+            code: -1728, accountName: "Google",
+            rawMessage: "Can't get mailbox \"草稿\" of mailbox \"[Gmail]\" of account id \"E51B96AC\".",
+            localCopyConfirmedMissing: false) ?? ""
+        XCTAssertTrue(msg.contains("MAILBOX"),
+                      "-1728 naming a mailbox must route to mailbox guidance; got:\n\(msg)")
+        XCTAssertTrue(msg.contains("list_mailboxes"))
+        XCTAssertFalse(msg.contains("ACCOUNT selector"),
+                       "must not lecture about the account namespace when the mailbox failed")
+    }
+
+    func testHint_unrecognizedRawMessage_fallsBackToHedgedCombined() {
+        let msg = saveAttachmentAppleEventHint(
+            code: -1719, accountName: "Google",
+            rawMessage: "Some opaque AppleScript failure.",
+            localCopyConfirmedMissing: false) ?? ""
+        XCTAssertTrue(msg.contains("could not be resolved"),
+                      "unrecognized raw text must get the hedged combined hint; got:\n\(msg)")
+        XCTAssertTrue(msg.contains("Some opaque AppleScript failure."),
+                      "raw message must still be echoed")
+    }
+
     func testSaveAttachmentAppleEventHint_minus10000_textUnchangedBy173() {
-        // The #103 contract for -10000 must stay byte-identical through the
-        // #173 guard widening — both hedged and confirmed-missing variants.
+        // The #103 contract for -10000 must stay BYTE-identical through the
+        // #173 guard widening — full golden-string compare for both variants
+        // (verify PR #187 finding 6: keyword locks let wording drift).
         let hedged = saveAttachmentAppleEventHint(
             code: -10000, accountName: "a@b", rawMessage: "x",
-            localCopyConfirmedMissing: false) ?? ""
-        XCTAssertTrue(hedged.contains("usually"))
+            localCopyConfirmedMissing: false)
+        XCTAssertEqual(hedged, """
+        save_attachment failed: Mail.app's save-attachment handler raised an error \
+        (-10000, AppleEvent handler failed — "x"). For save_attachment this usually \
+        means the attachment's binary is not in the local Mail cache and Mail.app \
+        could not re-fetch it from the IMAP server. Recovery options:
+        (1) Re-fetch the message: call the synchronize_account MCP tool for \
+        "a@b" (or in Mail.app: Mailbox menu → Take All Accounts Online, then \
+        Synchronize "a@b"), then retry save_attachment.
+        (2) In Mail.app: select the affected mailbox, then Mailbox menu → Rebuild.
+        (3) Manual fallback: open the message in Mail.app and use the attachment's \
+        "Save Attachment…" / drag-out, which forces Mail.app to fetch the binary.
+        If the local copy IS present, instead check that the save_path directory is \
+        writable and has free space.
+        """)
         let confirmed = saveAttachmentAppleEventHint(
             code: -10000, accountName: "a@b", rawMessage: "x",
-            localCopyConfirmedMissing: true) ?? ""
-        XCTAssertTrue(confirmed.contains("already confirmed"))
-        XCTAssertFalse(confirmed.contains("usually"))
+            localCopyConfirmedMissing: true)
+        XCTAssertEqual(confirmed, """
+        save_attachment failed: Mail.app's save-attachment handler raised an error \
+        (-10000, AppleEvent handler failed — "x"). The SQLite + .emlx fast path \
+        already confirmed the attachment's binary is absent from the local Mail \
+        store (no inline copy in the .emlx, no externalised copy in the Attachments \
+        cache), so Mail.app had to re-fetch it from the IMAP server — and that \
+        fetch failed. Recovery options:
+        (1) Re-fetch the message: call the synchronize_account MCP tool for \
+        "a@b" (or in Mail.app: Mailbox menu → Take All Accounts Online, then \
+        Synchronize "a@b"), then retry save_attachment.
+        (2) In Mail.app: select the affected mailbox, then Mailbox menu → Rebuild.
+        (3) Manual fallback: open the message in Mail.app and use the attachment's \
+        "Save Attachment…" / drag-out, which forces Mail.app to fetch the binary.
+        If the local copy IS present, instead check that the save_path directory is \
+        writable and has free space.
+        """)
+    }
+
+    // MARK: - save_attachment handler wiring (verify PR #187 finding 7)
+    //
+    // resolveSaveAttachmentAccountId is unit-tested in isolation; this
+    // structural pin (same discipline as #139's MailboxCrudScriptBuilderTests)
+    // catches the "handler stopped threading the resolver's result" regression
+    // that the isolated unit tests cannot see.
+
+    func testSaveAttachmentHandler_threadsResolvedAccountId() throws {
+        let serverSource = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // CheAppleMailMCPTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // repo root
+            .appendingPathComponent("Sources/CheAppleMailMCP/Server.swift")
+        let source = try String(contentsOf: serverSource, encoding: .utf8)
+        guard let caseStart = source.range(of: "case \"save_attachment\":") else {
+            XCTFail("save_attachment case not found in Server.swift")
+            return
+        }
+        let tail = source[caseStart.upperBound...]
+        let caseBody = tail.range(of: "\n        case \"").map { String(tail[..<$0.lowerBound]) }
+            ?? String(tail)
+        XCTAssertTrue(caseBody.contains("resolveSaveAttachmentAccountId("),
+                      "handler must call the resolver before Tier 2")
+        XCTAssertTrue(caseBody.contains("accountId: resolvedAccountId"),
+                      "handler must thread the resolver's result into saveAttachment")
     }
 
     // MARK: - resolveSaveAttachmentAccountId (#173 — email→UUID normalization)

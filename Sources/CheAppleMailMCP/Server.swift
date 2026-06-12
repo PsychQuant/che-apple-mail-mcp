@@ -1133,6 +1133,15 @@ class CheAppleMailMCPServer {
             // instead of a raw AppleScript failure later.
             let resolvedAccountId = try resolveSaveAttachmentAccountId(
                 accountId: accountId, accountName: accountName)
+            // Logged-decision discipline (verify PR #187 finding 13): the
+            // upgrade silently changes which selector Tier 2 uses — make it
+            // observable like every other fast-path/fallback decision.
+            if (accountId ?? "").isEmpty, let upgraded = resolvedAccountId {
+                let message = "save_attachment: account_name \"\(accountName)\" "
+                    + "auto-upgraded to (account id \"\(upgraded)\") via AccountsMap "
+                    + "reverse lookup (#173)\n"
+                FileHandle.standardError.write(Data(message.utf8))
+            }
             do {
                 return try await mailController.saveAttachment(
                     id: id,
@@ -1838,37 +1847,59 @@ func saveAttachmentAppleEventHint(code: Int, accountName: String, rawMessage: St
         If the local copy IS present, instead check that the save_path directory is \
         writable and has free space.
         """
-    case -1719:
-        // #173: mailbox resolution failed under the selected account. Since
-        // #174 nested Gmail paths ([Gmail]/全部郵件) resolve via container
-        // chains, the remaining causes are a stale/mistyped mailbox string or
-        // a mailbox/account pairing mismatch.
+    case -1719, -1728:
+        // #173 + verify PR #187 findings 1/3/4: BOTH codes are overloaded —
+        // -1719 fires for any zero-match `first … whose` filter (a stale
+        // message rowId is the most common producer), and -1728 fires for any
+        // failed NAMED access (a missing nested chain segment post-#174, a
+        // stale account UUID, or the account-description namespace mismatch).
+        // A single asserted cause per code misdirects recovery, so the hint
+        // discriminates on the failing object class named in the raw
+        // AppleScript message instead. Precedence message → mailbox → account
+        // matches AppleScript's innermost-failure reporting: "Can't get
+        // message 1 of mailbox …" names the message as the failing object
+        // even though the text also mentions mailbox/account. The class names
+        // inside the error text stay English even under a localized macOS
+        // (they quote the AppleScript expression); an unrecognized message
+        // falls through to a hedged combined hint.
+        let lower = rawMessage.lowercased()
+        let focus: String
+        if lower.contains("message") {
+            focus = """
+            The failing reference is the MESSAGE lookup — the mailbox and account \
+            resolved, but no message with the given id exists there. The id from \
+            search_emails may be stale (message deleted, moved, or re-indexed since \
+            the search). Re-run search_emails and retry with the fresh id and its \
+            accompanying mailbox/account fields.
+            """
+        } else if lower.contains("mailbox") {
+            focus = """
+            The failing reference is the MAILBOX lookup. Nested Gmail paths like \
+            [Gmail]/全部郵件 ARE supported (#174) — use the mailbox value verbatim \
+            from search_emails / list_emails output (it reflects the on-disk \
+            hierarchy), make sure it is paired with the SAME message's account, and \
+            compare against the account's real names via list_mailboxes.
+            """
+        } else if lower.contains("account") {
+            focus = """
+            The failing reference is the ACCOUNT selector. Either account_name does \
+            not match Mail's AppleScript account name (the account description shown \
+            in Mail settings, e.g. "Google" — often NOT the email address that \
+            SQLite-path tools like search_emails report), or the account UUID is \
+            stale (account removed/re-added in Mail). Check list_accounts.
+            """
+        } else {
+            focus = """
+            One of the account / mailbox / message / attachment references could not \
+            be resolved — the raw message above names the failing object. Check each \
+            against list_accounts / list_mailboxes / a fresh search_emails run.
+            """
+        }
         return """
-        save_attachment failed: Mail.app could not resolve the mailbox under the \
-        selected account (-1719 — "\(rawMessage)"). Nested Gmail paths like \
-        [Gmail]/全部郵件 ARE supported (#174) — this error means the mailbox string \
-        does not exist under that account. Recovery options:
-        (1) Use the mailbox value verbatim from search_emails / list_emails output \
-        (it reflects the on-disk hierarchy) and make sure it is paired with the SAME \
-        message's account.
-        (2) Pass account_id (the UUID from search_emails results or list_accounts) — \
-        a display-name selected wrong account silently changes which mailboxes exist.
-        (3) List the account's real mailbox names with list_mailboxes and compare.
-        """
-    case -1728:
-        // #173: the account selector itself failed. Mail's AppleScript
-        // `account "<name>"` matches the account DESCRIPTION (e.g. "Google"),
-        // not the email address that SQLite-path tools emit as account_name.
-        return """
-        save_attachment failed: Mail.app could not find the account (-1728 — \
-        "\(rawMessage)"). Note that account_name must match Mail's AppleScript \
-        account name (the account description shown in Mail settings, e.g. \
-        "Google"), which is often NOT the email address — SQLite-path tools like \
-        search_emails report the email, so feeding their account_name back here \
-        fails for accounts whose description differs. Recovery options:
-        (1) Pass account_id (the UUID from search_emails results or the id field \
-        in list_accounts) — it is globally unique and bypasses the name mismatch.
-        (2) Or pass the account description from list_accounts as account_name.
+        save_attachment failed: Mail.app could not resolve a reference \
+        (\(code) — "\(rawMessage)"). \(focus) \
+        Passing account_id (the UUID from search_emails results or the id field in \
+        list_accounts) rules out account-name namespace mismatches.
         """
     default:
         return nil
