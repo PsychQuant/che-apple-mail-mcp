@@ -73,6 +73,23 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
                       + "so MailController can translate it into an actionable message; got:\n\(script)")
     }
 
+    // MARK: - Per-child try guard (verify PR #181 finding 3)
+
+    func testPerChildTryGuard_skipsAccountlessChildren() {
+        // A unified-drafts child without a resolvable `account` property
+        // (On My Mac / POP local storage) must not abort the whole loop —
+        // the per-child access has to sit inside try ... end try.
+        let script = buildListDraftsScript(accountId: "UUID-A", accountName: "Google")
+        XCTAssertTrue(script.contains("try"),
+                      "Per-child account access must be try-guarded; got:\n\(script)")
+        XCTAssertTrue(script.contains("end try"),
+                      "try guard must be closed inside the repeat loop")
+        let repeatIdx = script.range(of: "repeat with mb")!.lowerBound
+        let tryIdx = script.range(of: "try")!.lowerBound
+        XCTAssertTrue(tryIdx > repeatIdx,
+                      "try guard must be inside the repeat loop, not around it")
+    }
+
     // MARK: - Escaping
 
     func testEscapesQuotes_inBothModes() {

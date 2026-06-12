@@ -962,12 +962,21 @@ actor MailController {
                 ["subject": subject]
             }
         } catch MailError.scriptFailed(_, let code) where code == listDraftsNoMatchErrorNumber {
-            throw MailError.operationFailed(
-                "No drafts mailbox found for account \"\(accountId?.isEmpty == false ? accountId! : accountName)\". "
-                + "Note: account_name must match Mail's AppleScript account name (the account "
-                + "description, e.g. \"Google\"), which often differs from the email address. "
-                + "Pass account_id (the UUID from list_accounts) for reliable matching."
-            )
+            // Advice matches the selector that actually ran (verify PR #181
+            // finding 18): UUID mode failures are about a wrong/stale UUID,
+            // not about the account_name namespace.
+            let hint: String
+            if let aid = accountId, !aid.isEmpty {
+                hint = "No drafts mailbox found for account_id \"\(aid)\". "
+                    + "Check the UUID against list_accounts — the account may have been "
+                    + "removed or the UUID may belong to another Mail profile."
+            } else {
+                hint = "No drafts mailbox found for account_name \"\(accountName)\". "
+                    + "Note: account_name must match Mail's AppleScript account name (the account "
+                    + "description, e.g. \"Google\"), which often differs from the email address. "
+                    + "Pass account_id (the UUID from list_accounts) for reliable matching."
+            }
+            throw MailError.operationFailed(hint)
         }
     }
 

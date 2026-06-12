@@ -295,8 +295,8 @@ class CheAppleMailMCPServer {
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "account_name": .object(["type": .string("string"), "description": .string("Mail's AppleScript account name (the account description, e.g. 'Google') — often NOT the email address. Prefer passing account_id for reliable matching.")]),
-                        "account_id": .object(["type": .string("string"), "description": .string("Optional: Mail.app account UUID. Discoverable from list_accounts or search_emails results (the `account_id` field). When non-empty, takes precedence over account_name.")])
+                        "account_name": .object(["type": .string("string"), "description": .string("Mail's AppleScript account name (the account description, e.g. 'Google') — often NOT the email address. Required; may mismatch or be ambiguous — prefer passing `account_id` alongside for reliable matching (mirrors the #101 pattern; account_name is ignored when account_id is non-empty).")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional: Mail.app account UUID, used alongside account_name. Discoverable from list_accounts or search_emails results (the `account_id` field). When non-empty, takes precedence over account_name.")])
                     ]),
                     "required": .array([.string("account_name")])
                 ])

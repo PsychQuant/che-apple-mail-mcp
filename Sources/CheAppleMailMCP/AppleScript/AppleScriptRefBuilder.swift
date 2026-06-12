@@ -43,9 +43,18 @@ import Foundation
 /// keep the legacy `whose name is` form so non-nested callers stay
 /// byte-identical (#104 regression guard). "/" is always a hierarchy
 /// separator in MailSQLite output (it derives from on-disk .mbox nesting),
-/// so the rewrite never misfires for that caller; hand-crafted names that
-/// merely contain a literal "/" failed with -1719 before and keep the same
-/// failure surface.
+/// so the rewrite never misfires for that caller.
+///
+/// > **Behavior change for literal-"/" leaf names** (verify PR #181
+/// > findings 7/11/12): a hand-crafted mailbox whose AppleScript `name`
+/// > literally contains "/" used to fail -1719 under `whose name is`; it now
+/// > gets chain-resolved instead — usually a different -1719, but in the
+/// > pathological case where the split segments happen to name a real
+/// > container/child pair, the chain resolves a DIFFERENT mailbox than the
+/// > literal name intended. Accepted trade-off: MailSQLite-emitted names
+/// > (the only ecosystem source) are always hierarchical, and AppleScript
+/// > offers no escape syntax to disambiguate. Callers minting their own
+/// > literal-"/" names are out of contract.
 ///
 /// - Returns: `(mailbox "leaf" of mailbox "parent" ... of <accountRef>)`,
 ///   or nil when fewer than 2 non-empty segments remain.
@@ -75,7 +84,10 @@ func nestedMailboxChain(path: String, accountRef: String) -> String? {
 ///   - mailbox: Mailbox name (e.g. "INBOX", "[Gmail]/全部郵件"). Escaped via `appleScriptEscape`.
 ///   - accountId: Account UUID. Caller must ensure non-empty — use
 ///     `resolveMailboxRef` for nil/empty handling.
-/// - Returns: `(first mailbox of (account id "<escaped UUID>") whose name is "<escaped mailbox>")`
+/// - Returns: `(first mailbox of (account id "<escaped UUID>") whose name is "<escaped mailbox>")`,
+///   or — when `mailbox` is a nested on-disk path (≥ 2 "/"-separated
+///   segments, #174) — the container chain
+///   `(mailbox "leaf" of mailbox "parent" ... of (account id "<escaped UUID>"))`.
 func mailboxRefByAccountId(_ mailbox: String, accountId: String) -> String {
     // accountName: "" is intentional — accountId is guaranteed non-empty by
     // contract, so resolveAccountRef takes the UUID path and never consults
@@ -118,7 +130,9 @@ func msgRefByAccountId(_ id: String, mailbox: String, accountId: String) -> Stri
 ///   - accountName: Display name. Used only in the fallback path.
 /// - Returns: `(first mailbox of (account id "...") whose name is "...")`
 ///   when `accountId` is usable, else `(first mailbox of account "<display_name>" whose name is "...")`
-///   — the latter byte-identical to `MailController.mailboxRef`.
+///   — the latter byte-identical to `MailController.mailboxRef`. Nested
+///   on-disk paths (≥ 2 "/"-separated segments, #174) instead return the
+///   container chain `(mailbox "leaf" of ... of <accountRef>)` in both modes.
 func resolveMailboxRef(mailbox: String, accountId: String?, accountName: String) -> String {
     // #137 refactor: compose `resolveAccountRef` to keep account-selector
     // syntax (UUID vs display_name) defined in exactly one place. Pre-#137

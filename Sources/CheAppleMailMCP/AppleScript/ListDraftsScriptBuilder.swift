@@ -46,12 +46,20 @@ func buildListDraftsScript(accountId: String?, accountName: String) -> String {
     } else {
         condition = "(name of account of mb) is \"\(appleScriptEscape(accountName))\""
     }
+    // Per-child try guard (verify PR #181 finding 3): a unified-drafts child
+    // without a resolvable `account` property (an "On My Mac" local drafts
+    // container, POP-style local storage, a disabled account) would otherwise
+    // raise mid-loop and abort the whole script — breaking list_drafts for
+    // unrelated, previously-working accounts depending on iteration order.
+    // The guard skips such children; a genuine no-match still reaches 9174.
     return """
     tell application "Mail"
         repeat with mb in (every mailbox of drafts mailbox)
-            if \(condition) then
-                return subject of messages of mb
-            end if
+            try
+                if \(condition) then
+                    return subject of messages of mb
+                end if
+            end try
         end repeat
         error "No drafts mailbox matched the requested account" number \(listDraftsNoMatchErrorNumber)
     end tell
