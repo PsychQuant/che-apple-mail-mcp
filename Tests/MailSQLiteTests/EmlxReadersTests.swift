@@ -6,10 +6,7 @@ final class EmlxReadersTests: XCTestCase {
     // MARK: - Helpers
 
     private func makeReader() throws -> EnvelopeIndexReader {
-        let path = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Envelope Index not available at \(path)")
-        }
+        let path = try realEnvelopeIndexPathOrSkip()
         return try EnvelopeIndexReader(databasePath: path)
     }
 

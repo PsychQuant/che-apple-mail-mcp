@@ -779,7 +779,7 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("name and account_name are required")
             }
-            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             return try await mailController.createMailbox(name: name, accountName: accountName, accountId: accountId)
 
         case "delete_mailbox":
@@ -787,7 +787,7 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("name and account_name are required")
             }
-            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             return try await mailController.deleteMailbox(name: name, accountName: accountName, accountId: accountId)
 
         // Email Reading Tools
@@ -924,7 +924,7 @@ class CheAppleMailMCPServer {
                   let read = arguments["read"]?.boolValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and read are required")
             }
-            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             return try await mailController.markRead(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, read: read)
 
         case "flag_email":
@@ -934,7 +934,7 @@ class CheAppleMailMCPServer {
                   let flagged = arguments["flagged"]?.boolValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and flagged are required")
             }
-            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             return try await mailController.flagEmail(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, flagged: flagged)
 
         case "move_email":
@@ -944,7 +944,7 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("from_mailbox, to_mailbox, and account_name are required")
             }
-            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             return try await mailController.moveEmail(id: id, fromMailbox: fromMailbox, toMailbox: toMailbox, accountName: accountName, accountId: accountId)
 
         case "delete_email":
@@ -953,7 +953,7 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("mailbox, and account_name are required")
             }
-            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             return try await mailController.deleteEmail(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId)
 
         // Compose Tools
@@ -980,7 +980,7 @@ class CheAppleMailMCPServer {
                   let body = arguments["body"]?.stringValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and body are required")
             }
-            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             let replyAll = try requireBool(arguments, key: "reply_all", default: false)
             let ccAdditional = try optionalStringArray(arguments, key: "cc_additional")
             let replyAttachments = try optionalStringArray(arguments, key: "attachments")
@@ -996,7 +996,7 @@ class CheAppleMailMCPServer {
                   let toArray = arguments["to"]?.arrayValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and to are required")
             }
-            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             let to = toArray.compactMap { $0.stringValue }
             let body = arguments["body"]?.stringValue
             let format = try parseBodyFormatArgument(arguments["format"])
@@ -1009,7 +1009,7 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("account_name is required")
             }
             // #174: optional UUID disambiguation, mirroring the #101 pattern.
-            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             let drafts = try await mailController.listDrafts(accountName: accountName, accountId: accountId)
             return formatJSON(drafts)
 
@@ -1104,7 +1104,17 @@ class CheAppleMailMCPServer {
             // that produces -1728 / -1719 errors. When absent, Tier 2 falls back
             // to the legacy `account "<display_name>"` form for backward compat.
             // Tier 1 fast path is unaffected (never touches account_name).
+            // (#176: not wrapped here — save_attachment feeds resolveAccountIdForTool
+            // explicitly below at the Tier 2 boundary.)
             let accountId = decodeAccountId(arguments, tool: invokedTool)
+            // #178: ensure the save_path's parent directory exists before EITHER
+            // tier. Both fail on a missing parent — Tier 1's Data.write throws
+            // (AttachmentExtractor.saveAttachment requires the parent to exist),
+            // and Tier 2's Mail.app `save att in POSIX file` raises a misleading
+            // -10000 reported as an IMAP-cache problem. Creating it up front makes
+            // the missing-dir case vanish; an un-creatable path errors here with
+            // an actionable message instead of the opaque -10000.
+            try ensureSaveDestinationDirectory(savePath)
             // Tier 1: SQLite + .emlx fast path (see openspec/changes/save-attachment-fast-path).
             // Wraps in its own do/catch so any failure falls through to the
             // AppleScript tier in the trailing `mailController.saveAttachment`
@@ -1141,22 +1151,12 @@ class CheAppleMailMCPServer {
             // Tier 2: AppleScript fallback. Use the #101 6-arg overload (preferring
             // account_id when provided) — when account_id is nil/empty, behavior
             // is identical to the legacy 5-arg path (display_name selector).
-            // #173: normalize an email-form account_name to its account UUID
-            // first — SQLite-path tools emit the AccountsMap email, which the
-            // display_name selector can never match (-1728). Ambiguity (one
-            // email fronting several accounts) throws an actionable error here
-            // instead of a raw AppleScript failure later.
-            let resolvedAccountId = try resolveSaveAttachmentAccountId(
-                accountId: accountId, accountName: accountName)
-            // Logged-decision discipline (verify PR #187 finding 13): the
-            // upgrade silently changes which selector Tier 2 uses — make it
-            // observable like every other fast-path/fallback decision.
-            if (accountId ?? "").isEmpty, let upgraded = resolvedAccountId {
-                let message = "save_attachment: account_name \"\(accountName)\" "
-                    + "auto-upgraded to (account id \"\(upgraded)\") via AccountsMap "
-                    + "reverse lookup (#173)\n"
-                FileHandle.standardError.write(Data(message.utf8))
-            }
+            // #173 → #176: normalize an email-form account_name to its account
+            // UUID first — SQLite-path tools emit the AccountsMap email, which the
+            // display_name selector can never match (-1728). Ambiguity throws an
+            // actionable error; the upgrade is logged inside the resolver.
+            let resolvedAccountId = try resolveAccountIdForTool(
+                accountId: accountId, accountName: accountName, tool: invokedTool)
             do {
                 return try await mailController.saveAttachment(
                     id: id,
@@ -1265,7 +1265,7 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("from_mailbox, to_mailbox, and account_name are required")
             }
-            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             return try await mailController.copyEmail(id: id, fromMailbox: fromMailbox, toMailbox: toMailbox, accountName: accountName, accountId: accountId)
 
         case "set_flag_color":
@@ -1275,7 +1275,7 @@ class CheAppleMailMCPServer {
                   let colorIndex = arguments["color_index"]?.intValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and color_index are required")
             }
-            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             return try await mailController.setFlagColor(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, colorIndex: colorIndex)
 
         case "set_background_color":
@@ -1289,7 +1289,7 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter(
                     "color must be one of: blue, gray, green, none, orange, purple, red, yellow (got: \"\(color)\")")
             }
-            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             return try await mailController.setBackgroundColor(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, color: color)
 
         case "mark_as_junk":
@@ -1299,7 +1299,7 @@ class CheAppleMailMCPServer {
                   let isJunk = arguments["is_junk"]?.boolValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and is_junk are required")
             }
-            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             return try await mailController.markAsJunk(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, isJunk: isJunk)
 
         case "get_email_headers":
@@ -1359,7 +1359,7 @@ class CheAppleMailMCPServer {
                   let toArray = arguments["to"]?.arrayValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and to are required")
             }
-            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             let to = toArray.compactMap { $0.stringValue }
             return try await mailController.redirectEmail(id: id, mailbox: mailbox, accountName: accountName, to: to, accountId: accountId)
 
@@ -1942,30 +1942,106 @@ func saveAttachmentAppleEventHint(code: Int, accountName: String, rawMessage: St
     }
 }
 
-/// Normalize `save_attachment`'s account parameters before the Tier 2
-/// AppleScript fallback (#173).
+/// Validate and prepare the `save_attachment` destination (#178).
 ///
-/// SQLite-path tools (`search_emails` / `list_attachments`) emit the
+/// Both tiers fail on a missing parent directory: Tier 1's `Data.write` throws
+/// (`AttachmentExtractor.saveAttachment` documents "parent directory MUST already
+/// exist"), and Tier 2's Mail.app `save att in POSIX file "<path>"` raises a
+/// generic `-10000` that `saveAttachmentAppleEventHint` translates IMAP-cache-first
+/// — sending the user to synchronize/rebuild dead-ends for what is just a missing
+/// `mkdir -p` (the 2026-06-11 repro in #178).
+///
+/// This function removes the **missing-parent** source of that misleading `-10000`,
+/// and surfaces the two adjacent destination problems as actionable errors instead
+/// of letting them reach Tier 2's `-10000` (verify PR #189 review):
+///
+///  1. **Path shape** — `save_path` must be a well-formed absolute file path. An
+///     empty / relative / trailing-slash value makes `deletingLastPathComponent`
+///     resolve to the process cwd or strip the intended leaf, so the wrong tree
+///     would be created and a later `-10000` would *still* mislead. Rejected as
+///     `invalidParameter`.
+///  2. **Missing parent** — created with `mkdir -p`. **Accepted trade-off** (the
+///     issue explicitly asked for "binary 自己 mkdir -p"): a typo'd absolute path
+///     silently materialises the wrong tree rather than failing fast. We bound the
+///     blast radius to *absolute* paths (shape check above) and prefer this over
+///     the opaque `-10000` dead-end.
+///  3. **Existing-but-unwritable parent** — `createDirectory` is a no-op success
+///     when the dir already exists, but the write would still fail → Tier 2
+///     `-10000`. A post-create writability check surfaces it as `operationFailed`.
+///
+/// **Scope of the guarantee**: this removes only the *missing-parent* and the two
+/// problems above as sources of a misleading `-10000`. A `-10000` after this
+/// returns reflects a destination-independent cause (e.g. the attachment binary is
+/// not in the local Mail cache) — which is exactly what the (unchanged, byte-locked)
+/// `saveAttachmentAppleEventHint` describes.
+///
+/// Free function (not a method) so it's unit-testable without the MCP server.
+func ensureSaveDestinationDirectory(_ savePath: String) throws {
+    // 1. Path shape — must be an absolute file path (not empty / relative /
+    //    directory-form), so the parent we create is the one the caller intends.
+    guard savePath.hasPrefix("/"), !savePath.hasSuffix("/") else {
+        throw MailError.invalidParameter(
+            "save_attachment: save_path must be an absolute file path "
+            + "(start with '/' and name a file, not end with '/'); got \"\(savePath)\"."
+        )
+    }
+    let fm = FileManager.default
+    let parent = URL(fileURLWithPath: savePath).deletingLastPathComponent()
+    // 2. Missing parent — mkdir -p (accepted trade-off, see docstring).
+    do {
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
+    } catch {
+        throw MailError.operationFailed(
+            "save_attachment: cannot create the save_path parent directory "
+            + "\(parent.path): \(error.localizedDescription). "
+            + "Check the path is valid and that you have write permission."
+        )
+    }
+    // 3. Existing-but-unwritable parent — createDirectory no-ops when the dir is
+    //    already present, so verify it is actually a writable directory; otherwise
+    //    the write would fail downstream as a misleading -10000.
+    var isDir: ObjCBool = false
+    guard fm.fileExists(atPath: parent.path, isDirectory: &isDir), isDir.boolValue,
+          fm.isWritableFile(atPath: parent.path) else {
+        throw MailError.operationFailed(
+            "save_attachment: the save_path parent \(parent.path) is not a "
+            + "writable directory. Check it exists, is a directory, and is writable."
+        )
+    }
+}
+
+/// Normalize `save_attachment`'s account parameters before the Tier 2
+/// AppleScript fallback across all AppleScript-routed tools (#173 →
+/// generalized in #176).
+///
+/// SQLite-path tools (`search_emails` / `list_attachments` / …) emit the
 /// AccountsMap **email** as `account_name`, but Mail's AppleScript
 /// `account "<name>"` selector matches the account DESCRIPTION — feeding the
 /// email back fails with -1728. When the caller did not supply `account_id`
 /// and the `accountName` looks like an email, resolve it to a UUID via
 /// `AccountMapper.uuids(forEmail:)`:
 ///
-/// - exactly one match → return that UUID (upgrade to the `account id` path)
+/// - non-empty `accountId` → return it unchanged (byte-identical to pre-#176;
+///   protects the #104 sweep's exact-string contract)
+/// - `accountName` without `@` → return nil (legacy display_name path, unchanged)
+/// - exactly one match → return that UUID (upgrade to the `account id` path),
+///   logged to stderr per the logged-decision discipline (verify PR #187 #13)
 /// - multiple matches → throw an actionable error listing every candidate —
-///   the same address can front different accounts (iCloud catch-all vs
-///   Google in #173's report); auto-picking would silently target the wrong one
-/// - no match → return nil (legacy display_name path, unchanged behavior)
+///   the same address can front different accounts (iCloud catch-all vs Google
+///   in #173's report); auto-picking would silently target the wrong one
 ///
-/// Scope note: applied at the save_attachment layer only; the chokepoint-level
-/// sweep across all AppleScript-routed tools is tracked by #176.
+/// #176: lifted out of the save_attachment-only layer into a shared helper
+/// threaded by every AppleScript-routed handler that takes an `account_name`.
+/// The pure ref-builders (`resolveAccountRef`/`resolveMailboxRef`/`resolveMsgRef`)
+/// stay untouched — normalization happens at the handler layer.
 ///
-/// - Parameter uuidsForEmail: Injectable lookup for tests; defaults to
-///   `AccountMapper.uuids(forEmail:)`.
-func resolveSaveAttachmentAccountId(
+/// - Parameters:
+///   - tool: tool name for the stderr upgrade log (default "" → "save_attachment").
+///   - uuidsForEmail: Injectable lookup for tests; defaults to `AccountMapper.uuids(forEmail:)`.
+func resolveAccountIdForTool(
     accountId: String?,
     accountName: String,
+    tool: String = "",
     uuidsForEmail: (String) -> [String] = { AccountMapper.uuids(forEmail: $0) }
 ) throws -> String? {
     if let aid = accountId, !aid.isEmpty { return aid }
@@ -1975,10 +2051,20 @@ func resolveSaveAttachmentAccountId(
     case 0:
         return nil
     case 1:
+        // Logged-decision discipline: the silent email→UUID upgrade changes
+        // which selector the AppleScript path uses — make it observable for
+        // every threaded tool (centralized here, #176).
+        let label = tool.isEmpty ? "save_attachment" : tool
+        let message = "\(label): account_name \"\(accountName)\" auto-upgraded to "
+            + "(account id \"\(matches[0])\") via AccountsMap reverse lookup (#176)\n"
+        FileHandle.standardError.write(Data(message.utf8))
         return matches[0]
     default:
+        // Name the tool (verify PR #190 finding) so the error is distinguishable
+        // across the 14 callers, not identical text regardless of which fired.
+        let label = tool.isEmpty ? "save_attachment" : tool
         throw MailError.invalidParameter(
-            "account_name \"\(accountName)\" matches multiple Mail accounts: "
+            "\(label): account_name \"\(accountName)\" matches multiple Mail accounts: "
             + matches.joined(separator: ", ")
             + ". Pass account_id explicitly to select one — use list_accounts "
             + "to see which UUID belongs to which account."
