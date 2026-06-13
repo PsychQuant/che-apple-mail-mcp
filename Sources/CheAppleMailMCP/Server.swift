@@ -697,6 +697,34 @@ class CheAppleMailMCPServer {
                     "required": .array([.string("emails")])
                 ])
             ),
+            Tool(
+                name: "export_emails_markdown",
+                description: "Export a batch of emails to verbatim markdown files server-side (frozen 6-field frontmatter + verbatim body), optionally with attachments, into an allowed-roots-validated output_dir. Returns a per-email manifest. Designed for large archive jobs: one call replaces per-email fetch + client-side transcription.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "ids": .object([
+                            "type": .string("array"),
+                            "description": .string("Array of message id strings (SQLite rowIds)"),
+                            "items": .object(["type": .string("string")])
+                        ]),
+                        "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox name; used only to label direction (sent when it looks like a Sent mailbox, else received)")]),
+                        "account_name": .object(["type": .string("string"), "description": .string("Optional mail account (accepted for consistency; the SQLite fast path is account-agnostic)")]),
+                        "output_dir": .object(["type": .string("string"), "description": .string("Directory to write .md files into. Must resolve under the user's home (path traversal and system directories are rejected).")]),
+                        "opts": .object([
+                            "type": .string("object"),
+                            "description": .string("Optional export options"),
+                            "properties": .object([
+                                "include_attachments": .object(["type": .string("boolean"), "description": .string("Also export each email's attachments (data extensions → output_dir/data/, others → output_dir/attachments/<stem>/)")]),
+                                "filename_template": .object(["type": .string("string"), "description": .string("Override filename with placeholders {date}/{subject}/{sender}/{message_id}")]),
+                                "filenames": .object(["type": .string("object"), "description": .string("Per-id filename override map { id: name }")]),
+                                "extra_frontmatter": .object(["type": .string("object"), "description": .string("Static key/value pairs appended to every file's frontmatter after the six core fields")])
+                            ])
+                        ])
+                    ]),
+                    "required": .array([.string("ids"), .string("output_dir")])
+                ])
+            ),
         ]
     }
 
@@ -1445,6 +1473,73 @@ class CheAppleMailMCPServer {
             return try await mailController.importMailbox(path: path)
 
         // Batch Tools
+        case "export_emails_markdown":
+            guard let idsArray = arguments["ids"]?.arrayValue else {
+                throw MailError.invalidParameter("ids array is required")
+            }
+            let exportIds = idsArray.compactMap { $0.stringValue }
+            guard !exportIds.isEmpty else {
+                throw MailError.invalidParameter("ids must be a non-empty array of message id strings")
+            }
+            guard exportIds.count <= 2000 else {
+                throw MailError.invalidParameter("Batch size exceeds maximum of 2000 items")
+            }
+            guard let outputDir = arguments["output_dir"]?.stringValue else {
+                throw MailError.invalidParameter("output_dir is required")
+            }
+            guard let exportReader = indexReader else {
+                throw MailError.invalidParameter("export_emails_markdown requires the SQLite envelope index, which is unavailable")
+            }
+            // direction derived from the optional mailbox label (no AppleScript fallback path).
+            let exportMailbox = arguments["mailbox"]?.stringValue ?? ""
+            let exportDirection = (exportMailbox.range(of: "sent", options: .caseInsensitive) != nil
+                || exportMailbox.contains("寄件")) ? "sent" : "received"
+            let exportOpts = arguments["opts"]?.objectValue ?? [:]
+            let includeAttachments = exportOpts["include_attachments"]?.boolValue ?? false
+            let filenameTemplate = exportOpts["filename_template"]?.stringValue
+            var filenameOverrides: [String: String] = [:]
+            if let fmap = exportOpts["filenames"]?.objectValue {
+                for (k, v) in fmap { if let s = v.stringValue { filenameOverrides[k] = s } }
+            }
+            var extraFrontmatter: [(String, String)] = []
+            if let extra = exportOpts["extra_frontmatter"]?.objectValue {
+                for (k, v) in extra { if let s = v.stringValue { extraFrontmatter.append((k, s)) } }
+            }
+            // Validate output_dir (home-only by default; a configurable
+            // export_allowed_roots whitelist is a documented follow-up).
+            let validatedDir: URL
+            do {
+                validatedDir = try AllowedRootsValidator().validate(outputDir, allowedRoots: [])
+            } catch {
+                throw MailError.invalidParameter("output_dir rejected by write-safety check: \(error)")
+            }
+            let exportManifest = ExportEmailsMarkdown.run(
+                ids: exportIds, outputDir: validatedDir, direction: exportDirection,
+                includeAttachments: includeAttachments, filenameTemplate: filenameTemplate,
+                filenameOverrides: filenameOverrides, extraFrontmatter: extraFrontmatter,
+                fetch: { id in
+                    guard let rowId = Int(id) else {
+                        throw MailError.invalidParameter("id '\(id)' is not a numeric rowId")
+                    }
+                    guard let mailboxUrl = try exportReader.mailboxURL(forMessageId: rowId) else {
+                        throw MailError.invalidParameter("rowId \(rowId) is not in the envelope index")
+                    }
+                    return try EmlxParser.readEmail(rowId: rowId, mailboxURL: mailboxUrl, format: "text")
+                },
+                attachmentNamesFor: { id in
+                    guard let rowId = Int(id),
+                          let mailboxUrl = try exportReader.mailboxURL(forMessageId: rowId) else { return [] }
+                    return Array(try EmlxParser.attachmentNames(rowId: rowId, mailboxURL: mailboxUrl))
+                },
+                saveAttachment: { id, name, dest in
+                    guard let rowId = Int(id),
+                          let mailboxUrl = try exportReader.mailboxURL(forMessageId: rowId) else {
+                        throw MailError.invalidParameter("rowId not resolvable for attachment '\(name)'")
+                    }
+                    try EmlxParser.saveAttachment(rowId: rowId, mailboxURL: mailboxUrl, attachmentName: name, destination: dest)
+                })
+            return formatJSON(exportManifest.jsonObject)
+
         case "get_emails_batch":
             guard let emailsArray = arguments["emails"]?.arrayValue else {
                 throw MailError.invalidParameter("emails array is required")
