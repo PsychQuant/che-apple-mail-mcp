@@ -1449,7 +1449,28 @@ actor MailController {
     // MARK: - Special Mailboxes
 
     /// Get special mailboxes (inbox, drafts, sent, trash, junk, outbox)
-    func getSpecialMailboxes() throws -> [String: Any] {
+    /// Special mailbox names.
+    ///
+    /// #179: when an account selector (`accountId` / `accountName`) is supplied,
+    /// returns *that account's* per-account special-mailbox real names (localized /
+    /// provider) via the unified-children reverse-lookup; otherwise returns the
+    /// app-level unified names unchanged (backward-compat). Default-nil parameters
+    /// keep existing no-arg callers source-compatible.
+    func getSpecialMailboxes(accountId: String? = nil, accountName: String? = nil) throws -> [String: Any] {
+        // Per-account mode (#179): an account selector is supplied.
+        let hasAccount = !(accountId ?? "").isEmpty || !(accountName ?? "").isEmpty
+        if hasAccount {
+            let script = buildSpecialMailboxNamesScript(accountId: accountId, accountName: accountName ?? "")
+            let raw = try runScriptAsList(script)  // [matchedId, matchedName, matchCount, n0…n3] (drafts/sent/trash/junk; inbox deferred)
+            // Pure parse + pure throw-translation (both unit-tested without the actor):
+            // .resolved → canonical metadata + present special names (absent omitted, D3);
+            // .noMatch → operationFailed; .ambiguous → invalidParameter (#179).
+            let resolution = resolveSpecialMailboxesResult(raw)
+            let obj = try specialMailboxesResultOrThrow(resolution, accountId: accountId, accountName: accountName ?? "")
+            return obj.reduce(into: [String: Any]()) { $0[$1.key] = $1.value }
+        }
+
+        // Unified mode (unchanged): app-level special mailbox names.
         let inboxScript = """
         tell application "Mail"
             get name of inbox

@@ -1214,4 +1214,37 @@ final class ServerSchemaTests: XCTestCase {
                            + "mailboxRef so accountId (UUID) disambiguation reaches every branch (#180)")
         }
     }
+
+    // MARK: - #179: get_special_mailboxes per-account selectors
+
+    /// `get_special_mailboxes` must advertise optional `account_id` + `account_name`
+    /// (the per-account contract); neither may be required (omitted ⇒ unified names).
+    func testGetSpecialMailboxes_advertisesOptionalAccountSelectors() {
+        guard let t = tool(named: "get_special_mailboxes"), let props = propertiesObject(of: t) else {
+            XCTFail("get_special_mailboxes schema/properties missing"); return
+        }
+        XCTAssertNotNil(props["account_id"], "must advertise account_id (#179)")
+        XCTAssertNotNil(props["account_name"], "must advertise account_name (#179)")
+        let required = requiredArray(of: t) ?? []
+        XCTAssertFalse(required.contains("account_id"), "account_id must stay optional")
+        XCTAssertFalse(required.contains("account_name"), "account_name must stay optional")
+    }
+
+    /// Structural wiring pin (mirrors #176/#180): the `get_special_mailboxes` handler
+    /// must resolve the account selector through `resolveAccountIdForTool` (email→UUID
+    /// chokepoint) and thread it into `getSpecialMailboxes(accountId:accountName:)`.
+    func testGetSpecialMailboxesHandler_resolvesAndThreadsAccountSelector() throws {
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/CheAppleMailMCP/Server.swift"), encoding: .utf8)
+        guard let start = source.range(of: "case \"get_special_mailboxes\":") else {
+            XCTFail("get_special_mailboxes case not found"); return
+        }
+        let tail = source[start.upperBound...]
+        let body = tail.range(of: "\n        case \"").map { String(tail[..<$0.lowerBound]) } ?? String(tail)
+        XCTAssertTrue(body.contains("resolveAccountIdForTool("),
+                      "handler must resolve the account selector via resolveAccountIdForTool (#179)")
+        XCTAssertTrue(body.contains("getSpecialMailboxes(accountId:"),
+                      "handler must thread the resolved selector into getSpecialMailboxes (#179)")
+    }
 }
