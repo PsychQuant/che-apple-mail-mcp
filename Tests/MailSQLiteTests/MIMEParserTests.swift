@@ -74,10 +74,7 @@ final class MIMEParserTests: XCTestCase {
 
     func testRealEmlxParsing() throws {
         // Integration test: parse a real .emlx file
-        let path = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Envelope Index not available")
-        }
+        let path = try realEnvelopeIndexPathOrSkip()
 
         let reader = try EnvelopeIndexReader(databasePath: path)
         let results = try reader.search(SearchParameters(query: "a", limit: 1))
