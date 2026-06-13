@@ -974,20 +974,40 @@ final class ServerSchemaTests: XCTestCase {
     /// Brace-balanced extraction of a Swift method body from source text,
     /// starting at `func <name>(`. Returns the substring from the func keyword
     /// through the matching closing brace.
+    ///
+    /// verify #192 LOW (round 2): the naive depth counter mis-counted braces
+    /// that appear inside `"""…"""` heredocs (the methods under scan embed
+    /// AppleScript snippets like `set results to {}` in heredocs). It happened
+    /// to work because those snippets only contained self-balancing `{}`, but a
+    /// future unbalanced brace inside a heredoc (e.g. `set x to "{"`) would
+    /// latch `endIdx` onto the wrong `}` and silently mis-extract — risking a
+    /// false-green on the invariant pin this helper feeds. We now skip the
+    /// interior of `"""`-delimited heredocs entirely so embedded AppleScript
+    /// braces can never perturb the count.
     private func methodBody(_ source: String, funcName: String) -> String? {
         guard let start = source.range(of: "func \(funcName)(") else { return nil }
         var depth = 0
         var seenOpen = false
+        var inHeredoc = false
         var idx = start.lowerBound
         var endIdx = source.endIndex
+        let triple = "\"\"\""
         while idx < source.endIndex {
-            let ch = source[idx]
-            if ch == "{" { depth += 1; seenOpen = true }
-            else if ch == "}" {
-                depth -= 1
-                if seenOpen && depth == 0 {
-                    endIdx = source.index(after: idx)
-                    break
+            // Detect a `"""` delimiter (open or close of a heredoc) and skip past it.
+            if source[idx...].hasPrefix(triple) {
+                inHeredoc.toggle()
+                idx = source.index(idx, offsetBy: triple.count)
+                continue
+            }
+            if !inHeredoc {
+                let ch = source[idx]
+                if ch == "{" { depth += 1; seenOpen = true }
+                else if ch == "}" {
+                    depth -= 1
+                    if seenOpen && depth == 0 {
+                        endIdx = source.index(after: idx)
+                        break
+                    }
                 }
             }
             idx = source.index(after: idx)

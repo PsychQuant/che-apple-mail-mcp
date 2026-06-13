@@ -525,7 +525,7 @@ actor MailController {
                 return results
             end tell
             """
-        } else if accountName != nil || !(accountId ?? "").isEmpty {
+        } else if (accountName.map { !$0.isEmpty } ?? false) || !(accountId ?? "").isEmpty {
             // #180 (verify #192): account-only / id-only mode (no specific
             // mailbox). Pre-fix this fell through to the all-accounts branch
             // below, which ignored BOTH accountName and accountId — so
@@ -619,7 +619,7 @@ actor MailController {
                 get unread count of \(mailboxRef(mailbox, account: account, accountId: accountId))
             end tell
             """
-        } else if accountName != nil || !(accountId ?? "").isEmpty {
+        } else if (accountName.map { !$0.isEmpty } ?? false) || !(accountId ?? "").isEmpty {
             // #180 (verify #192): account-only / id-only mode. Was an inline
             // legacy `account "<display_name>"` selector that ignored accountId
             // entirely — `get_unread_count(account_name:X, account_id:UUID)`
