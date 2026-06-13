@@ -1466,7 +1466,11 @@ class CheAppleMailMCPServer {
                 // fallback so a Gmail / ambiguous display_name resolves via the
                 // `account id` selector. Empty/absent → resolveAccountRef falls
                 // back to account_name. SQLite fast path is account-agnostic.
-                let accountId = obj["account_id"]?.stringValue
+                // Uses decodeAccountId (not raw obj["account_id"]) so a non-string
+                // per-item account_id emits the same stderr warning as the single
+                // tools (verify #192 LOW: warning parity) — `obj` is the per-item
+                // [String: Value] dict, the shape decodeAccountId expects.
+                let accountId = decodeAccountId(obj, tool: invokedTool)
                 // Try SQLite/emlx first; on any failure, fall through to
                 // AppleScript — mirrors the structure of `get_email` so both
                 // tools behave identically when the filesystem-fast-path is
@@ -1530,7 +1534,11 @@ class CheAppleMailMCPServer {
                 // fallback so a Gmail / ambiguous display_name resolves via the
                 // `account id` selector. Empty/absent → resolveAccountRef falls
                 // back to account_name. SQLite fast path is account-agnostic.
-                let accountId = obj["account_id"]?.stringValue
+                // Uses decodeAccountId (not raw obj["account_id"]) so a non-string
+                // per-item account_id emits the same stderr warning as the single
+                // tools (verify #192 LOW: warning parity) — `obj` is the per-item
+                // [String: Value] dict, the shape decodeAccountId expects.
+                let accountId = decodeAccountId(obj, tool: invokedTool)
                 // SQLite + .emlx fast path with #24 cross-validation: filter
                 // out stale SQLite attachment rows that don't actually exist
                 // in the .emlx body. Mirrors the single-message handler at

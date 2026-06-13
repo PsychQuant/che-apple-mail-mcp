@@ -525,6 +525,37 @@ actor MailController {
                 return results
             end tell
             """
+        } else if accountName != nil || !(accountId ?? "").isEmpty {
+            // #180 (verify #192): account-only / id-only mode (no specific
+            // mailbox). Pre-fix this fell through to the all-accounts branch
+            // below, which ignored BOTH accountName and accountId — so
+            // `search_emails(account_name:X, account_id:UUID)` without a mailbox
+            // silently searched every account. Scope to the single account via
+            // the resolveAccountRef chokepoint (UUID selector when accountId is
+            // supplied), aligning the AppleScript fallback with the SQLite
+            // primary path, which already filters by account.
+            let accountRef = resolveAccountRef(accountId: accountId, accountName: accountName ?? "")
+            script = """
+            tell application "Mail"
+                set results to {}
+                set counter to 0
+                set acct to \(accountRef)
+                set acctName to name of acct
+                repeat with mbox in every mailbox of acct
+                    try
+                        set mboxName to name of mbox
+                        set foundMsgs to (messages of mbox whose subject contains "\(escapedQuery)" or sender contains "\(escapedQuery)")
+                        repeat with msg in foundMsgs
+                            if counter ≥ \(limit) then exit repeat
+                            set end of results to (id of msg as string) & "\(sep)" & (subject of msg) & "\(sep)" & (sender of msg) & "\(sep)" & (date received of msg as string) & "\(sep)" & acctName & "\(sep)" & mboxName
+                            set counter to counter + 1
+                        end repeat
+                    end try
+                    if counter ≥ \(limit) then exit repeat
+                end repeat
+                return results
+            end tell
+            """
         } else {
             // Search across all accounts and mailboxes
             script = """
@@ -588,11 +619,19 @@ actor MailController {
                 get unread count of \(mailboxRef(mailbox, account: account, accountId: accountId))
             end tell
             """
-        } else if let account = accountName {
+        } else if accountName != nil || !(accountId ?? "").isEmpty {
+            // #180 (verify #192): account-only / id-only mode. Was an inline
+            // legacy `account "<display_name>"` selector that ignored accountId
+            // entirely — `get_unread_count(account_name:X, account_id:UUID)`
+            // with no mailbox silently re-hit the #101 same-display_name
+            // collision. Route through the resolveAccountRef chokepoint so the
+            // UUID selector applies here too; byte-identical to the legacy form
+            // at accountId:nil (`account "<display_name>"`).
+            let accountRef = resolveAccountRef(accountId: accountId, accountName: accountName ?? "")
             script = """
             tell application "Mail"
                 set total to 0
-                repeat with mb in mailboxes of account "\(appleScriptEscape(account))"
+                repeat with mb in mailboxes of \(accountRef)
                     set total to total + (unread count of mb)
                 end repeat
                 return total

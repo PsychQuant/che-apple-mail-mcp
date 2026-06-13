@@ -970,4 +970,69 @@ final class ServerSchemaTests: XCTestCase {
             XCTAssertGreaterThan(found, 0, "\(label): expected ≥1 \(needle) call site")
         }
     }
+
+    /// Brace-balanced extraction of a Swift method body from source text,
+    /// starting at `func <name>(`. Returns the substring from the func keyword
+    /// through the matching closing brace.
+    private func methodBody(_ source: String, funcName: String) -> String? {
+        guard let start = source.range(of: "func \(funcName)(") else { return nil }
+        var depth = 0
+        var seenOpen = false
+        var idx = start.lowerBound
+        var endIdx = source.endIndex
+        while idx < source.endIndex {
+            let ch = source[idx]
+            if ch == "{" { depth += 1; seenOpen = true }
+            else if ch == "}" {
+                depth -= 1
+                if seenOpen && depth == 0 {
+                    endIdx = source.index(after: idx)
+                    break
+                }
+            }
+            idx = source.index(after: idx)
+        }
+        return String(source[start.lowerBound..<endIdx])
+    }
+
+    /// #180 (verify #192): the real invariant the prior handler-call-line grep
+    /// did NOT lock — the devil's-advocate correctly noted that a green
+    /// "handler threads accountId" test says nothing about whether the
+    /// MailController method then USES accountId in ALL of its branches. The
+    /// first round threaded accountId only into the both-`mailbox`+`account`
+    /// branch of `getUnreadCount` / `searchEmails`; their account-only branches
+    /// kept inline legacy `account "<display_name>"` selectors that silently
+    /// dropped accountId. This pin asserts those two method bodies contain NO
+    /// inline `account "` selector — i.e. every account/mailbox reference routes
+    /// through the `resolveAccountRef` / `mailboxRef` chokepoint (which is where
+    /// the UUID-vs-display_name decision lives). Would be RED on the round-1 diff.
+    func testReadMethods_haveNoInlineLegacyAccountSelector() throws {
+        let mcSource = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift"),
+            encoding: .utf8)
+        // Methods that take accountId and build account-addressing AppleScript —
+        // every account selector inside MUST come from the chokepoint, never an
+        // inline `account "…"` literal. (getAccountInfo / listMailboxes are
+        // intentionally account-name-keyed and excluded.)
+        for method in ["getUnreadCount", "searchEmails"] {
+            guard let body = methodBody(mcSource, funcName: method) else {
+                XCTFail("could not extract \(method) body from MailController.swift"); continue
+            }
+            // Strip `//` line comments before scanning — a comment that merely
+            // *mentions* the legacy `account "…"` form (e.g. explaining the fix)
+            // must not trip the pin; only real code selectors count.
+            let code = body.split(separator: "\n", omittingEmptySubsequences: false)
+                .map { line -> Substring in
+                    if let r = line.range(of: "//") { return line[..<r.lowerBound] }
+                    return line
+                }
+                .joined(separator: "\n")
+            XCTAssertFalse(code.contains("account \""),
+                           "\(method) must not build an inline legacy `account \"<display_name>\"` "
+                           + "selector — route account addressing through resolveAccountRef / "
+                           + "mailboxRef so accountId (UUID) disambiguation reaches every branch (#180)")
+        }
+    }
 }
