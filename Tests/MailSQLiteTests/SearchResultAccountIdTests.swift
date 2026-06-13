@@ -56,10 +56,7 @@ final class SearchResultAccountIdTests: XCTestCase {
     // MARK: - Tier 2: Integration tests (real DB, XCTSkip-gated)
 
     func testSearch_populatesAccountIdFromMailboxesJoin() throws {
-        let path = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Envelope Index not available — integration test skipped")
-        }
+        let path = try realEnvelopeIndexPathOrSkip()
         let reader = try EnvelopeIndexReader(databasePath: path)
         let results = try reader.search(SearchParameters(query: "a", limit: 10))
 

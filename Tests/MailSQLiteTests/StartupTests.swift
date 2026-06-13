@@ -6,10 +6,7 @@ final class StartupTests: XCTestCase {
     /// Verify EnvelopeIndexReader initializes quickly (no AppleScript blocking).
     /// AccountMapper.buildMapping() reads a plist synchronously — should be < 100ms.
     func testReaderInitializesWithinOneSecond() throws {
-        let path = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Envelope Index not available")
-        }
+        let path = try realEnvelopeIndexPathOrSkip()
 
         let start = CFAbsoluteTimeGetCurrent()
         let reader = try EnvelopeIndexReader(databasePath: path)

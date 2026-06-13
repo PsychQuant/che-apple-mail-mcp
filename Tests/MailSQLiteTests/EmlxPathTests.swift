@@ -214,10 +214,7 @@ final class EmlxPathTests: XCTestCase {
     // MARK: - resolveEmlxPath with Real Data
 
     func testResolveEmlxPathForRealMessage() throws {
-        let dbPath = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: dbPath) else {
-            throw XCTSkip("Envelope Index not available at \(dbPath)")
-        }
+        let dbPath = try realEnvelopeIndexPathOrSkip()
 
         let reader = try EnvelopeIndexReader(databasePath: dbPath)
 

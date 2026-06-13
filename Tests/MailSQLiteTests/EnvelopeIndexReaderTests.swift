@@ -44,10 +44,7 @@ final class EnvelopeIndexReaderTests: XCTestCase {
 
     func testInitWithValidDatabasePath() throws {
         // Use the real Envelope Index if available, skip otherwise
-        let path = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Envelope Index not available at \(path)")
-        }
+        let path = try realEnvelopeIndexPathOrSkip()
         let reader = try EnvelopeIndexReader(databasePath: path)
         XCTAssertNotNil(reader)
     }
@@ -76,10 +73,7 @@ final class EnvelopeIndexReaderTests: XCTestCase {
     // MARK: - Account Mapping
 
     func testAccountNameWithMapping() throws {
-        let path = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Envelope Index not available")
-        }
+        let path = try realEnvelopeIndexPathOrSkip()
         let reader = try EnvelopeIndexReader(
             databasePath: path,
             accountMapping: ["ABC-123": "My Gmail"]
@@ -88,10 +82,7 @@ final class EnvelopeIndexReaderTests: XCTestCase {
     }
 
     func testAccountNameFallsBackToUUID() throws {
-        let path = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Envelope Index not available")
-        }
+        let path = try realEnvelopeIndexPathOrSkip()
         let reader = try EnvelopeIndexReader(databasePath: path)
         XCTAssertEqual(reader.accountName(for: "UNKNOWN-UUID"), "UNKNOWN-UUID")
     }
