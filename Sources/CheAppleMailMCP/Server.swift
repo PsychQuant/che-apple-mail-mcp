@@ -1948,8 +1948,11 @@ func resolveAccountIdForTool(
         FileHandle.standardError.write(Data(message.utf8))
         return matches[0]
     default:
+        // Name the tool (verify PR #190 finding) so the error is distinguishable
+        // across the 14 callers, not identical text regardless of which fired.
+        let label = tool.isEmpty ? "save_attachment" : tool
         throw MailError.invalidParameter(
-            "account_name \"\(accountName)\" matches multiple Mail accounts: "
+            "\(label): account_name \"\(accountName)\" matches multiple Mail accounts: "
             + matches.joined(separator: ", ")
             + ". Pass account_id explicitly to select one — use list_accounts "
             + "to see which UUID belongs to which account."

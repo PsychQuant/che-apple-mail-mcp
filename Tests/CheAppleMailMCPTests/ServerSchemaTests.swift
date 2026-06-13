@@ -551,9 +551,15 @@ final class ServerSchemaTests: XCTestCase {
             return tail.range(of: "\n        case \"").map { String(tail[..<$0.lowerBound]) } ?? String(tail)
         }
 
-        // Representative AppleScript-routed write tools that must normalize an
-        // email-form account_name to its UUID before resolving the account.
-        for tool in ["move_email", "delete_email", "mark_read", "redirect_email"] {
+        // ALL 14 AppleScript-routed handlers threaded in #176 — full regression
+        // net (verify PR #190 finding: a 4/14 sample let 10 handlers silently
+        // revert). list_drafts is included explicitly: it is the one wrapped
+        // tool that does NOT route through resolveAccountRef (its own
+        // ListDraftsScriptBuilder), so it is least transitively protected.
+        for tool in ["mark_read", "flag_email", "set_flag_color", "set_background_color",
+                     "mark_as_junk", "move_email", "copy_email", "delete_email",
+                     "reply_email", "forward_email", "redirect_email",
+                     "create_mailbox", "delete_mailbox", "list_drafts"] {
             guard let body = caseBody(tool) else {
                 XCTFail("\(tool) case not found in Server.swift"); continue
             }
