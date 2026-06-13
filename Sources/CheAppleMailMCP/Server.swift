@@ -1090,6 +1090,14 @@ class CheAppleMailMCPServer {
             // to the legacy `account "<display_name>"` form for backward compat.
             // Tier 1 fast path is unaffected (never touches account_name).
             let accountId = decodeAccountId(arguments, tool: invokedTool)
+            // #178: ensure the save_path's parent directory exists before EITHER
+            // tier. Both fail on a missing parent — Tier 1's Data.write throws
+            // (AttachmentExtractor.saveAttachment requires the parent to exist),
+            // and Tier 2's Mail.app `save att in POSIX file` raises a misleading
+            // -10000 reported as an IMAP-cache problem. Creating it up front makes
+            // the missing-dir case vanish; an un-creatable path errors here with
+            // an actionable message instead of the opaque -10000.
+            try ensureSaveDestinationDirectory(savePath)
             // Tier 1: SQLite + .emlx fast path (see openspec/changes/save-attachment-fast-path).
             // Wraps in its own do/catch so any failure falls through to the
             // AppleScript tier in the trailing `mailController.saveAttachment`
@@ -1903,6 +1911,36 @@ func saveAttachmentAppleEventHint(code: Int, accountName: String, rawMessage: St
         """
     default:
         return nil
+    }
+}
+
+/// Ensure the parent directory of a `save_attachment` destination exists (#178).
+///
+/// Both tiers fail on a missing parent directory: Tier 1's `Data.write` throws
+/// (`AttachmentExtractor.saveAttachment` documents "parent directory MUST already
+/// exist"), and Tier 2's Mail.app `save att in POSIX file "<path>"` raises a
+/// generic `-10000` that `saveAttachmentAppleEventHint` translates IMAP-cache-first
+/// — sending the user to synchronize/rebuild dead-ends for what is just a missing
+/// `mkdir -p` (the 2026-06-11 repro in #178). Creating the parent up front removes
+/// the missing-dir failure mode for both tiers; once it returns, any later `-10000`
+/// genuinely reflects the IMAP-cache cause, so the existing hint stays accurate.
+///
+/// A genuinely un-creatable path (a path component is a file, or the location is
+/// unwritable) surfaces here as an actionable `MailError.operationFailed` naming the
+/// `save_path` parent — far better than the opaque `-10000`.
+///
+/// Free function (not a method) so it's unit-testable without the MCP server.
+func ensureSaveDestinationDirectory(_ savePath: String) throws {
+    let parent = URL(fileURLWithPath: savePath).deletingLastPathComponent()
+    do {
+        try FileManager.default.createDirectory(
+            at: parent, withIntermediateDirectories: true)
+    } catch {
+        throw MailError.operationFailed(
+            "save_attachment: cannot create the save_path parent directory "
+            + "\(parent.path): \(error.localizedDescription). "
+            + "Check the path is valid and that you have write permission."
+        )
     }
 }
 

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`save_attachment` creates a missing `save_path` parent directory instead of failing with a misleading `-10000`** ([#178](https://github.com/PsychQuant/che-apple-mail-mcp/issues/178) PART 2). When the destination's parent dir was absent, Tier 1's `Data.write` threw (`AttachmentExtractor.saveAttachment` requires the parent to exist) → fell through to Tier 2, where Mail.app's `save att in POSIX file` raised a generic `-10000` that `saveAttachmentAppleEventHint` translated **IMAP-cache-first** ("binary not in local cache… synchronize_account / Rebuild") — sending users to dead-ends for what was just a missing `mkdir -p` (2026-06-11 repro). A new `ensureSaveDestinationDirectory(_:)` runs before both tiers (`mkdir -p` of the parent); an un-creatable path now errors with an actionable `operationFailed` naming the `save_path` parent + permission hint, and any later `-10000` genuinely reflects the IMAP-cache cause so the existing (byte-locked) hint stays accurate and unchanged. 4 new tests. PART 1 of #178 (`-1719` on `[Gmail]/全部郵件` from `search_emails`) was already resolved by #174's container-chain — no code needed. Additive change to `Server.swift`.
+
 ## [2.11.0] - 2026-06-12
 
 Gmail mailbox-resolution pair — closes #173, #174 (PRs #181, #187; 6-AI ensemble verify on both, in-scope findings fixed in-flight). Highlights: nested Gmail mailbox paths (`[Gmail]/全部郵件`) now resolve through container chains at the `resolveMailboxRef` chokepoint (~14 tools); `list_drafts` drops its hardcoded `Drafts` lookup for localization-independent unified-drafts-children resolution (+ optional `account_id`); `save_attachment` gains email→UUID account normalization and per-object-class actionable error hints for `-1719`/`-1728`/`-10000`. Test suite +36 (all RED→GREEN); follow-ups tracked in #176/#179/#180/#182/#183/#185/#186.
