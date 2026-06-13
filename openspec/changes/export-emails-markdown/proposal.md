@@ -12,7 +12,7 @@
 
 - **新增 MCP tool `export_emails_markdown`**（additive；不改任何既有 tool）。input：`ids[]` / `mailbox` / `account_name` / `output_dir` / `opts`。行為：批次 fetch 完整 body → 渲染 frontmatter + verbatim body 的 markdown → 寫 `output_dir`，回傳 manifest。
 - **抽出 `MarkdownRendering` 的單封渲染函數** `renderEmailMarkdown(EmailContent, frontmatter fields) -> String`：frontmatter（見下）+ `Subject/From/To/Cc/Date` header + **verbatim body**（byte 級保真，不經任何改寫）。
-- **frontmatter schema（published contract，凍結）**：`message_id` / `thread_key` / `in_reply_to` / `date`(ISO 8601 UTC) / `sender`(bare email) / `direction`(received|sent)。`opts.extra_frontmatter_fields` 可加選配欄位但不得移除這 6 個 core 欄位。沿用 `archive-mail` workflow 的既有慣例 → 既有歸檔零遷移。
+- **frontmatter schema（published contract，凍結）**：`message_id` / `thread_key` / `in_reply_to` / `date`(ISO 8601 UTC) / `sender`(bare email) / `direction`(received|sent)。`opts.extra_frontmatter`（key/value 物件）可加選配欄位但不得移除這 6 個 core 欄位。沿用 `archive-mail` workflow 的既有慣例 → 既有歸檔零遷移。
 - **`output_dir` 安全：allowed-roots 白名單**。新增 `AllowedRootsValidator`：canonicalize `output_dir`（解析 `..` 與 symlink）後，只允許落在使用者 home 或 config 設定的白名單根目錄之下；拒絕系統目錄（`/System`、`/usr`、`/bin`、`/etc` 等）與 symlink 逃逸。這是此 MCP **首次具備「寫任意 fs 路徑」的 surface**，故安全邊界先於彈性。
 - **`opts.include_attachments`（bool）**：true 時，每封信的附件用既有 `AttachmentExtractor` 寫到 `output_dir/attachments/<stem>/`，data 類副檔名分流到 `output_dir/data/`（沿用既有 routing 慣例）。附件折進同一 tool（不另開 `save_attachments_bulk`），每封 md + 其附件原子處理。
 - **檔名**：server 預設 `YYYY-MM-DD_<slug>.md`（date 取自信件 Date、slug 為 sanitized bare subject）+ 同名碰撞後綴 `-1`/`-2`；`opts.filename_template` 或 per-id override 可覆寫。manifest 一律回傳實際寫出的 path。

@@ -36,7 +36,7 @@
 
 ## 6. Server.swift tool 註冊 + dispatcher
 
-- [ ] 6.1 在 `Sources/CheAppleMailMCP/Server.swift` 註冊 `export_emails_markdown` tool（input schema：`ids` array / `mailbox` / `account_name` / `output_dir` / `opts` object：`include_attachments`/`filename_template`/`filenames`/`extra_frontmatter_fields`）。
+- [ ] 6.1 在 `Sources/CheAppleMailMCP/Server.swift` 註冊 `export_emails_markdown` tool（input schema：`ids` array / `mailbox` / `account_name` / `output_dir` / `opts` object：`include_attachments`/`filename_template`/`filenames`/`extra_frontmatter`）。
 - [ ] 6.2 dispatcher：parse args → AllowedRootsValidator → 核心（§4）→ 回 manifest JSON。account_name 沿用既有 display-name 解析（避免 -1728 類問題）。
 - [ ] 6.3 README.md / README_zh-TW.md tool 清單新增條目；CHANGELOG.md 新版本 entry。
 
@@ -46,3 +46,14 @@
 - [ ] 7.2 `swift build` 通過、`swift test` 全綠（既有測試零 regression + 新增測試通過）。
 - [ ] 7.3 `spectra validate --change export-emails-markdown` 通過。
 - [ ] 7.4 手動 smoke：對 3–5 封真實信跑 `export_emails_markdown`（含 include_attachments），確認 markdown 格式、附件分流、manifest 正確。
+
+## 8. Write-safety hardening（idd-verify #193 — 6-AI 驗出兩個 CRITICAL 任意寫入）
+
+- [x] 8.1 Leaf-path 容納：新增共用 `isSafeSegment` / `sanitizeSegment` / `isWithin`（用 `AllowedRootsValidator.canonicalize` 解析 symlink），對 `.md` 檔名、附件目錄、附件檔三類 leaf 全部「sanitize 成單一安全 segment + 寫入前 canonical hasPrefix 重檢」。關掉 sender-controlled 附件名 `../` 逃逸（CRITICAL-1）與 per-id override `../` 逃逸（CRITICAL-2）。
+- [x] 8.2 統一去重：三條命名分支（default / template / override）全部過 `uniquify`，template/override 撞名不再靜默覆寫（HIGH）。
+- [x] 8.3 `Date` 無法 parse 時不讓 raw header 進路徑：`localDate` 只留數字與 `-`，空則 `unknown-date`。
+- [x] 8.4 YAML 注入防護：`yamlQuoted` + 新 `singleLine` 把換行／控制字元壓平，未引號的 `date`/`sender` 也走 `singleLine`，sender-controlled header 無法注入額外 frontmatter 行（HIGH）。
+- [x] 8.5 附件失敗不再靜默吞：manifest item 新增 `attachment_errors`；附件列舉／抽取／拒絕失敗都記錄但不中止 markdown（E8）。`.md` 寫入失敗時清掉已寫附件，避免 orphan（DA #4）。
+- [x] 8.6 新增 9 個 regression 測試覆蓋上述（attachment traversal / override traversal / template collision / attachment-fail recorded / YAML newline / 純函數）；`swift test` 全綠（574 tests, 0 failures）。
+- [ ] 8.7 （follow-up，非 blocking）`export_allowed_roots` 預設縮窄 + home-relative 敏感目錄 denylist（`~/Library`、`~/.ssh`、`~/.config`、dotfiles）（MED-1）。
+- [ ] 8.8 （follow-up，非 blocking）`in_reply_to` 由 raw header 解析填入，而非永遠空字串（Codex #5）；html-only body 在 frontmatter 標示來源型別（DA #2）。

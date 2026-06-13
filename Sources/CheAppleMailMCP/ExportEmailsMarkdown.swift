@@ -3,17 +3,19 @@ import MailSQLite
 
 /// One per-email entry in the `export_emails_markdown` manifest.
 struct ExportManifestItem {
-    let id: String              // input message id (SQLite rowId as string)
-    let messageId: String?      // resolved RFC 5322 Message-ID (nil on fetch error)
-    let writtenPath: String?    // absolute path of the written .md (nil on error)
-    let attachments: [String]   // paths of saved attachments (relative to output_dir)
-    let status: String          // "written" | "error"
+    let id: String                   // input message id (SQLite rowId as string)
+    let messageId: String?           // resolved RFC 5322 Message-ID (nil on fetch error)
+    let writtenPath: String?         // absolute path of the written .md (nil on error)
+    let attachments: [String]        // paths of saved attachments (relative to output_dir)
+    let attachmentErrors: [String]   // per-attachment failures (never silently dropped)
+    let status: String               // "written" | "error"
     let error: String?
 
     var jsonObject: [String: Any] {
         var o: [String: Any] = ["id": id, "status": status, "attachments": attachments]
         if let m = messageId { o["message_id"] = m }
         if let p = writtenPath { o["written_path"] = p }
+        if !attachmentErrors.isEmpty { o["attachment_errors"] = attachmentErrors }
         if let e = error { o["error"] = e }
         return o
     }
@@ -56,6 +58,63 @@ enum ExportEmailsMarkdown {
     static func attachmentClass(_ filename: String) -> String {
         let ext = (filename as NSString).pathExtension.lowercased()
         return dataExtensions.contains(ext) ? "data" : "document"
+    }
+
+    // MARK: - Write-safety (leaf-path containment)
+    //
+    // `AllowedRootsValidator` gates `output_dir`, but `URL.appendingPathComponent`
+    // does NOT reject `..`, so a leaf name (sender-controlled attachment name,
+    // caller-supplied filename override, or an unparseable Date passed through
+    // into the default name) could escape the validated root. Every leaf the
+    // tool builds is therefore (a) checked as a single safe path segment and/or
+    // (b) re-verified to canonicalize back inside `output_dir` before any write.
+
+    /// True if `name` is a single safe path segment: non-empty, no `/` or `\`,
+    /// not `.`/`..`, and free of control characters / NUL. Sender-controlled
+    /// attachment names that fail this are rejected (recorded, not written).
+    static func isSafeSegment(_ name: String) -> Bool {
+        guard !name.isEmpty, name != ".", name != ".." else { return false }
+        if name.contains("/") || name.contains("\\") { return false }
+        for scalar in name.unicodeScalars where scalar.value < 0x20 || scalar.value == 0x7f {
+            return false
+        }
+        return true
+    }
+
+    /// Collapse a caller-supplied filename override (or template result) into a
+    /// single safe path segment: path separators → `-`, control chars dropped,
+    /// `.`/`..`/empty → `untitled`. Defence-in-depth paired with `isWithin`.
+    static func sanitizeSegment(_ raw: String) -> String {
+        var s = raw.replacingOccurrences(of: "/", with: "-")
+                   .replacingOccurrences(of: "\\", with: "-")
+        s = String(String.UnicodeScalarView(
+            s.unicodeScalars.filter { $0.value >= 0x20 && $0.value != 0x7f }))
+        s = s.trimmingCharacters(in: .whitespaces)
+        return (s.isEmpty || s == "." || s == "..") ? "untitled" : s
+    }
+
+    /// True if `url` canonicalizes back to (or under) `canonicalRoot`. Uses the
+    /// validator's symlink-resolving canonicalize, so it also defeats a
+    /// pre-planted symlink at an intermediate directory (e.g. `output_dir/data`
+    /// → elsewhere), not just lexical `..` traversal.
+    static func isWithin(_ url: URL, canonicalRoot: String) -> Bool {
+        let resolved = AllowedRootsValidator.canonicalize(url.path).path
+        return resolved == canonicalRoot || resolved.hasPrefix(canonicalRoot + "/")
+    }
+
+    /// Ensure `filename` has not already been written this run; if it has,
+    /// append `-1`, `-2`, … before `.md`. Applied uniformly across the default,
+    /// template, and override branches so two emails can never silently
+    /// overwrite each other (the per-`(date,slug)` counter only covers the
+    /// default branch).
+    static func uniquify(_ filename: String, used: inout Set<String>) -> String {
+        if !used.contains(filename) { used.insert(filename); return filename }
+        let base = filename.hasSuffix(".md") ? String(filename.dropLast(3)) : filename
+        var n = 1
+        var candidate = "\(base)-\(n).md"
+        while used.contains(candidate) { n += 1; candidate = "\(base)-\(n).md" }
+        used.insert(candidate)
+        return candidate
     }
 
     /// Sanitize a thread key into a filename slug: keep letters (incl. CJK) and
@@ -106,12 +165,15 @@ enum ExportEmailsMarkdown {
         _ template: String, localDate: String, threadKey: String,
         sender: String, messageId: String
     ) -> String {
-        var name = template
+        let expanded = template
             .replacingOccurrences(of: "{date}", with: localDate)
             .replacingOccurrences(of: "{subject}", with: slug(threadKey))
             .replacingOccurrences(of: "{sender}", with: sender)
             .replacingOccurrences(of: "{message_id}", with: slug(messageId))
-        name = name.replacingOccurrences(of: "/", with: "-")
+        // `{sender}` expands raw, so route the whole result through the shared
+        // single-segment sanitizer (collapses `/` and `\`, strips control
+        // chars) rather than a one-off `/`→`-` pass.
+        var name = sanitizeSegment(expanded)
         if !name.hasSuffix(".md") { name += ".md" }
         return name
     }
@@ -143,9 +205,13 @@ enum ExportEmailsMarkdown {
         fileManager: FileManager = .default
     ) -> ExportManifest {
         try? fileManager.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        // Canonical root every leaf path must stay within (the caller already
+        // validated outputDir via AllowedRootsValidator).
+        let canonicalRoot = AllowedRootsValidator.canonicalize(outputDir.path).path
 
         var items: [ExportManifestItem] = []
-        var seen: [String: Int] = [:]
+        var seen: [String: Int] = [:]          // default-branch (date,slug) counter
+        var usedFilenames: Set<String> = []    // every .md filename emitted this run
 
         for id in ids {
             let content: EmailContent
@@ -154,50 +220,94 @@ enum ExportEmailsMarkdown {
             } catch {
                 items.append(ExportManifestItem(
                     id: id, messageId: nil, writtenPath: nil, attachments: [],
-                    status: "error", error: "fetch: \(error.localizedDescription)"))
+                    attachmentErrors: [], status: "error",
+                    error: "fetch: \(error.localizedDescription)"))
                 continue
             }
 
             let threadKey = EmailMarkdownRenderer.stripReplyPrefixes(content.subject)
             let iso = EmailMarkdownRenderer.rfc822ToISO8601UTC(content.date)
-            let localDate = String(iso.prefix(10))  // YYYY-MM-DD (UTC)
+            // Date may be unparseable (rfc822ToISO8601UTC passes it through), so
+            // keep only digits/dashes — never let a raw header reach a path.
+            let rawDate = String(iso.prefix(10)).filter { $0.isNumber || $0 == "-" }
+            let localDate = rawDate.isEmpty ? "unknown-date" : rawDate
             let bareSender = EmailMarkdownRenderer.bareEmail(content.sender)
 
             // Resolve filename: per-id override > template > default(+collision).
-            let filename: String
+            // Every branch yields a single sanitized segment, then `uniquify`
+            // guarantees no two emails ever write to the same path.
+            var filename: String
             if let override = filenameOverrides[id] {
-                filename = override.hasSuffix(".md") ? override : override + ".md"
+                let seg = sanitizeSegment(override)
+                filename = seg.hasSuffix(".md") ? seg : seg + ".md"
             } else if let template = filenameTemplate {
                 filename = applyTemplate(template, localDate: localDate, threadKey: threadKey,
                                          sender: bareSender, messageId: content.messageId)
             } else {
                 filename = defaultFilename(localDate: localDate, threadKey: threadKey, seen: &seen)
             }
+            filename = uniquify(filename, used: &usedFilenames)
             let stem = filename.hasSuffix(".md") ? String(filename.dropLast(3)) : filename
             let destURL = outputDir.appendingPathComponent(filename)
+
+            // Defence-in-depth: confirm the .md target canonicalizes back inside
+            // output_dir before writing anything.
+            guard isWithin(destURL, canonicalRoot: canonicalRoot) else {
+                items.append(ExportManifestItem(
+                    id: id, messageId: content.messageId, writtenPath: nil, attachments: [],
+                    attachmentErrors: [], status: "error",
+                    error: "filename escapes output_dir: \(filename)"))
+                continue
+            }
 
             var md = EmailMarkdownRenderer.render(
                 content, direction: direction, inReplyTo: "", extraFrontmatter: extraFrontmatter)
 
             var savedAttachments: [String] = []
+            var savedAttachmentURLs: [URL] = []   // for orphan cleanup on .md write failure
+            var attachmentErrors: [String] = []
             if includeAttachments {
-                let names = (try? attachmentNamesFor(id)) ?? []
+                let names: [String]
+                do {
+                    names = try attachmentNamesFor(id)
+                } catch {
+                    names = []
+                    attachmentErrors.append("list: \(error.localizedDescription)")
+                }
                 for name in names {
+                    // The attachment name is sender-controlled MIME metadata.
+                    // Reject anything that is not a single safe segment (path
+                    // traversal / control chars) — recorded, never silently
+                    // dropped.
+                    guard isSafeSegment(name) else {
+                        attachmentErrors.append("\(name): rejected (unsafe filename)")
+                        continue
+                    }
                     let cls = attachmentClass(name)
                     let destDir: URL = cls == "data"
                         ? outputDir.appendingPathComponent("data", isDirectory: true)
                         : outputDir.appendingPathComponent("attachments", isDirectory: true)
                             .appendingPathComponent(stem, isDirectory: true)
+                    // Reject if the target dir (e.g. a pre-planted symlink) would
+                    // resolve outside output_dir — checked BEFORE createDirectory.
+                    guard isWithin(destDir, canonicalRoot: canonicalRoot) else {
+                        attachmentErrors.append("\(name): destination escapes output_dir")
+                        continue
+                    }
                     try? fileManager.createDirectory(at: destDir, withIntermediateDirectories: true)
                     let attDest = destDir.appendingPathComponent(name)
+                    guard isWithin(attDest, canonicalRoot: canonicalRoot) else {
+                        attachmentErrors.append("\(name): destination escapes output_dir")
+                        continue
+                    }
                     do {
                         try saveAttachment(id, name, attDest)
                         // Path relative to outputDir for the manifest + markdown link.
                         let rel = cls == "data" ? "data/\(name)" : "attachments/\(stem)/\(name)"
                         savedAttachments.append(rel)
+                        savedAttachmentURLs.append(attDest)
                     } catch {
-                        // Attachment failure must not abort the email's markdown.
-                        continue
+                        attachmentErrors.append("\(name): \(error.localizedDescription)")
                     }
                 }
                 if !savedAttachments.isEmpty {
@@ -211,12 +321,16 @@ enum ExportEmailsMarkdown {
                 try md.data(using: .utf8)?.write(to: destURL, options: .atomic)
                 items.append(ExportManifestItem(
                     id: id, messageId: content.messageId, writtenPath: destURL.path,
-                    attachments: savedAttachments, status: "written", error: nil))
+                    attachments: savedAttachments, attachmentErrors: attachmentErrors,
+                    status: "written", error: nil))
             } catch {
+                // The .md failed — remove attachments already written so a failed
+                // item leaves no orphan files behind.
+                for url in savedAttachmentURLs { try? fileManager.removeItem(at: url) }
                 items.append(ExportManifestItem(
                     id: id, messageId: content.messageId, writtenPath: nil,
-                    attachments: savedAttachments, status: "error",
-                    error: "write: \(error.localizedDescription)"))
+                    attachments: [], attachmentErrors: attachmentErrors,
+                    status: "error", error: "write: \(error.localizedDescription)"))
             }
         }
 

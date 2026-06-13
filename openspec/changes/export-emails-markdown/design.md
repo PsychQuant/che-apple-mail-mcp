@@ -50,7 +50,7 @@ if canon matches SYSTEM_DENYLIST_PREFIX: REJECT       # belt-and-suspenders
 symlink 逃逸由 realpath 在比對前解析根除（canon 是 real path，白名單根也 realpath 過）。
 
 ### D3. frontmatter schema = 凍結 6 欄 + 選配
-**選**：core 6 欄固定：`message_id` / `thread_key` / `in_reply_to` / `date`(ISO 8601 UTC) / `sender`(bare) / `direction`。`opts.extra_frontmatter_fields` 只能加、不能移除 core。
+**選**：core 6 欄固定：`message_id` / `thread_key` / `in_reply_to` / `date`(ISO 8601 UTC) / `sender`(bare) / `direction`。`opts.extra_frontmatter`（key/value 物件）只能加、不能移除 core。
 **理由**：這已是 archive-mail workflow 寫出的 de-facto 格式，沿用 → 既有歸檔零遷移、跨工具一致。frozen contract 必須 minimal-but-complete：這 6 欄足以支撐 dedup（message_id）、thread 聚合（thread_key/in_reply_to）、排序（date）、收發判定（direction）。
 
 ### D4. 檔名 policy：server 預設 + caller 可覆寫

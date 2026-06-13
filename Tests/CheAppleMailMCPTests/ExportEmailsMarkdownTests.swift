@@ -56,6 +56,118 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         XCTAssertEqual(name, "2026-06-13__Hello-World.md")
     }
 
+    // MARK: - Write-safety helpers (pure)
+
+    func testIsSafeSegment() {
+        XCTAssertTrue(ExportEmailsMarkdown.isSafeSegment("report.pdf"))
+        XCTAssertTrue(ExportEmailsMarkdown.isSafeSegment("中文 檔名.csv"))
+        XCTAssertFalse(ExportEmailsMarkdown.isSafeSegment("../escape.txt"))   // traversal
+        XCTAssertFalse(ExportEmailsMarkdown.isSafeSegment("a/b.txt"))         // separator
+        XCTAssertFalse(ExportEmailsMarkdown.isSafeSegment("a\\b.txt"))        // backslash
+        XCTAssertFalse(ExportEmailsMarkdown.isSafeSegment(".."))
+        XCTAssertFalse(ExportEmailsMarkdown.isSafeSegment("."))
+        XCTAssertFalse(ExportEmailsMarkdown.isSafeSegment(""))
+        XCTAssertFalse(ExportEmailsMarkdown.isSafeSegment("evil\u{0}.txt"))   // NUL
+    }
+
+    func testSanitizeSegment() {
+        XCTAssertEqual(ExportEmailsMarkdown.sanitizeSegment("../../evil"), "..-..-evil")
+        XCTAssertEqual(ExportEmailsMarkdown.sanitizeSegment("a/b\\c"), "a-b-c")
+        XCTAssertEqual(ExportEmailsMarkdown.sanitizeSegment(".."), "untitled")
+        XCTAssertEqual(ExportEmailsMarkdown.sanitizeSegment("   "), "untitled")
+        XCTAssertEqual(ExportEmailsMarkdown.sanitizeSegment("normal name"), "normal name")
+    }
+
+    func testUniquify_addsSuffixOnRepeat() {
+        var used: Set<String> = []
+        XCTAssertEqual(ExportEmailsMarkdown.uniquify("a.md", used: &used), "a.md")
+        XCTAssertEqual(ExportEmailsMarkdown.uniquify("a.md", used: &used), "a-1.md")
+        XCTAssertEqual(ExportEmailsMarkdown.uniquify("a.md", used: &used), "a-2.md")
+    }
+
+    // MARK: - Write-safety orchestration (the CRITICALs from idd-verify #193)
+
+    func testRun_rejectsAttachmentPathTraversal() throws {
+        let out = tempDir()
+        let parent = out.deletingLastPathComponent()
+        let evil = parent.appendingPathComponent("escape_PWNED.txt")
+        try? FileManager.default.removeItem(at: evil)
+        addTeardownBlock { try? FileManager.default.removeItem(at: evil) }
+
+        let manifest = ExportEmailsMarkdown.run(
+            ids: ["10"], outputDir: out, direction: "received",
+            includeAttachments: true, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { _ in self.makeEmail(subject: "Att") },
+            attachmentNamesFor: { _ in ["../../escape_PWNED.txt"] },
+            saveAttachment: { _, _, dest in try Data("x".utf8).write(to: dest) })
+
+        // The malicious attachment must NOT have escaped output_dir.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: evil.path),
+                       "attachment with ../ must not be written outside output_dir")
+        let item = manifest.items[0]
+        XCTAssertEqual(item.status, "written")          // the .md still succeeds
+        XCTAssertTrue(item.attachments.isEmpty)         // traversal attachment skipped
+        XCTAssertFalse(item.attachmentErrors.isEmpty)   // recorded, not silently dropped
+    }
+
+    func testRun_perIdOverride_pathTraversalContained() throws {
+        let out = tempDir()
+        let parentEvil = out.deletingLastPathComponent().appendingPathComponent("evil.md")
+        try? FileManager.default.removeItem(at: parentEvil)
+        addTeardownBlock { try? FileManager.default.removeItem(at: parentEvil) }
+
+        let manifest = ExportEmailsMarkdown.run(
+            ids: ["10"], outputDir: out, direction: "received",
+            includeAttachments: false, filenameTemplate: nil,
+            filenameOverrides: ["10": "../../evil"], extraFrontmatter: [],
+            fetch: { _ in self.makeEmail(subject: "Override") },
+            attachmentNamesFor: { _ in [] },
+            saveAttachment: { _, _, _ in })
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: parentEvil.path),
+                       "per-id override with ../ must not write outside output_dir")
+        let item = manifest.items[0]
+        XCTAssertEqual(item.status, "written")
+        // The written file stays inside output_dir (separators collapsed).
+        XCTAssertTrue(item.writtenPath!.hasPrefix(out.path + "/"))
+    }
+
+    func testRun_templateCollision_noSilentOverwrite() throws {
+        let out = tempDir()
+        // Both emails resolve to the same template name → must NOT overwrite.
+        let manifest = ExportEmailsMarkdown.run(
+            ids: ["10", "11"], outputDir: out, direction: "received",
+            includeAttachments: false, filenameTemplate: "{date}", filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { _ in self.makeEmail(subject: "Whatever") },
+            attachmentNamesFor: { _ in [] },
+            saveAttachment: { _, _, _ in })
+
+        XCTAssertEqual(manifest.written, 2)
+        let paths = Set(manifest.items.compactMap { $0.writtenPath })
+        XCTAssertEqual(paths.count, 2, "two emails must produce two distinct files, not overwrite")
+        for p in paths { XCTAssertTrue(FileManager.default.fileExists(atPath: p)) }
+    }
+
+    func testRun_attachmentSaveFailure_recordedInManifest() throws {
+        let out = tempDir()
+        struct Boom: Error {}
+        let manifest = ExportEmailsMarkdown.run(
+            ids: ["10"], outputDir: out, direction: "received",
+            includeAttachments: true, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { _ in self.makeEmail(subject: "AttFail") },
+            attachmentNamesFor: { _ in ["report.pdf"] },
+            saveAttachment: { _, _, _ in throw Boom() })
+
+        let item = manifest.items[0]
+        XCTAssertEqual(item.status, "written")          // email markdown still written
+        XCTAssertTrue(item.attachments.isEmpty)
+        XCTAssertFalse(item.attachmentErrors.isEmpty,   // failure surfaced, not swallowed
+                       "attachment save failure must be recorded in the manifest")
+    }
+
     // MARK: - Orchestration (injected fakes, real temp dir)
 
     func testRun_writesMarkdownAndManifest() throws {

@@ -55,8 +55,12 @@ enum EmailMarkdownRenderer {
         out += "message_id: \(yamlQuoted(content.messageId))\n"
         out += "thread_key: \(yamlQuoted(threadKey))\n"
         out += "in_reply_to: \(yamlQuoted(inReplyTo))\n"
-        out += "date: \(isoDate)\n"
-        out += "sender: \(bareSender)\n"
+        // `date` / `sender` are emitted unquoted (frozen contract format), so a
+        // newline or control char in the value could inject a spurious YAML
+        // line. `singleLine` flattens them; a normal ISO date / bare email is
+        // unaffected (no control chars), so the published format is preserved.
+        out += "date: \(singleLine(isoDate))\n"
+        out += "sender: \(singleLine(bareSender))\n"
         out += "direction: \(direction)\n"
         for (key, value) in extraFrontmatter {
             out += "\(key): \(yamlQuoted(value))\n"
@@ -141,7 +145,20 @@ enum EmailMarkdownRenderer {
     /// Wrap a value in double quotes for YAML frontmatter, replacing any
     /// embedded double-quote with a single-quote so the line stays parseable
     /// (matches the archive-mail convention; avoids escaping complexity).
+    /// Control characters (CR/LF/NUL/etc.) are flattened to spaces first so a
+    /// sender-controlled header cannot inject extra frontmatter lines.
     static func yamlQuoted(_ value: String) -> String {
-        "\"\(value.replacingOccurrences(of: "\"", with: "'"))\""
+        let flat = singleLine(value).replacingOccurrences(of: "\"", with: "'")
+        return "\"\(flat)\""
+    }
+
+    /// Flatten any line break or control character to a single space and trim.
+    /// Used for the unquoted `date` / `sender` frontmatter fields (and inside
+    /// `yamlQuoted`) so no value can break out of its YAML line.
+    static func singleLine(_ value: String) -> String {
+        let scalars = value.unicodeScalars.map { scalar -> Character in
+            (scalar.value < 0x20 || scalar.value == 0x7f) ? " " : Character(scalar)
+        }
+        return String(scalars).trimmingCharacters(in: .whitespaces)
     }
 }

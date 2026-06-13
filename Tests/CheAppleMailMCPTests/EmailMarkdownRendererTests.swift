@@ -87,4 +87,27 @@ final class EmailMarkdownRendererTests: XCTestCase {
         XCTAssertTrue(md.contains("thread_key: \"the 'quoted' topic\""),
                       "embedded double-quotes must become single-quotes to keep YAML parseable")
     }
+
+    func testRender_newlineInFrontmatterValuesCannotInjectYAML() {
+        // A sender-controlled header with a newline must not break out of its
+        // YAML line and inject a spurious frontmatter key.
+        let md = EmailMarkdownRenderer.render(
+            makeEmail(subject: "Topic\ninjected_subj: evil",
+                      messageId: "<m>\ninjected_mid: evil"),
+            direction: "received", inReplyTo: "")
+        let frontmatter = md.components(separatedBy: "---\n")[1]  // between the two fences
+        XCTAssertFalse(frontmatter.contains("\ninjected_subj:"),
+                       "newline in subject must be flattened, not injected as a YAML key")
+        XCTAssertFalse(frontmatter.contains("\ninjected_mid:"),
+                       "newline in message_id must be flattened, not injected as a YAML key")
+        // Core fields still present and well-formed.
+        XCTAssertTrue(frontmatter.contains("thread_key: \"Topic injected_subj: evil\""))
+        XCTAssertTrue(frontmatter.contains("date: 2026-06-13T08:01:14Z"))
+    }
+
+    func testSingleLine_flattensControlChars() {
+        XCTAssertEqual(EmailMarkdownRenderer.singleLine("a\nb\tc"), "a b c")
+        XCTAssertEqual(EmailMarkdownRenderer.singleLine("  trimmed\r\n"), "trimmed")
+        XCTAssertEqual(EmailMarkdownRenderer.singleLine("plain@addr.com"), "plain@addr.com")
+    }
 }
