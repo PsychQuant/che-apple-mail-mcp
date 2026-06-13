@@ -561,6 +561,51 @@ final class ServerSchemaTests: XCTestCase {
         XCTAssertNoThrow(try ensureSaveDestinationDirectory(savePath))  // twice = idempotent
     }
 
+    func testEnsureSaveDestinationDirectory_rejectsMalformedPaths() throws {
+        // verify PR #189 / DA finding: empty / relative / trailing-slash save_path
+        // makes deletingLastPathComponent resolve to cwd or strip the leaf, so the
+        // claimed "mkdir -p makes a later -10000 trustworthy" invariant would be
+        // false. These must be rejected at the boundary as invalidParameter.
+        for bad in ["", "report.pdf", "relative/sub/report.pdf", "/tmp/wantdir/"] {
+            XCTAssertThrowsError(try ensureSaveDestinationDirectory(bad),
+                                 "must reject malformed save_path \"\(bad)\"") { error in
+                guard let mailErr = error as? MailError,
+                      case .invalidParameter(let msg) = mailErr else {
+                    XCTFail("expected MailError.invalidParameter for \"\(bad)\", got \(error)")
+                    return
+                }
+                XCTAssertTrue(msg.contains("save_path") && msg.contains("absolute"),
+                              "error must explain the absolute-file-path requirement; got: \(msg)")
+            }
+        }
+    }
+
+    func testEnsureSaveDestinationDirectory_throwsActionableWhenParentUnwritable() throws {
+        // verify PR #189 codex MEDIUM: an existing-but-unwritable parent makes
+        // createDirectory a no-op success yet the write still fails → Tier 2's
+        // misleading -10000. Must surface as actionable operationFailed instead.
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent("ensuredir-\(UUID().uuidString)")
+        let ro = base.appendingPathComponent("ro")
+        try fm.createDirectory(at: ro, withIntermediateDirectories: true)
+        try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: ro.path)  // r-x, no write
+        addTeardownBlock {
+            try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: ro.path)
+            try? fm.removeItem(at: base)
+        }
+        let savePath = ro.appendingPathComponent("report.pdf").path
+
+        XCTAssertThrowsError(try ensureSaveDestinationDirectory(savePath)) { error in
+            guard let mailErr = error as? MailError,
+                  case .operationFailed(let msg) = mailErr else {
+                XCTFail("expected MailError.operationFailed, got \(error)")
+                return
+            }
+            XCTAssertTrue(msg.contains("writable"),
+                          "error must name the writability problem; got: \(msg)")
+        }
+    }
+
     func testEnsureSaveDestinationDirectory_throwsActionableWhenParentUncreatable() throws {
         let fm = FileManager.default
         let base = fm.temporaryDirectory.appendingPathComponent("ensuredir-\(UUID().uuidString)")

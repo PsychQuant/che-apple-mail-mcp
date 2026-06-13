@@ -1914,32 +1914,70 @@ func saveAttachmentAppleEventHint(code: Int, accountName: String, rawMessage: St
     }
 }
 
-/// Ensure the parent directory of a `save_attachment` destination exists (#178).
+/// Validate and prepare the `save_attachment` destination (#178).
 ///
 /// Both tiers fail on a missing parent directory: Tier 1's `Data.write` throws
 /// (`AttachmentExtractor.saveAttachment` documents "parent directory MUST already
 /// exist"), and Tier 2's Mail.app `save att in POSIX file "<path>"` raises a
 /// generic `-10000` that `saveAttachmentAppleEventHint` translates IMAP-cache-first
 /// — sending the user to synchronize/rebuild dead-ends for what is just a missing
-/// `mkdir -p` (the 2026-06-11 repro in #178). Creating the parent up front removes
-/// the missing-dir failure mode for both tiers; once it returns, any later `-10000`
-/// genuinely reflects the IMAP-cache cause, so the existing hint stays accurate.
+/// `mkdir -p` (the 2026-06-11 repro in #178).
 ///
-/// A genuinely un-creatable path (a path component is a file, or the location is
-/// unwritable) surfaces here as an actionable `MailError.operationFailed` naming the
-/// `save_path` parent — far better than the opaque `-10000`.
+/// This function removes the **missing-parent** source of that misleading `-10000`,
+/// and surfaces the two adjacent destination problems as actionable errors instead
+/// of letting them reach Tier 2's `-10000` (verify PR #189 review):
+///
+///  1. **Path shape** — `save_path` must be a well-formed absolute file path. An
+///     empty / relative / trailing-slash value makes `deletingLastPathComponent`
+///     resolve to the process cwd or strip the intended leaf, so the wrong tree
+///     would be created and a later `-10000` would *still* mislead. Rejected as
+///     `invalidParameter`.
+///  2. **Missing parent** — created with `mkdir -p`. **Accepted trade-off** (the
+///     issue explicitly asked for "binary 自己 mkdir -p"): a typo'd absolute path
+///     silently materialises the wrong tree rather than failing fast. We bound the
+///     blast radius to *absolute* paths (shape check above) and prefer this over
+///     the opaque `-10000` dead-end.
+///  3. **Existing-but-unwritable parent** — `createDirectory` is a no-op success
+///     when the dir already exists, but the write would still fail → Tier 2
+///     `-10000`. A post-create writability check surfaces it as `operationFailed`.
+///
+/// **Scope of the guarantee**: this removes only the *missing-parent* and the two
+/// problems above as sources of a misleading `-10000`. A `-10000` after this
+/// returns reflects a destination-independent cause (e.g. the attachment binary is
+/// not in the local Mail cache) — which is exactly what the (unchanged, byte-locked)
+/// `saveAttachmentAppleEventHint` describes.
 ///
 /// Free function (not a method) so it's unit-testable without the MCP server.
 func ensureSaveDestinationDirectory(_ savePath: String) throws {
+    // 1. Path shape — must be an absolute file path (not empty / relative /
+    //    directory-form), so the parent we create is the one the caller intends.
+    guard savePath.hasPrefix("/"), !savePath.hasSuffix("/") else {
+        throw MailError.invalidParameter(
+            "save_attachment: save_path must be an absolute file path "
+            + "(start with '/' and name a file, not end with '/'); got \"\(savePath)\"."
+        )
+    }
+    let fm = FileManager.default
     let parent = URL(fileURLWithPath: savePath).deletingLastPathComponent()
+    // 2. Missing parent — mkdir -p (accepted trade-off, see docstring).
     do {
-        try FileManager.default.createDirectory(
-            at: parent, withIntermediateDirectories: true)
+        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
     } catch {
         throw MailError.operationFailed(
             "save_attachment: cannot create the save_path parent directory "
             + "\(parent.path): \(error.localizedDescription). "
             + "Check the path is valid and that you have write permission."
+        )
+    }
+    // 3. Existing-but-unwritable parent — createDirectory no-ops when the dir is
+    //    already present, so verify it is actually a writable directory; otherwise
+    //    the write would fail downstream as a misleading -10000.
+    var isDir: ObjCBool = false
+    guard fm.fileExists(atPath: parent.path, isDirectory: &isDir), isDir.boolValue,
+          fm.isWritableFile(atPath: parent.path) else {
+        throw MailError.operationFailed(
+            "save_attachment: the save_path parent \(parent.path) is not a "
+            + "writable directory. Check it exists, is a directory, and is writable."
         )
     }
 }
