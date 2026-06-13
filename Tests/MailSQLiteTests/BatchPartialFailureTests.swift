@@ -24,10 +24,7 @@ final class BatchPartialFailureTests: XCTestCase {
     // MARK: - Test 2: Batch partial failure pattern
 
     func testBatchPartialFailurePattern() throws {
-        let dbPath = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: dbPath) else {
-            throw XCTSkip("Envelope Index not available")
-        }
+        let dbPath = try realEnvelopeIndexPathOrSkip()
 
         let reader = try EnvelopeIndexReader(databasePath: dbPath)
         let results = try reader.search(SearchParameters(query: "a", limit: 20))

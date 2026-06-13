@@ -4,10 +4,7 @@ import XCTest
 final class EmailContentTests: XCTestCase {
 
     func testReadEmailFromEmlx() throws {
-        let dbPath = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: dbPath) else {
-            throw XCTSkip("Envelope Index not available")
-        }
+        let dbPath = try realEnvelopeIndexPathOrSkip()
 
         let reader = try EnvelopeIndexReader(databasePath: dbPath)
         let results = try reader.search(SearchParameters(query: "a", limit: 10))
@@ -42,10 +39,7 @@ final class EmailContentTests: XCTestCase {
     }
 
     func testReadEmailSource() throws {
-        let dbPath = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: dbPath) else {
-            throw XCTSkip("Envelope Index not available")
-        }
+        let dbPath = try realEnvelopeIndexPathOrSkip()
 
         let reader = try EnvelopeIndexReader(databasePath: dbPath)
         let results = try reader.search(SearchParameters(query: "a", limit: 10))
