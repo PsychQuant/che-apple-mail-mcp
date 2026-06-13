@@ -884,4 +884,90 @@ final class ServerSchemaTests: XCTestCase {
         XCTAssertEqual(entry["mimeType"] as? String, "application/pdf")
         XCTAssertEqual(entry["rowId"] as? Int, 999)
     }
+
+    // MARK: - #180: read tools advertise optional account_id
+
+    /// The 8 single-message read tools must advertise an optional `account_id`
+    /// (so a caller can feed the `search_emails` UUID straight back into the
+    /// read tool's AppleScript fallback). #180 — closes the read-tool half of
+    /// the chokepoint sweep that #176 did for write tools.
+    func testSingleReadTools_advertiseOptionalAccountId() {
+        let readTools = [
+            "list_emails", "get_email", "search_emails", "get_unread_count",
+            "list_attachments", "get_email_headers", "get_email_source",
+            "get_email_metadata",
+        ]
+        for name in readTools {
+            guard let t = tool(named: name), let props = propertiesObject(of: t) else {
+                XCTFail("\(name): schema/properties missing"); continue
+            }
+            XCTAssertNotNil(props["account_id"],
+                            "\(name) must advertise an account_id property (#180)")
+            XCTAssertFalse((requiredArray(of: t) ?? []).contains("account_id"),
+                           "\(name): account_id must stay optional")
+        }
+    }
+
+    /// The 2 batch read tools nest `account_id` inside their per-item schema
+    /// (`emails[].account_id`), not at the top level. Dig into the array's
+    /// item properties and assert presence + optionality there.
+    func testBatchReadTools_advertisePerItemAccountId() throws {
+        for name in ["get_emails_batch", "list_attachments_batch"] {
+            guard let t = tool(named: name), let props = propertiesObject(of: t),
+                  case .object(let emails)? = props["emails"],
+                  case .object(let items)? = emails["items"],
+                  case .object(let itemProps)? = items["properties"] else {
+                XCTFail("\(name): emails[].items.properties missing"); continue
+            }
+            XCTAssertNotNil(itemProps["account_id"],
+                            "\(name) must advertise a per-item account_id (#180)")
+            // account_id must NOT be in the per-item required array.
+            if case .array(let req)? = items["required"] {
+                let names = req.compactMap { v -> String? in
+                    if case .string(let s) = v { return s }; return nil
+                }
+                XCTAssertFalse(names.contains("account_id"),
+                               "\(name): per-item account_id must stay optional")
+            }
+        }
+    }
+
+    /// Structural wiring lock (mirrors `testSaveAttachmentHandler_threadsResolvedAccountId`
+    /// (#173) and the #139 discipline): every read-tool AppleScript fallback
+    /// `mailController.<method>(...)` call must thread `accountId:`. A future
+    /// edit that drops the threading — regressing read tools to the
+    /// display_name-only `-1728` behavior on Gmail — fails here.
+    func testReadHandlers_threadAccountIdIntoAppleScriptFallback() throws {
+        let serverSource = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // CheAppleMailMCPTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // repo root
+            .appendingPathComponent("Sources/CheAppleMailMCP/Server.swift")
+        let source = try String(contentsOf: serverSource, encoding: .utf8)
+        // call-substring → human label. getEmail/listAttachments each appear at
+        // BOTH a single handler and a batch loop — every occurrence must thread.
+        let fallbacks: [(String, String)] = [
+            ("mailController.listEmails(", "list_emails"),
+            ("mailController.getEmail(", "get_email / get_emails_batch"),
+            ("mailController.searchEmails(", "search_emails"),
+            ("mailController.getUnreadCount(", "get_unread_count"),
+            ("mailController.listAttachments(", "list_attachments / list_attachments_batch"),
+            ("mailController.getEmailHeaders(", "get_email_headers"),
+            ("mailController.getEmailSource(", "get_email_source"),
+            ("mailController.getEmailMetadata(", "get_email_metadata"),
+        ]
+        for (needle, label) in fallbacks {
+            var searchRange = source.startIndex..<source.endIndex
+            var found = 0
+            while let r = source.range(of: needle, range: searchRange) {
+                let lineEnd = source[r.upperBound...].firstIndex(of: "\n") ?? source.endIndex
+                let call = String(source[r.lowerBound..<lineEnd])
+                XCTAssertTrue(call.contains("accountId: accountId"),
+                              "\(label): mailController.\(needle) fallback must thread accountId; got:\n\(call)")
+                found += 1
+                searchRange = lineEnd..<source.endIndex
+            }
+            XCTAssertGreaterThan(found, 0, "\(label): expected ≥1 \(needle) call site")
+        }
+    }
 }
