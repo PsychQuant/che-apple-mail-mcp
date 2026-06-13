@@ -118,6 +118,7 @@ class CheAppleMailMCPServer {
                     "properties": .object([
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name (e.g., 'INBOX')")]),
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID (from search_emails / list_accounts) to disambiguate accounts that share a display_name (#101). Used only by the AppleScript fallback path; the SQLite fast path is account-agnostic (#180).")]),
                         "limit": .object(["type": .string("integer"), "description": .string("Maximum number of emails to return (default: 50)")])
                     ]),
                     "required": .array([.string("mailbox"), .string("account_name")])
@@ -132,6 +133,7 @@ class CheAppleMailMCPServer {
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID (from search_emails / list_accounts) to disambiguate accounts that share a display_name (#101). Used only by the AppleScript fallback path; the SQLite fast path is account-agnostic (#180).")]),
                         "format": .object(["type": .string("string"), "description": .string("Content format: 'html' (default, preserves links), 'text' (plain text), 'source' (full MIME)")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name")])
@@ -147,6 +149,7 @@ class CheAppleMailMCPServer {
                         "field": .object(["type": .string("string"), "description": .string("Search field: 'subject', 'sender', 'recipient', or 'any' (default: 'any' — searches all fields)")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox to search in (optional — omit to search all mailboxes)")]),
                         "account_name": .object(["type": .string("string"), "description": .string("Mail account (optional — omit to search all accounts)")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID (from search_emails / list_accounts) to disambiguate accounts that share a display_name (#101). Used only by the AppleScript fallback path; the SQLite fast path is account-agnostic (#180).")]),
                         "date_from": .object(["type": .string("string"), "description": .string("Start date filter, ISO 8601 (e.g., '2026-01-01')")]),
                         "date_to": .object(["type": .string("string"), "description": .string("End date filter, ISO 8601 (e.g., '2026-03-31')")]),
                         "limit": .object(["type": .string("integer"), "description": .string("Maximum results (default: 50)")]),
@@ -162,7 +165,8 @@ class CheAppleMailMCPServer {
                     "type": .string("object"),
                     "properties": .object([
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name (optional)")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("Account name (optional)")])
+                        "account_name": .object(["type": .string("string"), "description": .string("Account name (optional)")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID (from search_emails / list_accounts) to disambiguate accounts that share a display_name (#101). Used only by the AppleScript fallback path; the SQLite fast path is account-agnostic (#180).")])
                     ])
                 ])
             ),
@@ -330,7 +334,8 @@ class CheAppleMailMCPServer {
                     "properties": .object([
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")])
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID (from search_emails / list_accounts) to disambiguate accounts that share a display_name (#101). Used only by the AppleScript fallback path; the SQLite fast path is account-agnostic (#180).")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name")])
                 ])
@@ -505,7 +510,8 @@ class CheAppleMailMCPServer {
                     "properties": .object([
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")])
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID (from search_emails / list_accounts) to disambiguate accounts that share a display_name (#101). Used only by the AppleScript fallback path; the SQLite fast path is account-agnostic (#180).")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name")])
                 ])
@@ -518,7 +524,8 @@ class CheAppleMailMCPServer {
                     "properties": .object([
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")])
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID (from search_emails / list_accounts) to disambiguate accounts that share a display_name (#101). Used only by the AppleScript fallback path; the SQLite fast path is account-agnostic (#180).")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name")])
                 ])
@@ -546,7 +553,8 @@ class CheAppleMailMCPServer {
                     "properties": .object([
                         "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")])
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID (from search_emails / list_accounts) to disambiguate accounts that share a display_name (#101). Used only by the AppleScript fallback path; the SQLite fast path is account-agnostic (#180).")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name")])
                 ])
@@ -654,7 +662,8 @@ class CheAppleMailMCPServer {
                                 "properties": .object([
                                     "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                                     "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                                    "account_name": .object(["type": .string("string"), "description": .string("The mail account")])
+                                    "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                                    "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID (from search_emails / list_accounts) to disambiguate accounts that share a display_name (#101). Used only by the AppleScript fallback path; the SQLite fast path is account-agnostic (#180).")])
                                 ]),
                                 "required": .array([.string("id"), .string("mailbox"), .string("account_name")])
                             ])
@@ -678,7 +687,8 @@ class CheAppleMailMCPServer {
                                 "properties": .object([
                                     "id": .object(["type": .string("string"), "description": .string("The email ID")]),
                                     "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                                    "account_name": .object(["type": .string("string"), "description": .string("The mail account")])
+                                    "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
+                                    "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID (from search_emails / list_accounts) to disambiguate accounts that share a display_name (#101). Used only by the AppleScript fallback path; the SQLite fast path is account-agnostic (#180).")])
                                 ]),
                                 "required": .array([.string("id"), .string("mailbox"), .string("account_name")])
                             ])
@@ -815,7 +825,8 @@ class CheAppleMailMCPServer {
                     FileHandle.standardError.write(Data(message.utf8))
                 }
             }
-            let emails = try await mailController.listEmails(mailbox: mailbox, accountName: accountName, limit: limit)
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let emails = try await mailController.listEmails(mailbox: mailbox, accountName: accountName, accountId: accountId, limit: limit)
             return formatJSON(emails)
 
         case "get_email":
@@ -858,7 +869,8 @@ class CheAppleMailMCPServer {
                                            reason: .error(error.localizedDescription))
                 }
             }
-            let email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName, format: format)
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, format: format)
             return formatJSON(email)
 
         case "search_emails":
@@ -889,7 +901,8 @@ class CheAppleMailMCPServer {
                 return formatJSON(formatted)
             }
             // Fallback to AppleScript
-            let results = try await mailController.searchEmails(query: query, mailbox: mailbox, accountName: accountName, limit: limit, sort: sort)
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let results = try await mailController.searchEmails(query: query, mailbox: mailbox, accountName: accountName, accountId: accountId, limit: limit, sort: sort)
             return formatJSON(results)
 
         case "get_unread_count":
@@ -899,7 +912,8 @@ class CheAppleMailMCPServer {
                 let count = try reader.getUnreadCount(mailbox: mailbox, accountName: accountName)
                 return "Unread count: \(count)"
             }
-            let count = try await mailController.getUnreadCount(mailbox: mailbox, accountName: accountName)
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let count = try await mailController.getUnreadCount(mailbox: mailbox, accountName: accountName, accountId: accountId)
             return "Unread count: \(count)"
 
         // Email Action Tools
@@ -1072,7 +1086,8 @@ class CheAppleMailMCPServer {
                 }
                 return formatJSON(sqliteAttachments)
             }
-            let attachments = try await mailController.listAttachments(id: id, mailbox: mailbox, accountName: accountName)
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let attachments = try await mailController.listAttachments(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId)
             return formatJSON(attachments)
 
         case "save_attachment":
@@ -1310,7 +1325,8 @@ class CheAppleMailMCPServer {
                     FileHandle.standardError.write(Data(message.utf8))
                 }
             }
-            return try await mailController.getEmailHeaders(id: id, mailbox: mailbox, accountName: accountName)
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            return try await mailController.getEmailHeaders(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId)
 
         case "get_email_source":
             let id = try requireMessageId(arguments)
@@ -1333,7 +1349,8 @@ class CheAppleMailMCPServer {
                     FileHandle.standardError.write(Data(message.utf8))
                 }
             }
-            return try await mailController.getEmailSource(id: id, mailbox: mailbox, accountName: accountName)
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            return try await mailController.getEmailSource(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId)
 
         case "redirect_email":
             let id = try requireMessageId(arguments)
@@ -1369,7 +1386,8 @@ class CheAppleMailMCPServer {
                     FileHandle.standardError.write(Data(message.utf8))
                 }
             }
-            let metadata = try await mailController.getEmailMetadata(id: id, mailbox: mailbox, accountName: accountName)
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let metadata = try await mailController.getEmailMetadata(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId)
             return formatJSON(metadata)
 
         // Signature Tools
@@ -1444,6 +1462,15 @@ class CheAppleMailMCPServer {
                     results.append(["error": "Missing required fields (id, mailbox, account_name)"])
                     continue
                 }
+                // #180: per-item account_id (UUID) threads into the AppleScript
+                // fallback so a Gmail / ambiguous display_name resolves via the
+                // `account id` selector. Empty/absent → resolveAccountRef falls
+                // back to account_name. SQLite fast path is account-agnostic.
+                // Uses decodeAccountId (not raw obj["account_id"]) so a non-string
+                // per-item account_id emits the same stderr warning as the single
+                // tools (verify #192 LOW: warning parity) — `obj` is the per-item
+                // [String: Value] dict, the shape decodeAccountId expects.
+                let accountId = decodeAccountId(obj, tool: invokedTool)
                 // Try SQLite/emlx first; on any failure, fall through to
                 // AppleScript — mirrors the structure of `get_email` so both
                 // tools behave identically when the filesystem-fast-path is
@@ -1479,7 +1506,7 @@ class CheAppleMailMCPServer {
                 }
                 // Fallback to AppleScript
                 do {
-                    let email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName, format: format)
+                    let email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, format: format)
                     results.append(email)
                 } catch {
                     results.append(["id": id, "error": error.localizedDescription])
@@ -1503,6 +1530,15 @@ class CheAppleMailMCPServer {
                     results.append(["error": "Missing required fields (id, mailbox, account_name)"])
                     continue
                 }
+                // #180: per-item account_id (UUID) threads into the AppleScript
+                // fallback so a Gmail / ambiguous display_name resolves via the
+                // `account id` selector. Empty/absent → resolveAccountRef falls
+                // back to account_name. SQLite fast path is account-agnostic.
+                // Uses decodeAccountId (not raw obj["account_id"]) so a non-string
+                // per-item account_id emits the same stderr warning as the single
+                // tools (verify #192 LOW: warning parity) — `obj` is the per-item
+                // [String: Value] dict, the shape decodeAccountId expects.
+                let accountId = decodeAccountId(obj, tool: invokedTool)
                 // SQLite + .emlx fast path with #24 cross-validation: filter
                 // out stale SQLite attachment rows that don't actually exist
                 // in the .emlx body. Mirrors the single-message handler at
@@ -1557,7 +1593,7 @@ class CheAppleMailMCPServer {
                 }
                 // Tier 2: AppleScript fallback (legacy path, preserved unchanged).
                 do {
-                    let attachments = try await mailController.listAttachments(id: id, mailbox: mailbox, accountName: accountName)
+                    let attachments = try await mailController.listAttachments(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId)
                     results.append(["id": id, "mailbox": mailbox, "account_name": accountName, "attachments": attachments])
                 } catch {
                     results.append(["id": id, "error": error.localizedDescription])

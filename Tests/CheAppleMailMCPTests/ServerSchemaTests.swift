@@ -1043,4 +1043,175 @@ final class ServerSchemaTests: XCTestCase {
         XCTAssertEqual(entry["mimeType"] as? String, "application/pdf")
         XCTAssertEqual(entry["rowId"] as? Int, 999)
     }
+
+    // MARK: - #180: read tools advertise optional account_id
+
+    /// The 8 single-message read tools must advertise an optional `account_id`
+    /// (so a caller can feed the `search_emails` UUID straight back into the
+    /// read tool's AppleScript fallback). #180 — closes the read-tool half of
+    /// the chokepoint sweep that #176 did for write tools.
+    func testSingleReadTools_advertiseOptionalAccountId() {
+        let readTools = [
+            "list_emails", "get_email", "search_emails", "get_unread_count",
+            "list_attachments", "get_email_headers", "get_email_source",
+            "get_email_metadata",
+        ]
+        for name in readTools {
+            guard let t = tool(named: name), let props = propertiesObject(of: t) else {
+                XCTFail("\(name): schema/properties missing"); continue
+            }
+            XCTAssertNotNil(props["account_id"],
+                            "\(name) must advertise an account_id property (#180)")
+            XCTAssertFalse((requiredArray(of: t) ?? []).contains("account_id"),
+                           "\(name): account_id must stay optional")
+        }
+    }
+
+    /// The 2 batch read tools nest `account_id` inside their per-item schema
+    /// (`emails[].account_id`), not at the top level. Dig into the array's
+    /// item properties and assert presence + optionality there.
+    func testBatchReadTools_advertisePerItemAccountId() throws {
+        for name in ["get_emails_batch", "list_attachments_batch"] {
+            guard let t = tool(named: name), let props = propertiesObject(of: t),
+                  case .object(let emails)? = props["emails"],
+                  case .object(let items)? = emails["items"],
+                  case .object(let itemProps)? = items["properties"] else {
+                XCTFail("\(name): emails[].items.properties missing"); continue
+            }
+            XCTAssertNotNil(itemProps["account_id"],
+                            "\(name) must advertise a per-item account_id (#180)")
+            // account_id must NOT be in the per-item required array.
+            if case .array(let req)? = items["required"] {
+                let names = req.compactMap { v -> String? in
+                    if case .string(let s) = v { return s }; return nil
+                }
+                XCTAssertFalse(names.contains("account_id"),
+                               "\(name): per-item account_id must stay optional")
+            }
+        }
+    }
+
+    /// Structural wiring lock (mirrors `testSaveAttachmentHandler_threadsResolvedAccountId`
+    /// (#173) and the #139 discipline): every read-tool AppleScript fallback
+    /// `mailController.<method>(...)` call must thread `accountId:`. A future
+    /// edit that drops the threading — regressing read tools to the
+    /// display_name-only `-1728` behavior on Gmail — fails here.
+    func testReadHandlers_threadAccountIdIntoAppleScriptFallback() throws {
+        let serverSource = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // CheAppleMailMCPTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // repo root
+            .appendingPathComponent("Sources/CheAppleMailMCP/Server.swift")
+        let source = try String(contentsOf: serverSource, encoding: .utf8)
+        // call-substring → human label. getEmail/listAttachments each appear at
+        // BOTH a single handler and a batch loop — every occurrence must thread.
+        let fallbacks: [(String, String)] = [
+            ("mailController.listEmails(", "list_emails"),
+            ("mailController.getEmail(", "get_email / get_emails_batch"),
+            ("mailController.searchEmails(", "search_emails"),
+            ("mailController.getUnreadCount(", "get_unread_count"),
+            ("mailController.listAttachments(", "list_attachments / list_attachments_batch"),
+            ("mailController.getEmailHeaders(", "get_email_headers"),
+            ("mailController.getEmailSource(", "get_email_source"),
+            ("mailController.getEmailMetadata(", "get_email_metadata"),
+        ]
+        for (needle, label) in fallbacks {
+            var searchRange = source.startIndex..<source.endIndex
+            var found = 0
+            while let r = source.range(of: needle, range: searchRange) {
+                let lineEnd = source[r.upperBound...].firstIndex(of: "\n") ?? source.endIndex
+                let call = String(source[r.lowerBound..<lineEnd])
+                XCTAssertTrue(call.contains("accountId: accountId"),
+                              "\(label): mailController.\(needle) fallback must thread accountId; got:\n\(call)")
+                found += 1
+                searchRange = lineEnd..<source.endIndex
+            }
+            XCTAssertGreaterThan(found, 0, "\(label): expected ≥1 \(needle) call site")
+        }
+    }
+
+    /// Brace-balanced extraction of a Swift method body from source text,
+    /// starting at `func <name>(`. Returns the substring from the func keyword
+    /// through the matching closing brace.
+    ///
+    /// verify #192 LOW (round 2): the naive depth counter mis-counted braces
+    /// that appear inside `"""…"""` heredocs (the methods under scan embed
+    /// AppleScript snippets like `set results to {}` in heredocs). It happened
+    /// to work because those snippets only contained self-balancing `{}`, but a
+    /// future unbalanced brace inside a heredoc (e.g. `set x to "{"`) would
+    /// latch `endIdx` onto the wrong `}` and silently mis-extract — risking a
+    /// false-green on the invariant pin this helper feeds. We now skip the
+    /// interior of `"""`-delimited heredocs entirely so embedded AppleScript
+    /// braces can never perturb the count.
+    private func methodBody(_ source: String, funcName: String) -> String? {
+        guard let start = source.range(of: "func \(funcName)(") else { return nil }
+        var depth = 0
+        var seenOpen = false
+        var inHeredoc = false
+        var idx = start.lowerBound
+        var endIdx = source.endIndex
+        let triple = "\"\"\""
+        while idx < source.endIndex {
+            // Detect a `"""` delimiter (open or close of a heredoc) and skip past it.
+            if source[idx...].hasPrefix(triple) {
+                inHeredoc.toggle()
+                idx = source.index(idx, offsetBy: triple.count)
+                continue
+            }
+            if !inHeredoc {
+                let ch = source[idx]
+                if ch == "{" { depth += 1; seenOpen = true }
+                else if ch == "}" {
+                    depth -= 1
+                    if seenOpen && depth == 0 {
+                        endIdx = source.index(after: idx)
+                        break
+                    }
+                }
+            }
+            idx = source.index(after: idx)
+        }
+        return String(source[start.lowerBound..<endIdx])
+    }
+
+    /// #180 (verify #192): the real invariant the prior handler-call-line grep
+    /// did NOT lock — the devil's-advocate correctly noted that a green
+    /// "handler threads accountId" test says nothing about whether the
+    /// MailController method then USES accountId in ALL of its branches. The
+    /// first round threaded accountId only into the both-`mailbox`+`account`
+    /// branch of `getUnreadCount` / `searchEmails`; their account-only branches
+    /// kept inline legacy `account "<display_name>"` selectors that silently
+    /// dropped accountId. This pin asserts those two method bodies contain NO
+    /// inline `account "` selector — i.e. every account/mailbox reference routes
+    /// through the `resolveAccountRef` / `mailboxRef` chokepoint (which is where
+    /// the UUID-vs-display_name decision lives). Would be RED on the round-1 diff.
+    func testReadMethods_haveNoInlineLegacyAccountSelector() throws {
+        let mcSource = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift"),
+            encoding: .utf8)
+        // Methods that take accountId and build account-addressing AppleScript —
+        // every account selector inside MUST come from the chokepoint, never an
+        // inline `account "…"` literal. (getAccountInfo / listMailboxes are
+        // intentionally account-name-keyed and excluded.)
+        for method in ["getUnreadCount", "searchEmails"] {
+            guard let body = methodBody(mcSource, funcName: method) else {
+                XCTFail("could not extract \(method) body from MailController.swift"); continue
+            }
+            // Strip `//` line comments before scanning — a comment that merely
+            // *mentions* the legacy `account "…"` form (e.g. explaining the fix)
+            // must not trip the pin; only real code selectors count.
+            let code = body.split(separator: "\n", omittingEmptySubsequences: false)
+                .map { line -> Substring in
+                    if let r = line.range(of: "//") { return line[..<r.lowerBound] }
+                    return line
+                }
+                .joined(separator: "\n")
+            XCTAssertFalse(code.contains("account \""),
+                           "\(method) must not build an inline legacy `account \"<display_name>\"` "
+                           + "selector — route account addressing through resolveAccountRef / "
+                           + "mailboxRef so accountId (UUID) disambiguation reaches every branch (#180)")
+        }
+    }
 }

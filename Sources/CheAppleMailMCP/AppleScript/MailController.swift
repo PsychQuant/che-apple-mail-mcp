@@ -221,7 +221,7 @@ actor MailController {
     ///
     /// Result: 3× IPC reduction + count-of-messages bottleneck removed.
     /// Empty-mailbox case handled by AppleScript returning empty arrays.
-    func listEmails(mailbox: String, accountName: String, limit: Int = 50) throws -> [[String: Any]] {
+    func listEmails(mailbox: String, accountName: String, accountId: String? = nil, limit: Int = 50) throws -> [[String: Any]] {
         // Single batched script: resolve mailbox once, fetch all three
         // properties in one IPC. Returns a list of three lists in fixed
         // order: [{ids}, {subjects}, {senders}].
@@ -231,7 +231,7 @@ actor MailController {
         // mailbox returns three empty lists.
         let batchedScript = """
         tell application "Mail"
-            set mb to \(mailboxRef(mailbox, account: accountName))
+            set mb to \(mailboxRef(mailbox, account: accountName, accountId: accountId))
             set theMessages to messages 1 thru \(limit) of mb
             return {id of theMessages, subject of theMessages, sender of theMessages}
         end tell
@@ -245,7 +245,7 @@ actor MailController {
         // resolution + single message-range fetch is the dominant cost).
         let combinedScript = """
         tell application "Mail"
-            set mb to \(mailboxRef(mailbox, account: accountName))
+            set mb to \(mailboxRef(mailbox, account: accountName, accountId: accountId))
             set theMessages to messages 1 thru \(limit) of mb
             set subjectList to subject of theMessages
             set senderList to sender of theMessages
@@ -294,8 +294,8 @@ actor MailController {
     /// - format: "html" (default) returns HTML body with links preserved;
     ///           "text" returns plain text content;
     ///           "source" returns full MIME source
-    func getEmail(id: String, mailbox: String, accountName: String, format: String = "html") throws -> [String: Any] {
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
+    func getEmail(id: String, mailbox: String, accountName: String, accountId: String? = nil, format: String = "html") throws -> [String: Any] {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName, accountId: accountId)
 
         let subjectScript = """
         tell application "Mail"
@@ -504,7 +504,7 @@ actor MailController {
     }
 
     /// Search emails
-    func searchEmails(query: String, mailbox: String? = nil, accountName: String? = nil, limit: Int = 20, sort: String = "desc") throws -> [[String: Any]] {
+    func searchEmails(query: String, mailbox: String? = nil, accountName: String? = nil, accountId: String? = nil, limit: Int = 20, sort: String = "desc") throws -> [[String: Any]] {
         let escapedQuery = appleScriptEscape(query)
         let sep = "⏐"  // Separator unlikely to appear in email fields
 
@@ -513,7 +513,7 @@ actor MailController {
             // Search specific mailbox of specific account
             script = """
             tell application "Mail"
-                set mb to \(mailboxRef(mailbox, account: accountName))
+                set mb to \(mailboxRef(mailbox, account: accountName, accountId: accountId))
                 set foundMsgs to (messages of mb whose subject contains "\(escapedQuery)" or sender contains "\(escapedQuery)")
                 set results to {}
                 set counter to 0
@@ -521,6 +521,37 @@ actor MailController {
                     if counter ≥ \(limit) then exit repeat
                     set end of results to (id of msg as string) & "\(sep)" & (subject of msg) & "\(sep)" & (sender of msg) & "\(sep)" & (date received of msg as string) & "\(sep)" & "\(appleScriptEscape(accountName))" & "\(sep)" & "\(appleScriptEscape(mailbox))"
                     set counter to counter + 1
+                end repeat
+                return results
+            end tell
+            """
+        } else if (accountName.map { !$0.isEmpty } ?? false) || !(accountId ?? "").isEmpty {
+            // #180 (verify #192): account-only / id-only mode (no specific
+            // mailbox). Pre-fix this fell through to the all-accounts branch
+            // below, which ignored BOTH accountName and accountId — so
+            // `search_emails(account_name:X, account_id:UUID)` without a mailbox
+            // silently searched every account. Scope to the single account via
+            // the resolveAccountRef chokepoint (UUID selector when accountId is
+            // supplied), aligning the AppleScript fallback with the SQLite
+            // primary path, which already filters by account.
+            let accountRef = resolveAccountRef(accountId: accountId, accountName: accountName ?? "")
+            script = """
+            tell application "Mail"
+                set results to {}
+                set counter to 0
+                set acct to \(accountRef)
+                set acctName to name of acct
+                repeat with mbox in every mailbox of acct
+                    try
+                        set mboxName to name of mbox
+                        set foundMsgs to (messages of mbox whose subject contains "\(escapedQuery)" or sender contains "\(escapedQuery)")
+                        repeat with msg in foundMsgs
+                            if counter ≥ \(limit) then exit repeat
+                            set end of results to (id of msg as string) & "\(sep)" & (subject of msg) & "\(sep)" & (sender of msg) & "\(sep)" & (date received of msg as string) & "\(sep)" & acctName & "\(sep)" & mboxName
+                            set counter to counter + 1
+                        end repeat
+                    end try
+                    if counter ≥ \(limit) then exit repeat
                 end repeat
                 return results
             end tell
@@ -580,19 +611,27 @@ actor MailController {
     }
 
     /// Get unread count
-    func getUnreadCount(mailbox: String? = nil, accountName: String? = nil) throws -> Int {
+    func getUnreadCount(mailbox: String? = nil, accountName: String? = nil, accountId: String? = nil) throws -> Int {
         let script: String
         if let mailbox = mailbox, let account = accountName {
             script = """
             tell application "Mail"
-                get unread count of \(mailboxRef(mailbox, account: account))
+                get unread count of \(mailboxRef(mailbox, account: account, accountId: accountId))
             end tell
             """
-        } else if let account = accountName {
+        } else if (accountName.map { !$0.isEmpty } ?? false) || !(accountId ?? "").isEmpty {
+            // #180 (verify #192): account-only / id-only mode. Was an inline
+            // legacy `account "<display_name>"` selector that ignored accountId
+            // entirely — `get_unread_count(account_name:X, account_id:UUID)`
+            // with no mailbox silently re-hit the #101 same-display_name
+            // collision. Route through the resolveAccountRef chokepoint so the
+            // UUID selector applies here too; byte-identical to the legacy form
+            // at accountId:nil (`account "<display_name>"`).
+            let accountRef = resolveAccountRef(accountId: accountId, accountName: accountName ?? "")
             script = """
             tell application "Mail"
                 set total to 0
-                repeat with mb in mailboxes of account "\(appleScriptEscape(account))"
+                repeat with mb in mailboxes of \(accountRef)
                     set total to total + (unread count of mb)
                 end repeat
                 return total
@@ -1008,8 +1047,8 @@ actor MailController {
     // MARK: - Attachment Operations
 
     /// List attachments of an email
-    func listAttachments(id: String, mailbox: String, accountName: String) throws -> [[String: Any]] {
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
+    func listAttachments(id: String, mailbox: String, accountName: String, accountId: String? = nil) throws -> [[String: Any]] {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName, accountId: accountId)
         let namesScript = """
         tell application "Mail"
             get name of every mail attachment of \(ref)
@@ -1023,7 +1062,14 @@ actor MailController {
         }
     }
 
-    /// Save attachment to disk
+    /// Save attachment to disk.
+    ///
+    /// 5-arg overload retained as the #112 byte-identity referent for
+    /// `buildSaveAttachmentScript(accountId: nil)`. No live caller (the Server
+    /// `save_attachment` handler uses the #101 6-arg overload), but #180 still
+    /// routes its `msgRef` through the `resolveMsgRef` chokepoint — so this path
+    /// is no longer an inline-legacy bypass while staying byte-identical at
+    /// `accountId: nil`.
     func saveAttachment(id: String, mailbox: String, accountName: String, attachmentName: String, savePath: String) throws -> String {
         let ref = msgRef(id, mailbox: mailbox, account: accountName)
         let script = """
@@ -1239,8 +1285,8 @@ actor MailController {
     }
 
     /// Get all email headers
-    func getEmailHeaders(id: String, mailbox: String, accountName: String) throws -> String {
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
+    func getEmailHeaders(id: String, mailbox: String, accountName: String, accountId: String? = nil) throws -> String {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName, accountId: accountId)
         let script = """
         tell application "Mail"
             get all headers of \(ref)
@@ -1250,8 +1296,8 @@ actor MailController {
     }
 
     /// Get email source (raw message)
-    func getEmailSource(id: String, mailbox: String, accountName: String) throws -> String {
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
+    func getEmailSource(id: String, mailbox: String, accountName: String, accountId: String? = nil) throws -> String {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName, accountId: accountId)
         let script = """
         tell application "Mail"
             get source of \(ref)
@@ -1283,8 +1329,8 @@ actor MailController {
     }
 
     /// Get email metadata (was forwarded, replied to, redirected)
-    func getEmailMetadata(id: String, mailbox: String, accountName: String) throws -> [String: Any] {
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
+    func getEmailMetadata(id: String, mailbox: String, accountName: String, accountId: String? = nil) throws -> [String: Any] {
+        let ref = msgRef(id, mailbox: mailbox, account: accountName, accountId: accountId)
 
         let forwardedScript = """
         tell application "Mail"
@@ -1541,8 +1587,13 @@ actor MailController {
     /// Generate AppleScript expression to reference a mailbox by display name.
     /// `mailbox "X" of account "Y"` fails for Gmail localized names (e.g. "寄件備份").
     /// `first mailbox of account "Y" whose name is "X"` always works.
-    private func mailboxRef(_ mailbox: String, account: String) -> String {
-        return "(first mailbox of account \"\(appleScriptEscape(account))\" whose name is \"\(appleScriptEscape(mailbox))\")"
+    /// #180: delegates to the `resolveMailboxRef` chokepoint instead of inlining
+    /// the legacy `account "<name>" whose name is "<path>"` form. Byte-identical
+    /// for non-nested names at `accountId: nil` (proven against the prior inline
+    /// body), and now inherits #174 nested-mailbox container chains + #101/#176
+    /// account-UUID disambiguation when `accountId` is threaded through.
+    private func mailboxRef(_ mailbox: String, account: String, accountId: String? = nil) -> String {
+        return resolveMailboxRef(mailbox: mailbox, accountId: accountId, accountName: account)
     }
 
     /// Generate AppleScript reference to find a message by its numeric id.
@@ -1556,9 +1607,13 @@ actor MailController {
     /// malicious string is never interpolated and the script fails cleanly with
     /// -1728. Server.swift's `requireMessageId` remains the user-facing contract.
     /// `internal` (not `private`) purely as the #145 test seam.
-    func msgRef(_ id: String, mailbox: String, account: String) -> String {
-        let safeId = Int(id) != nil ? id : "-1"
-        return "(first message of \(mailboxRef(mailbox, account: account)) whose id is \(safeId))"
+    func msgRef(_ id: String, mailbox: String, account: String, accountId: String? = nil) -> String {
+        // #180: delegate to the resolveMsgRef chokepoint (was an inline build via
+        // the legacy mailboxRef). Byte-identical for non-nested names at
+        // accountId: nil (same #118 safeId guard, applied inside resolveMsgRef);
+        // inherits #174 nested chains + #101/#176 UUID disambiguation when
+        // accountId is provided.
+        return resolveMsgRef(id: id, mailbox: mailbox, accountId: accountId, accountName: account)
     }
 }
 
