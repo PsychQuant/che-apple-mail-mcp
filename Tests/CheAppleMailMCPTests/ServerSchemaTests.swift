@@ -507,7 +507,7 @@ final class ServerSchemaTests: XCTestCase {
 
     // MARK: - save_attachment handler wiring (verify PR #187 finding 7)
     //
-    // resolveSaveAttachmentAccountId is unit-tested in isolation; this
+    // resolveAccountIdForTool is unit-tested in isolation; this
     // structural pin (same discipline as #139's MailboxCrudScriptBuilderTests)
     // catches the "handler stopped threading the resolver's result" regression
     // that the isolated unit tests cannot see.
@@ -526,30 +526,62 @@ final class ServerSchemaTests: XCTestCase {
         let tail = source[caseStart.upperBound...]
         let caseBody = tail.range(of: "\n        case \"").map { String(tail[..<$0.lowerBound]) }
             ?? String(tail)
-        XCTAssertTrue(caseBody.contains("resolveSaveAttachmentAccountId("),
+        XCTAssertTrue(caseBody.contains("resolveAccountIdForTool("),
                       "handler must call the resolver before Tier 2")
         XCTAssertTrue(caseBody.contains("accountId: resolvedAccountId"),
                       "handler must thread the resolver's result into saveAttachment")
     }
 
-    // MARK: - resolveSaveAttachmentAccountId (#173 — email→UUID normalization)
+    // MARK: - chokepoint email→UUID handler wiring (#176)
+    //
+    // #176 generalized resolveAccountIdForTool across the AppleScript-routed
+    // write handlers. These structural pins (same discipline as #139/#178/#187)
+    // catch a handler silently reverting to raw decodeAccountId, which would
+    // re-open the -1728 email→description gap for that tool.
+
+    func testWriteHandlers_threadResolveAccountIdForTool() throws {
+        let serverSource = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/CheAppleMailMCP/Server.swift")
+        let source = try String(contentsOf: serverSource, encoding: .utf8)
+
+        func caseBody(_ tool: String) -> String? {
+            guard let start = source.range(of: "case \"\(tool)\":") else { return nil }
+            let tail = source[start.upperBound...]
+            return tail.range(of: "\n        case \"").map { String(tail[..<$0.lowerBound]) } ?? String(tail)
+        }
+
+        // Representative AppleScript-routed write tools that must normalize an
+        // email-form account_name to its UUID before resolving the account.
+        for tool in ["move_email", "delete_email", "mark_read", "redirect_email"] {
+            guard let body = caseBody(tool) else {
+                XCTFail("\(tool) case not found in Server.swift"); continue
+            }
+            XCTAssertTrue(
+                body.contains("try resolveAccountIdForTool(accountId: decodeAccountId"),
+                "\(tool) handler must thread resolveAccountIdForTool over decodeAccountId (#176); "
+                + "a raw decodeAccountId re-opens the -1728 email→description gap")
+        }
+    }
+
+    // MARK: - resolveAccountIdForTool (#173 — email→UUID normalization)
 
     func testResolveAccountId_passthroughWhenAccountIdProvided() throws {
-        let result = try resolveSaveAttachmentAccountId(
+        let result = try resolveAccountIdForTool(
             accountId: "UUID-X", accountName: "anything@example.com",
             uuidsForEmail: { _ in XCTFail("lookup must not run when accountId is given"); return [] })
         XCTAssertEqual(result, "UUID-X")
     }
 
     func testResolveAccountId_nonEmailName_skipsLookup() throws {
-        let result = try resolveSaveAttachmentAccountId(
+        let result = try resolveAccountIdForTool(
             accountId: nil, accountName: "Google",
             uuidsForEmail: { _ in XCTFail("lookup must not run for non-email names"); return [] })
         XCTAssertNil(result, "Non-email account_name keeps the legacy display_name path")
     }
 
     func testResolveAccountId_singleMatch_upgradesToUuid() throws {
-        let result = try resolveSaveAttachmentAccountId(
+        let result = try resolveAccountIdForTool(
             accountId: nil, accountName: "alice@example.com",
             uuidsForEmail: { email in
                 XCTAssertEqual(email, "alice@example.com")
@@ -560,14 +592,14 @@ final class ServerSchemaTests: XCTestCase {
     }
 
     func testResolveAccountId_emptyAccountId_treatedAsNil() throws {
-        let result = try resolveSaveAttachmentAccountId(
+        let result = try resolveAccountIdForTool(
             accountId: "", accountName: "alice@example.com",
             uuidsForEmail: { _ in ["UUID-A"] })
         XCTAssertEqual(result, "UUID-A")
     }
 
     func testResolveAccountId_noMatch_fallsBackToLegacy() throws {
-        let result = try resolveSaveAttachmentAccountId(
+        let result = try resolveAccountIdForTool(
             accountId: nil, accountName: "nobody@example.com",
             uuidsForEmail: { _ in [] })
         XCTAssertNil(result)
@@ -576,7 +608,7 @@ final class ServerSchemaTests: XCTestCase {
     func testResolveAccountId_multipleMatches_throwsListingCandidates() {
         // The #173 scenario: iCloud catch-all + Google both present the same
         // address — auto-picking would silently target the wrong account.
-        XCTAssertThrowsError(try resolveSaveAttachmentAccountId(
+        XCTAssertThrowsError(try resolveAccountIdForTool(
             accountId: nil, accountName: "dup@example.com",
             uuidsForEmail: { _ in ["UUID-A", "UUID-Z"] })) { error in
             let msg = String(describing: error)
