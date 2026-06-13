@@ -66,10 +66,7 @@ final class FallbackTests: XCTestCase {
     // MARK: - Mailbox URL lookup fallback
 
     func testMailboxURLForNonexistentMessageReturnsNil() throws {
-        let dbPath = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: dbPath) else {
-            throw XCTSkip("Envelope Index not available")
-        }
+        let dbPath = try realEnvelopeIndexPathOrSkip()
         let reader = try EnvelopeIndexReader(databasePath: dbPath)
         let url = try reader.mailboxURL(forMessageId: 999999999)
         XCTAssertNil(url, "Non-existent message should return nil mailbox URL")
@@ -83,10 +80,7 @@ final class FallbackTests: XCTestCase {
         // 2. Try emlx read → fails
         // 3. Should fall back to AppleScript (represented by reaching the fallback branch)
 
-        let dbPath = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: dbPath) else {
-            throw XCTSkip("Envelope Index not available")
-        }
+        let dbPath = try realEnvelopeIndexPathOrSkip()
         let reader = try EnvelopeIndexReader(databasePath: dbPath)
         let results = try reader.search(SearchParameters(query: "a", limit: 1))
         guard let msg = results.first else {

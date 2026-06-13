@@ -8,10 +8,7 @@ final class SearchIntegrationTests: XCTestCase {
     private var reader: EnvelopeIndexReader?
 
     override func setUpWithError() throws {
-        let path = EnvelopeIndexReader.defaultDatabasePath
-        guard FileManager.default.fileExists(atPath: path) else {
-            throw XCTSkip("Envelope Index not available")
-        }
+        let path = try realEnvelopeIndexPathOrSkip()
         reader = try EnvelopeIndexReader(databasePath: path)
     }
 
