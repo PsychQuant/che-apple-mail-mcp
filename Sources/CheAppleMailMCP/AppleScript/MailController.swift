@@ -1000,22 +1000,15 @@ actor MailController {
             return subjects.map { subject in
                 ["subject": subject]
             }
-        } catch MailError.scriptFailed(_, let code) where code == listDraftsNoMatchErrorNumber {
-            // Advice matches the selector that actually ran (verify PR #181
-            // finding 18): UUID mode failures are about a wrong/stale UUID,
-            // not about the account_name namespace.
-            let hint: String
-            if let aid = accountId, !aid.isEmpty {
-                hint = "No drafts mailbox found for account_id \"\(aid)\". "
-                    + "Check the UUID against list_accounts — the account may have been "
-                    + "removed or the UUID may belong to another Mail profile."
-            } else {
-                hint = "No drafts mailbox found for account_name \"\(accountName)\". "
-                    + "Note: account_name must match Mail's AppleScript account name (the account "
-                    + "description, e.g. \"Google\"), which often differs from the email address. "
-                    + "Pass account_id (the UUID from list_accounts) for reliable matching."
-            }
-            throw MailError.operationFailed(hint)
+        } catch {
+            // #185: route every list_drafts script error through the pure
+            // `translateListDraftsScriptError` (ListDraftsScriptBuilder.swift, alongside
+            // the 9174 constant). The 9174 no-match becomes an actionable operationFailed
+            // carrying `listDraftsNoMatchHint`; any other error rethrows unchanged. A pure
+            // function so the whole code-path contract (guard + wrapping + non-9174
+            // propagation) is unit-testable without an actor runner seam. Behaviorally
+            // identical to the prior selective `catch where code == 9174` (PR #181 #18).
+            throw translateListDraftsScriptError(error, accountId: accountId, accountName: accountName)
         }
     }
 

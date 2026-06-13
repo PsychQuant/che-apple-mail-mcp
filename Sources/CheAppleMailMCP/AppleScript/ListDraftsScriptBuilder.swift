@@ -65,3 +65,39 @@ func buildListDraftsScript(accountId: String?, accountName: String) -> String {
     end tell
     """
 }
+
+/// Actionable hint for the `list_drafts` no-match case (AppleScript error
+/// `listDraftsNoMatchErrorNumber` / 9174). Extracted from `MailController.listDrafts`'s
+/// catch branch (#185) so the `9174 → operationFailed` translation contract is
+/// unit-testable without spinning up the actor — same pure-free-function pattern as
+/// `saveAttachmentAppleEventHint`, and co-located here with the 9174 constant + emitter.
+///
+/// Advice matches the selector that actually ran (verify PR #181 finding 18): a
+/// UUID-mode failure is about a wrong/stale UUID, not the account_name namespace.
+func listDraftsNoMatchHint(accountId: String?, accountName: String) -> String {
+    if let aid = accountId, !aid.isEmpty {
+        return "No drafts mailbox found for account_id \"\(aid)\". "
+            + "Check the UUID against list_accounts — the account may have been "
+            + "removed or the UUID may belong to another Mail profile."
+    } else {
+        return "No drafts mailbox found for account_name \"\(accountName)\". "
+            + "Note: account_name must match Mail's AppleScript account name (the account "
+            + "description, e.g. \"Google\"), which often differs from the email address. "
+            + "Pass account_id (the UUID from list_accounts) for reliable matching."
+    }
+}
+
+/// Translate a `list_drafts` AppleScript error (#185): the no-match error
+/// (`listDraftsNoMatchErrorNumber` / 9174) becomes an actionable `operationFailed`
+/// carrying `listDraftsNoMatchHint`; **every other error is returned unchanged** for
+/// the caller to rethrow. Pure + actor-free, so the full `9174 → operationFailed`
+/// code-path contract — the `code == 9174` guard, the `operationFailed` wrapping, AND
+/// non-9174 propagation — is behaviorally unit-testable without a runner seam, not
+/// merely the hint string.
+func translateListDraftsScriptError(_ error: Error, accountId: String?, accountName: String) -> Error {
+    if case let MailError.scriptFailed(_, code) = error, code == listDraftsNoMatchErrorNumber {
+        return MailError.operationFailed(
+            listDraftsNoMatchHint(accountId: accountId, accountName: accountName))
+    }
+    return error
+}
