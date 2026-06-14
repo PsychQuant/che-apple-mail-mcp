@@ -588,8 +588,14 @@ class CheAppleMailMCPServer {
             // Special Mailboxes
             Tool(
                 name: "get_special_mailboxes",
-                description: "Get special mailbox names (inbox, drafts, sent, trash, junk, outbox)",
-                inputSchema: .object(["type": .string("object"), "properties": .object([:])])
+                description: "Get special mailbox names. Without account_id/account_name: the app-level unified names (inbox, drafts, sent, trash, junk, outbox). With an account selector: that account's per-account special-mailbox real (localized/provider) names (drafts, sent, trash, junk) — e.g. a Gmail account returns drafts \"草稿\", junk \"垃圾郵件\" (#179). Per-account inbox is deferred (pending live verification); outbox stays unified-only.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID (from list_accounts / search_emails). When supplied, returns this account's per-account special-mailbox real names instead of the unified names (#179).")]),
+                        "account_name": .object(["type": .string("string"), "description": .string("Optional account selector. An email address is resolved to the account UUID; otherwise matched against Mail's account name (description). Supply account_id for unambiguous matching.")])
+                    ])
+                ])
             ),
 
             // Address Tools
@@ -1437,7 +1443,26 @@ class CheAppleMailMCPServer {
 
         // Special Mailboxes
         case "get_special_mailboxes":
-            let mailboxes = try await mailController.getSpecialMailboxes()
+            // #179: optional account selector → per-account special-mailbox real names.
+            let rawAccountId = decodeAccountId(arguments, tool: invokedTool)
+            let accountName = arguments["account_name"]?.stringValue
+            let explicitAccountId = !(rawAccountId ?? "").isEmpty
+            let hasSelector = explicitAccountId || !(accountName ?? "").isEmpty
+            // Only resolve when a selector was actually supplied — the no-selector
+            // path must stay byte-unchanged (no resolver step / side effects). When a
+            // selector is present, resolve an email-form account_name to its UUID via
+            // the shared chokepoint so matching uses the collision-free `account id`
+            // selector, not the description namespace (same as the write tools, #176).
+            let resolvedAccountId = hasSelector
+                ? try resolveAccountIdForTool(accountId: rawAccountId, accountName: accountName ?? "", tool: invokedTool)
+                : nil
+            // The no-match/ambiguity hint must name the selector the builder matched
+            // on, not a co-supplied one (#179 verify R4, findings 2/5): when an
+            // explicit account_id is given the builder matches the UUID, so suppress
+            // account_name in the hint; otherwise reference the account_name the user
+            // typed (preserving the email→UUID non-laundering fix).
+            let hintAccountName = specialMailboxesHintAccountName(explicitAccountId: explicitAccountId, accountName: accountName)
+            let mailboxes = try await mailController.getSpecialMailboxes(accountId: resolvedAccountId, accountName: hintAccountName)
             return formatJSON(mailboxes)
 
         // Address Tools
