@@ -1215,35 +1215,25 @@ actor MailController {
 
     // MARK: - Mail Check & Sync Operations
 
-    /// Check for new mail
-    func checkForNewMail(accountName: String? = nil) throws -> String {
-        let script: String
-        if let account = accountName {
-            script = """
-            tell application "Mail"
-                check for new mail for account "\(appleScriptEscape(account))"
-                return "Checking for new mail in \(appleScriptEscape(account))"
-            end tell
-            """
-        } else {
-            script = """
-            tell application "Mail"
-                check for new mail
-                return "Checking for new mail in all accounts"
-            end tell
-            """
-        }
+    /// Check for new mail.
+    ///
+    /// #191: optional `accountId` adds the UUID-selector escape hatch (mirrors the
+    /// #104/#176 account_id overload). Delegates to `buildCheckForNewMailScript`
+    /// (pure, unit-tested); the name-mode / check-all output is byte-identical to
+    /// the pre-#191 inline script.
+    func checkForNewMail(accountName: String? = nil, accountId: String? = nil) throws -> String {
+        let script = buildCheckForNewMailScript(accountId: accountId, accountName: accountName)
         return try runScript(script)
     }
 
-    /// Synchronize IMAP account
-    func synchronizeAccount(accountName: String) throws -> String {
-        let script = """
-        tell application "Mail"
-            synchronize account "\(appleScriptEscape(accountName))"
-            return "Synchronizing account: \(appleScriptEscape(accountName))"
-        end tell
-        """
+    /// Synchronize IMAP account.
+    ///
+    /// #191: optional `accountId` adds the UUID-selector escape hatch (mirrors the
+    /// #104/#176 account_id overload). Delegates to `buildSynchronizeAccountScript`
+    /// (pure, unit-tested); the name-mode output is byte-identical to the pre-#191
+    /// inline script.
+    func synchronizeAccount(accountName: String, accountId: String? = nil) throws -> String {
+        let script = buildSynchronizeAccountScript(accountId: accountId, accountName: accountName)
         return try runScript(script)
     }
 

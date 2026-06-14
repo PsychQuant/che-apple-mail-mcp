@@ -425,19 +425,22 @@ class CheAppleMailMCPServer {
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "account_name": .object(["type": .string("string"), "description": .string("Account to check (optional, checks all if omitted)")])
+                        "account_name": .object(["type": .string("string"), "description": .string("Account to check (optional, checks all if omitted)")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID (from list_accounts / search_emails) — takes precedence over account_name. Lets an email-form account_name resolve to the collision-free UUID selector instead of the account description, avoiding -1728 (#191).")])
                     ])
                 ])
             ),
             Tool(
                 name: "synchronize_account",
-                description: "Synchronize an IMAP account with the server",
+                description: "Synchronize an IMAP account with the server. Supply account_name (description) and/or account_id (UUID) — at least one is required.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "account_name": .object(["type": .string("string"), "description": .string("Account to synchronize")])
-                    ]),
-                    "required": .array([.string("account_name")])
+                        "account_name": .object(["type": .string("string"), "description": .string("Account to synchronize (the Mail account description). Optional if account_id is supplied (#191).")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Account UUID (from list_accounts / search_emails) — takes precedence over account_name, and can be supplied alone. Lets an email-form account_name resolve to the collision-free UUID selector instead of the account description, avoiding -1728 (#191).")])
+                    ])
+                    // No `required`: at least one of account_name / account_id is enforced
+                    // in the handler (#191 — account_id is a genuine standalone escape hatch).
                 ])
             ),
 
@@ -1282,14 +1285,31 @@ class CheAppleMailMCPServer {
 
         // Mail Check & Sync Tools
         case "check_for_new_mail":
+            // #191: optional account_id escape hatch (mirrors #104/#176). Resolve only
+            // when a selector is supplied so the check-all path (no account) is unchanged.
             let accountName = arguments["account_name"]?.stringValue
-            return try await mailController.checkForNewMail(accountName: accountName)
+            let rawAccountId = decodeAccountId(arguments, tool: invokedTool)
+            let resolvedAccountId = hasAccountSelector(accountId: rawAccountId, accountName: accountName)
+                ? try resolveAccountIdForTool(accountId: rawAccountId, accountName: accountName ?? "", tool: invokedTool)
+                : nil
+            return try await mailController.checkForNewMail(accountName: accountName, accountId: resolvedAccountId)
 
         case "synchronize_account":
-            guard let accountName = arguments["account_name"]?.stringValue else {
-                throw MailError.invalidParameter("account_name is required")
+            // #191: account_id is a genuine standalone escape hatch — require AT LEAST
+            // ONE of account_name / account_id (not account_name unconditionally), so a
+            // caller holding only a UUID (e.g. from a search_emails round-trip, or an EWS
+            // account whose AccountsMap stores the UUID) can sync without a dummy name.
+            let syncAccountName = arguments["account_name"]?.stringValue
+            let syncRawAccountId = decodeAccountId(arguments, tool: invokedTool)
+            guard hasAccountSelector(accountId: syncRawAccountId, accountName: syncAccountName) else {
+                throw MailError.invalidParameter("synchronize_account requires account_name or account_id")
             }
-            return try await mailController.synchronizeAccount(accountName: accountName)
+            // Resolve an email-form account_name to the collision-free UUID selector via
+            // the shared #176 chokepoint (was a bare description selector → -1728).
+            let syncResolvedAccountId = try resolveAccountIdForTool(
+                accountId: syncRawAccountId, accountName: syncAccountName ?? "", tool: invokedTool)
+            return try await mailController.synchronizeAccount(
+                accountName: syncAccountName ?? "", accountId: syncResolvedAccountId)
 
         // Advanced Email Tools
         case "copy_email":
