@@ -95,6 +95,37 @@ final class ServerSchemaTests: XCTestCase {
         assertFormatParameter(toolName: "forward_email")
     }
 
+    // MARK: - check_for_new_mail / synchronize_account account_id escape hatch (#191)
+
+    /// Both action tools must advertise an optional `account_id` (the escape hatch the
+    /// #176 sweep gave the 14 message tools); account_name stays required only where it
+    /// was before (synchronize_account), never account_id.
+    func testCheckForNewMail_advertisesOptionalAccountId() {
+        guard let t = tool(named: "check_for_new_mail"), let props = propertiesObject(of: t) else {
+            XCTFail("check_for_new_mail schema missing"); return
+        }
+        XCTAssertNotNil(props["account_id"], "check_for_new_mail must advertise account_id (#191)")
+        XCTAssertNotNil(props["account_name"], "check_for_new_mail must still advertise account_name")
+        let required = requiredArray(of: t) ?? []
+        XCTAssertFalse(required.contains("account_id"), "account_id must stay optional")
+        XCTAssertFalse(required.contains("account_name"), "check_for_new_mail account_name stays optional (check-all)")
+    }
+
+    func testSynchronizeAccount_advertisesOptionalAccountId() {
+        guard let t = tool(named: "synchronize_account"), let props = propertiesObject(of: t) else {
+            XCTFail("synchronize_account schema missing"); return
+        }
+        XCTAssertNotNil(props["account_id"], "synchronize_account must advertise account_id (#191)")
+        XCTAssertNotNil(props["account_name"], "synchronize_account must still advertise account_name")
+        // #191 verify R1: account_id is a genuine standalone escape hatch, so account_name
+        // is NO LONGER unconditionally required — the handler enforces "at least one of
+        // account_name / account_id" instead. Neither is in the schema `required` list.
+        let required = requiredArray(of: t) ?? []
+        XCTAssertFalse(required.contains("account_name"),
+                       "account_name must be optional now (account_id-only sync is allowed, #191 verify)")
+        XCTAssertFalse(required.contains("account_id"), "account_id must stay optional")
+    }
+
     // MARK: - reply_email new optional params (issue #33)
 
     func testReplyEmail_advertisesCcAdditionalAttachmentsAndSaveAsDraft() throws {
@@ -567,6 +598,41 @@ final class ServerSchemaTests: XCTestCase {
                 body.contains("try resolveAccountIdForTool(accountId: decodeAccountId"),
                 "\(tool) handler must thread resolveAccountIdForTool over decodeAccountId (#176); "
                 + "a raw decodeAccountId re-opens the -1728 email→description gap")
+        }
+    }
+
+    /// #191: the two action handlers must thread resolveAccountIdForTool too (structural
+    /// pin, same discipline — they use gated forms not matched by the #176 literal above).
+    /// Locks the email→UUID wiring so a future edit can't silently revert to a bare
+    /// description selector. (Handler behaviour isn't actor-unit-testable; resolveAccountIdForTool
+    /// itself is covered by the #176 suite — this pins that the wiring stays connected.)
+    func testSyncCheckHandlers_threadResolveAccountIdForTool() throws {
+        let serverSource = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/CheAppleMailMCP/Server.swift")
+        let source = try String(contentsOf: serverSource, encoding: .utf8)
+
+        // Bound the case body to the NEXT case; a missing next-case sentinel returns nil
+        // (XCTFail below) rather than falling back to the whole file — otherwise the
+        // assertions could false-pass on resolveAccountIdForTool from an unrelated handler
+        // (#191 verify R2 finding 10). Both target tools are mid-switch, so the sentinel
+        // is always present; this guards against a future edit moving them to the end.
+        func caseBody(_ tool: String) -> String? {
+            guard let start = source.range(of: "case \"\(tool)\":") else { return nil }
+            let tail = source[start.upperBound...]
+            guard let next = tail.range(of: "\n        case \"") else { return nil }
+            return String(tail[..<next.lowerBound])
+        }
+
+        for tool in ["check_for_new_mail", "synchronize_account"] {
+            guard let body = caseBody(tool) else {
+                XCTFail("\(tool) case body not bounded in Server.swift (missing next-case sentinel)"); continue
+            }
+            XCTAssertTrue(body.contains("resolveAccountIdForTool("),
+                          "\(tool) handler must thread resolveAccountIdForTool (#191); a raw "
+                          + "decodeAccountId / bare account_name re-opens the -1728 email→description gap")
+            XCTAssertTrue(body.contains("accountId:"),
+                          "\(tool) handler must pass the resolved accountId into the controller method (#191)")
         }
     }
 
