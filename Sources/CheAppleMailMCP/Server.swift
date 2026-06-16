@@ -865,7 +865,7 @@ class CheAppleMailMCPServer {
             let accountId = decodeAccountId(arguments, tool: invokedTool)
             let emails = try await mailController.listEmails(mailbox: mailbox, accountName: accountName, accountId: accountId, limit: limit)
             // Fallback can't fetch limit+1 cheaply; truncated is best-effort heuristic (#204).
-            return formatJSON(Self.resultEnvelope(results: emails, limit: limit, truncated: emails.count >= limit))
+            return formatJSON(Self.resultEnvelope(results: emails, limit: limit, truncated: emails.count == limit))
 
         case "get_email":
             let id = try requireMessageId(arguments)
@@ -942,7 +942,7 @@ class CheAppleMailMCPServer {
             let accountId = decodeAccountId(arguments, tool: invokedTool)
             let results = try await mailController.searchEmails(query: query, mailbox: mailbox, accountName: accountName, accountId: accountId, limit: limit, sort: sort)
             // Fallback can't fetch limit+1 cheaply; truncated is best-effort heuristic (#204).
-            return formatJSON(Self.resultEnvelope(results: results, limit: limit, truncated: results.count >= limit))
+            return formatJSON(Self.resultEnvelope(results: results, limit: limit, truncated: results.count == limit))
 
         case "get_unread_count":
             let mailbox = arguments["mailbox"]?.stringValue

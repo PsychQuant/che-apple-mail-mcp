@@ -251,8 +251,12 @@ public final class EnvelopeIndexReader {
     /// List emails in a mailbox via SQLite.
     /// List with truncation detection: fetches up to `limit + 1` rows so the
     /// caller can tell whether more existed than were returned (#204).
-    public func listEmailsPage(mailbox: String, accountName: String, limit: Int = 50) throws -> (results: [[String: Any]], truncated: Bool) {
+    public func listEmailsPage(mailbox: String, accountName: String, limit rawLimit: Int = 50) throws -> (results: [[String: Any]], truncated: Bool) {
         guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
+
+        // Clamp limit: negative would trap `prefix()`, above Int32.max-1 would
+        // overflow the `+1` bind. Negative → 0 (empty, crash-free). (#204)
+        let limit = min(max(rawLimit, 0), Int(Int32.max) - 1)
 
         var conditions = ["m.deleted = 0"]
         var bindings: [String] = []
@@ -292,7 +296,7 @@ public final class EnvelopeIndexReader {
             idx += 1
         }
         // Fetch one extra row to detect truncation definitively (#204).
-        let fetchLimit = limit >= Int(Int32.max) ? limit : limit + 1
+        let fetchLimit = limit + 1
         sqlite3_bind_int(stmt, idx, Int32(fetchLimit))
 
         var results: [[String: Any]] = []
@@ -465,6 +469,11 @@ public final class EnvelopeIndexReader {
             throw MailSQLiteError.queryFailed("Database not open")
         }
 
+        // Clamp limit before use: a negative value would trap `prefix()`, and a
+        // value above Int32.max-1 would overflow the `+1` bind. Negative → 0
+        // (empty result, crash-free). (#204 verify CRITICAL)
+        let limit = min(max(params.limit, 0), Int(Int32.max) - 1)
+
         var conditions: [String] = ["m.deleted = 0"]
         var bindings: [String] = []
         let likeQuery = "%\(params.query)%"
@@ -560,7 +569,7 @@ public final class EnvelopeIndexReader {
             idx += 1
         }
         // Fetch one extra row to detect truncation definitively (#204).
-        let fetchLimit = params.limit >= Int(Int32.max) ? params.limit : params.limit + 1
+        let fetchLimit = limit + 1
         sqlite3_bind_int(stmt, idx, Int32(fetchLimit))
 
         // Execute and collect results
@@ -598,8 +607,8 @@ public final class EnvelopeIndexReader {
             ))
         }
 
-        let truncated = results.count > params.limit
-        return (Array(results.prefix(params.limit)), truncated)
+        let truncated = results.count > limit
+        return (Array(results.prefix(limit)), truncated)
     }
 
     /// Backward-compatible array form — returns at most `limit` results without

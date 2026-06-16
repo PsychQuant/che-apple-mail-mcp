@@ -113,4 +113,42 @@ final class SearchTruncationTests: XCTestCase {
             try reader.listEmails(mailbox: "INBOX", accountName: "Alice", limit: 3).count,
             try reader.listEmailsPage(mailbox: "INBOX", accountName: "Alice", limit: 3).results.count)
     }
+
+    // MARK: - Limit clamping (#204 verify CRITICAL: negative limit must not trap prefix())
+
+    func testSearchPage_negativeLimitDoesNotTrap() throws {
+        let reader = try makeReader(messageCount: 5)
+        // Pre-fix: limit -1 → fetchLimit 0 → Array(prefix(-1)) traps (fatal).
+        // Post-fix: clamped to 0 → empty, crash-free.
+        let page = try reader.searchPage(SearchParameters(query: "match", field: .subject, limit: -1))
+        XCTAssertEqual(page.results.count, 0)
+    }
+
+    func testListEmailsPage_negativeLimitDoesNotTrap() throws {
+        let reader = try makeReader(messageCount: 5)
+        let page = try reader.listEmailsPage(mailbox: "INBOX", accountName: "Alice", limit: -1)
+        XCTAssertEqual(page.results.count, 0)
+    }
+
+    func testSearchPage_zeroLimitNoMatchNotTruncated() throws {
+        let reader = try makeReader(messageCount: 5)
+        let page = try reader.searchPage(SearchParameters(query: "no_such_zzqx", field: .subject, limit: 0))
+        XCTAssertEqual(page.results.count, 0)
+        XCTAssertFalse(page.truncated)
+    }
+
+    func testSearchPage_zeroLimitWithMatchesIsTruncated() throws {
+        let reader = try makeReader(messageCount: 5)
+        // limit 0 + matches exist → returns nothing but signals there is more.
+        let page = try reader.searchPage(SearchParameters(query: "match", field: .subject, limit: 0))
+        XCTAssertEqual(page.results.count, 0)
+        XCTAssertTrue(page.truncated)
+    }
+
+    func testListEmailsPage_notTruncatedAtExactLimit() throws {
+        let reader = try makeReader(messageCount: 5)
+        let page = try reader.listEmailsPage(mailbox: "INBOX", accountName: "Alice", limit: 5)
+        XCTAssertEqual(page.results.count, 5)
+        XCTAssertFalse(page.truncated, "exactly limit must NOT be truncated (limit+1 fetch)")
+    }
 }
