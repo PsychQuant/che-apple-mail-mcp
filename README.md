@@ -309,12 +309,22 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 
 ### Step 3: Grant Permissions
 
+**Automation** (control Mail.app):
+
 ```bash
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
 ```
 
 1. Find **CheAppleMailMCP** and enable permission for **Mail.app**
 2. If using Claude Code, also add **Terminal** or **iTerm**
+
+**Full Disk Access** (the SQLite fast path + `export_emails_markdown` read `~/Library/Mail`):
+
+```bash
+open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
+```
+
+Add **`~/bin/CheAppleMailMCP`** (the exact binary path) and enable it. Without Full Disk Access, read tools silently fall back to the slower AppleScript path and SQLite-only features (`projection`, `export_emails_markdown`) fail. With a Developer ID-signed build this grant survives version bumps — see [Signing & Notarization](#signing--notarization).
 
 ### Step 4: Restart Claude
 
@@ -485,6 +495,47 @@ Still **not** covered by `account_id` (tracked): `get_account_info` / `list_mail
 - **Write/state path**: AppleScript via `NSAppleScript`
 - **Transport**: stdio
 - **Platform**: macOS 13.0+ (Ventura and later)
+
+---
+
+## Signing & Notarization
+
+The distributed binary is **Developer ID-signed and notarized**, and that is not cosmetic. The fast read path needs **Full Disk Access (FDA)**, and macOS TCC keys an FDA grant to the binary's *designated requirement*. For an ad-hoc binary that requirement is the **cdhash**, so every version bump invalidated the grant and you had to re-add the binary to the Full Disk Access list after each release. A stable Developer ID signature keys the grant to the **signing identity** instead, so it survives version bumps (#211) — that signature, not notarization, is what delivers the persistence.
+
+Notarization matters for **quarantined-launch** paths: a browser download or the `.mcpb` (Claude Desktop) install, where Gatekeeper assesses the binary on first launch. The plugin wrapper's `curl` + `exec` path sets no quarantine attribute, so Gatekeeper never fires there. We notarize anyway so the published release asset is safe to run by any means.
+
+> **The first grant is still manual.** FDA (`kTCCServiceSystemPolicyAllFiles`) has no programmatic request API — an app can only deep-link you to the settings pane. Signing makes that first grant *permanent*, not automatic.
+
+### One-time setup (maintainers)
+
+```bash
+# 1. Developer ID Application cert in your login keychain (needs an Apple Developer account)
+security find-identity -p codesigning -v        # find your identity
+
+# 2. notarytool keychain profile (prompts for an app-specific password — never pass it on the CLI)
+xcrun notarytool store-credentials <profile-name> \
+  --apple-id <your-apple-id> --team-id <your-team-id>
+
+# 3. Export both for the signed targets
+export DEVELOPER_ID='Developer ID Application: Your Name (TEAMID)'
+export NOTARY_PROFILE='<profile-name>'
+```
+
+### Dev install on your own machine (fast — no notarization)
+
+```bash
+make install-signed     # build + Developer ID sign + copy to ~/bin
+```
+
+Use this to get a **stable FDA grant on your own Mac without waiting for Apple notarization**: your own cert launches fine locally, and the grant survives future rebuilds. Grant Full Disk Access once to `~/bin/CheAppleMailMCP` and you are done.
+
+### Distribution release (signed + notarized + published)
+
+```bash
+make release-signed VERSION=vX.Y.Z      # wraps scripts/release.sh with REQUIRE_CODESIGN=1
+```
+
+This builds a **universal** (arm64 + x86_64) binary, signs it, notarizes it (1–15 min Apple round-trip), and uploads it to the GitHub release. Forks without certs can still cut an unsigned dev release with `SKIP_CODESIGN=1 ./scripts/release.sh vX.Y.Z`.
 
 ---
 

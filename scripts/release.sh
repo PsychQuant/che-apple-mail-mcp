@@ -26,7 +26,10 @@ set -euo pipefail
 
 REPO="PsychQuant/che-apple-mail-mcp"
 BINARY_NAME="CheAppleMailMCP"
-BINARY_PATH=".build/release/$BINARY_NAME"
+# Distribution artifact: a signed + notarized UNIVERSAL (arm64 + x86_64) binary,
+# lipo'd into a dedicated dist dir so the per-arch .build trees stay untouched.
+DIST_DIR=".build/dist"
+BINARY_PATH="$DIST_DIR/$BINARY_NAME"
 
 # ---- Helpers -----------------------------------------------------------------
 
@@ -121,17 +124,32 @@ info "Release notes (first 5 lines):"
 echo "$RELEASE_NOTES" | head -5 | sed 's/^/    /'
 echo "    ..."
 
-# ---- Build binary ------------------------------------------------------------
+# ---- Build universal binary --------------------------------------------------
 
-info "Building release binary..."
-swift build -c release
+info "Building release binary (universal: arm64 + x86_64)..."
+swift build -c release --arch arm64
+swift build -c release --arch x86_64
 
-if [[ ! -f "$BINARY_PATH" ]]; then
-    die "expected binary at $BINARY_PATH but it's missing. build failed?"
+ARM64_BINARY=".build/arm64-apple-macosx/release/$BINARY_NAME"
+X64_BINARY=".build/x86_64-apple-macosx/release/$BINARY_NAME"
+if [[ ! -f "$ARM64_BINARY" || ! -f "$X64_BINARY" ]]; then
+    die "expected per-arch binaries missing (arm64: $ARM64_BINARY, x86_64: $X64_BINARY). build failed?"
 fi
 
+mkdir -p "$DIST_DIR"
+# rm -f forces a fresh inode (macOS caches code-signature hashes per inode;
+# reusing one held by a running process causes "load code signature error 2").
+rm -f "$BINARY_PATH"
+lipo -create "$ARM64_BINARY" "$X64_BINARY" -output "$BINARY_PATH"
+chmod +x "$BINARY_PATH"
+
+# Validate (not just print) that both slices made it into the fat binary (#211).
+ARCHS="$(lipo -archs "$BINARY_PATH")"
+[[ "$ARCHS" == *arm64* && "$ARCHS" == *x86_64* ]] \
+    || die "universal binary missing expected archs (got: $ARCHS)"
+
 BINARY_SIZE="$(ls -lh "$BINARY_PATH" | awk '{print $5}')"
-info "Binary built: $BINARY_PATH ($BINARY_SIZE)"
+info "Universal binary built: $BINARY_PATH ($BINARY_SIZE), archs: $ARCHS"
 
 # ---- Confirm with user -------------------------------------------------------
 
@@ -147,10 +165,11 @@ About to release $VERSION with the following plan:
     Notes: extracted from CHANGELOG.md [$VERSION_NO_V]
 
 This will:
-    1. Create git tag $VERSION on HEAD
-    2. Push tag to origin
-    3. Create GitHub release $VERSION
-    4. Upload $BINARY_NAME as release asset
+    1. Sign + notarize the universal binary (unless SKIP_CODESIGN / no DEVELOPER_ID)
+    2. Create git tag $VERSION on HEAD
+    3. Push tag to origin
+    4. Create GitHub release $VERSION
+    5. Upload $BINARY_NAME (+ .sha256) as release assets
 
 EOF
 read -p "Proceed? [y/N] " -n 1 -r
@@ -159,6 +178,51 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
     info "Aborted."
     exit 0
 fi
+
+# ---- Sign + notarize ---------------------------------------------------------
+# macOS TCC keys the Full Disk Access grant to the binary's designated
+# requirement. A Developer ID signature makes that grant stable across version
+# bumps; an ad-hoc binary loses it every release (#211).
+#
+# Gate (fork-friendly):
+#   SKIP_CODESIGN=1                    → skip (dev/emergency; ships ad-hoc binary)
+#   no DEVELOPER_ID / cert not present → skip with warning (default for forks)
+#   REQUIRE_CODESIGN=1                 → fail-fast instead of skipping
+#                                        (set by `make release-signed`)
+#   otherwise                          → sign + notarize
+SHOULD_SIGN=true
+SKIP_REASON=""
+if [[ "${SKIP_CODESIGN:-}" == "1" || "${SKIP_CODESIGN:-}" == "true" ]]; then
+    SHOULD_SIGN=false; SKIP_REASON="SKIP_CODESIGN=$SKIP_CODESIGN"
+elif [[ -z "${DEVELOPER_ID:-}" ]]; then
+    SHOULD_SIGN=false; SKIP_REASON="DEVELOPER_ID env not set"
+elif ! security find-identity -p codesigning -v 2>/dev/null | grep -qF "$DEVELOPER_ID"; then
+    SHOULD_SIGN=false; SKIP_REASON="codesigning identity '$DEVELOPER_ID' not in keychain"
+fi
+
+if [[ "$SHOULD_SIGN" == "false" ]]; then
+    if [[ "${REQUIRE_CODESIGN:-}" == "1" || "${REQUIRE_CODESIGN:-}" == "true" ]]; then
+        die "Refusing to ship an unsigned binary: REQUIRE_CODESIGN set but $SKIP_REASON.
+        Set DEVELOPER_ID + NOTARY_PROFILE and install the Developer ID Application cert.
+        See README 'Signing & Notarization'."
+    fi
+    info "Skipping Developer ID signing + notarize ($SKIP_REASON)."
+    echo "    Applying an ad-hoc signature to the final universal binary —"
+    echo "    lipo invalidates the per-arch signatures, and an unsigned arm64"
+    echo "    binary can fail to launch (#211 CODEX-2)."
+    codesign --force --sign - "$BINARY_PATH"
+    echo "    ⚠ Ad-hoc signed only. On macOS, users must re-grant Full Disk Access"
+    echo "      after every such release (#211). For a stable grant that survives"
+    echo "      version bumps, set DEVELOPER_ID + NOTARY_PROFILE and re-run"
+    echo "      (or use make release-signed)."
+else
+    info "Signing + notarizing the universal binary..."
+    "$(dirname "$0")/sign-and-notarize.sh" "$BINARY_PATH"
+fi
+
+# SHA-256 companion of the (possibly signed) binary, uploaded alongside it.
+shasum -a 256 "$BINARY_PATH" | awk '{print $1}' > "$BINARY_PATH.sha256"
+info "SHA-256: $(cat "$BINARY_PATH.sha256")"
 
 # ---- Tag + release + upload --------------------------------------------------
 
@@ -174,8 +238,8 @@ gh release create "$VERSION" \
     --title "$TITLE" \
     --notes "$RELEASE_NOTES"
 
-info "Uploading $BINARY_NAME..."
-gh release upload "$VERSION" "$BINARY_PATH" --repo "$REPO"
+info "Uploading $BINARY_NAME (+ .sha256)..."
+gh release upload "$VERSION" "$BINARY_PATH" "$BINARY_PATH.sha256" --repo "$REPO"
 
 # ---- Done --------------------------------------------------------------------
 

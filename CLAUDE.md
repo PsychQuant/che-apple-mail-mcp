@@ -54,10 +54,17 @@ The script will:
 
 1. Sanity-check the working tree, tag absence, and CHANGELOG entry
 2. Extract release notes from CHANGELOG.md's `[X.Y.Z]` section
-3. `swift build -c release` to produce `.build/release/CheAppleMailMCP`
+3. Build a **universal** (arm64 + x86_64) binary into `.build/dist/`
 4. Confirm with you before any destructive / remote operation
-5. Create git tag `vX.Y.Z`, push to origin
-6. Create GitHub release and upload the binary
+5. **Sign + notarize** the binary (Developer ID), unless `SKIP_CODESIGN=1` or no `DEVELOPER_ID` is set
+6. Create git tag `vX.Y.Z`, push to origin
+7. Create GitHub release and upload the signed binary + `.sha256`
+
+For a signed release, export `DEVELOPER_ID` + `NOTARY_PROFILE` and prefer
+`make release-signed VERSION=vX.Y.Z` (sets `REQUIRE_CODESIGN=1` so it refuses to
+ship an unsigned binary). See README "Signing & Notarization" for one-time
+setup and why signing is what keeps Full Disk Access working across upgrades
+([#211](https://github.com/PsychQuant/che-apple-mail-mcp/issues/211)).
 
 After the script finishes, update `marketplace.json` in
 [`psychquant-claude-plugins`](https://github.com/PsychQuant/psychquant-claude-plugins)

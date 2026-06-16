@@ -21,7 +21,11 @@ let package = Package(
                 .product(name: "MCP", package: "swift-sdk"),
                 "MailSQLite"
             ],
-            path: "Sources/CheAppleMailMCP"
+            path: "Sources/CheAppleMailMCP",
+            // Entitlements.plist is consumed by scripts/sign-and-notarize.sh at
+            // release time, not compiled — exclude it so SwiftPM doesn't warn
+            // about an unhandled resource (#211).
+            exclude: ["Entitlements.plist"]
         ),
         .testTarget(
             name: "MailSQLiteTests",
