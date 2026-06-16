@@ -926,18 +926,11 @@ class CheAppleMailMCPServer {
             let dateToStr = arguments["date_to"]?.stringValue
 
             // #208: projection / dedup for cheap bulk collection (ids feeds export_emails_markdown).
-            let projection = arguments["projection"]?.stringValue ?? "full"
-            let dedupStr = arguments["dedup"]?.stringValue ?? "none"
-            guard ["full", "ids", "count"].contains(projection) else {
-                throw MailError.invalidParameter("projection must be 'full', 'ids', or 'count'")
-            }
-            guard ["none", "logical"].contains(dedupStr) else {
-                throw MailError.invalidParameter("dedup must be 'none' or 'logical'")
-            }
-            let dedup = dedupStr == "logical"
-            if dedup && projection == "full" {
-                throw MailError.invalidParameter("dedup 'logical' is only supported with projection 'ids' or 'count' (full-row dedup is not implemented)")
-            }
+            // Validation extracted to a pure static helper so the spec's normative
+            // "reject invalid combinations" contract is unit-testable.
+            let (projection, dedup) = try Self.validateSearchProjection(
+                projection: arguments["projection"]?.stringValue ?? "full",
+                dedup: arguments["dedup"]?.stringValue ?? "none")
 
             // Use SQLite search if available
             if let reader = indexReader {
@@ -1835,6 +1828,24 @@ class CheAppleMailMCPServer {
             "limit": limit,
             "truncated": truncated,
         ]
+    }
+
+    /// Validate + normalize the #208 `search_emails` `projection` / `dedup` params.
+    /// Pure (no I/O) so the spec's normative "reject invalid combinations" contract
+    /// (unknown enum value, or `dedup: logical` with `projection: full`) is
+    /// unit-testable. Returns the validated projection + a `dedup` bool.
+    static func validateSearchProjection(projection: String, dedup dedupStr: String) throws -> (projection: String, dedup: Bool) {
+        guard ["full", "ids", "count"].contains(projection) else {
+            throw MailError.invalidParameter("projection must be 'full', 'ids', or 'count'")
+        }
+        guard ["none", "logical"].contains(dedupStr) else {
+            throw MailError.invalidParameter("dedup must be 'none' or 'logical'")
+        }
+        let dedup = dedupStr == "logical"
+        if dedup && projection == "full" {
+            throw MailError.invalidParameter("dedup 'logical' is only supported with projection 'ids' or 'count' (full-row dedup is not implemented)")
+        }
+        return (projection, dedup)
     }
 
     private func formatJSON(_ value: Any) -> String {
