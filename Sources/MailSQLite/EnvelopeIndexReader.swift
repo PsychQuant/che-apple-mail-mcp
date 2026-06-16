@@ -249,7 +249,9 @@ public final class EnvelopeIndexReader {
     }
 
     /// List emails in a mailbox via SQLite.
-    public func listEmails(mailbox: String, accountName: String, limit: Int = 50) throws -> [[String: Any]] {
+    /// List with truncation detection: fetches up to `limit + 1` rows so the
+    /// caller can tell whether more existed than were returned (#204).
+    public func listEmailsPage(mailbox: String, accountName: String, limit: Int = 50) throws -> (results: [[String: Any]], truncated: Bool) {
         guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
 
         var conditions = ["m.deleted = 0"]
@@ -289,7 +291,9 @@ public final class EnvelopeIndexReader {
             sqlite3_bind_text(stmt, idx, binding, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
             idx += 1
         }
-        sqlite3_bind_int(stmt, idx, Int32(limit))
+        // Fetch one extra row to detect truncation definitively (#204).
+        let fetchLimit = limit >= Int(Int32.max) ? limit : limit + 1
+        sqlite3_bind_int(stmt, idx, Int32(fetchLimit))
 
         var results: [[String: Any]] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
@@ -304,7 +308,14 @@ public final class EnvelopeIndexReader {
                 "sender": sender
             ])
         }
-        return results
+        let truncated = results.count > limit
+        return (Array(results.prefix(limit)), truncated)
+    }
+
+    /// Backward-compatible array form — returns at most `limit` results without
+    /// the truncation flag. Prefer `listEmailsPage` when truncation matters (#204).
+    public func listEmails(mailbox: String, accountName: String, limit: Int = 50) throws -> [[String: Any]] {
+        try listEmailsPage(mailbox: mailbox, accountName: accountName, limit: limit).results
     }
 
     /// Get unread count via SQLite mailboxes table.
@@ -447,7 +458,9 @@ public final class EnvelopeIndexReader {
     /// - Parameter params: Search parameters (query, field, filters, sort, limit).
     /// - Returns: Array of search results.
     /// - Throws: `MailSQLiteError.queryFailed` on SQLite errors.
-    public func search(_ params: SearchParameters) throws -> [SearchResult] {
+    /// Search with truncation detection: fetches up to `limit + 1` rows so the
+    /// caller can tell whether more matched than were returned (#204).
+    public func searchPage(_ params: SearchParameters) throws -> (results: [SearchResult], truncated: Bool) {
         guard let db = db else {
             throw MailSQLiteError.queryFailed("Database not open")
         }
@@ -546,7 +559,9 @@ public final class EnvelopeIndexReader {
             sqlite3_bind_text(stmt, idx, binding, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
             idx += 1
         }
-        sqlite3_bind_int(stmt, idx, Int32(params.limit))
+        // Fetch one extra row to detect truncation definitively (#204).
+        let fetchLimit = params.limit >= Int(Int32.max) ? params.limit : params.limit + 1
+        sqlite3_bind_int(stmt, idx, Int32(fetchLimit))
 
         // Execute and collect results
         var results: [SearchResult] = []
@@ -583,7 +598,14 @@ public final class EnvelopeIndexReader {
             ))
         }
 
-        return results
+        let truncated = results.count > params.limit
+        return (Array(results.prefix(params.limit)), truncated)
+    }
+
+    /// Backward-compatible array form — returns at most `limit` results without
+    /// the truncation flag. Prefer `searchPage` when truncation matters (#204).
+    public func search(_ params: SearchParameters) throws -> [SearchResult] {
+        try searchPage(params).results
     }
 
     // MARK: - Private Helpers
