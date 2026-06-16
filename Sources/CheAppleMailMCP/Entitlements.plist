@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Intentionally EMPTY (#211).
+
+    Unlike che-ical-mcp (which needs com.apple.security.personal-information.
+    calendars/reminders so macOS 26.5 will show the Calendar/Reminders TCC
+    prompt under hardened runtime), this server's only TCC dependency is
+    **Full Disk Access** (kTCCServiceSystemPolicyAllFiles).
+
+    FDA has NO corresponding entitlement key — there is no
+    "personal-information.full-disk-access". FDA is granted purely by the user
+    in System Settings; the binary needs no entitlement to benefit from it.
+    A hardened-runtime signature with no extra entitlements is sufficient: once
+    the user grants FDA, the process reads ~/Library/Mail with no sandbox in
+    the way.
+
+    Why ship an empty file at all: it makes the "no special entitlements"
+    decision explicit and gives scripts/sign-and-notarize.sh a stable, optional
+    --entitlements target. The point of signing here is the **stable Developer
+    ID designated requirement**, which makes TCC bind the FDA grant to the
+    signing identity (not the binary's cdhash) so it survives version bumps.
+
+    If a future feature ever needs a real entitlement, add it here.
+-->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>
