@@ -30,9 +30,11 @@ class CheAppleMailMCPServer {
             self.indexReader = try EnvelopeIndexReader(databasePath: EnvelopeIndexReader.defaultDatabasePath)
         } catch {
             let message = "EnvelopeIndexReader init failed: "
-                + "\(error.localizedDescription); "
-                + "all read tools will use AppleScript fallback path "
-                + "(slower; expected for EWS accounts, see README).\n"
+                + "\(error.localizedDescription)\n"
+                + "All read tools will use the AppleScript fallback path "
+                + "(slower; expected for EWS-only accounts, see README). "
+                + "For local IMAP/POP accounts this usually means Full Disk Access "
+                + "is missing — see the actionable steps above.\n"
             FileHandle.standardError.write(Data(message.utf8))
             self.indexReader = nil
         }
@@ -965,7 +967,7 @@ class CheAppleMailMCPServer {
 
             // Fallback to AppleScript — SQLite-only projections cannot be served here.
             if projection != "full" {
-                throw MailError.invalidParameter("projection '\(projection)' requires the SQLite envelope index, which is unavailable")
+                throw MailError.invalidParameter("projection '\(projection)' requires the SQLite envelope index, which is unavailable. " + FullDiskAccessHelp.unavailableSuffix())
             }
             let accountId = decodeAccountId(arguments, tool: invokedTool)
             let results = try await mailController.searchEmails(query: query, mailbox: mailbox, accountName: accountName, accountId: accountId, limit: limit, sort: sort)
@@ -1563,7 +1565,7 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("output_dir is required")
             }
             guard let exportReader = indexReader else {
-                throw MailError.invalidParameter("export_emails_markdown requires the SQLite envelope index, which is unavailable")
+                throw MailError.invalidParameter("export_emails_markdown requires the SQLite envelope index, which is unavailable. " + FullDiskAccessHelp.unavailableSuffix())
             }
             // direction derived from the optional mailbox label (no AppleScript fallback path).
             let exportMailbox = arguments["mailbox"]?.stringValue ?? ""

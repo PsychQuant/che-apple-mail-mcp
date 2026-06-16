@@ -87,9 +87,9 @@ public final class EnvelopeIndexReader {
 
         guard FileManager.default.fileExists(atPath: databasePath) else {
             throw MailSQLiteError.databaseNotAccessible(
-                "Database does not exist at \(databasePath). "
-                + "Ensure Full Disk Access is granted to the terminal application "
-                + "in System Settings > Privacy & Security > Full Disk Access."
+                FullDiskAccessHelp.guidance(
+                    reason: "Database does not exist or is unreadable at \(databasePath)."
+                )
             )
         }
 
@@ -100,9 +100,7 @@ public final class EnvelopeIndexReader {
             sqlite3_close(db)
             db = nil
             throw MailSQLiteError.databaseNotAccessible(
-                "Failed to open database: \(msg). "
-                + "Ensure Full Disk Access is granted to the terminal application "
-                + "in System Settings > Privacy & Security > Full Disk Access."
+                FullDiskAccessHelp.guidance(reason: "Failed to open database: \(msg).")
             )
         }
     }
