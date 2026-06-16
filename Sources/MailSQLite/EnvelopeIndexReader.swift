@@ -474,72 +474,7 @@ public final class EnvelopeIndexReader {
         // (empty result, crash-free). (#204 verify CRITICAL)
         let limit = min(max(params.limit, 0), Int(Int32.max) - 1)
 
-        var conditions: [String] = ["m.deleted = 0"]
-        var bindings: [String] = []
-        let likeQuery = "%\(params.query)%"
-
-        // Field-specific conditions
-        switch params.field {
-        case .subject:
-            conditions.append("s.subject LIKE ?")
-            bindings.append(likeQuery)
-
-        case .sender:
-            conditions.append("(a.address LIKE ? OR a.comment LIKE ?)")
-            bindings.append(likeQuery)
-            bindings.append(likeQuery)
-
-        case .recipient:
-            conditions.append("""
-                EXISTS (SELECT 1 FROM recipients r \
-                JOIN addresses ra ON r.address = ra.ROWID \
-                WHERE r.message = m.ROWID \
-                AND (ra.address LIKE ? OR ra.comment LIKE ?))
-                """)
-            bindings.append(likeQuery)
-            bindings.append(likeQuery)
-
-        case .any:
-            conditions.append("""
-                (s.subject LIKE ? \
-                OR a.address LIKE ? OR a.comment LIKE ? \
-                OR EXISTS (SELECT 1 FROM recipients r \
-                JOIN addresses ra ON r.address = ra.ROWID \
-                WHERE r.message = m.ROWID \
-                AND (ra.address LIKE ? OR ra.comment LIKE ?)))
-                """)
-            bindings.append(likeQuery) // subject
-            bindings.append(likeQuery) // sender address
-            bindings.append(likeQuery) // sender comment
-            bindings.append(likeQuery) // recipient address
-            bindings.append(likeQuery) // recipient comment
-        }
-
-        // Date range filtering
-        if let dateFrom = params.dateFrom {
-            conditions.append("m.date_received >= ?")
-            bindings.append(String(Int(dateFrom.timeIntervalSince1970)))
-        }
-        if let dateTo = params.dateTo {
-            conditions.append("m.date_received <= ?")
-            bindings.append(String(Int(dateTo.timeIntervalSince1970)))
-        }
-
-        // Account filter via mailbox URL
-        if let accountName = params.accountName {
-            if let uuid = accountUUIDs(forName: accountName).first {
-                conditions.append("mb.url LIKE ?")
-                bindings.append("%://\(uuid)/%")
-            }
-        }
-
-        // Mailbox filter
-        if let mailbox = params.mailbox {
-            let encoded = mailbox.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? mailbox
-            conditions.append("(mb.url LIKE ? OR mb.url LIKE ?)")
-            bindings.append("%/\(encoded)")
-            bindings.append("%/\(encoded)/%")
-        }
+        let (conditions, bindings) = buildSearchConditions(params)
 
         let sortDirection = params.sort == .asc ? "ASC" : "DESC"
 
@@ -615,6 +550,205 @@ public final class EnvelopeIndexReader {
     /// the truncation flag. Prefer `searchPage` when truncation matters (#204).
     public func search(_ params: SearchParameters) throws -> [SearchResult] {
         try searchPage(params).results
+    }
+
+    /// Build the shared WHERE conditions + positional bindings for a search query.
+    /// Used by `searchPage` (full rows), `searchIds` (rowId projection), and
+    /// `searchCount`. Defining the field / date / account / mailbox semantics
+    /// here once guarantees every projection matches identically (#208).
+    private func buildSearchConditions(_ params: SearchParameters) -> (conditions: [String], bindings: [String]) {
+        var conditions: [String] = ["m.deleted = 0"]
+        var bindings: [String] = []
+        let likeQuery = "%\(params.query)%"
+
+        // Field-specific conditions
+        switch params.field {
+        case .subject:
+            conditions.append("s.subject LIKE ?")
+            bindings.append(likeQuery)
+
+        case .sender:
+            conditions.append("(a.address LIKE ? OR a.comment LIKE ?)")
+            bindings.append(likeQuery)
+            bindings.append(likeQuery)
+
+        case .recipient:
+            conditions.append("""
+                EXISTS (SELECT 1 FROM recipients r \
+                JOIN addresses ra ON r.address = ra.ROWID \
+                WHERE r.message = m.ROWID \
+                AND (ra.address LIKE ? OR ra.comment LIKE ?))
+                """)
+            bindings.append(likeQuery)
+            bindings.append(likeQuery)
+
+        case .any:
+            conditions.append("""
+                (s.subject LIKE ? \
+                OR a.address LIKE ? OR a.comment LIKE ? \
+                OR EXISTS (SELECT 1 FROM recipients r \
+                JOIN addresses ra ON r.address = ra.ROWID \
+                WHERE r.message = m.ROWID \
+                AND (ra.address LIKE ? OR ra.comment LIKE ?)))
+                """)
+            bindings.append(likeQuery) // subject
+            bindings.append(likeQuery) // sender address
+            bindings.append(likeQuery) // sender comment
+            bindings.append(likeQuery) // recipient address
+            bindings.append(likeQuery) // recipient comment
+        }
+
+        // Date range filtering
+        if let dateFrom = params.dateFrom {
+            conditions.append("m.date_received >= ?")
+            bindings.append(String(Int(dateFrom.timeIntervalSince1970)))
+        }
+        if let dateTo = params.dateTo {
+            conditions.append("m.date_received <= ?")
+            bindings.append(String(Int(dateTo.timeIntervalSince1970)))
+        }
+
+        // Account filter via mailbox URL
+        if let accountName = params.accountName {
+            if let uuid = accountUUIDs(forName: accountName).first {
+                conditions.append("mb.url LIKE ?")
+                bindings.append("%://\(uuid)/%")
+            }
+        }
+
+        // Mailbox filter
+        if let mailbox = params.mailbox {
+            let encoded = mailbox.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? mailbox
+            conditions.append("(mb.url LIKE ? OR mb.url LIKE ?)")
+            bindings.append("%/\(encoded)")
+            bindings.append("%/\(encoded)/%")
+        }
+
+        return (conditions, bindings)
+    }
+
+    /// Light id-only projection (#208). Selects `ROWID` only and **never**
+    /// performs the per-row recipient subquery that `searchPage` uses to fill
+    /// `to` — so a bulk caller collecting rowIds for `export_emails_markdown`
+    /// gets an orders-of-magnitude smaller payload and avoids N+1 queries.
+    /// Honors the #204 `limit + 1` definitive truncation. When `dedup` is true,
+    /// collapses mailbox-duplicate copies (same subject / sender / date_received)
+    /// to one representative `MIN(ROWID)` server-side via `GROUP BY`.
+    public func searchIds(_ params: SearchParameters, dedup: Bool = false) throws -> (ids: [Int], truncated: Bool) {
+        guard let db = db else {
+            throw MailSQLiteError.queryFailed("Database not open")
+        }
+
+        // Same clamp as searchPage: negative → 0 (crash-free), cap below Int32.max-1 (#204).
+        let limit = min(max(params.limit, 0), Int(Int32.max) - 1)
+        let (conditions, bindings) = buildSearchConditions(params)
+        let sortDirection = params.sort == .asc ? "ASC" : "DESC"
+        let whereClause = conditions.joined(separator: " AND ")
+
+        let sql: String
+        if dedup {
+            sql = """
+                SELECT MIN(m.ROWID)
+                FROM messages m
+                JOIN subjects s ON m.subject = s.ROWID
+                JOIN addresses a ON m.sender = a.ROWID
+                JOIN mailboxes mb ON m.mailbox = mb.ROWID
+                WHERE \(whereClause)
+                GROUP BY s.subject, a.address, m.date_received
+                ORDER BY m.date_received \(sortDirection)
+                LIMIT ?
+                """
+        } else {
+            sql = """
+                SELECT m.ROWID
+                FROM messages m
+                JOIN subjects s ON m.subject = s.ROWID
+                JOIN addresses a ON m.sender = a.ROWID
+                JOIN mailboxes mb ON m.mailbox = mb.ROWID
+                WHERE \(whereClause)
+                ORDER BY m.date_received \(sortDirection)
+                LIMIT ?
+                """
+        }
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            let msg = String(cString: sqlite3_errmsg(db))
+            throw MailSQLiteError.queryFailed("Prepare failed: \(msg)")
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var idx: Int32 = 1
+        for binding in bindings {
+            sqlite3_bind_text(stmt, idx, binding, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            idx += 1
+        }
+        // Fetch one extra to detect truncation definitively (#204).
+        let fetchLimit = limit + 1
+        sqlite3_bind_int(stmt, idx, Int32(fetchLimit))
+
+        var ids: [Int] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            ids.append(Int(sqlite3_column_int64(stmt, 0)))
+        }
+
+        let truncated = ids.count > limit
+        return (Array(ids.prefix(limit)), truncated)
+    }
+
+    /// Count-only projection (#208). Returns the total number of matches,
+    /// **ignoring** `limit`, for cheap backlog scoping. When `dedup` is true,
+    /// counts deduplicated logical emails (same subject / sender / date_received)
+    /// rather than raw mailbox-duplicated rows.
+    public func searchCount(_ params: SearchParameters, dedup: Bool = false) throws -> Int {
+        guard let db = db else {
+            throw MailSQLiteError.queryFailed("Database not open")
+        }
+
+        let (conditions, bindings) = buildSearchConditions(params)
+        let whereClause = conditions.joined(separator: " AND ")
+
+        let sql: String
+        if dedup {
+            sql = """
+                SELECT COUNT(*) FROM (
+                    SELECT 1
+                    FROM messages m
+                    JOIN subjects s ON m.subject = s.ROWID
+                    JOIN addresses a ON m.sender = a.ROWID
+                    JOIN mailboxes mb ON m.mailbox = mb.ROWID
+                    WHERE \(whereClause)
+                    GROUP BY s.subject, a.address, m.date_received
+                )
+                """
+        } else {
+            sql = """
+                SELECT COUNT(*)
+                FROM messages m
+                JOIN subjects s ON m.subject = s.ROWID
+                JOIN addresses a ON m.sender = a.ROWID
+                JOIN mailboxes mb ON m.mailbox = mb.ROWID
+                WHERE \(whereClause)
+                """
+        }
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            let msg = String(cString: sqlite3_errmsg(db))
+            throw MailSQLiteError.queryFailed("Prepare failed: \(msg)")
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var idx: Int32 = 1
+        for binding in bindings {
+            sqlite3_bind_text(stmt, idx, binding, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            idx += 1
+        }
+
+        guard sqlite3_step(stmt) == SQLITE_ROW else {
+            return 0
+        }
+        return Int(sqlite3_column_int64(stmt, 0))
     }
 
     // MARK: - Private Helpers
