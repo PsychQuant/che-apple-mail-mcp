@@ -141,7 +141,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "search_emails",
-                description: "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101). Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204).",
+                description: "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101). Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204). For BULK collection (e.g. feeding export_emails_markdown), use `projection: \"ids\"` to get just rowId strings (far smaller payload, no per-row recipient fetch) and `dedup: \"logical\"` to collapse Gmail mailbox duplicates server-side; `projection: \"count\"` returns just the total match count for scoping (#208).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -153,7 +153,9 @@ class CheAppleMailMCPServer {
                         "date_from": .object(["type": .string("string"), "description": .string("Start date filter, ISO 8601 (e.g., '2026-01-01')")]),
                         "date_to": .object(["type": .string("string"), "description": .string("End date filter, ISO 8601 (e.g., '2026-03-31')")]),
                         "limit": .object(["type": .string("integer"), "description": .string("Maximum results (default: 50)")]),
-                        "sort": .object(["type": .string("string"), "description": .string("Sort order by date: 'desc' (newest first, default) or 'asc' (oldest first)")])
+                        "sort": .object(["type": .string("string"), "description": .string("Sort order by date: 'desc' (newest first, default) or 'asc' (oldest first)")]),
+                        "projection": .object(["type": .string("string"), "description": .string("Result shape: 'full' (default, the {results,returned,limit,truncated} envelope of full objects), 'ids' (envelope whose `results` is an array of message rowId strings only — orders-of-magnitude smaller, for bulk collection feeding export_emails_markdown), or 'count' (just {count}, the total matches ignoring `limit`, for scoping). 'ids'/'count' require the SQLite index (#208).")]),
+                        "dedup": .object(["type": .string("string"), "description": .string("'none' (default) or 'logical'. 'logical' collapses mailbox-duplicate copies (same subject+sender+date_received, e.g. Gmail INBOX/Archive/All Mail) to one row server-side. Only valid with projection 'ids' or 'count' (#208).")])
                     ]),
                     "required": .array([.string("query")])
                 ])
@@ -922,8 +924,15 @@ class CheAppleMailMCPServer {
             let fieldStr = arguments["field"]?.stringValue ?? "any"
             let dateFromStr = arguments["date_from"]?.stringValue
             let dateToStr = arguments["date_to"]?.stringValue
-            // Use SQLite search if available
 
+            // #208: projection / dedup for cheap bulk collection (ids feeds export_emails_markdown).
+            // Validation extracted to a pure static helper so the spec's normative
+            // "reject invalid combinations" contract is unit-testable.
+            let (projection, dedup) = try Self.validateSearchProjection(
+                projection: arguments["projection"]?.stringValue ?? "full",
+                dedup: arguments["dedup"]?.stringValue ?? "none")
+
+            // Use SQLite search if available
             if let reader = indexReader {
                 let field = SearchField(rawValue: fieldStr) ?? .any
                 let sortOrder = SortOrder(rawValue: sort) ?? .desc
@@ -934,11 +943,30 @@ class CheAppleMailMCPServer {
                     mailbox: mailbox, dateFrom: dateFrom, dateTo: dateTo,
                     sort: sortOrder, limit: limit
                 )
-                let page = try reader.searchPage(params)
-                let formatted: [[String: Any]] = page.results.map(Self.formatSearchResultForJSON)
-                return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
+                switch projection {
+                case "ids":
+                    let page = try reader.searchIds(params, dedup: dedup)
+                    let ids = page.ids.map { String($0) }
+                    return formatJSON([
+                        "results": ids,
+                        "returned": ids.count,
+                        "limit": limit,
+                        "truncated": page.truncated
+                    ])
+                case "count":
+                    let count = try reader.searchCount(params, dedup: dedup)
+                    return formatJSON(["count": count])
+                default:
+                    let page = try reader.searchPage(params)
+                    let formatted: [[String: Any]] = page.results.map(Self.formatSearchResultForJSON)
+                    return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
+                }
             }
-            // Fallback to AppleScript
+
+            // Fallback to AppleScript — SQLite-only projections cannot be served here.
+            if projection != "full" {
+                throw MailError.invalidParameter("projection '\(projection)' requires the SQLite envelope index, which is unavailable")
+            }
             let accountId = decodeAccountId(arguments, tool: invokedTool)
             let results = try await mailController.searchEmails(query: query, mailbox: mailbox, accountName: accountName, accountId: accountId, limit: limit, sort: sort)
             // Fallback can't fetch limit+1 cheaply; truncated is best-effort heuristic (#204).
@@ -1800,6 +1828,24 @@ class CheAppleMailMCPServer {
             "limit": limit,
             "truncated": truncated,
         ]
+    }
+
+    /// Validate + normalize the #208 `search_emails` `projection` / `dedup` params.
+    /// Pure (no I/O) so the spec's normative "reject invalid combinations" contract
+    /// (unknown enum value, or `dedup: logical` with `projection: full`) is
+    /// unit-testable. Returns the validated projection + a `dedup` bool.
+    static func validateSearchProjection(projection: String, dedup dedupStr: String) throws -> (projection: String, dedup: Bool) {
+        guard ["full", "ids", "count"].contains(projection) else {
+            throw MailError.invalidParameter("projection must be 'full', 'ids', or 'count'")
+        }
+        guard ["none", "logical"].contains(dedupStr) else {
+            throw MailError.invalidParameter("dedup must be 'none' or 'logical'")
+        }
+        let dedup = dedupStr == "logical"
+        if dedup && projection == "full" {
+            throw MailError.invalidParameter("dedup 'logical' is only supported with projection 'ids' or 'count' (full-row dedup is not implemented)")
+        }
+        return (projection, dedup)
     }
 
     private func formatJSON(_ value: Any) -> String {
