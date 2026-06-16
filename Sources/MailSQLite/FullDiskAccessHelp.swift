@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#endif
 
 /// Shared, actionable guidance for the case where Apple Mail's Envelope Index
 /// (the SQLite fast path) can't be read because **Full Disk Access (FDA)** is
@@ -24,11 +27,31 @@ public enum FullDiskAccessHelp {
     /// Absolute path of the currently-running binary — the EXACT entry the user
     /// must add to the Full Disk Access list. Deliberately not "the terminal
     /// application": this MCP server is launched by Claude Code, not a terminal.
+    ///
+    /// Uses `_NSGetExecutablePath` (the real executable path) rather than
+    /// `argv[0]`, which is not guaranteed to be the executable: a PATH launch
+    /// gives a bare name, a symlink launch gives the link, and a launcher can
+    /// rewrite it (#211 CODEX-4). Falls back to argv[0] only if that API fails.
     public static func binaryPath() -> String {
+        #if canImport(Darwin)
+        var size: UInt32 = 0
+        _ = _NSGetExecutablePath(nil, &size)   // first call: learn required size
+        if size > 0 {
+            var buffer = [CChar](repeating: 0, count: Int(size))
+            if _NSGetExecutablePath(&buffer, &size) == 0 {
+                let path = String(cString: buffer)
+                if !path.isEmpty {
+                    // resolvingSymlinksInPath gives the canonical real path —
+                    // the exact entry TCC matches against.
+                    return URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+                }
+            }
+        }
+        #endif
+        // Fallback: argv[0], best-effort.
         let argv0 = CommandLine.arguments.first ?? ""
         guard !argv0.isEmpty else { return "the CheAppleMailMCP binary" }
         if argv0.hasPrefix("/") { return argv0 }
-        // Resolve a relative argv[0] against cwd so the path is clickable/absolute.
         let cwd = FileManager.default.currentDirectoryPath
         return URL(fileURLWithPath: argv0, relativeTo: URL(fileURLWithPath: cwd))
             .standardizedFileURL.path

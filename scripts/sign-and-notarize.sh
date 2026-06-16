@@ -17,9 +17,11 @@
 # an un-notarized (even ad-hoc) binary would exec identically. We notarize so
 # the published release asset is safe to run by ANY means, not only the wrapper.
 #
-# Unlike che-ical-mcp this binary needs NO personal-information entitlement:
-# Full Disk Access (kTCCServiceSystemPolicyAllFiles) is not a requestable
-# entitlement. The entitlements file (if present) is therefore optional/empty.
+# Entitlements: Full Disk Access (kTCCServiceSystemPolicyAllFiles) is NOT a
+# requestable entitlement (pure user grant). BUT this server controls Mail.app
+# via Apple events, which a hardened-runtime process may not send without
+# com.apple.security.automation.apple-events — so Entitlements.plist carries
+# that key (#211 CODEX-1). Signing without it breaks all Mail AppleScript control.
 #
 # Stapling is NOT performed: stapler staple does not support raw Mach-O
 # binaries (only .app/.pkg/.dmg). Gatekeeper online-checks at first launch
@@ -109,20 +111,28 @@ if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>
     exit 1
 fi
 
-# Entitlements are optional for this server (FDA needs none). Use them only if
-# the file exists; otherwise sign with hardened runtime + no entitlements.
+# Entitlements are REQUIRED for correct Mail control (the file carries the
+# apple-events entitlement). Kept as an `if` for fork-friendliness, but warn
+# loudly if absent — a hardened-runtime build with no entitlements breaks all
+# Mail.app AppleScript control (#211 CODEX-1).
 CODESIGN_ENTITLEMENT_ARGS=()
 if [[ -f "$ENTITLEMENTS" ]]; then
     CODESIGN_ENTITLEMENT_ARGS=(--entitlements "$ENTITLEMENTS")
     ENT_DESC="$ENTITLEMENTS"
 else
-    ENT_DESC="(none — hardened runtime only; FDA needs no entitlement)"
+    ENT_DESC="(none — see WARNING)"
+    echo "⚠ Entitlements.plist not found at $ENTITLEMENTS — signing WITHOUT" >&2
+    echo "  com.apple.security.automation.apple-events. A hardened-runtime build" >&2
+    echo "  with no entitlements breaks all Mail.app AppleScript control" >&2
+    echo "  (errAEEventNotPermitted -1743). Restore the file before a real release." >&2
 fi
 
-# Use mktemp for /tmp zip + trap to ensure cleanup on any exit (incl. SIGINT/SIGTERM/error)
-ZIP_PATH=""
+# Single temp DIR for the notarization zip + submit log, removed on any exit
+# (incl. SIGINT/SIGTERM/error). A temp dir avoids the `$(mktemp ...).zip` leak
+# where the original suffix-less temp file is orphaned (#211 CODEX-5).
+NOTARIZE_TMP=""
 cleanup() {
-    [[ -n "$ZIP_PATH" && -f "$ZIP_PATH" ]] && rm -f "$ZIP_PATH"
+    [[ -n "$NOTARIZE_TMP" && -d "$NOTARIZE_TMP" ]] && rm -rf "$NOTARIZE_TMP"
 }
 trap cleanup EXIT INT TERM
 
@@ -136,6 +146,7 @@ echo ""
 echo "[1/4] Signing with Developer ID + hardened runtime..."
 echo "  Identifier:    $BINARY_IDENTIFIER (pinned — stable DR across filename changes)"
 codesign --force \
+    --timestamp \
     --options runtime \
     --identifier "$BINARY_IDENTIFIER" \
     "${CODESIGN_ENTITLEMENT_ARGS[@]}" \
@@ -153,11 +164,11 @@ codesign --verify --deep --strict --verbose=2 "$BINARY" 2>&1 | head -5
 # debug if the wait fails.
 echo ""
 echo "[3/4] Submitting for notarization (this typically takes 1-15 minutes)..."
-ZIP_PATH="$(mktemp -t notarize-XXXXXXXX).zip"
+NOTARIZE_TMP="$(mktemp -d -t notarize-XXXXXXXX)"
+ZIP_PATH="$NOTARIZE_TMP/notarize.zip"
 ditto -c -k --keepParent "$BINARY" "$ZIP_PATH"
 
-SUBMIT_LOG="$(mktemp -t notarize-log-XXXXXXXX)"
-trap 'cleanup; rm -f "$SUBMIT_LOG"' EXIT INT TERM
+SUBMIT_LOG="$NOTARIZE_TMP/submit.log"
 
 # Helper: extract submission UUID; never aborts under set -e (trailing || true).
 extract_submission_id() {

@@ -1,29 +1,35 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-    Intentionally EMPTY (#211).
+    Entitlements for the hardened-runtime, Developer ID-signed binary (#211).
 
-    Unlike che-ical-mcp (which needs com.apple.security.personal-information.
-    calendars/reminders so macOS 26.5 will show the Calendar/Reminders TCC
-    prompt under hardened runtime), this server's only TCC dependency is
-    **Full Disk Access** (kTCCServiceSystemPolicyAllFiles).
+    Two TCC surfaces, handled differently:
 
-    FDA has NO corresponding entitlement key — there is no
-    "personal-information.full-disk-access". FDA is granted purely by the user
-    in System Settings; the binary needs no entitlement to benefit from it.
-    A hardened-runtime signature with no extra entitlements is sufficient: once
-    the user grants FDA, the process reads ~/Library/Mail with no sandbox in
-    the way.
+    1. Full Disk Access (kTCCServiceSystemPolicyAllFiles) — the SQLite read
+       path. FDA has NO requestable entitlement key (there is no
+       "personal-information.full-disk-access"); it is granted purely by the
+       user in System Settings. So FDA needs nothing here.
 
-    Why ship an empty file at all: it makes the "no special entitlements"
-    decision explicit and gives scripts/sign-and-notarize.sh a stable, optional
-    --entitlements target. The point of signing here is the **stable Developer
-    ID designated requirement**, which makes TCC bind the FDA grant to the
-    signing identity (not the binary's cdhash) so it survives version bumps.
+    2. Apple Events / Automation — this server controls Mail.app via
+       NSAppleScript (compose / send / move / rules, plus the AppleScript read
+       fallback). Under a hardened runtime, a process may NOT send Apple events
+       unless it carries com.apple.security.automation.apple-events. Without it,
+       the Automation TCC prompt never appears and every AppleScript call fails
+       with errAEEventNotPermitted (-1743) — i.e. a hardened-runtime build with
+       NO entitlements would be WORSE than the old ad-hoc build. Caught by the
+       #211 verify Codex cross-model lens (CODEX-1) after five Claude reviewers
+       all missed it.
 
-    If a future feature ever needs a real entitlement, add it here.
+    com.apple.security.automation.apple-events is an unrestricted entitlement —
+    valid for Developer ID distribution outside the App Store, no provisioning
+    profile, no extra notarization requirements.
+
+    Do NOT remove the apple-events key. EntitlementsPlistTests pins it; dropping
+    it silently re-breaks all Mail control under a signed build.
 -->
 <plist version="1.0">
 <dict>
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
 </dict>
 </plist>

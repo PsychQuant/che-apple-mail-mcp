@@ -143,8 +143,13 @@ rm -f "$BINARY_PATH"
 lipo -create "$ARM64_BINARY" "$X64_BINARY" -output "$BINARY_PATH"
 chmod +x "$BINARY_PATH"
 
+# Validate (not just print) that both slices made it into the fat binary (#211).
+ARCHS="$(lipo -archs "$BINARY_PATH")"
+[[ "$ARCHS" == *arm64* && "$ARCHS" == *x86_64* ]] \
+    || die "universal binary missing expected archs (got: $ARCHS)"
+
 BINARY_SIZE="$(ls -lh "$BINARY_PATH" | awk '{print $5}')"
-info "Universal binary built: $BINARY_PATH ($BINARY_SIZE), archs: $(lipo -archs "$BINARY_PATH")"
+info "Universal binary built: $BINARY_PATH ($BINARY_SIZE), archs: $ARCHS"
 
 # ---- Confirm with user -------------------------------------------------------
 
@@ -201,10 +206,15 @@ if [[ "$SHOULD_SIGN" == "false" ]]; then
         Set DEVELOPER_ID + NOTARY_PROFILE and install the Developer ID Application cert.
         See README 'Signing & Notarization'."
     fi
-    info "Skipping codesign + notarize ($SKIP_REASON)."
-    echo "    ⚠ The uploaded binary will be AD-HOC signed. On macOS, users must"
-    echo "      re-grant Full Disk Access after every such release (#211)."
-    echo "      For a distribution build: set DEVELOPER_ID + NOTARY_PROFILE and re-run."
+    info "Skipping Developer ID signing + notarize ($SKIP_REASON)."
+    echo "    Applying an ad-hoc signature to the final universal binary —"
+    echo "    lipo invalidates the per-arch signatures, and an unsigned arm64"
+    echo "    binary can fail to launch (#211 CODEX-2)."
+    codesign --force --sign - "$BINARY_PATH"
+    echo "    ⚠ Ad-hoc signed only. On macOS, users must re-grant Full Disk Access"
+    echo "      after every such release (#211). For a stable grant that survives"
+    echo "      version bumps, set DEVELOPER_ID + NOTARY_PROFILE and re-run"
+    echo "      (or use make release-signed)."
 else
     info "Signing + notarizing the universal binary..."
     "$(dirname "$0")/sign-and-notarize.sh" "$BINARY_PATH"
