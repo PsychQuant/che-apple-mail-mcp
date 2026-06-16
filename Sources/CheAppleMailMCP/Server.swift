@@ -112,7 +112,7 @@ class CheAppleMailMCPServer {
             // Email Reading Tools
             Tool(
                 name: "list_emails",
-                description: "List emails in a mailbox",
+                description: "List emails in a mailbox. Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -141,7 +141,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "search_emails",
-                description: "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101).",
+                description: "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101). Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -853,8 +853,8 @@ class CheAppleMailMCPServer {
             // "list_attachments emlx validation failed" pattern (#24).
             if let reader = indexReader {
                 do {
-                    let emails = try reader.listEmails(mailbox: mailbox, accountName: accountName, limit: limit)
-                    return formatJSON(emails)
+                    let page = try reader.listEmailsPage(mailbox: mailbox, accountName: accountName, limit: limit)
+                    return formatJSON(Self.resultEnvelope(results: page.results, limit: limit, truncated: page.truncated))
                 } catch {
                     let message = "SQLite list_emails fast path failed for "
                         + "mailbox='\(mailbox)' account='\(accountName)': "
@@ -864,7 +864,8 @@ class CheAppleMailMCPServer {
             }
             let accountId = decodeAccountId(arguments, tool: invokedTool)
             let emails = try await mailController.listEmails(mailbox: mailbox, accountName: accountName, accountId: accountId, limit: limit)
-            return formatJSON(emails)
+            // Fallback can't fetch limit+1 cheaply; truncated is best-effort heuristic (#204).
+            return formatJSON(Self.resultEnvelope(results: emails, limit: limit, truncated: emails.count == limit))
 
         case "get_email":
             let id = try requireMessageId(arguments)
@@ -933,14 +934,15 @@ class CheAppleMailMCPServer {
                     mailbox: mailbox, dateFrom: dateFrom, dateTo: dateTo,
                     sort: sortOrder, limit: limit
                 )
-                let results = try reader.search(params)
-                let formatted: [[String: Any]] = results.map(Self.formatSearchResultForJSON)
-                return formatJSON(formatted)
+                let page = try reader.searchPage(params)
+                let formatted: [[String: Any]] = page.results.map(Self.formatSearchResultForJSON)
+                return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
             }
             // Fallback to AppleScript
             let accountId = decodeAccountId(arguments, tool: invokedTool)
             let results = try await mailController.searchEmails(query: query, mailbox: mailbox, accountName: accountName, accountId: accountId, limit: limit, sort: sort)
-            return formatJSON(results)
+            // Fallback can't fetch limit+1 cheaply; truncated is best-effort heuristic (#204).
+            return formatJSON(Self.resultEnvelope(results: results, limit: limit, truncated: results.count == limit))
 
         case "get_unread_count":
             let mailbox = arguments["mailbox"]?.stringValue
@@ -1785,6 +1787,19 @@ class CheAppleMailMCPServer {
         dateFormatter.dateFormat = "yyyy-MM-dd"
         dateFormatter.timeZone = .current
         return dateFormatter.date(from: string)
+    }
+
+    /// Wrap a result array in the truncation envelope (#204) so callers can
+    /// detect when more rows matched than were returned instead of silently
+    /// losing them. `truncated` is definitive on the SQLite fast path (limit+1
+    /// fetch) and best-effort (`returned == limit`) on the AppleScript fallback.
+    static func resultEnvelope(results: [[String: Any]], limit: Int, truncated: Bool) -> [String: Any] {
+        [
+            "results": results,
+            "returned": results.count,
+            "limit": limit,
+            "truncated": truncated,
+        ]
     }
 
     private func formatJSON(_ value: Any) -> String {
