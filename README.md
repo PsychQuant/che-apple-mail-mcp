@@ -500,7 +500,9 @@ Still **not** covered by `account_id` (tracked): `get_account_info` / `list_mail
 
 ## Signing & Notarization
 
-The distributed binary is **Developer ID-signed and notarized**, and that is not cosmetic. The fast read path needs **Full Disk Access (FDA)**, and macOS TCC keys an FDA grant to the binary's *designated requirement*. For an ad-hoc binary that requirement is the **cdhash**, so every version bump invalidated the grant and you had to re-add the binary to the Full Disk Access list after each release. A stable Developer ID signature keys the grant to the **signing identity** instead, so it survives version bumps (#211). Notarization is additionally required for Gatekeeper to launch the binary cleanly on macOS 26.
+The distributed binary is **Developer ID-signed and notarized**, and that is not cosmetic. The fast read path needs **Full Disk Access (FDA)**, and macOS TCC keys an FDA grant to the binary's *designated requirement*. For an ad-hoc binary that requirement is the **cdhash**, so every version bump invalidated the grant and you had to re-add the binary to the Full Disk Access list after each release. A stable Developer ID signature keys the grant to the **signing identity** instead, so it survives version bumps (#211) — that signature, not notarization, is what delivers the persistence.
+
+Notarization matters for **quarantined-launch** paths: a browser download or the `.mcpb` (Claude Desktop) install, where Gatekeeper assesses the binary on first launch. The plugin wrapper's `curl` + `exec` path sets no quarantine attribute, so Gatekeeper never fires there. We notarize anyway so the published release asset is safe to run by any means.
 
 > **The first grant is still manual.** FDA (`kTCCServiceSystemPolicyAllFiles`) has no programmatic request API — an app can only deep-link you to the settings pane. Signing makes that first grant *permanent*, not automatic.
 

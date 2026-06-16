@@ -45,9 +45,9 @@ install-signed: verify-developer-id
 	cp .build/release/$(BINARY_NAME) ~/bin/$(BINARY_NAME)
 	chmod +x ~/bin/$(BINARY_NAME)
 	@if [ -f "$(ENTITLEMENTS)" ]; then \
-	    codesign --force --options runtime --entitlements "$(ENTITLEMENTS)" --sign "$$DEVELOPER_ID" ~/bin/$(BINARY_NAME); \
+	    codesign --force --options runtime --identifier "$(BINARY_NAME)" --entitlements "$(ENTITLEMENTS)" --sign "$$DEVELOPER_ID" ~/bin/$(BINARY_NAME); \
 	else \
-	    codesign --force --options runtime --sign "$$DEVELOPER_ID" ~/bin/$(BINARY_NAME); \
+	    codesign --force --options runtime --identifier "$(BINARY_NAME)" --sign "$$DEVELOPER_ID" ~/bin/$(BINARY_NAME); \
 	fi
 	@echo "Installed: ~/bin/$(BINARY_NAME) (Developer ID signed — FDA grant survives rebuilds)"
 	@echo "ℹ Grant Full Disk Access ONCE to ~/bin/$(BINARY_NAME); it then persists across version bumps."

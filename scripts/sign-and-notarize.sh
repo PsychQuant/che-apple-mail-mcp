@@ -7,8 +7,15 @@
 # bump invalidated the grant and the user had to re-add the binary to the FDA
 # list. A Developer ID Application signature makes TCC key the grant to the
 # stable designated requirement (Team ID + signing identity), so it survives
-# version bumps. Notarization is additionally required on macOS 26 (ad-hoc
-# binaries can be SIGKILL'd before they could even prompt).
+# version bumps. That signature — not notarization — is what delivers the
+# FDA-persistence #211 is about.
+#
+# Why notarize anyway: notarization matters for *quarantined-launch* paths — a
+# browser download or the .mcpb (Claude Desktop) install, where Gatekeeper
+# assesses the binary on first launch. The plugin wrapper's `curl` + `exec`
+# path sets no com.apple.quarantine xattr, so Gatekeeper never fires there and
+# an un-notarized (even ad-hoc) binary would exec identically. We notarize so
+# the published release asset is safe to run by ANY means, not only the wrapper.
 #
 # Unlike che-ical-mcp this binary needs NO personal-information entitlement:
 # Full Disk Access (kTCCServiceSystemPolicyAllFiles) is not a requestable
@@ -40,6 +47,10 @@ BINARY="${1:?Usage: $0 <path/to/binary>}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 ENTITLEMENTS="${ENTITLEMENTS:-$PROJECT_DIR/Sources/CheAppleMailMCP/Entitlements.plist}"
+# Pinned signing identifier → stable designated-requirement identifier half,
+# independent of the on-disk filename (#211 DA-2). Keep this value invariant
+# across releases; changing it would invalidate the user's existing FDA grant.
+BINARY_IDENTIFIER="${BINARY_IDENTIFIER:-CheAppleMailMCP}"
 
 # Pre-flight: xcrun must exist. Without Xcode Command Line Tools every
 # downstream `xcrun ...` would fail with a confusing "unable to find utility"
@@ -123,8 +134,10 @@ echo ""
 
 # Step 1: codesign with hardened runtime
 echo "[1/4] Signing with Developer ID + hardened runtime..."
+echo "  Identifier:    $BINARY_IDENTIFIER (pinned — stable DR across filename changes)"
 codesign --force \
     --options runtime \
+    --identifier "$BINARY_IDENTIFIER" \
     "${CODESIGN_ENTITLEMENT_ARGS[@]}" \
     --sign "$DEVELOPER_ID" \
     "$BINARY"
