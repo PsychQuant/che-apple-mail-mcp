@@ -203,6 +203,19 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 
 </details>
 
+### 回傳結構：`search_emails` / `list_emails`
+
+兩個工具回傳的是**信封物件（envelope）** `{ results, returned, limit, truncated }`，**不是**裸陣列（自 [v2.14.0](CHANGELOG.md)、[#204](https://github.com/PsychQuant/che-apple-mail-mcp/issues/204) 起變更）。從 `.results` 讀取符合的郵件：
+
+| 欄位 | 意義 |
+|------|------|
+| `results` | 結果物件陣列（每個物件的欄位不變——`id`、`subject`、`sender`、`date_received`、`account_name`、`account_id`、`mailbox` 等） |
+| `returned` | `results` 中的物件數量 |
+| `limit` | 此次查詢實際套用的 `limit` |
+| `truncated` | 當符合的筆數超過 `limit` 時為 `true`——**調高 `limit` 或縮小查詢範圍**以取得其餘結果 |
+
+在 SQLite 快速路徑上 `truncated` 是**確定的**（內部會多抓 `limit + 1` 筆）；在 AppleScript 後備路徑上則是盡力而為的 `returned == limit` 啟發式判斷。任何「列舉 → 批次處理」的消費端，在假設已取得完整結果集之前都應先檢查 `truncated`。
+
 ---
 
 ## 安裝方式
