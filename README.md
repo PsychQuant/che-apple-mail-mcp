@@ -257,10 +257,10 @@ Both tools return an **envelope object** `{ results, returned, limit, truncated 
 
 | Field | Meaning |
 |-------|---------|
-| `results` | Array of result objects (per-object fields unchanged — `id`, `subject`, `sender`, `date_received`, `account_name`, `account_id`, `mailbox`, …) |
+| `results` | Array of result objects (per-object fields unchanged from the pre-envelope shape). `search_emails` objects carry `id`, `subject`, `sender`, `date_received`, `account_name`, `mailbox`, `to`, plus `account_id` when the account UUID is resolvable. `list_emails` objects carry `id`, `subject`, `sender`. |
 | `returned` | Number of objects in `results` |
 | `limit` | Effective `limit` applied to the query |
-| `truncated` | `true` when more rows matched than `limit` — **raise `limit` or narrow the query** to retrieve the rest |
+| `truncated` | `true` when more results are available than were returned — **raise `limit` or narrow the query** to retrieve the rest (definitive on the SQLite fast path; a best-effort heuristic on the AppleScript fallback — see below) |
 
 `truncated` is **definitive** on the SQLite fast path (it fetches `limit + 1` internally); on the AppleScript fallback it is a best-effort `returned == limit` heuristic. Any "enumerate → batch process" consumer should check `truncated` before assuming it has the full set.
 
