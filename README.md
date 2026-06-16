@@ -251,6 +251,19 @@ reply_email(
 
 </details>
 
+### Response shape: `search_emails` / `list_emails`
+
+Both tools return an **envelope object** `{ results, returned, limit, truncated }` — **not** a bare array (changed in [v2.14.0](CHANGELOG.md), [#204](https://github.com/PsychQuant/che-apple-mail-mcp/issues/204)). Read the matches from `.results`:
+
+| Field | Meaning |
+|-------|---------|
+| `results` | Array of result objects (per-object fields unchanged from the pre-envelope shape). `search_emails` objects carry `id`, `subject`, `sender`, `date_received`, `account_name`, `mailbox`, `to`, plus `account_id` when the account UUID is resolvable. `list_emails` objects carry `id`, `subject`, `sender`. |
+| `returned` | Number of objects in `results` |
+| `limit` | Effective `limit` applied to the query |
+| `truncated` | `true` when more results are available than were returned — **raise `limit` or narrow the query** to retrieve the rest (definitive on the SQLite fast path; a best-effort heuristic on the AppleScript fallback — see below) |
+
+`truncated` is **definitive** on the SQLite fast path (it fetches `limit + 1` internally); on the AppleScript fallback it is a best-effort `returned == limit` heuristic. Any "enumerate → batch process" consumer should check `truncated` before assuming it has the full set.
+
 ---
 
 ## Installation
@@ -436,7 +449,7 @@ Mail.app's AppleScript `account "<display_name>"` selector is **not unique** whe
 
 **Discovering `account_id`**:
 
-- **From `search_emails` results** — each `SearchResult` carries an `account_id` field alongside `account_name` (populated by decoding the account UUID from the SQLite `mailboxes.url` authority via `MailboxURL.decode` — Mail.app's storage convention encodes the account UUID in the mailbox URL authority; there is no direct `SELECT mailboxes.account_id`). Recommended: pass it through directly.
+- **From `search_emails` results** — each object in the `results` array (a `SearchResult`) carries an `account_id` field alongside `account_name` (populated by decoding the account UUID from the SQLite `mailboxes.url` authority via `MailboxURL.decode` — Mail.app's storage convention encodes the account UUID in the mailbox URL authority; there is no direct `SELECT mailboxes.account_id`). Recommended: pass it through directly.
 - **Manually** — read `~/Library/Mail/V10/MailData/Signatures/AccountsMap.plist`. The top-level keys are the UUIDs; the `AccountURL` value contains the matching email address percent-encoded in the authority.
 - **In AppleScript** — `tell application "Mail" to get id of every account` returns the UUID list.
 
