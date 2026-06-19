@@ -24,13 +24,31 @@ final class FDAStatusTests: XCTestCase {
                        "a nonexistent path is ENOENT → .noMailData, not .denied")
     }
 
-    func testSummaryDistinguishesAllThreeStates() {
+    func testProbeUnreadableFileReportsDenied() throws {
+        // A 000-perm file the owner can't read reproduces the EACCES/EPERM path
+        // that distinguishes a genuine TCC denial from other errors. root
+        // bypasses file perms, so skip there (CI/local run as the user).
+        try XCTSkipIf(geteuid() == 0, "running as root bypasses file permissions")
+        let tmp = NSTemporaryDirectory() + "fda-probe-noperm-\(ProcessInfo.processInfo.globallyUniqueString).bin"
+        try Data([0x01]).write(to: URL(fileURLWithPath: tmp))
+        XCTAssertEqual(chmod(tmp, 0), 0, "chmod 000 must succeed for the test to be meaningful")
+        defer { _ = chmod(tmp, 0o644); try? FileManager.default.removeItem(atPath: tmp) }
+
+        XCTAssertEqual(FDAStatus.probe(path: tmp), .denied,
+                       "an unreadable (000) file is EACCES → .denied, not .undetermined")
+    }
+
+    func testSummaryDistinguishesAllFourStates() {
         XCTAssertTrue(FDAStatus.summary(.granted).contains("GRANTED"))
         XCTAssertTrue(FDAStatus.summary(.denied).contains("DENIED"))
         XCTAssertTrue(FDAStatus.summary(.noMailData).contains("UNKNOWN"))
-        // All three must be distinct so a reader can tell them apart.
-        let all = Set([FDAStatus.summary(.granted), FDAStatus.summary(.denied), FDAStatus.summary(.noMailData)])
-        XCTAssertEqual(all.count, 3)
+        XCTAssertTrue(FDAStatus.summary(.undetermined).contains("UNDETERMINED"))
+        // All four must be distinct so a reader (and check_fda) can tell them apart.
+        let all = Set([
+            FDAStatus.summary(.granted), FDAStatus.summary(.denied),
+            FDAStatus.summary(.noMailData), FDAStatus.summary(.undetermined),
+        ])
+        XCTAssertEqual(all.count, 4)
     }
 
     func testDefaultProbePathIsTheEnvelopeIndex() {

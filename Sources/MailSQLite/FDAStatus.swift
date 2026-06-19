@@ -15,14 +15,19 @@ public enum FDAStatus {
 
     /// Result of the read probe.
     public enum Probe: Equatable {
-        case granted      // the Envelope Index opened for reading — FDA is in effect
-        case denied       // the file exists but the open was refused (TCC) — FDA not granted
-        case noMailData   // no Envelope Index on disk (Apple Mail never set up) — can't tell
+        case granted       // the Envelope Index opened for reading — FDA is in effect
+        case denied        // EPERM/EACCES — the open was refused (TCC) — FDA not granted
+        case noMailData    // ENOENT — no Envelope Index on disk (Mail not set up) — can't tell
+        case undetermined  // any other errno (EMFILE, EIO, EISDIR, …) — an unexpected error, not a clear denial
     }
 
-    /// Probe FDA by attempting to open `path` for reading. `fopen` honors TCC, so
-    /// a refused open (`EPERM`/`EACCES`) means FDA is not granted, while `ENOENT`
-    /// means there is simply no Mail data to read.
+    /// Probe FDA by attempting to open `path` for reading. `fopen` honors TCC.
+    /// The `errno` after a failed open is discriminated precisely so we never
+    /// report a transient/unexpected failure as a TCC denial (which would
+    /// mislead the user into a pointless grant):
+    ///   - `EPERM` / `EACCES` → `.denied` (the genuine FDA-refusal signal)
+    ///   - `ENOENT`           → `.noMailData` (no file to read; Mail not set up)
+    ///   - anything else      → `.undetermined` (EMFILE under fd exhaustion, EIO, …)
     ///
     /// Default path is the real Envelope Index; tests pass a temp path.
     public static func probe(path: String = EnvelopeIndexReader.defaultDatabasePath) -> Probe {
@@ -32,10 +37,15 @@ public enum FDAStatus {
             fclose(fp)
             return .granted
         }
-        // Distinguish "no such file" from "refused".
-        return errno == ENOENT ? .noMailData : .denied
+        // Capture errno immediately — any later call could clobber it.
+        let err = errno
+        switch err {
+        case EPERM, EACCES: return .denied
+        case ENOENT:        return .noMailData
+        default:            return .undetermined
+        }
         #else
-        return .denied
+        return .undetermined
         #endif
     }
 
@@ -45,9 +55,11 @@ public enum FDAStatus {
         case .granted:
             return "Full Disk Access: GRANTED — the Apple Mail Envelope Index is readable."
         case .denied:
-            return "Full Disk Access: DENIED — the Envelope Index exists but this process can't read it."
+            return "Full Disk Access: DENIED — the Envelope Index exists but this process can't read it (permission refused)."
         case .noMailData:
             return "Full Disk Access: UNKNOWN — no Apple Mail Envelope Index on disk yet (Mail not set up)."
+        case .undetermined:
+            return "Full Disk Access: UNDETERMINED — the Envelope Index couldn't be opened due to an unexpected error."
         }
     }
 }

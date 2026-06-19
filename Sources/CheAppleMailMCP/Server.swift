@@ -785,9 +785,20 @@ class CheAppleMailMCPServer {
             case .granted:
                 return "✅ " + FDAStatus.summary(probe)
                     + "\nThe SQLite fast path and export_emails_markdown are available."
-            case .denied, .noMailData:
+            case .denied:
                 return "⚠️ " + FDAStatus.summary(probe) + "\n\n"
                     + FullDiskAccessHelp.guidance(reason: "Full Disk Access is required for the SQLite fast path.")
+            case .noMailData:
+                // Mail isn't set up — granting FDA would not fix anything. Don't mislead.
+                return "ℹ️ " + FDAStatus.summary(probe)
+                    + "\nThere is no Apple Mail Envelope Index to read yet. Set up at least one account in"
+                    + " Mail, then re-check — FDA status can't be determined until there is mail data."
+            case .undetermined:
+                // An unexpected errno, not a clear TCC denial — offer the FDA steps conditionally.
+                return "⚠️ " + FDAStatus.summary(probe)
+                    + "\nThis is not a clear permission denial; retry first. If it persists and Full Disk"
+                    + " Access might be the cause:\n\n"
+                    + FullDiskAccessHelp.guidance(reason: "If Full Disk Access is the cause:")
             }
 
         // Account Tools
