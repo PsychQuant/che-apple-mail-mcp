@@ -62,6 +62,11 @@ class CheAppleMailMCPServer {
                 inputSchema: .object(["type": .string("object"), "properties": .object([:])])
             ),
             Tool(
+                name: "check_fda",
+                description: "Check whether Full Disk Access is granted (functionally probes the Apple Mail Envelope Index). Returns status plus the exact steps to grant it if not. Use when SQLite-only features (search_emails projection=ids/count, export_emails_markdown) fail with an 'unavailable' error.",
+                inputSchema: .object(["type": .string("object"), "properties": .object([:])])
+            ),
+            Tool(
                 name: "get_account_info",
                 description: "Get detailed information about a specific mail account",
                 inputSchema: .object([
@@ -773,6 +778,18 @@ class CheAppleMailMCPServer {
         // diagnostics use `invokedTool` rather than the shadowed parameter.
         let invokedTool = name
         switch name {
+        // Setup / diagnostics
+        case "check_fda":
+            let probe = FDAStatus.probe()
+            switch probe {
+            case .granted:
+                return "✅ " + FDAStatus.summary(probe)
+                    + "\nThe SQLite fast path and export_emails_markdown are available."
+            case .denied, .noMailData:
+                return "⚠️ " + FDAStatus.summary(probe) + "\n\n"
+                    + FullDiskAccessHelp.guidance(reason: "Full Disk Access is required for the SQLite fast path.")
+            }
+
         // Account Tools
         case "list_accounts":
             // Primary: AppleScript path — only way to resolve EWS display_name
