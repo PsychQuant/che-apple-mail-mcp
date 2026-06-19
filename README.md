@@ -324,7 +324,7 @@ open "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
 ```
 
-Add **`~/bin/CheAppleMailMCP`** (the exact binary path) and enable it. Without Full Disk Access, read tools silently fall back to the slower AppleScript path and SQLite-only features (`projection`, `export_emails_markdown`) fail. With a Developer ID-signed build this grant survives version bumps — see [Signing & Notarization](#signing--notarization).
+macOS grants Full Disk Access to the **responsible process** — the app that *launched* this server — not to the binary itself. For an MCP server run by **Claude Code inside a terminal**, that responsible process is the **terminal** (Ghostty / Terminal / iTerm), so add **your terminal app** here and enable it. One grant on the terminal covers every MCP server it launches. (If you instead run the binary directly, or use the **Claude Desktop** bundle, add that binary — `~/bin/CheAppleMailMCP` — since it is then its own responsible process.) The FDA-denied error message resolves and names the exact responsible process for you at runtime (#214). Without Full Disk Access, read tools silently fall back to the slower AppleScript path and SQLite-only features (`projection`, `export_emails_markdown`) fail. For the direct-launch path, a Developer ID-signed build makes the grant survive version bumps — see [Signing & Notarization](#signing--notarization).
 
 ### Step 4: Restart Claude
 
