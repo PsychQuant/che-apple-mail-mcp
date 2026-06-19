@@ -62,6 +62,11 @@ class CheAppleMailMCPServer {
                 inputSchema: .object(["type": .string("object"), "properties": .object([:])])
             ),
             Tool(
+                name: "check_fda",
+                description: "Check whether Full Disk Access is granted (functionally probes the Apple Mail Envelope Index). Returns status plus the exact steps to grant it if not. Use when SQLite-only features (search_emails projection=ids/count, export_emails_markdown) fail with an 'unavailable' error.",
+                inputSchema: .object(["type": .string("object"), "properties": .object([:])])
+            ),
+            Tool(
                 name: "get_account_info",
                 description: "Get detailed information about a specific mail account",
                 inputSchema: .object([
@@ -773,6 +778,34 @@ class CheAppleMailMCPServer {
         // diagnostics use `invokedTool` rather than the shadowed parameter.
         let invokedTool = name
         switch name {
+        // Setup / diagnostics
+        case "check_fda":
+            let probe = FDAStatus.probe()
+            switch probe {
+            case .granted:
+                // The probe reads the file; the SQLite open is a proxy, so phrase as
+                // "should work" rather than asserting availability (#213 verify, DA #7).
+                return "✅ " + FDAStatus.summary(probe)
+                    + "\nThe SQLite fast path (search_emails projection, export_emails_markdown) should now work."
+            case .denied:
+                return "⚠️ " + FDAStatus.summary(probe) + "\n\n"
+                    + FullDiskAccessHelp.guidance(reason: "Full Disk Access is required for the SQLite fast path.")
+            case .noMailData:
+                // ENOENT is ambiguous (no Mail vs FDA-denied hiding the dir) — present
+                // BOTH possibilities so an FDA-denied user isn't told the opposite of the fix.
+                return "ℹ️ " + FDAStatus.summary(probe)
+                    + "\nIf Apple Mail IS configured, this most likely means Full Disk Access is denied"
+                    + " (a denial can hide ~/Library/Mail). Grant it:\n\n"
+                    + FullDiskAccessHelp.guidance(reason: "If Full Disk Access is the cause:")
+                    + "\n\nIf Mail genuinely isn't set up, add an account first, then re-check."
+            case .undetermined:
+                // An unexpected errno, not a clear TCC denial — offer the FDA steps conditionally.
+                return "⚠️ " + FDAStatus.summary(probe)
+                    + "\nThis is not a clear permission denial; retry first. If it persists and Full Disk"
+                    + " Access might be the cause:\n\n"
+                    + FullDiskAccessHelp.guidance(reason: "If Full Disk Access is the cause:")
+            }
+
         // Account Tools
         case "list_accounts":
             // Primary: AppleScript path — only way to resolve EWS display_name

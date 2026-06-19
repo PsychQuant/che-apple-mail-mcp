@@ -324,7 +324,15 @@ open "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
 ```
 
-macOS grants Full Disk Access to the **responsible process** — the app that *launched* this server — not to the binary itself. For an MCP server run by **Claude Code inside a terminal**, that responsible process is the **terminal** (Ghostty / Terminal / iTerm), so add **your terminal app** here and enable it. One grant on the terminal covers every MCP server it launches. (If you instead run the binary directly, or use the **Claude Desktop** bundle, add that binary — `~/bin/CheAppleMailMCP` — since it is then its own responsible process.) The FDA-denied error message resolves and names the exact responsible process for you at runtime (#214). Without Full Disk Access, read tools silently fall back to the slower AppleScript path and SQLite-only features (`projection`, `export_emails_markdown`) fail. For the direct-launch path, a Developer ID-signed build makes the grant survive version bumps — see [Signing & Notarization](#signing--notarization).
+macOS grants Full Disk Access to the **responsible process** — the app that *launched* this server — not to the binary itself. For an MCP server run by **Claude Code inside a terminal**, that responsible process is the **terminal** (Ghostty / Terminal / iTerm), so add **your terminal app** here and enable it. One grant on the terminal covers every MCP server it launches. (If you instead run the binary directly, or use the **Claude Desktop** bundle, add that binary — `~/bin/CheAppleMailMCP` — since it is then its own responsible process.) The FDA-denied error message names these candidates for you — it does **not** auto-resolve the one exact app, because macOS exposes no reliable in-process API for that (#214). Without Full Disk Access, read tools silently fall back to the slower AppleScript path and SQLite-only features (`projection`, `export_emails_markdown`) fail. For the direct-launch path, a Developer ID-signed build makes the grant survive version bumps — see [Signing & Notarization](#signing--notarization).
+
+**Guided setup** (#213) — instead of the manual steps above, the binary ships setup helpers:
+
+- **`CheAppleMailMCP --setup`** opens a small window with **live** Full Disk Access status (re-checked on a timer, flips to "Ready ✅" the moment you grant) plus an **on-demand** Automation check, and "Open Full Disk Access settings" / "Copy binary path" buttons.
+- **`CheAppleMailMCP --check-fda`** prints the status headlessly (and opens the pane when access is **denied**) — handy from a terminal or script.
+- The **`check_fda` MCP tool** reports the same status to Claude on demand (call it when a SQLite-only feature errors).
+
+None of these can remove the single manual toggle (Apple puts FDA in the manual-only bucket alongside Accessibility / Screen Recording), but they make "what do I do?" obvious and give live feedback the instant you flip it on.
 
 ### Step 4: Restart Claude
 
