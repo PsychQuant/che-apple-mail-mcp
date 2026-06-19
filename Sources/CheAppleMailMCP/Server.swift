@@ -783,16 +783,21 @@ class CheAppleMailMCPServer {
             let probe = FDAStatus.probe()
             switch probe {
             case .granted:
+                // The probe reads the file; the SQLite open is a proxy, so phrase as
+                // "should work" rather than asserting availability (#213 verify, DA #7).
                 return "✅ " + FDAStatus.summary(probe)
-                    + "\nThe SQLite fast path and export_emails_markdown are available."
+                    + "\nThe SQLite fast path (search_emails projection, export_emails_markdown) should now work."
             case .denied:
                 return "⚠️ " + FDAStatus.summary(probe) + "\n\n"
                     + FullDiskAccessHelp.guidance(reason: "Full Disk Access is required for the SQLite fast path.")
             case .noMailData:
-                // Mail isn't set up — granting FDA would not fix anything. Don't mislead.
+                // ENOENT is ambiguous (no Mail vs FDA-denied hiding the dir) — present
+                // BOTH possibilities so an FDA-denied user isn't told the opposite of the fix.
                 return "ℹ️ " + FDAStatus.summary(probe)
-                    + "\nThere is no Apple Mail Envelope Index to read yet. Set up at least one account in"
-                    + " Mail, then re-check — FDA status can't be determined until there is mail data."
+                    + "\nIf Apple Mail IS configured, this most likely means Full Disk Access is denied"
+                    + " (a denial can hide ~/Library/Mail). Grant it:\n\n"
+                    + FullDiskAccessHelp.guidance(reason: "If Full Disk Access is the cause:")
+                    + "\n\nIf Mail genuinely isn't set up, add an account first, then re-check."
             case .undetermined:
                 // An unexpected errno, not a clear TCC denial — offer the FDA steps conditionally.
                 return "⚠️ " + FDAStatus.summary(probe)

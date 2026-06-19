@@ -328,8 +328,8 @@ macOS grants Full Disk Access to the **responsible process** — the app that *l
 
 **Guided setup** (#213) — instead of the manual steps above, the binary ships setup helpers:
 
-- **`CheAppleMailMCP --setup`** opens a small window with live Full Disk Access + Automation status, "Open Full Disk Access settings" / "Copy binary path" buttons, and it flips to "Ready ✅" the moment you grant.
-- **`CheAppleMailMCP --check-fda`** prints the status headlessly (and opens the pane if not granted) — handy from a terminal or script.
+- **`CheAppleMailMCP --setup`** opens a small window with **live** Full Disk Access status (re-checked on a timer, flips to "Ready ✅" the moment you grant) plus an **on-demand** Automation check, and "Open Full Disk Access settings" / "Copy binary path" buttons.
+- **`CheAppleMailMCP --check-fda`** prints the status headlessly (and opens the pane when access is **denied**) — handy from a terminal or script.
 - The **`check_fda` MCP tool** reports the same status to Claude on demand (call it when a SQLite-only feature errors).
 
 None of these can remove the single manual toggle (Apple puts FDA in the manual-only bucket alongside Accessibility / Screen Recording), but they make "what do I do?" obvious and give live feedback the instant you flip it on.

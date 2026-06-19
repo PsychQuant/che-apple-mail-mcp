@@ -57,7 +57,10 @@ public enum FDAStatus {
         case .denied:
             return "Full Disk Access: DENIED — the Envelope Index exists but this process can't read it (permission refused)."
         case .noMailData:
-            return "Full Disk Access: UNKNOWN — no Apple Mail Envelope Index on disk yet (Mail not set up)."
+            // ENOENT is ambiguous: Mail may genuinely not be set up, OR Full Disk
+            // Access is denied — ~/Library/Mail is a TCC-protected 0700 directory,
+            // so a denial can surface as "no such file" (#213 verify, DA #8).
+            return "Full Disk Access: UNKNOWN — no Apple Mail Envelope Index found (Mail isn't set up, OR Full Disk Access is denied and hiding it)."
         case .undetermined:
             return "Full Disk Access: UNDETERMINED — the Envelope Index couldn't be opened due to an unexpected error."
         }

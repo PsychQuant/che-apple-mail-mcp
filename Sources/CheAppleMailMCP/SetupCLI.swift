@@ -2,8 +2,9 @@ import Foundation
 import MailSQLite
 
 /// Headless `--check-fda` flow: print the Full Disk Access status + the right
-/// next step per state, opening the settings pane only when granting FDA would
-/// actually help. No window — for terminals, scripts, or a quick check. (#213)
+/// next step per state. It opens the settings pane **only** for `.denied` — the
+/// one state where granting FDA is unambiguously the fix. No window — for
+/// terminals, scripts, or a quick check. (#213)
 enum SetupCLI {
     static func runCheckFDA() {
         let probe = FDAStatus.probe()
@@ -12,10 +13,14 @@ enum SetupCLI {
         case .granted:
             return
         case .noMailData:
-            // Mail isn't set up — do NOT tell the user to grant FDA (it won't help).
+            // ENOENT is ambiguous (no Mail vs FDA-denied hiding ~/Library/Mail) —
+            // present both, and offer the grant steps for the FDA-denied case.
             print("")
-            print("Set up at least one account in Apple Mail, then re-run — Full Disk Access "
-                + "status can't be determined until there is mail data to read.")
+            print("If Apple Mail IS configured, this most likely means Full Disk Access is denied "
+                + "(a denial can hide ~/Library/Mail). Grant it:")
+            print(FullDiskAccessHelp.guidance(reason: "If Full Disk Access is the cause:"))
+            print("")
+            print("If Mail genuinely isn't set up, add an account first, then re-run.")
         case .denied:
             print("")
             print(FullDiskAccessHelp.guidance(reason: "Full Disk Access is required for the SQLite fast path."))
@@ -23,13 +28,12 @@ enum SetupCLI {
             print("Opening the Full Disk Access settings pane…")
             openSettingsPane()
         case .undetermined:
+            // Not a clear permission denial — print steps but DON'T auto-open the
+            // pane (it would imply this is an FDA problem when it may not be).
             print("")
             print("The Envelope Index couldn't be read due to an unexpected error (not a clear "
                 + "permission denial). Retry first. If it persists and Full Disk Access might be the cause:")
             print(FullDiskAccessHelp.guidance(reason: "If Full Disk Access is the cause:"))
-            print("")
-            print("Opening the Full Disk Access settings pane…")
-            openSettingsPane()
         }
     }
 

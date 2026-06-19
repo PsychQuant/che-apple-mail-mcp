@@ -8,7 +8,9 @@ import SwiftUI
 /// The `--setup` GUI: a launch-on-demand window that shows live Full Disk Access
 /// + Automation status, opens the right settings pane, and re-checks on a timer
 /// so it flips to "Ready ✅" the instant the user grants. Gated behind --setup
-/// (see `RunMode`), so the stdio MCP path never links this AppKit runloop. (#213)
+/// (see `RunMode`): AppKit/SwiftUI are linked into the binary (load-time deps),
+/// but this runloop only *starts* under --setup — the stdio MCP path never enters
+/// it. (#213)
 ///
 /// The window names *candidates* (terminal / Claude Desktop / binary), it does
 /// NOT claim to auto-name the exact responsible app — there is no reliable
@@ -56,6 +58,9 @@ final class SetupModel: ObservableObject {
     private var timer: Timer?
 
     func start() {
+        // Idempotent: a view re-appear (miniaturize/deminiaturize re-runs onAppear
+        // while the @StateObject persists) must not leak a second repeating timer.
+        stop()
         refresh()
         // Live re-check so the window flips to Ready the moment the user grants.
         timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
@@ -129,7 +134,7 @@ struct SetupView: View {
 
             // Automation
             HStack(alignment: .top, spacing: 10) {
-                dot(model.automation == true)
+                automationDot(model.automation)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Automation (control Mail.app)").bold()
                     Text(automationLabel).font(.caption).foregroundColor(.secondary)
@@ -141,8 +146,9 @@ struct SetupView: View {
             Spacer()
 
             if model.fda == .granted {
-                Text("Ready ✅ — Full Disk Access is granted. You can close this window.")
+                Text("Full Disk Access ✅ granted — the read / SQLite path is ready. (Automation, above, is a separate grant; check it if you use Mail-control features.)")
                     .foregroundColor(.green).bold()
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(24)
@@ -162,6 +168,16 @@ struct SetupView: View {
     @ViewBuilder private func dot(_ ok: Bool) -> some View {
         Circle()
             .fill(ok ? Color.green : Color.red)
+            .frame(width: 12, height: 12)
+            .padding(.top, 3)
+    }
+
+    /// Three-state dot for Automation: gray for "not checked yet" so it doesn't
+    /// read as a red "denied" before the user has clicked Check.
+    @ViewBuilder private func automationDot(_ state: Bool?) -> some View {
+        let color: Color = state == nil ? .gray : (state! ? .green : .red)
+        Circle()
+            .fill(color)
             .frame(width: 12, height: 12)
             .padding(.top, 3)
     }

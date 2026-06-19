@@ -1,5 +1,8 @@
 import XCTest
 @testable import MailSQLite
+#if canImport(Darwin)
+import Darwin
+#endif
 
 /// #213 — the functional FDA probe is the only honest signal for Full Disk
 /// Access (no query API exists). These tests pin the readable / missing-file
@@ -8,6 +11,9 @@ import XCTest
 /// vs readable cases.
 final class FDAStatusTests: XCTestCase {
 
+    // These three pin Darwin errno semantics (granted/noMailData/denied); on a
+    // non-Darwin platform probe() returns .undetermined, so guard them (#213 verify).
+    #if canImport(Darwin)
     func testProbeReadableFileReportsGranted() throws {
         // A file we can definitely open stands in for a readable Envelope Index.
         let tmp = NSTemporaryDirectory() + "fda-probe-\(ProcessInfo.processInfo.globallyUniqueString).bin"
@@ -37,6 +43,7 @@ final class FDAStatusTests: XCTestCase {
         XCTAssertEqual(FDAStatus.probe(path: tmp), .denied,
                        "an unreadable (000) file is EACCES → .denied, not .undetermined")
     }
+    #endif
 
     func testSummaryDistinguishesAllFourStates() {
         XCTAssertTrue(FDAStatus.summary(.granted).contains("GRANTED"))
