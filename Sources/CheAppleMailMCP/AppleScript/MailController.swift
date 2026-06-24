@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(AppKit)
+import AppKit  // #175: NSPasteboard for full-fidelity clipboard preserve/restore
+#endif
 
 /// Controller for Apple Mail via AppleScript
 actor MailController {
@@ -865,6 +868,23 @@ actor MailController {
         // The actual sender selection is wired through `fromAddress`. Kept
         // for backward compat with any Swift caller still passing it; no
         // production caller does so.
+
+        // #175: prefer the wrapper-free mailto path (native compose pipeline →
+        // no Apple-Mail-URLShare/blockquote-cite wrapper). Falls back to the
+        // legacy AppleScript injection (which wraps the body) on any failure,
+        // for markdown/html, for a custom sender, without Accessibility, or
+        // when disabled via env. See MailtoCompose.swift.
+        if mailtoComposeEligible(format: format, fromAddress: fromAddress, subject: subject) {
+            do {
+                return try composeViaMailto(
+                    to: to, subject: subject, body: body, cc: cc, bcc: bcc,
+                    attachments: attachments, send: true)
+            } catch {
+                warnMailtoFallback(error)
+                // fall through to legacy injection
+            }
+        }
+
         let script = try buildComposeEmailScript(
             to: to,
             subject: subject,
@@ -877,6 +897,79 @@ actor MailController {
             fromAddress: fromAddress
         )
         return try runScript(script)
+    }
+
+    /// #175 — true iff this compose call should use the wrapper-free mailto path.
+    /// Probes Accessibility + the env escape hatch at call time; custom sender
+    /// (`fromAddress`) and an empty subject both route to the legacy path (mailto
+    /// can't pick a non-default account; the GUI dispatch guard identifies the
+    /// compose window by its title = subject).
+    private func mailtoComposeEligible(format: BodyFormat, fromAddress: String?, subject: String) -> Bool {
+        return shouldUseMailtoCompose(
+            format: format,
+            accessibilityTrusted: AccessibilityStatus.isTrusted,
+            disabledByEnv: mailtoComposeDisabledByEnv(),
+            hasCustomSender: (fromAddress?.isEmpty == false),
+            hasSubject: !subject.isEmpty
+        )
+    }
+
+    /// #175 — run the wrapper-free mailto compose path. Builds the percent-encoded
+    /// URL, refuses over-long URLs (→ caller falls back; avoids silent body
+    /// truncation), and runs the GUI script with the user's clipboard preserved
+    /// at full fidelity when attachments are involved (the script sets the
+    /// clipboard per-attachment for the Go-to-folder paste).
+    private func composeViaMailto(
+        to: [String], subject: String, body: String,
+        cc: [String]?, bcc: [String]?, attachments: [String]?, send: Bool
+    ) throws -> String {
+        let url = buildMailtoURL(to: to, subject: subject, body: body, cc: cc, bcc: bcc)
+        guard url.count <= maxMailtoURLLength else {
+            throw MailError.scriptFailed(
+                message: "mailto URL too long (\(url.count) > \(maxMailtoURLLength) chars)",
+                code: -1)
+        }
+        let script = buildMailtoComposeScript(
+            url: url, subject: subject, attachments: attachments ?? [], send: send)
+        if attachments?.isEmpty == false {
+            return try withClipboardPreserved { try runScript(script) }
+        }
+        return try runScript(script)
+    }
+
+    /// #175 — preserve the user's clipboard (all flavors) across a closure that
+    /// mutates it. The mailto attach path sets the clipboard to each attachment
+    /// path for the Go-to-folder paste; this snapshots every pasteboard item's
+    /// types+data into detached copies and restores them in a `defer` (so the
+    /// clipboard is restored even if the GUI script throws). Full-fidelity
+    /// (image / RTF / file-promise survive), unlike an AppleScript `the clipboard
+    /// as text` round-trip (#175 verify — Codex).
+    private func withClipboardPreserved<T>(_ body: () throws -> T) rethrows -> T {
+        let pb = NSPasteboard.general
+        let saved: [NSPasteboardItem] = (pb.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    copy.setData(data, forType: type)
+                }
+            }
+            return copy
+        }
+        defer {
+            pb.clearContents()
+            if !saved.isEmpty { pb.writeObjects(saved) }
+        }
+        return try body()
+    }
+
+    /// #175 — surface (never swallow) a mailto-path failure before falling back
+    /// to the legacy injection path. Mirrors the save_attachment fast-path
+    /// fallback logging precedent (the `r-must-direct-db` observability rule).
+    private func warnMailtoFallback(_ error: Error) {
+        let msg = "mailto clean-compose path failed (#175): "
+            + "\(error.localizedDescription); falling back to AppleScript injection "
+            + "— body will be wrapped in <blockquote type=\"cite\"> (looks quoted on some mobile clients)\n"
+        FileHandle.standardError.write(Data(msg.utf8))
     }
 
     /// Reply to an email. Optionally add extra CC, attach files, and/or save as draft instead of sending.
@@ -1023,6 +1116,20 @@ actor MailController {
         if let from = fromAddress, !from.isEmpty {
             try validateEmailAddresses([from], field: "from_address")
         }
+
+        // #175: prefer the wrapper-free mailto path (save draft via ⌘S);
+        // graceful fallback to legacy injection. See composeEmail above.
+        if mailtoComposeEligible(format: format, fromAddress: fromAddress, subject: subject) {
+            do {
+                return try composeViaMailto(
+                    to: to, subject: subject, body: body, cc: cc, bcc: bcc,
+                    attachments: attachments, send: false)
+            } catch {
+                warnMailtoFallback(error)
+                // fall through to legacy injection
+            }
+        }
+
         let script = try buildCreateDraftScript(
             to: to,
             subject: subject,

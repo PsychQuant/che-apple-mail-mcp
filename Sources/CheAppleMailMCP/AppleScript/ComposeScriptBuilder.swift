@@ -75,6 +75,183 @@ private func recipientFragment(_ addresses: [String], kind: String) -> String {
     }.joined(separator: "\n")
 }
 
+// MARK: - #175 mailto-based clean-body compose (GUI orchestration)
+//
+// Builds the AppleScript that drives Mail's NATIVE compose pipeline via a
+// `mailto:` hand-off (which, unlike `set content` / `set html content`, does NOT
+// wrap the body in `Apple-Mail-URLShareWrapperClass` / `blockquote type="cite"`).
+// The mailto window is NOT an AppleScript `outgoing message` object, so save/send
+// and attachments are driven by System Events keystrokes.
+//
+// Locale-independence (avoids the #174-class hardcoded-string trap): EVERY step
+// uses a keyboard SHORTCUT, never a localized menu-item name —
+//   ⇧⌘A = File ▸ Attach,  ⇧⌘G = Go to folder,  ⌘S = save draft,  ⇧⌘D = send.
+// These are identical across UI languages.
+//
+// Robustness (hardened per two #175 verify rounds — DA + Codex cross-model):
+//   - WINDOW IDENTITY: before EVERY keystroke phase (each attach AND dispatch) we
+//     re-locate the compose window BY TITLE (= subject; eligibility guarantees a
+//     non-empty subject) and best-effort raise it, so a keystroke lands on OUR
+//     window and not one the user opened/focused during a delay. A bare
+//     window-count delta is NOT enough (`activate` can open a viewer). RESIDUAL
+//     (documented): AX has no "send keystroke to a specific window" primitive, so
+//     a TOCTOU gap between raise and keystroke remains — inherent to GUI
+//     automation; a detectable mismatch (our window gone) hard-errors → fallback.
+//   - ATTACHMENT COMPLETION: the pre-dispatch check asserts `count of sheets of
+//     _w is 0`, so a still-open File▸Attach panel blocks dispatch; a drain delay
+//     gives the attachment time to bind before ⇧⌘D. RESIDUAL: panel-closed is a
+//     proxy for bind, not per-file completion polling.
+//   - STAGE-AWARE FALLBACK + NO DATA LOSS: the GUI interaction is wrapped in
+//     try/on-error that closes ONLY a window we created — identified by NEW
+//     `id of window` (captured before the mailto) AND matching subject — so a
+//     pre-existing same-titled draft the user already had open is never
+//     `saving no` discarded (a data-loss bug the second verify round caught).
+//     Dispatch is the last statement, so a pre-dispatch error means nothing was
+//     sent (fallback safe; no double-send).
+//   - CLIPBOARD: the per-attachment path is set on the clipboard here, but
+//     save/restore is done by the caller in Swift (full-fidelity NSPasteboard,
+//     failure-safe) — this script does NOT save/restore.
+// Delays are env-overridable (#64 pattern) because GUI timing drifts under load.
+func buildMailtoComposeScript(
+    url: String,
+    subject: String,
+    attachments: [String],
+    send: Bool
+) -> String {
+    let windowDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_WINDOW_DELAY", fallback: 1.8)
+    let stepDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_STEP_DELAY", fallback: 0.7)
+    let attachDrain = resolvedDelay(envKey: "CHE_MAIL_MAILTO_ATTACH_DRAIN", fallback: 1.5)
+    let dispatchKey = send
+        ? "keystroke \"d\" using {command down, shift down}"
+        : "keystroke \"s\" using command down"
+    let dispatchLabel = send
+        ? "Email sent successfully (mailto path)"
+        : "Draft created successfully (mailto path)"
+    let subjEsc = appleScriptEscape(subject)
+
+    // raiseOnly (runs inside `tell process "Mail"`): re-locate the compose window
+    // BY TITLE (= subject) and best-effort raise it so the NEXT keystroke lands on
+    // OUR window. Re-applied before EVERY keystroke phase (each attach + dispatch)
+    // — focus the user/system stole during a delay is reclaimed. Hard-errors if
+    // our window is gone (→ safe fallback). Keys off the target `_w`, never
+    // `front window` (that evaluated unreliably under the actor's in-process
+    // NSAppleScript context and regressed the path to always-fallback); AXRaise is
+    // best-effort (wrapped) so an AX quirk can't break the path.
+    let raiseOnly = """
+                set _t to "\(subjEsc)"
+                set _w to missing value
+                repeat with _cand in windows
+                    if title of _cand is _t then
+                        set _w to _cand
+                        exit repeat
+                    end if
+                end repeat
+                if _w is missing value then error "mailto compose window not found (title)"
+                try
+                    perform action "AXRaise" of _w
+                end try
+                delay 0.25
+    """
+    // verifyNoSheet: raiseOnly + assert no open sheet (the File▸Attach panel must
+    // have closed) — used immediately before dispatch.
+    let verifyNoSheet = raiseOnly + """
+
+                if (count of sheets of _w) is not 0 then error "a sheet/panel is still open on the compose window"
+    """
+
+    // 1. Capture Mail window ids BEFORE the mailto, hand it off, then compute the
+    // NEW window id(s). On-error cleanup closes ONLY a newly-appeared window whose
+    // name matches our subject — never a pre-existing same-titled draft the user
+    // had open (that `saving no` discard would be data loss — #175 verify round 2,
+    // Codex BLOCKING). `id of window` is stable + unique.
+    var s = """
+    tell application "Mail"
+        set _wc to (count of windows)
+        set _beforeIds to (id of every window)
+        activate
+        mailto "\(appleScriptEscape(url))"
+    end tell
+    delay \(windowDelay)
+    tell application "Mail"
+        if (count of windows) <= _wc then error "mailto did not open a compose window"
+        set _afterIds to (id of every window)
+        set _newIds to {}
+        repeat with _k from 1 to (count of _afterIds)
+            set _thisId to item _k of _afterIds
+            if _beforeIds does not contain _thisId then set end of _newIds to _thisId
+        end repeat
+    end tell
+    try
+        tell application "System Events"
+            tell process "Mail"
+                set frontmost to true
+    \(raiseOnly)
+            end tell
+        end tell
+    """
+
+    // 2. Attachments: re-raise OUR window, then one File ▸ Attach (⇧⌘A) cycle each,
+    // path pasted into the Go-to-folder (⇧⌘G) field (CJK-safe; clipboard set here,
+    // restored by the caller in Swift).
+    if !attachments.isEmpty {
+        for path in attachments {
+            s += """
+
+            tell application "System Events"
+                tell process "Mail"
+                    set frontmost to true
+                    \(raiseOnly)
+                    keystroke "a" using {command down, shift down}
+                end tell
+            end tell
+            delay \(stepDelay)
+            set the clipboard to "\(appleScriptEscape(path))"
+            tell application "System Events"
+                tell process "Mail"
+                    keystroke "g" using {command down, shift down}
+                    delay \(stepDelay)
+                    keystroke "v" using command down
+                    delay 0.4
+                    key code 36
+                    delay \(stepDelay)
+                    key code 36
+                end tell
+            end tell
+            delay \(stepDelay)
+            """
+        }
+        // Drain: give the attachment(s) time to bind before dispatch (#60-style).
+        s += "\n        delay \(attachDrain)\n"
+    }
+
+    // 3. Final re-raise + no-lingering-panel check + dispatch.
+    s += """
+
+        tell application "System Events"
+            tell process "Mail"
+                set frontmost to true
+    \(verifyNoSheet)
+                \(dispatchKey)
+            end tell
+        end tell
+    on error _mErr
+        tell application "Mail"
+            repeat with _k from 1 to (count of _newIds)
+                set _nid to item _k of _newIds
+                try
+                    set _cw to (first window whose id is _nid)
+                    if (name of _cw) is "\(subjEsc)" then close _cw saving no
+                end try
+            end repeat
+        end tell
+        error _mErr
+    end try
+    delay \(stepDelay)
+    return "\(dispatchLabel)"
+    """
+    return s
+}
+
 func buildComposeEmailScript(
     to: [String],
     subject: String,

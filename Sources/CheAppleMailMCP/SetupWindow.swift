@@ -41,7 +41,7 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate {
         let win = NSWindow(contentViewController: hosting)
         win.title = "CheAppleMailMCP — Full Disk Access Setup"
         win.styleMask = [.titled, .closable, .miniaturizable]
-        win.setContentSize(NSSize(width: 480, height: 440))
+        win.setContentSize(NSSize(width: 480, height: 560))
         win.center()
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -55,6 +55,8 @@ final class SetupAppDelegate: NSObject, NSApplicationDelegate {
 final class SetupModel: ObservableObject {
     @Published var fda: FDAStatus.Probe = FDAStatus.probe()
     @Published var automation: Bool?
+    /// #175: Accessibility drives the wrapper-free mailto compose path.
+    @Published var accessibility: AccessibilityStatus.Probe = AccessibilityStatus.probe()
     private var timer: Timer?
 
     func start() {
@@ -73,12 +75,22 @@ final class SetupModel: ObservableObject {
         timer = nil
     }
 
-    func refresh() { fda = FDAStatus.probe() }
+    func refresh() {
+        fda = FDAStatus.probe()
+        accessibility = AccessibilityStatus.probe()
+    }
 
     var binaryPath: String { FullDiskAccessHelp.binaryPath() }
 
     func openFDASettings() {
         if let url = URL(string: FullDiskAccessHelp.settingsDeepLink) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// #175: deep-link to System Settings ▸ Privacy & Security ▸ Accessibility.
+    func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
     }
@@ -143,6 +155,24 @@ struct SetupView: View {
                 Button("Check") { model.checkAutomation() }
             }
 
+            Divider()
+
+            // Accessibility (#175 — wrapper-free compose path)
+            HStack(alignment: .top, spacing: 10) {
+                dot(model.accessibility == .granted)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Accessibility (clean compose)").bold()
+                    Text(AccessibilityStatus.summary(model.accessibility))
+                        .font(.caption).foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button("Open settings") { model.openAccessibilitySettings() }
+            }
+            Text("Lets compose_email / create_draft send through Mail's native path so the body isn't shown as a quote on mobile (#175). Grant it to whatever LAUNCHED this server (terminal / Claude Desktop). Without it, compose still works but the body is wrapped.")
+                .font(.caption).foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
             Spacer()
 
             if model.fda == .granted {
@@ -152,7 +182,7 @@ struct SetupView: View {
             }
         }
         .padding(24)
-        .frame(minWidth: 460, minHeight: 410, alignment: .topLeading)
+        .frame(minWidth: 460, minHeight: 530, alignment: .topLeading)
         .onAppear { model.start() }
         .onDisappear { model.stop() }
     }
