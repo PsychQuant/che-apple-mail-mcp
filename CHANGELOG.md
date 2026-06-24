@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.17.0] - 2026-06-24
+
 ### Fixed
 - **`compose_email` / `create_draft` no longer wrap the body in `<blockquote type="cite">`** ([#175](https://github.com/PsychQuant/che-apple-mail-mcp/issues/175)). Mail.app applies its `Apple-Mail-URLShareWrapperClass` / `blockquote type="cite"` "inserted content" wrapper to **any** AppleScript-injected outgoing-message body (`content:` / `set content` / `set html content`) at MIME-serialization time. Desktop hides it with an inline `border-left-style:none`, so the sender saw nothing wrong — but many mobile clients honor the `cite` semantics and rendered the user's own new text as **quoted content**. Runtime testing disproved every "strip the wrapper after injection" fix (reading the live outgoing message's `html content` → AppleScript -1723; re-setting clean HTML → re-wraps; editing the saved `.emlx` → overwritten on send). The wrapper-free fix routes compose/draft through Mail's **native compose pipeline via a `mailto:` hand-off** (which does not wrap), then drives save/send and attachments with **locale-independent keyboard shortcuts** (⇧⌘A attach, ⇧⌘G go-to-folder, ⌘S save, ⇧⌘D send — no hardcoded localized menu names, avoiding the #174-class trap). A window-count delta guards dispatch so a keystroke never fires into the wrong window.
 
