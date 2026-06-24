@@ -67,6 +67,11 @@ class CheAppleMailMCPServer {
                 inputSchema: .object(["type": .string("object"), "properties": .object([:])])
             ),
             Tool(
+                name: "check_accessibility",
+                description: "Check whether Accessibility (GUI-scripting) is granted via AXIsProcessTrusted(). Required for the #175 wrapper-free compose path (compose_email / create_draft use mailto + keystrokes so the body isn't wrapped in <blockquote type=\"cite\"> on mobile clients). Returns status plus steps to grant it. Separate grant from check_fda. If denied, compose still works but the body is wrapped in a quote on some mobile clients.",
+                inputSchema: .object(["type": .string("object"), "properties": .object([:])])
+            ),
+            Tool(
                 name: "get_account_info",
                 description: "Get detailed information about a specific mail account",
                 inputSchema: .object([
@@ -804,6 +809,22 @@ class CheAppleMailMCPServer {
                     + "\nThis is not a clear permission denial; retry first. If it persists and Full Disk"
                     + " Access might be the cause:\n\n"
                     + FullDiskAccessHelp.guidance(reason: "If Full Disk Access is the cause:")
+            }
+
+        case "check_accessibility":
+            // #175: Accessibility is what lets compose_email / create_draft use
+            // the wrapper-free mailto path (System Events keystrokes for save /
+            // send / attach). Separate grant from Full Disk Access (check_fda).
+            let probe = AccessibilityStatus.probe()
+            switch probe {
+            case .granted:
+                return "✅ " + AccessibilityStatus.summary(probe)
+                    + "\ncompose_email / create_draft will use the wrapper-free mailto path (#175)."
+            case .denied:
+                return "⚠️ " + AccessibilityStatus.summary(probe) + "\n\n"
+                    + AccessibilityStatus.guidance()
+            case .unsupported:
+                return "ℹ️ " + AccessibilityStatus.summary(probe)
             }
 
         // Account Tools

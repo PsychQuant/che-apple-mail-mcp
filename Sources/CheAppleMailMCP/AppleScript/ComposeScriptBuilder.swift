@@ -75,6 +75,106 @@ private func recipientFragment(_ addresses: [String], kind: String) -> String {
     }.joined(separator: "\n")
 }
 
+// MARK: - #175 mailto-based clean-body compose (GUI orchestration)
+//
+// Builds the AppleScript that drives Mail's NATIVE compose pipeline via a
+// `mailto:` hand-off (which, unlike `set content` / `set html content`, does NOT
+// wrap the body in `Apple-Mail-URLShareWrapperClass` / `blockquote type="cite"`).
+// The mailto window is NOT an AppleScript `outgoing message` object, so save/send
+// and attachments are driven by System Events keystrokes.
+//
+// Locale-independence (avoids the #174-class hardcoded-string trap): EVERY step
+// uses a keyboard SHORTCUT, never a localized menu-item name —
+//   ⇧⌘A = File ▸ Attach,  ⇧⌘G = Go to folder,  ⌘S = save draft,  ⇧⌘D = send.
+// These are identical across UI languages.
+//
+// Robustness: a window-count delta gates dispatch — if the compose window never
+// opened (or vanished), we `error` (caller catches → legacy fallback) rather
+// than fire ⌘S/⇧⌘D into the wrong window. Delays are env-overridable (#64
+// pattern) because GUI timing drifts under load / across macOS versions.
+func buildMailtoComposeScript(
+    url: String,
+    subject: String,
+    attachments: [String],
+    send: Bool
+) -> String {
+    let windowDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_WINDOW_DELAY", fallback: 1.8)
+    let stepDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_STEP_DELAY", fallback: 0.7)
+    let dispatchKey = send
+        ? "keystroke \"d\" using {command down, shift down}"
+        : "keystroke \"s\" using command down"
+    let dispatchLabel = send
+        ? "Email sent successfully (mailto path)"
+        : "Draft created successfully (mailto path)"
+
+    // Capture Mail's window count, hand off the mailto, then assert a new
+    // window appeared. Mail's own `windows` counts the viewer + compose windows,
+    // so a +1 delta is a reliable "compose window opened" signal (no fragile
+    // subject/title matching, locale-independent).
+    var s = """
+    tell application "Mail"
+        set _wc to (count of windows)
+        activate
+        mailto "\(appleScriptEscape(url))"
+    end tell
+    delay \(windowDelay)
+    tell application "Mail"
+        if (count of windows) <= _wc then error "mailto did not open a compose window"
+    end tell
+    """
+
+    // Attachments: one File ▸ Attach (⇧⌘A) cycle each. The absolute path is set
+    // on the clipboard and pasted into the open panel's Go-to-folder (⇧⌘G) field
+    // — paste is CJK-safe (keystroke would mangle non-ASCII filenames). The
+    // pre-existing clipboard text is saved and restored.
+    if !attachments.isEmpty {
+        s += "\n" + "set _savedClip to \"\"\ntry\n    set _savedClip to (the clipboard as text)\nend try\n"
+        for path in attachments {
+            s += """
+
+            tell application "System Events"
+                tell process "Mail"
+                    set frontmost to true
+                    keystroke "a" using {command down, shift down}
+                end tell
+            end tell
+            delay \(stepDelay)
+            set the clipboard to "\(appleScriptEscape(path))"
+            tell application "System Events"
+                tell process "Mail"
+                    keystroke "g" using {command down, shift down}
+                    delay \(stepDelay)
+                    keystroke "v" using command down
+                    delay 0.4
+                    key code 36
+                    delay \(stepDelay)
+                    key code 36
+                end tell
+            end tell
+            delay \(stepDelay)
+            """
+        }
+        s += "\ntry\n    set the clipboard to _savedClip\nend try\n"
+    }
+
+    // Dispatch via locale-independent shortcut, after a final window-presence
+    // re-check (never send into the void).
+    s += "\n" + """
+    tell application "Mail"
+        if (count of windows) <= _wc then error "mailto compose window vanished before dispatch"
+    end tell
+    tell application "System Events"
+        tell process "Mail"
+            set frontmost to true
+            \(dispatchKey)
+        end tell
+    end tell
+    delay \(stepDelay)
+    return "\(dispatchLabel)"
+    """
+    return s
+}
+
 func buildComposeEmailScript(
     to: [String],
     subject: String,
