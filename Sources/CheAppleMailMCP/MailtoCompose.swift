@@ -25,10 +25,12 @@ import Foundation
 /// `@`, spaces, newlines, `&`, `=`, `?`, CJK, etc. all become `%XX`, so no body
 /// or subject content can leak into the URL's structural delimiters.
 ///
-/// Spelled out as an explicit ASCII set (NOT `CharacterSet.alphanumerics`, whose
-/// semantics are Unicode-inclusive — it would treat CJK/accented letters as
-/// "allowed" and leave them raw, contradicting the percent-encode contract the
-/// tests rely on). #175 verify (Codex cross-model lens) flagged the ambiguity.
+/// Spelled out as an explicit ASCII set rather than `CharacterSet.alphanumerics`.
+/// In practice both encode CJK/accented input identically (`addingPercentEncoding`
+/// operates on UTF-8 bytes), so the old set was NOT buggy — but `.alphanumerics`
+/// is Unicode-inclusive by definition, making the percent-encode contract depend
+/// on a Foundation implementation detail. The explicit ASCII set pins the
+/// contract the tests assert, independent of that detail (#175 verify, Codex).
 private let mailtoUnreserved: CharacterSet =
     CharacterSet(charactersIn:
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")

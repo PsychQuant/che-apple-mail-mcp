@@ -144,9 +144,16 @@ final class MailtoComposeTests: XCTestCase {
                       "must raise OUR compose window before dispatch (wrong-window mitigation)")
         XCTAssertTrue(s.contains("count of sheets of _w) is not 0"),
                       "must refuse dispatch while an open panel/sheet is up on the target window")
-        // stage-aware fallback: on error, close the abandoned compose window
+        // stage-aware fallback with NO data loss: on error, close ONLY a window
+        // we created (new id captured before mailto) AND matching subject —
+        // never a pre-existing same-titled user draft (#175 verify round 2).
         XCTAssertTrue(s.contains("on error _mErr"))
-        XCTAssertTrue(s.contains("close (every window whose name is \"S\") saving no"))
+        XCTAssertTrue(s.contains("set _beforeIds to (id of every window)"),
+                      "must snapshot window ids before mailto for safe cleanup")
+        XCTAssertTrue(s.contains("if (name of _cw) is \"S\" then close _cw saving no"),
+                      "cleanup must close only our new + same-subject window, not every same-titled window")
+        XCTAssertFalse(s.contains("close (every window whose name"),
+                       "must NOT batch-close by subject (data-loss bug)")
     }
 
     func testMailtoScript_draft_usesSaveShortcut() {
