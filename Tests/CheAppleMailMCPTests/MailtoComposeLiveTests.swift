@@ -61,7 +61,27 @@ final class MailtoComposeLiveTests: XCTestCase {
         """)
     }
 
-    func testLive_createDraft_takesMailtoPath() async throws {
+    /// grep -rl for an .emlx under ~/Library/Mail containing `needle`; returns the
+    /// first matching draft file path, polling up to ~15s for Mail to materialize
+    /// the saved draft on disk.
+    private func findDraftEmlx(containing needle: String) -> String? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        for _ in 0..<15 {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/sh")
+            p.arguments = ["-c",
+                "grep -rl '\(needle)' \(home)/Library/Mail/V*/ 2>/dev/null | grep -i emlx | head -1"]
+            let out = Pipe(); p.standardOutput = out; p.standardError = Pipe()
+            try? p.run(); p.waitUntilExit()
+            let path = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !path.isEmpty { return path }
+            Thread.sleep(forTimeInterval: 1.0)
+        }
+        return nil
+    }
+
+    func testLive_createDraft_mailtoPath_producesWrapperFreeBody() async throws {
         try XCTSkipUnless(ProcessInfo.processInfo.environment["CHE_MAIL_LIVE_TEST"] == "1",
                           "live test — set CHE_MAIL_LIVE_TEST=1 to run")
         try XCTSkipUnless(AccessibilityStatus.isTrusted,
@@ -77,11 +97,24 @@ final class MailtoComposeLiveTests: XCTestCase {
             body: "第一行：live mailto 測試 \(marker)\n第二行：body 應乾淨"
         )
 
-        // The mailto branch returns a distinct success string; the legacy path
-        // returns "Draft created successfully" (no "(mailto path)"). Reaching the
-        // mailto string proves the whole GUI chain ran without throwing (the
-        // window-count guard would have errored otherwise).
+        // (a) The mailto branch returns a distinct success string; reaching it
+        // proves the whole GUI chain ran without throwing (the window-identity /
+        // sheet guards would have errored otherwise → legacy fallback string).
         XCTAssertTrue(result.contains("(mailto path)"),
                       "expected mailto path, got: \(result)")
+
+        // (b) The ACTUAL regression assertion (#175 verify finding #4): read the
+        // saved draft's .emlx off disk and confirm the body is wrapper-free —
+        // this is the property the bug is about, which the return-string check
+        // alone does NOT prove.
+        guard let emlx = findDraftEmlx(containing: marker) else {
+            XCTFail("saved draft .emlx not found on disk for marker \(marker)")
+            return
+        }
+        let body = (try? String(contentsOfFile: emlx, encoding: .utf8)) ?? ""
+        XCTAssertFalse(body.contains("blockquote type=\"cite\""),
+                       "mailto draft body must NOT be wrapped in blockquote type=cite (#175): \(emlx)")
+        XCTAssertFalse(body.contains("Apple-Mail-URLShareWrapperClass"),
+                       "mailto draft body must NOT carry the Apple-Mail-URLShare wrapper (#175): \(emlx)")
     }
 }

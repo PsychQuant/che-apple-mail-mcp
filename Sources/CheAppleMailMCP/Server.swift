@@ -819,7 +819,10 @@ class CheAppleMailMCPServer {
             switch probe {
             case .granted:
                 return "✅ " + AccessibilityStatus.summary(probe)
-                    + "\ncompose_email / create_draft will use the wrapper-free mailto path (#175)."
+                    + "\nEligible compose_email / create_draft calls (plain-text, a subject, no custom from_address,"
+                    + " env hatch off) will attempt the wrapper-free mailto path (#175); other calls and any GUI-step"
+                    + " failure fall back to the legacy path. Note: System Events keystrokes also rely on Automation"
+                    + " (Apple Events) being allowed — this probe only checks Accessibility (AXIsProcessTrusted)."
             case .denied:
                 return "⚠️ " + AccessibilityStatus.summary(probe) + "\n\n"
                     + AccessibilityStatus.guidance()

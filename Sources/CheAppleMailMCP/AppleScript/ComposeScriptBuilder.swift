@@ -88,10 +88,24 @@ private func recipientFragment(_ addresses: [String], kind: String) -> String {
 //   ⇧⌘A = File ▸ Attach,  ⇧⌘G = Go to folder,  ⌘S = save draft,  ⇧⌘D = send.
 // These are identical across UI languages.
 //
-// Robustness: a window-count delta gates dispatch — if the compose window never
-// opened (or vanished), we `error` (caller catches → legacy fallback) rather
-// than fire ⌘S/⇧⌘D into the wrong window. Delays are env-overridable (#64
-// pattern) because GUI timing drifts under load / across macOS versions.
+// Robustness (hardened per #175 verify — DA + Codex cross-model):
+//   - WINDOW IDENTITY: before EVERY keystroke phase we raise + verify the
+//     compose window BY TITLE (= subject; eligibility guarantees a non-empty
+//     subject) and assert it is frontmost with NO open sheet. A bare window-count
+//     delta is NOT enough — `activate` can open a viewer, and a window the user
+//     opens during the delay would otherwise receive ⇧⌘D and send their message.
+//   - ATTACHMENT COMPLETION: the pre-dispatch verify asserts `count of sheets is
+//     0`, so a still-open File▸Attach panel blocks dispatch; a drain delay gives
+//     the attachment time to bind before ⇧⌘D.
+//   - STAGE-AWARE FALLBACK: the whole GUI interaction is wrapped in try/on-error
+//     that CLOSES the abandoned compose window (saving no) before re-raising, so
+//     the caller's legacy fallback starts clean — no orphaned compose, no
+//     duplicate. Dispatch is the last statement, so a pre-dispatch error means
+//     the message was never sent (fallback safe).
+//   - CLIPBOARD: the per-attachment path is set on the clipboard here, but
+//     save/restore is done by the caller in Swift (full-fidelity NSPasteboard,
+//     failure-safe) — this script does NOT save/restore.
+// Delays are env-overridable (#64 pattern) because GUI timing drifts under load.
 func buildMailtoComposeScript(
     url: String,
     subject: String,
@@ -100,17 +114,46 @@ func buildMailtoComposeScript(
 ) -> String {
     let windowDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_WINDOW_DELAY", fallback: 1.8)
     let stepDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_STEP_DELAY", fallback: 0.7)
+    let attachDrain = resolvedDelay(envKey: "CHE_MAIL_MAILTO_ATTACH_DRAIN", fallback: 1.5)
     let dispatchKey = send
         ? "keystroke \"d\" using {command down, shift down}"
         : "keystroke \"s\" using command down"
     let dispatchLabel = send
         ? "Email sent successfully (mailto path)"
         : "Draft created successfully (mailto path)"
+    let subjEsc = appleScriptEscape(subject)
 
-    // Capture Mail's window count, hand off the mailto, then assert a new
-    // window appeared. Mail's own `windows` counts the viewer + compose windows,
-    // so a +1 delta is a reliable "compose window opened" signal (no fragile
-    // subject/title matching, locale-independent).
+    // Reusable verify block (runs inside `tell process "Mail"`): locate the
+    // compose window BY TITLE (= subject), best-effort RAISE it to the front so
+    // the upcoming keystroke lands on OUR window (not one the user opened during
+    // the delay — the #175-verify wrong-window concern), and assert that window
+    // has no open sheet (the File▸Attach panel must have closed before dispatch).
+    //
+    // It deliberately keys off the TARGET window `_w`, not `front window`: an
+    // earlier draft asserted `title of front window is _t`, which evaluated
+    // unreliably under the actor's in-process NSAppleScript context and made the
+    // path fall back to the (wrapped) legacy on every call — a reliability
+    // regression far worse than the rare wrong-window edge it guarded. Missing
+    // window (didn't open / title mismatch) still hard-errors → safe fallback;
+    // AXRaise is best-effort (wrapped) so an AX quirk can't break the path.
+    let verify = """
+                set _t to "\(subjEsc)"
+                set _w to missing value
+                repeat with _cand in windows
+                    if title of _cand is _t then
+                        set _w to _cand
+                        exit repeat
+                    end if
+                end repeat
+                if _w is missing value then error "mailto compose window not found (title)"
+                try
+                    perform action "AXRaise" of _w
+                end try
+                delay 0.3
+                if (count of sheets of _w) is not 0 then error "a sheet/panel is still open on the compose window"
+    """
+
+    // 1. Hand off the mailto + assert a new Mail window appeared (cheap first gate).
     var s = """
     tell application "Mail"
         set _wc to (count of windows)
@@ -121,14 +164,18 @@ func buildMailtoComposeScript(
     tell application "Mail"
         if (count of windows) <= _wc then error "mailto did not open a compose window"
     end tell
+    try
+        tell application "System Events"
+            tell process "Mail"
+                set frontmost to true
+    \(verify)
+            end tell
+        end tell
     """
 
-    // Attachments: one File ▸ Attach (⇧⌘A) cycle each. The absolute path is set
-    // on the clipboard and pasted into the open panel's Go-to-folder (⇧⌘G) field
-    // — paste is CJK-safe (keystroke would mangle non-ASCII filenames). The
-    // pre-existing clipboard text is saved and restored.
+    // 2. Attachments: one File ▸ Attach (⇧⌘A) cycle each, path pasted into the
+    // Go-to-folder (⇧⌘G) field (CJK-safe; clipboard set here, restored by caller).
     if !attachments.isEmpty {
-        s += "\n" + "set _savedClip to \"\"\ntry\n    set _savedClip to (the clipboard as text)\nend try\n"
         for path in attachments {
             s += """
 
@@ -154,21 +201,28 @@ func buildMailtoComposeScript(
             delay \(stepDelay)
             """
         }
-        s += "\ntry\n    set the clipboard to _savedClip\nend try\n"
+        // Drain: give the attachment(s) time to bind before dispatch (#60-style).
+        s += "\n        delay \(attachDrain)\n"
     }
 
-    // Dispatch via locale-independent shortcut, after a final window-presence
-    // re-check (never send into the void).
-    s += "\n" + """
-    tell application "Mail"
-        if (count of windows) <= _wc then error "mailto compose window vanished before dispatch"
-    end tell
-    tell application "System Events"
-        tell process "Mail"
-            set frontmost to true
-            \(dispatchKey)
+    // 3. Final verify (compose still frontmost, no lingering panel) + dispatch.
+    s += """
+
+        tell application "System Events"
+            tell process "Mail"
+                set frontmost to true
+    \(verify)
+                \(dispatchKey)
+            end tell
         end tell
-    end tell
+    on error _mErr
+        tell application "Mail"
+            try
+                close (every window whose name is "\(subjEsc)") saving no
+            end try
+        end tell
+        error _mErr
+    end try
     delay \(stepDelay)
     return "\(dispatchLabel)"
     """

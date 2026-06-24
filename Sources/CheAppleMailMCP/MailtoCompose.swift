@@ -24,11 +24,20 @@ import Foundation
 /// deliberately conservative (matches Python's `urllib.parse.quote` default):
 /// `@`, spaces, newlines, `&`, `=`, `?`, CJK, etc. all become `%XX`, so no body
 /// or subject content can leak into the URL's structural delimiters.
-private let mailtoUnreserved: CharacterSet = {
-    var cs = CharacterSet.alphanumerics
-    cs.insert(charactersIn: "-._~")
-    return cs
-}()
+///
+/// Spelled out as an explicit ASCII set (NOT `CharacterSet.alphanumerics`, whose
+/// semantics are Unicode-inclusive — it would treat CJK/accented letters as
+/// "allowed" and leave them raw, contradicting the percent-encode contract the
+/// tests rely on). #175 verify (Codex cross-model lens) flagged the ambiguity.
+private let mailtoUnreserved: CharacterSet =
+    CharacterSet(charactersIn:
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+
+/// Upper bound on the encoded `mailto:` URL length. Beyond this, the native
+/// compose path risks silent body truncation (URL parsers / Mail), so the caller
+/// falls back to the legacy injection path (which has no length limit). 8000 is
+/// well under typical OS URL ceilings while comfortably fitting ordinary mail.
+let maxMailtoURLLength = 8000
 
 /// Percent-encode a single mailto component (recipient / subject / body).
 func mailtoEncode(_ s: String) -> String {
@@ -94,14 +103,22 @@ func mailtoComposeDisabledByEnv(
 /// pick would send from the wrong account. Until a verified sender-popup lands
 /// (follow-up issue), custom-sender compose falls back to the legacy `set sender`
 /// path (correct sender, but the body gets wrapped).
+///
+/// An EMPTY subject also disqualifies it (#175 verify): the GUI dispatch guard
+/// identifies the compose window by its title (= subject) to guarantee ⌘S/⇧⌘D
+/// fire into OUR window and not one the user opened during the delay. With no
+/// title there is no reliable identity check, so empty-subject compose falls
+/// back to the legacy path.
 func shouldUseMailtoCompose(
     format: BodyFormat,
     accessibilityTrusted: Bool,
     disabledByEnv: Bool,
-    hasCustomSender: Bool
+    hasCustomSender: Bool,
+    hasSubject: Bool
 ) -> Bool {
     if disabledByEnv { return false }
     if hasCustomSender { return false }
+    if !hasSubject { return false }
     guard format == .plain else { return false }
     return accessibilityTrusted
 }

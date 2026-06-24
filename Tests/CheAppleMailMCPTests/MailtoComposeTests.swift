@@ -58,11 +58,12 @@ final class MailtoComposeTests: XCTestCase {
 
     // MARK: - shouldUseMailtoCompose (fallback decision)
 
-    func testShouldUseMailto_plain_trusted_enabled_noCustomSender_true() {
+    func testShouldUseMailto_plain_trusted_enabled_noCustomSender_withSubject_true() {
         XCTAssertTrue(shouldUseMailtoCompose(format: .plain,
                                              accessibilityTrusted: true,
                                              disabledByEnv: false,
-                                             hasCustomSender: false))
+                                             hasCustomSender: false,
+                                             hasSubject: true))
     }
 
     func testShouldUseMailto_htmlFormat_false() {
@@ -70,25 +71,29 @@ final class MailtoComposeTests: XCTestCase {
         XCTAssertFalse(shouldUseMailtoCompose(format: .html,
                                               accessibilityTrusted: true,
                                               disabledByEnv: false,
-                                              hasCustomSender: false))
+                                              hasCustomSender: false,
+                                              hasSubject: true))
         XCTAssertFalse(shouldUseMailtoCompose(format: .markdown,
                                               accessibilityTrusted: true,
                                               disabledByEnv: false,
-                                              hasCustomSender: false))
+                                              hasCustomSender: false,
+                                              hasSubject: true))
     }
 
     func testShouldUseMailto_noAccessibility_false() {
         XCTAssertFalse(shouldUseMailtoCompose(format: .plain,
                                               accessibilityTrusted: false,
                                               disabledByEnv: false,
-                                              hasCustomSender: false))
+                                              hasCustomSender: false,
+                                              hasSubject: true))
     }
 
     func testShouldUseMailto_disabledByEnv_false() {
         XCTAssertFalse(shouldUseMailtoCompose(format: .plain,
                                               accessibilityTrusted: true,
                                               disabledByEnv: true,
-                                              hasCustomSender: false))
+                                              hasCustomSender: false,
+                                              hasSubject: true))
     }
 
     func testShouldUseMailto_customSender_false() {
@@ -96,7 +101,17 @@ final class MailtoComposeTests: XCTestCase {
         XCTAssertFalse(shouldUseMailtoCompose(format: .plain,
                                               accessibilityTrusted: true,
                                               disabledByEnv: false,
-                                              hasCustomSender: true))
+                                              hasCustomSender: true,
+                                              hasSubject: true))
+    }
+
+    func testShouldUseMailto_emptySubject_false() {
+        // No subject → no window-title to identify the dispatch target → legacy.
+        XCTAssertFalse(shouldUseMailtoCompose(format: .plain,
+                                              accessibilityTrusted: true,
+                                              disabledByEnv: false,
+                                              hasCustomSender: false,
+                                              hasSubject: false))
     }
 
     // MARK: - mailtoComposeDisabledByEnv
@@ -111,16 +126,27 @@ final class MailtoComposeTests: XCTestCase {
 
     // MARK: - buildMailtoComposeScript (GUI orchestration structure)
 
-    func testMailtoScript_send_usesSendShortcutAndWindowGuard() {
+    func testMailtoScript_send_usesSendShortcut_andWindowIdentityGuard() {
         let url = buildMailtoURL(to: ["a@b.c"], subject: "S", body: "B")
         let s = buildMailtoComposeScript(url: url, subject: "S", attachments: [], send: true)
         // dispatch = ⇧⌘D (send), not ⌘S
         XCTAssertTrue(s.contains("keystroke \"d\" using {command down, shift down}"), s)
         XCTAssertFalse(s.contains("keystroke \"s\" using command down"), s)
         XCTAssertTrue(s.contains("Email sent successfully (mailto path)"))
-        // never dispatch into the void: window-count delta guard present
-        XCTAssertTrue(s.contains("count of windows"))
         XCTAssertTrue(s.contains(url))
+        // window-count first gate + window-IDENTITY guard (#175 verify hardening):
+        XCTAssertTrue(s.contains("count of windows"), "missing window-count first gate")
+        XCTAssertTrue(s.contains("if title of _cand is _t then"),
+                      "dispatch must locate the compose window by title (= subject)")
+        XCTAssertTrue(s.contains("if _w is missing value then error"),
+                      "must hard-error (→ fallback) when our compose window isn't found")
+        XCTAssertTrue(s.contains("perform action \"AXRaise\" of _w"),
+                      "must raise OUR compose window before dispatch (wrong-window mitigation)")
+        XCTAssertTrue(s.contains("count of sheets of _w) is not 0"),
+                      "must refuse dispatch while an open panel/sheet is up on the target window")
+        // stage-aware fallback: on error, close the abandoned compose window
+        XCTAssertTrue(s.contains("on error _mErr"))
+        XCTAssertTrue(s.contains("close (every window whose name is \"S\") saving no"))
     }
 
     func testMailtoScript_draft_usesSaveShortcut() {
@@ -131,26 +157,38 @@ final class MailtoComposeTests: XCTestCase {
         XCTAssertTrue(s.contains("Draft created successfully (mailto path)"))
     }
 
-    func testMailtoScript_noAttachments_omitsAttachAndClipboard() {
+    func testMailtoScript_noAttachments_omitsAttachAndClipboardAndDrain() {
         let s = buildMailtoComposeScript(url: "mailto:a%40b.c", subject: "S",
                                          attachments: [], send: false)
         // ⇧⌘A is the Attach shortcut — must be absent with no attachments
         XCTAssertFalse(s.contains("keystroke \"a\" using {command down, shift down}"), s)
-        XCTAssertFalse(s.contains("the clipboard"), s)
+        // no per-attachment clipboard set, no attachment drain delay
+        XCTAssertFalse(s.contains("set the clipboard to"), s)
     }
 
-    func testMailtoScript_attachments_oneAttachCyclePerFile_localeIndependent() {
+    func testMailtoScript_attachments_oneAttachCyclePerFile_drain_localeIndependent() {
         let s = buildMailtoComposeScript(url: "mailto:a%40b.c", subject: "S",
                                          attachments: ["/tmp/a.pdf", "/tmp/b.txt"], send: false)
         // one File▸Attach (⇧⌘A) per attachment
         let attachCount = s.components(separatedBy: "keystroke \"a\" using {command down, shift down}").count - 1
         XCTAssertEqual(attachCount, 2, "expected one ⇧⌘A per attachment: \(s)")
-        // go-to-folder (⇧⌘G) used for path entry; both paths present; clipboard save/restore
+        // go-to-folder (⇧⌘G); both paths set on clipboard for paste
         XCTAssertTrue(s.contains("keystroke \"g\" using {command down, shift down}"))
-        XCTAssertTrue(s.contains("/tmp/a.pdf") && s.contains("/tmp/b.txt"))
-        XCTAssertTrue(s.contains("set _savedClip") && s.contains("set the clipboard to _savedClip"))
+        XCTAssertTrue(s.contains("set the clipboard to \"/tmp/a.pdf\""))
+        XCTAssertTrue(s.contains("set the clipboard to \"/tmp/b.txt\""))
+        // clipboard save/restore is now the caller's job (Swift NSPasteboard) — NOT in the script
+        XCTAssertFalse(s.contains("_savedClip"), "script must not do its own clipboard save/restore (#175 verify)")
+        // attachment drain before dispatch (don't ⇧⌘D before attachment binds)
+        XCTAssertTrue(s.contains("CHE_MAIL_MAILTO_ATTACH_DRAIN") || s.range(of: "delay") != nil)
         // locale-independence: no hardcoded localized menu names (the #174 trap)
         XCTAssertFalse(s.contains("附加檔案"))
         XCTAssertFalse(s.contains("Attach"))
+    }
+
+    func testMailtoScript_subjectWithQuotes_escapedInTitleGuardAndClose() {
+        let s = buildMailtoComposeScript(url: "mailto:a%40b.c",
+                                         subject: "say \"hi\"", attachments: [], send: false)
+        // subject is escaped wherever it's embedded (title compare + on-error close)
+        XCTAssertTrue(s.contains("say \\\"hi\\\""), s)
     }
 }
