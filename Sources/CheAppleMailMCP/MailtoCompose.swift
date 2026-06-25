@@ -124,3 +124,56 @@ func shouldUseMailtoCompose(
     guard format == .plain else { return false }
     return accessibilityTrusted
 }
+
+// MARK: - #218 clean reply/forward (native-verb + paste)
+//
+// reply_email / forward_email have the SAME wrapper bug as #175 compose: the
+// new reply/forward text, injected via `set content` / `set html content`, is
+// wrapped in `Apple-Mail-URLShareWrapperClass` / `blockquote type="cite"` so
+// mobile recipients see the user's OWN new text as a quotation. The #175 mailto
+// fix does NOT transfer — `mailto:` always opens a *fresh* compose and can't
+// thread a reply or carry the quoted original.
+//
+// The clean path drives Mail's NATIVE `reply` / `forward` verb (Mail builds the
+// quoted original itself — legitimately in a `blockquote type="cite"` — and sets
+// the In-Reply-To / References threading headers), then pastes ONLY the new body
+// at the cursor via System Events. The native quote stays correct; only the new
+// text avoids the wrapper. Like #175 it is plain-only (clipboard carries plain)
+// and needs Accessibility (the GUI paste/dispatch keystrokes).
+
+/// Environment escape hatch: set `CHE_MAIL_DISABLE_PASTE_REPLY=1` to force the
+/// legacy AppleScript injection path (wrapped new body) for reply/forward — for
+/// users running in heavy/unattended automation where a briefly-visible reply
+/// window and GUI keystrokes are unacceptable. Independent of the compose
+/// (`CHE_MAIL_DISABLE_MAILTO_COMPOSE`) hatch so the two GUI paths can be toggled
+/// separately. Absence/`0`/empty → clean paste path enabled.
+let replyForwardPasteDisableEnvKey = "CHE_MAIL_DISABLE_PASTE_REPLY"
+
+func replyForwardPasteDisabledByEnv(
+    _ env: [String: String] = ProcessInfo.processInfo.environment
+) -> Bool {
+    guard let raw = env[replyForwardPasteDisableEnvKey] else { return false }
+    return raw == "1" || raw.lowercased() == "true" || raw.lowercased() == "yes"
+}
+
+/// Decide whether the wrapper-free native-verb + paste path is usable for this
+/// reply/forward. Returns `false` (→ caller falls back to the legacy AppleScript
+/// injection path, which wraps the new body but always works) when:
+/// - `format` is `.markdown` / `.html` — the clipboard paste carries plain text
+///   only (the legacy path renders rich bodies, at the cost of the wrapper);
+/// - Accessibility (`AXIsProcessTrusted`) is not granted — the GUI paste/dispatch
+///   keystrokes would silently fail;
+/// - the env escape hatch disabled it.
+///
+/// Unlike `shouldUseMailtoCompose`, there is no subject/sender gate: a reply has
+/// no subject param, and its window is identified by id-delta (not title), so an
+/// empty/localized title is a non-issue.
+func shouldUsePasteReplyForward(
+    format: BodyFormat,
+    accessibilityTrusted: Bool,
+    disabledByEnv: Bool
+) -> Bool {
+    if disabledByEnv { return false }
+    guard format == .plain else { return false }
+    return accessibilityTrusted
+}

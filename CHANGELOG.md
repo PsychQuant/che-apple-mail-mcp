@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`reply_email` / `forward_email` no longer wrap the new body in `<blockquote type="cite">`** ([#218](https://github.com/PsychQuant/che-apple-mail-mcp/issues/218)). Same wrapper bug as #175, but the fix is structurally different: a reply's *quoted original* legitimately belongs in a `blockquote type="cite"` — only the **new** reply/forward text shouldn't be wrapped, and `mailto:` (the #175 fix) can't thread a reply or carry the quoted original. The clean path drives Mail's **native `reply` / `reply all` / `forward` verb** (Mail builds the quoted original itself — correct cite-blockquote + In-Reply-To / References threading headers) and pastes **only the new body at the cursor** via a System Events clipboard paste — never `set content` / `set html content` for the new text. So the quoted original stays a proper quote and the user's new text is clean (mobile clients honoring `cite` no longer render it as quoted). The reply/forward window is identified by **window-id delta** (the localized `Re:` / `Fwd:` title prefix is never matched); its real title is read from Mail and bridged into the Accessibility context to raise the right window before the paste/dispatch keystrokes, and on-error cleanup closes **only** the window we created (by id) so a pre-existing user draft is never discarded.
+
+### Added
+- **`CHE_MAIL_DISABLE_PASTE_REPLY` env escape hatch** ([#218](https://github.com/PsychQuant/che-apple-mail-mcp/issues/218)) — set to `1`/`true`/`yes` to force the legacy AppleScript injection path for reply/forward (wrapped new body), independent of the compose hatch (`CHE_MAIL_DISABLE_MAILTO_COMPOSE`), so the two GUI paths can be toggled separately. The clean reply/forward path reuses the `CHE_MAIL_MAILTO_*` GUI-timing knobs.
+
+### Notes
+- The clean reply/forward path is used only when: `format` is `plain`, Accessibility is granted, and the env hatch is off (for `forward_email`, additionally only when a new body is provided — a forward with no body injects nothing, so it is already wrapper-free). **markdown/html bodies, no Accessibility, the env hatch, or any GUI-step failure gracefully fall back to the legacy injection path** (which works but wraps the new body) with a one-line stderr warning — never a silent failure or refused send. `reply_all`, extra `cc` (#34), attachments (#60), `save_as_draft`, threading, and the native quoted original are all preserved (set via the native verbs / object model — only *new-body insertion* changed). `save_as_draft` on the clean path briefly opens the reply window (it needs a window to paste into); the legacy fallback still covers the no-window draft.
+- **Verification discipline (#221):** the gated live test (`CHE_MAIL_LIVE_TEST=1`) reads the saved reply draft's `.emlx` off disk to assert the new body is free of the `Apple-Mail-URLShareWrapperClass` wrapper while the native cite-blockquote quote is retained above it. It finds the source message and cleans up by **metadata / id-delta only** — never a `whose content contains` full-body scan, which O(corpus) loads every message body and OOM-crashes Mail on a large mailbox (the regression that opened #221).
+
 ## [2.17.0] - 2026-06-24
 
 ### Fixed
