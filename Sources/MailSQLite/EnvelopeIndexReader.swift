@@ -484,7 +484,7 @@ public final class EnvelopeIndexReader {
             JOIN addresses a ON m.sender = a.ROWID
             JOIN mailboxes mb ON m.mailbox = mb.ROWID
             WHERE \(conditions.joined(separator: " AND "))
-            ORDER BY m.date_received \(sortDirection)
+            ORDER BY m.date_received \(sortDirection), m.ROWID \(sortDirection)
             LIMIT ?
             """
 
@@ -653,7 +653,7 @@ public final class EnvelopeIndexReader {
                 JOIN mailboxes mb ON m.mailbox = mb.ROWID
                 WHERE \(whereClause)
                 GROUP BY s.subject, a.address, m.date_received
-                ORDER BY m.date_received \(sortDirection)
+                ORDER BY m.date_received \(sortDirection), MIN(m.ROWID) \(sortDirection)
                 LIMIT ?
                 """
         } else {
@@ -664,7 +664,7 @@ public final class EnvelopeIndexReader {
                 JOIN addresses a ON m.sender = a.ROWID
                 JOIN mailboxes mb ON m.mailbox = mb.ROWID
                 WHERE \(whereClause)
-                ORDER BY m.date_received \(sortDirection)
+                ORDER BY m.date_received \(sortDirection), m.ROWID \(sortDirection)
                 LIMIT ?
                 """
         }
