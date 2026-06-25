@@ -53,16 +53,37 @@ final class ReplyPasteLiveTests: XCTestCase {
         return (parts[0], parts[1], parts[2])
     }
 
-    /// Snapshot the ids of every message currently in the unified drafts mailbox.
-    /// Drafts are few, so enumerating ids is cheap and — crucially — reads NO
-    /// message body (#221-safe). Returns nil on failure so cleanup can refuse to
-    /// run rather than risk a too-broad delete.
-    private func draftMessageIds() -> Set<String>? {
+    /// Resolve the source account's REAL drafts mailbox. The unified `drafts
+    /// mailbox` smart-view enumerates fine but RESISTS a filtered `delete` (a
+    /// `delete m` on a smart-view message silently fails), and the `drafts mailbox
+    /// of account` accessor errors on this setup — so we iterate the account's own
+    /// mailboxes and pick the drafts one by a best-effort name match. AppleScript
+    /// snippet (interpolate the escaped account name + assign `_db`).
+    private func resolveAccountDraftsSnippet(_ account: String) -> String {
+        let esc = account.replacingOccurrences(of: "\\", with: "\\\\")
+                         .replacingOccurrences(of: "\"", with: "\\\"")
+        return """
+                set _db to missing value
+                try
+                    repeat with mb in (mailboxes of account "\(esc)")
+                        if (name of mb) is "Drafts" or (name of mb) contains "Draft" or (name of mb) contains "草稿" then set _db to mb
+                    end repeat
+                end try
+        """
+    }
+
+    /// Snapshot the ids of every message in the source account's real drafts
+    /// mailbox. Drafts are few, so enumerating ids is cheap and — crucially —
+    /// reads NO message body (#221-safe). Returns nil on failure so cleanup can
+    /// refuse to run rather than risk a too-broad delete.
+    private func draftMessageIds(account: String) -> Set<String>? {
         let raw = runOsa("""
         tell application "Mail"
+        \(resolveAccountDraftsSnippet(account))
+            if _db is missing value then return "ERR"
             set _ids to {}
             try
-                repeat with m in (messages of drafts mailbox)
+                repeat with m in (messages of _db)
                     set end of _ids to (id of m as string)
                 end repeat
             on error
@@ -80,16 +101,19 @@ final class ReplyPasteLiveTests: XCTestCase {
     }
 
     /// Delete ONLY drafts whose id is not in `before` — the one(s) this test just
-    /// created. id-delta cleanup: never touches a pre-existing user draft, and
-    /// never scans bodies (#221). No-op if `before` is nil (snapshot failed).
-    private func deleteNewDrafts(notIn before: Set<String>?) {
+    /// created — from the source account's real drafts mailbox (where `delete`
+    /// actually works). id-delta cleanup: never touches a pre-existing user draft,
+    /// and never scans bodies (#221). No-op if `before` is nil (snapshot failed).
+    private func deleteNewDrafts(account: String, notIn before: Set<String>?) {
         guard let before = before else { return }   // snapshot failed → refuse to delete
         let beforeList = "{" + before.map { "\"\($0)\"" }.joined(separator: ", ") + "}"
         _ = runOsa("""
         tell application "Mail"
+        \(resolveAccountDraftsSnippet(account))
+            if _db is missing value then return
             set _before to \(beforeList)
             try
-                repeat with m in (messages of drafts mailbox)
+                repeat with m in (messages of _db)
                     set _mid to (id of m as string)
                     if _mid is not in _before then
                         try
@@ -134,9 +158,11 @@ final class ReplyPasteLiveTests: XCTestCase {
         }
 
         let marker = "LIVEREPLY218_\(Int(Date().timeIntervalSince1970))"
-        // id-delta cleanup: only the draft we create gets deleted (never a content scan).
-        let draftsBefore = draftMessageIds()
-        defer { deleteNewDrafts(notIn: draftsBefore) }
+        // id-delta cleanup on the source account's real drafts mailbox: only the
+        // draft we create gets deleted (never a content scan). The clean path
+        // closes its draft window after ⌘S, so the draft isn't window-locked.
+        let draftsBefore = draftMessageIds(account: src.account)
+        defer { deleteNewDrafts(account: src.account, notIn: draftsBefore) }
 
         let result = try await MailController.shared.replyEmail(
             id: src.id,
@@ -156,7 +182,19 @@ final class ReplyPasteLiveTests: XCTestCase {
             XCTFail("saved reply draft .emlx not found on disk for marker \(marker)")
             return
         }
-        let body = (try? String(contentsOfFile: emlx, encoding: .utf8)) ?? ""
+        let raw = (try? String(contentsOfFile: emlx, encoding: .utf8)) ?? ""
+        // The saved HTML part is QUOTED-PRINTABLE encoded: literal `=` is stored as
+        // `=3D` and long lines are soft-wrapped with a trailing `=` + newline. So a
+        // raw `.contains("blockquote type=\"cite\"")` would miss the tag even when
+        // it IS present (it's stored as `type=3D"cite"`, split across a soft wrap).
+        // Undo just those two transforms so the structural ASCII tags + the ASCII
+        // marker are contiguous + matchable (the CJK body stays QP-encoded — we
+        // don't need it decoded, only the marker and the tags).
+        let body = raw
+            .replacingOccurrences(of: "=\r\n", with: "")
+            .replacingOccurrences(of: "=\n", with: "")
+            .replacingOccurrences(of: "=3D", with: "=")
+            .replacingOccurrences(of: "=3d", with: "=")
 
         // The #218 wrapper signature must be ABSENT — the clean path never emits it.
         XCTAssertFalse(body.contains("Apple-Mail-URLShareWrapperClass"),

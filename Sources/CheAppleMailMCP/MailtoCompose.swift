@@ -165,9 +165,13 @@ func replyForwardPasteDisabledByEnv(
 ///   keystrokes would silently fail;
 /// - the env escape hatch disabled it.
 ///
-/// Unlike `shouldUseMailtoCompose`, there is no subject/sender gate: a reply has
-/// no subject param, and its window is identified by id-delta (not title), so an
-/// empty/localized title is a non-issue.
+/// Unlike `shouldUseMailtoCompose`, there is no compile-time subject/sender gate
+/// (a reply has no subject param). The window is identified by **id-delta** in the
+/// Mail model, and `buildReplyForwardPasteScript` gates each keystroke phase on a
+/// RUNTIME front-window-id check (`id of front window` ∈ the id-delta set) — so a
+/// stolen focus degrades to the legacy fallback. The mailto path's title bridge is
+/// NOT reused: reply/forward compose windows expose an empty `name`, so title
+/// matching is unusable here (#218 verify, live-verified).
 func shouldUsePasteReplyForward(
     format: BodyFormat,
     accessibilityTrusted: Bool,

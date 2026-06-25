@@ -648,33 +648,33 @@ private func buildReplyForwardPasteScript(
     let dispatchKey = composeDispatchKeystroke(send: send)
     let bodyEsc = appleScriptEscape(newBody)
 
-    // raiseSnippet (runs inside `tell process "Mail"`): re-locate OUR window in
-    // the AX context by its REAL title `_wtitle` (read from Mail via id-delta —
-    // locale-independent, NOT a guessed Re:/Fwd: prefix) and best-effort raise it
-    // so the next keystroke lands on our window. Hard-errors (→ safe fallback) if
-    // our window is gone. Mirrors buildMailtoComposeScript's raiseOnly, but the
-    // title is READ rather than known.
-    let raiseSnippet = """
-                set _aw to missing value
-                repeat with _cand in windows
-                    if title of _cand is _wtitle then
-                        set _aw to _cand
-                        exit repeat
-                    end if
-                end repeat
-                if _aw is missing value then error "reply/forward compose window not found (title)"
-                try
-                    perform action "AXRaise" of _aw
-                end try
-                delay 0.25
+    // WINDOW IDENTITY — front-window-id guard (#218 verify; live-verified).
+    //
+    // The id-delta uniquely identifies OUR newly-opened window in the Mail object
+    // model. But the keystrokes go through System Events / AX, and AX has no view
+    // of Mail's window id. The mailto path (#175) bridges to AX by window TITLE —
+    // which does NOT work here: Mail's reply/forward COMPOSE windows expose an
+    // EMPTY `name` (the live test proved a reply window's title is ""), so a
+    // title match would either refuse the (common) empty-title case → legacy-wrap,
+    // or match the wrong same-titled window. Instead we use the guard the verify
+    // reviewers (Logic + Devil's Advocate) recommended: in the MAIL context, gate
+    // each keystroke phase on `id of front window` ∈ the id-delta set — i.e. OUR
+    // window is the frontmost Mail window. `reply/forward with opening window`
+    // opens the window frontmost; if the user stole focus during a delay, the id
+    // won't match → error → on-error close (scoped to our ids) → MailController
+    // catch → legacy injection fallback. Then `set frontmost to true` + keystroke
+    // hits that frontmost window. RESIDUAL (inherent GUI automation, documented):
+    // a sub-second TOCTOU between the Mail-side check and the AX keystroke remains
+    // — same class as the #175 mailto residual; a detectable change degrades to
+    // the legacy fallback.
+    let frontGuard = """
+        tell application "Mail"
+            if (count of windows) is 0 then error "no Mail window to target (falling back)"
+            if (id of front window) is not in _newIds then error "our reply/forward window is not frontmost (focus changed) — falling back"
+        end tell
     """
-    let verifyNoSheet = raiseSnippet + """
 
-                if (count of sheets of _aw) is not 0 then error "a sheet/panel is still open on the compose window"
-    """
-
-    // 1. Capture ids, drive the native verb, compute the new-window id delta, and
-    // read the new window's real title (for the AX bridge).
+    // 1. Capture ids, drive the native verb, compute the new-window id delta.
     var s = """
     tell application "Mail"
         set _beforeIds to (id of every window)
@@ -690,14 +690,13 @@ private func buildReplyForwardPasteScript(
             if _beforeIds does not contain _thisId then set end of _newIds to _thisId
         end repeat
         if (count of _newIds) is 0 then error "\(notOpenedError)"
-        set _w to (first window whose id is (item 1 of _newIds))
-        set _wtitle to (name of _w)
     end tell
     try
+    \(frontGuard)
         tell application "System Events"
             tell process "Mail"
                 set frontmost to true
-    \(raiseSnippet)
+                delay 0.25
                 set the clipboard to "\(bodyEsc)"
                 keystroke "v" using command down
                 delay \(stepDelay)
@@ -721,28 +720,57 @@ private func buildReplyForwardPasteScript(
         s += "\n        delay \(attachDrain)\n"
     }
 
-    // 3. Final re-raise + no-lingering-panel check + dispatch; on-error closes
-    // ONLY the windows we created (by id), never a pre-existing user window.
+    // 3. Re-confirm our window is still frontmost + no lingering panel + dispatch;
+    // on-error closes ONLY the windows we created (by id), never a pre-existing
+    // user window.
+    //
+    // Draft path closes its own window AFTER the dispatch succeeds: a saved-draft
+    // ⌘S leaves the compose window OPEN (unlike a ⇧⌘D send, which closes it), so
+    // without this every quiet draft accumulates a window — and an open compose
+    // window also holds the draft, blocking later deletion. The close lives
+    // OUTSIDE the `try` (best-effort, own inner `try`): a close failure must NOT
+    // propagate into the legacy fallback, which would save a SECOND draft (the
+    // double-dispatch hazard the "dispatch is the last statement in `try`"
+    // ordering deliberately avoids). `saving yes` is a harmless re-save of the
+    // already-saved draft, never a discard.
+    // Both window closes ITERATE `every window` and test id membership, rather
+    // than the `first window whose id is X` FILTER form — that filter is
+    // unreliable on Mail compose windows (it silently fails the same way
+    // `whose message id is` does), leaving the window open. Iteration + an
+    // `(id of _cw) is in _newIds` membership check closes reliably (live-verified).
+    let draftWindowClose = send ? "" : """
+
+
+    tell application "Mail"
+        repeat with _cw in (every window)
+            try
+                if (id of _cw) is in _newIds then close _cw saving yes
+            end try
+        end repeat
+    end tell
+    """
     s += """
 
+    \(frontGuard)
         tell application "System Events"
             tell process "Mail"
                 set frontmost to true
-    \(verifyNoSheet)
+                delay 0.25
+                if (count of sheets of window 1) is not 0 then error "a sheet/panel is still open on the compose window"
                 \(dispatchKey)
             end tell
         end tell
     on error _mErr
         tell application "Mail"
-            repeat with _k from 1 to (count of _newIds)
+            repeat with _cw in (every window)
                 try
-                    close (first window whose id is (item _k of _newIds)) saving no
+                    if (id of _cw) is in _newIds then close _cw saving no
                 end try
             end repeat
         end tell
         error _mErr
     end try
-    delay \(stepDelay)
+    delay \(stepDelay)\(draftWindowClose)
     return "\(successLabel)"
     """
     return s

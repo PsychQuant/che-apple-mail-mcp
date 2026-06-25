@@ -1031,9 +1031,9 @@ final class MailControllerComposeTests: XCTestCase {
     // itself, correctly, in a `blockquote type="cite"`) and pastes ONLY the new
     // body at the cursor via System Events — NEVER `set content` / `set html
     // content` for the new body (that path is what wraps the user's text in the
-    // URLShare/cite wrapper). Window identity = id-delta capture (the localized
-    // Re:/Fwd: title is NOT matched); the real window title is read from Mail
-    // (`name of _w`) and bridged into the AX context.
+    // URLShare/cite wrapper). Window identity = id-delta in the Mail model + a
+    // front-window-id guard (reply compose windows have an EMPTY title, so the AX
+    // layer is gated on "our window is the frontmost Mail window", never on title).
 
     func testBuildReplyPasteScript_usesNativeReplyVerb_pastesBody_neverInjectsContent() {
         let s = buildReplyEmailPasteScript(
@@ -1073,34 +1073,73 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertTrue(s.contains("reply all originalMsg with opening window"))
     }
 
-    func testBuildReplyPasteScript_windowIdDeltaGuard_notTitlePrefixMatch() {
+    func testBuildReplyPasteScript_windowIdDeltaGuard_frontWindowNotTitle() {
         let s = buildReplyEmailPasteScript(
             messageRef: "msgRef", newBody: "B", replyAll: false, saveAsDraft: false)
-        // identify the window by id-delta (robust), then read its REAL title and
-        // bridge into AX — never guess a localized Re:/Fwd: prefix.
+        // identify the window by id-delta in the Mail model and gate keystrokes on
+        // "OUR window is the frontmost Mail window" (its id is in the delta set).
+        // Reply compose windows have an EMPTY title (live-verified), so we must NOT
+        // depend on a window title or a localized Re:/Fwd: prefix.
         XCTAssertTrue(s.contains("set _beforeIds to (id of every window)"),
                       "must snapshot window ids before the reply verb")
         XCTAssertTrue(s.contains("if _beforeIds does not contain _thisId then set end of _newIds"),
                       "must compute the new-window id delta")
-        XCTAssertTrue(s.contains("set _wtitle to (name of _w)"),
-                      "must read the actual window title from Mail (locale-independent), not guess it")
-        XCTAssertTrue(s.contains("if title of _cand is _wtitle then"),
-                      "must bridge id-delta → AX by the real title")
-        XCTAssertTrue(s.contains("perform action \"AXRaise\""),
-                      "must raise OUR reply window before keystrokes")
-        XCTAssertTrue(s.contains("count of sheets of"),
-                      "must refuse dispatch while a sheet/panel is open")
+        XCTAssertTrue(s.contains("if (id of front window) is not in _newIds then error"),
+                      "must gate keystrokes on OUR window being the frontmost Mail window (id-based, not title)")
+        XCTAssertTrue(s.contains("set frontmost to true"),
+                      "must bring Mail frontmost before keystrokes")
+        XCTAssertTrue(s.contains("count of sheets of window 1"),
+                      "must refuse dispatch while a sheet/panel is open on the frontmost window")
+        // MUST NOT depend on the window title (empty for reply windows)
+        XCTAssertFalse(s.contains("name of _w"), "must NOT read the window title (empty for reply windows)")
+        XCTAssertFalse(s.contains("title of _cand"), "must NOT match the AX window by title")
         XCTAssertFalse(s.contains("Re:"), "must NOT hardcode a localized reply-prefix title")
         XCTAssertFalse(s.contains("Fwd:"), "must NOT hardcode a localized forward-prefix title")
+    }
+
+    // #218 verify follow-up: the clean-path saveAsDraft must CLOSE its reply
+    // window after ⌘S (the send path's ⇧⌘D closes the window itself). Otherwise
+    // every quiet draft leaves a lingering compose window, and an open compose
+    // window also holds the draft (blocking deletion). The close must live OUTSIDE
+    // the `try` — a close failure must NOT propagate into the legacy fallback
+    // (that would produce a second draft, the bug the dispatch-is-last-statement
+    // ordering deliberately avoids). It closes by id (`item 1 of _newIds`) with
+    // `saving yes` (harmless re-save), distinct from the on-error `saving no`.
+    func testBuildReplyPasteScript_saveAsDraft_closesWindowAfterSave() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "B", replyAll: false, saveAsDraft: true)
+        // close by ITERATION + id membership (the reliable form; the `whose id is`
+        // filter silently fails on compose windows). `saving yes` re-saves the
+        // already-saved draft harmlessly.
+        XCTAssertTrue(s.contains("if (id of _cw) is in _newIds then close _cw saving yes"),
+                      "saveAsDraft must close the saved draft window by id-iteration (quiet draft)")
+        // must be AFTER the try block (so a close failure can't trigger fallback)
+        assertOrdered(s, "saving yes", between: "end try", and: "return")
+    }
+
+    func testBuildReplyPasteScript_send_noExplicitWindowClose() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "B", replyAll: false, saveAsDraft: false)
+        // send path: ⇧⌘D sends + closes the compose window itself — no `saving yes` close.
+        XCTAssertFalse(s.contains("saving yes"),
+                       "send path must not add an explicit draft-window close (⇧⌘D closes it)")
+    }
+
+    func testBuildForwardPasteScript_send_noExplicitWindowClose() {
+        // forward always sends → no explicit close (matches reply send path).
+        let s = buildForwardEmailPasteScript(
+            messageRef: "msgRef", to: ["x@y.z"], newBody: "B")
+        XCTAssertFalse(s.contains("saving yes"))
     }
 
     func testBuildReplyPasteScript_onError_closesOnlyNewWindows_noDataLoss() {
         let s = buildReplyEmailPasteScript(
             messageRef: "msgRef", newBody: "B", replyAll: false, saveAsDraft: false)
         XCTAssertTrue(s.contains("on error _mErr"))
-        // cleanup closes ONLY windows we created (the new ids), never a pre-existing
-        // user window — and must NOT batch-close by title (data-loss bug, #175 r2).
-        XCTAssertTrue(s.contains("close (first window whose id is"))
+        // cleanup closes ONLY windows we created (id membership), never a
+        // pre-existing user window — and must NOT batch-close by title (data-loss
+        // bug, #175 r2). `saving no` discards the abandoned compose.
+        XCTAssertTrue(s.contains("if (id of _cw) is in _newIds then close _cw saving no"))
         XCTAssertFalse(s.contains("close (every window whose name"))
     }
 
@@ -1172,12 +1211,13 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertTrue(s.contains("address:\"d@e.f\""))
     }
 
-    func testBuildForwardPasteScript_windowIdDeltaGuard_notTitlePrefixMatch() {
+    func testBuildForwardPasteScript_windowIdDeltaGuard_frontWindowNotTitle() {
         let s = buildForwardEmailPasteScript(
             messageRef: "msgRef", to: ["x@y.z"], newBody: "B")
         XCTAssertTrue(s.contains("set _beforeIds to (id of every window)"))
-        XCTAssertTrue(s.contains("set _wtitle to (name of _w)"))
+        XCTAssertTrue(s.contains("if (id of front window) is not in _newIds then error"))
         XCTAssertTrue(s.contains("on error _mErr"))
+        XCTAssertFalse(s.contains("name of _w"))
         XCTAssertFalse(s.contains("Fwd:"))
     }
 
