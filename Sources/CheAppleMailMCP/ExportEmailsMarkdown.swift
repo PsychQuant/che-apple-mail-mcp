@@ -260,8 +260,20 @@ enum ExportEmailsMarkdown {
                 continue
             }
 
+            // #198: thread the `In-Reply-To` header (was hard-coded `""`), so reply
+            // threading via the `in_reply_to` frontmatter field works.
+            // #199: signal the body type (text vs html-only) so a downstream
+            // human/LLM reader knows when the verbatim body is raw HTML. It is
+            // appended via `extraFrontmatter` — after the frozen core-6 fields and
+            // any caller extras — so the published 6-field contract is unchanged.
+            // The text/html choice mirrors the renderer's body selection
+            // (`textBody ?? htmlBody ?? ""`): text when a plain body exists, html
+            // when only an HTML body does, text for an empty body.
+            let bodyType = content.textBody != nil ? "text"
+                : (content.htmlBody != nil ? "html" : "text")
             var md = EmailMarkdownRenderer.render(
-                content, direction: direction, inReplyTo: "", extraFrontmatter: extraFrontmatter)
+                content, direction: direction, inReplyTo: content.inReplyTo,
+                extraFrontmatter: extraFrontmatter + [("body_type", bodyType)])
 
             var savedAttachments: [String] = []
             var savedAttachmentURLs: [URL] = []   // for orphan cleanup on .md write failure

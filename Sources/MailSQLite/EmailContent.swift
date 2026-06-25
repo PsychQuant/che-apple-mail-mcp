@@ -8,6 +8,10 @@ public struct EmailContent: Sendable {
     public let ccRecipients: [String]
     public let date: String
     public let messageId: String
+    /// The `In-Reply-To` Message-ID header (#198), or `""` when absent. Used by
+    /// `export_emails_markdown` to populate the `in_reply_to` frontmatter field
+    /// (previously hard-coded empty) so reply threading works.
+    public let inReplyTo: String
     public let textBody: String?
     public let htmlBody: String?
     public let rawSource: Data?
@@ -48,6 +52,7 @@ extension EmlxParser {
                 ccRecipients: parseAddressList(headers["cc"]),
                 date: headers["date"] ?? "",
                 messageId: headers["message-id"] ?? "",
+                inReplyTo: headers["in-reply-to"] ?? "",
                 textBody: nil,
                 htmlBody: nil,
                 rawSource: messageData
@@ -66,6 +71,7 @@ extension EmlxParser {
                 ccRecipients: parseAddressList(headers["cc"]),
                 date: headers["date"] ?? "",
                 messageId: headers["message-id"] ?? "",
+                inReplyTo: headers["in-reply-to"] ?? "",
                 textBody: nil,
                 htmlBody: nil,
                 rawSource: nil
@@ -82,6 +88,7 @@ extension EmlxParser {
             ccRecipients: parseAddressList(headers["cc"]),
             date: headers["date"] ?? "",
             messageId: headers["message-id"] ?? "",
+            inReplyTo: headers["in-reply-to"] ?? "",
             textBody: parsed.textBody,
             htmlBody: parsed.htmlBody,
             rawSource: nil
