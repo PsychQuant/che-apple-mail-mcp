@@ -103,7 +103,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(subject: "Att") },
             attachmentNamesFor: { _ in ["../../escape_PWNED.txt"] },
-            saveAttachment: { _, _, dest in try Data("x".utf8).write(to: dest) })
+            attachmentData: { _, _ in Data("x".utf8) })
 
         // The malicious attachment must NOT have escaped output_dir.
         XCTAssertFalse(FileManager.default.fileExists(atPath: evil.path),
@@ -126,7 +126,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
             filenameOverrides: ["10": "../../evil"], extraFrontmatter: [],
             fetch: { _ in self.makeEmail(subject: "Override") },
             attachmentNamesFor: { _ in [] },
-            saveAttachment: { _, _, _ in })
+            attachmentData: { _, _ in Data() })
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: parentEvil.path),
                        "per-id override with ../ must not write outside output_dir")
@@ -145,7 +145,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(subject: "Whatever") },
             attachmentNamesFor: { _ in [] },
-            saveAttachment: { _, _, _ in })
+            attachmentData: { _, _ in Data() })
 
         XCTAssertEqual(manifest.written, 2)
         let paths = Set(manifest.items.compactMap { $0.writtenPath })
@@ -162,7 +162,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(subject: "AttFail") },
             attachmentNamesFor: { _ in ["report.pdf"] },
-            saveAttachment: { _, _, _ in throw Boom() })
+            attachmentData: { _, _ in throw Boom() })
 
         let item = manifest.items[0]
         XCTAssertEqual(item.status, "written")          // email markdown still written
@@ -182,7 +182,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
             extraFrontmatter: [],
             fetch: { emails[$0]! },
             attachmentNamesFor: { _ in [] },
-            saveAttachment: { _, _, _ in })
+            attachmentData: { _, _ in Data() })
 
         XCTAssertEqual(manifest.written, 2)
         XCTAssertEqual(manifest.errors, 0)
@@ -207,7 +207,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
             extraFrontmatter: extra,
             fetch: { _ in email },
             attachmentNamesFor: { _ in [] },
-            saveAttachment: { _, _, _ in })
+            attachmentData: { _, _ in Data() })
     }
 
     func testRun_threadsInReplyToIntoFrontmatter() throws {
@@ -248,7 +248,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
             extraFrontmatter: [],
             fetch: { id in if id == "bad" { throw Boom() }; return self.makeEmail(subject: "S\(id)") },
             attachmentNamesFor: { _ in [] },
-            saveAttachment: { _, _, _ in })
+            attachmentData: { _, _ in Data() })
 
         XCTAssertEqual(manifest.written, 2)
         XCTAssertEqual(manifest.errors, 1)
@@ -266,7 +266,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(subject: "Same Topic") },
             attachmentNamesFor: { _ in [] },
-            saveAttachment: { _, _, _ in })
+            attachmentData: { _, _ in Data() })
 
         let names = Set(manifest.items.compactMap { $0.writtenPath.map { ($0 as NSString).lastPathComponent } })
         XCTAssertTrue(names.contains("2026-06-13_Same-Topic.md"))
@@ -281,9 +281,9 @@ final class ExportEmailsMarkdownTests: XCTestCase {
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(subject: "WithAtt") },
             attachmentNamesFor: { _ in ["report.pdf", "data.csv"] },
-            saveAttachment: { _, name, dest in
-                // Fake: write a placeholder file at dest (parent dir made by core).
-                try Data("x".utf8).write(to: dest)
+            attachmentData: { _, _ in
+                // Fake: placeholder bytes (the export owns the race-free write).
+                Data("x".utf8)
             })
 
         let item = manifest.items[0]

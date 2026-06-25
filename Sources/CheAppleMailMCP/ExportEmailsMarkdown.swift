@@ -190,7 +190,9 @@ enum ExportEmailsMarkdown {
     ///   - extraFrontmatter: optional extra frontmatter fields.
     ///   - fetch: id → `EmailContent` (caller wires `EmlxParser.readEmail`, format "text").
     ///   - attachmentNamesFor: id → attachment filenames.
-    ///   - saveAttachment: (id, name, destination) → writes the attachment.
+    ///   - attachmentData: (id, name) → the attachment's decoded bytes. The
+    ///     export owns the filesystem write via the race-free `RaceFreeFileWriter`
+    ///     (#200), so this only extracts bytes — it must not write.
     static func run(
         ids: [String],
         outputDir: URL,
@@ -201,7 +203,7 @@ enum ExportEmailsMarkdown {
         extraFrontmatter: [(String, String)],
         fetch: (String) throws -> EmailContent,
         attachmentNamesFor: (String) throws -> [String],
-        saveAttachment: (String, String, URL) throws -> Void,
+        attachmentData: (String, String) throws -> Data,
         fileManager: FileManager = .default
     ) -> ExportManifest {
         try? fileManager.createDirectory(at: outputDir, withIntermediateDirectories: true)
@@ -300,20 +302,27 @@ enum ExportEmailsMarkdown {
                         ? outputDir.appendingPathComponent("data", isDirectory: true)
                         : outputDir.appendingPathComponent("attachments", isDirectory: true)
                             .appendingPathComponent(stem, isDirectory: true)
-                    // Reject if the target dir (e.g. a pre-planted symlink) would
-                    // resolve outside output_dir — checked BEFORE createDirectory.
+                    // Cheap canonical first-gate (a pre-existing symlink that
+                    // resolves outside output_dir is caught here); the race-free
+                    // `openat`-relative descent below is the actual enforcement
+                    // against a symlink planted in the validate→write window.
                     guard isWithin(destDir, canonicalRoot: canonicalRoot) else {
                         attachmentErrors.append("\(name): destination escapes output_dir")
                         continue
                     }
-                    try? fileManager.createDirectory(at: destDir, withIntermediateDirectories: true)
                     let attDest = destDir.appendingPathComponent(name)
                     guard isWithin(attDest, canonicalRoot: canonicalRoot) else {
                         attachmentErrors.append("\(name): destination escapes output_dir")
                         continue
                     }
+                    // #200: extract bytes, then write race-free (no-follow descent
+                    // from the validated output_dir fd → a symlink swap can't redirect).
+                    let relComponents = cls == "data" ? ["data"] : ["attachments", stem]
                     do {
-                        try saveAttachment(id, name, attDest)
+                        let data = try attachmentData(id, name)
+                        try RaceFreeFileWriter.writeFile(
+                            rootDir: outputDir.path, relativeDirComponents: relComponents,
+                            filename: name, data: data)
                         // Path relative to outputDir for the manifest + markdown link.
                         let rel = cls == "data" ? "data/\(name)" : "attachments/\(stem)/\(name)"
                         savedAttachments.append(rel)
@@ -330,7 +339,12 @@ enum ExportEmailsMarkdown {
             }
 
             do {
-                try md.data(using: .utf8)?.write(to: destURL, options: .atomic)
+                // #200: race-free write into the validated output_dir (the leaf
+                // `.md` is created via a sibling temp + rename — a symlink at the
+                // target is replaced, never followed).
+                try RaceFreeFileWriter.writeFile(
+                    rootDir: outputDir.path, relativeDirComponents: [],
+                    filename: filename, data: Data(md.utf8))
                 items.append(ExportManifestItem(
                     id: id, messageId: content.messageId, writtenPath: destURL.path,
                     attachments: savedAttachments, attachmentErrors: attachmentErrors,
