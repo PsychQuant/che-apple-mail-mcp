@@ -118,10 +118,27 @@ final class SearchEmailsScriptBuilderTests: XCTestCase {
     }
 
     func testWhoseSuffix_fieldAndDate_combined() {
+        // The field group is parenthesized before AND-joining the date (see the
+        // `.any` regression test below for why this matters).
         XCTAssertEqual(
             searchEmailsWhoseSuffix(field: .subject, escapedQuery: "Q",
                                     datePredicate: "date received ≤ _qTo"),
-            " whose subject contains \"Q\" and date received ≤ _qTo")
+            " whose (subject contains \"Q\") and date received ≤ _qTo")
+    }
+
+    /// #194 CRITICAL (6-AI verify — Logic + Devil's Advocate): for `field=any`
+    /// combined with a date bound, the field group MUST be parenthesized.
+    /// AppleScript binds `and` tighter than `or`, so an unparenthesized
+    /// `subject contains "Q" or sender contains "Q" and date received ≥ _qFrom`
+    /// parses as `subject or (sender and date)` — a subject match OUTSIDE the
+    /// date range leaks through, reintroducing the exact primary-vs-fallback
+    /// divergence #194 exists to kill (on the default field, with the named
+    /// date params).
+    func testWhoseSuffix_anyFieldWithDate_parenthesizesFieldGroup() {
+        XCTAssertEqual(
+            searchEmailsWhoseSuffix(field: .any, escapedQuery: "Q",
+                                    datePredicate: "date received ≥ _qFrom"),
+            " whose (subject contains \"Q\" or sender contains \"Q\") and date received ≥ _qFrom")
     }
 
     // MARK: - #221 guard: never emit a full-corpus content scan

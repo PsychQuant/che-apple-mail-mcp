@@ -118,13 +118,23 @@ private func searchEmailsDateVarSetup(_ varName: String, _ date: Date) -> String
 /// `whose` level: `.recipient` with no date bound). Combines the field substring
 /// predicate (for the fast-path fields) with the date predicate.
 func searchEmailsWhoseSuffix(field: SearchField, escapedQuery: String, datePredicate: String) -> String {
-    var parts: [String] = []
-    if let fieldPredicate = searchEmailsFieldPredicate(field: field, escapedQuery: escapedQuery) {
-        parts.append(fieldPredicate)
+    let fieldPredicate = searchEmailsFieldPredicate(field: field, escapedQuery: escapedQuery)
+    let hasDate = !datePredicate.isEmpty
+    switch (fieldPredicate, hasDate) {
+    case (nil, false):
+        return ""                                  // .recipient, no date → enumerate all, filter in-loop
+    case (nil, true):
+        return " whose \(datePredicate)"           // .recipient + date → date-only `whose`
+    case (let predicate?, false):
+        return " whose \(predicate)"               // field only → byte-compatible with pre-#194 (no parens)
+    case (let predicate?, true):
+        // field + date: the field group MUST be parenthesized before AND-joining
+        // the date. AppleScript binds `and` tighter than `or`, so for `.any`
+        // (`subject contains … or sender contains …`) an unparenthesized
+        // `A or B and date` would parse as `A or (B and date)` — a subject match
+        // OUTSIDE the date range would leak through, diverging from SQLite (which
+        // ANDs the date as a separate condition). Parenthesizing is harmless for
+        // the single-term fields and correct for `.any`.
+        return " whose (\(predicate)) and \(datePredicate)"
     }
-    if !datePredicate.isEmpty {
-        parts.append(datePredicate)
-    }
-    guard !parts.isEmpty else { return "" }
-    return " whose " + parts.joined(separator: " and ")
 }

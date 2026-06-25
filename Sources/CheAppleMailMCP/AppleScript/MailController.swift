@@ -525,6 +525,10 @@ actor MailController {
             FileHandle.standardError.write(Data((
                 "search_emails AppleScript fallback: field=any matches subject+sender; "
                 + "recipient-only matches require the SQLite index (#194 known limitation)\n").utf8))
+        } else if field == .recipient {
+            FileHandle.standardError.write(Data((
+                "search_emails AppleScript fallback: field=recipient enumerates the mailbox in-loop "
+                + "(O(mailbox) — slow on large mailboxes); the SQLite index is the fast path (#194)\n").utf8))
         }
         let dateClause = searchEmailsDateClause(dateFrom: dateFrom, dateTo: dateTo)
         let whoseSuffix = searchEmailsWhoseSuffix(
