@@ -9,11 +9,14 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         sender: String = "Joanne Peng <peng.cyj@gmail.com>",
         date: String = "Sat, 13 Jun 2026 16:01:14 +0800",
         messageId: String = "<m@x>",
-        textBody: String? = "body"
+        inReplyTo: String = "",
+        textBody: String? = "body",
+        htmlBody: String? = nil
     ) -> EmailContent {
         EmailContent(
             subject: subject, sender: sender, toRecipients: ["a@x.com"], ccRecipients: [],
-            date: date, messageId: messageId, textBody: textBody, htmlBody: nil, rawSource: nil)
+            date: date, messageId: messageId, inReplyTo: inReplyTo,
+            textBody: textBody, htmlBody: htmlBody, rawSource: nil)
     }
 
     private func tempDir() -> URL {
@@ -188,6 +191,52 @@ final class ExportEmailsMarkdownTests: XCTestCase {
             XCTAssertNotNil(item.writtenPath)
             XCTAssertTrue(FileManager.default.fileExists(atPath: item.writtenPath!))
         }
+    }
+
+    // MARK: - #198 in_reply_to threading + #199 body_type frontmatter
+
+    private func readWrittenMd(_ manifest: ExportManifest) throws -> String {
+        let path = try XCTUnwrap(manifest.items.first?.writtenPath)
+        return try String(contentsOfFile: path, encoding: .utf8)
+    }
+
+    private func runOne(_ email: EmailContent, extra: [(String, String)] = []) -> ExportManifest {
+        ExportEmailsMarkdown.run(
+            ids: ["10"], outputDir: tempDir(), direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: extra,
+            fetch: { _ in email },
+            attachmentNamesFor: { _ in [] },
+            saveAttachment: { _, _, _ in })
+    }
+
+    func testRun_threadsInReplyToIntoFrontmatter() throws {
+        let md = try readWrittenMd(runOne(makeEmail(inReplyTo: "<parent@example.com>")))
+        XCTAssertTrue(md.contains("in_reply_to: \"<parent@example.com>\""),
+                      "#198: in_reply_to must be threaded from EmailContent, not hard-coded empty:\n\(md)")
+    }
+
+    func testRun_inReplyToEmptyWhenAbsent() throws {
+        let md = try readWrittenMd(runOne(makeEmail(inReplyTo: "")))
+        XCTAssertTrue(md.contains("in_reply_to: \"\""),
+                      "absent In-Reply-To → empty (preserves prior behavior)")
+    }
+
+    func testRun_bodyTypeText_whenTextBodyPresent() throws {
+        let md = try readWrittenMd(runOne(makeEmail(textBody: "plain body", htmlBody: nil)))
+        XCTAssertTrue(md.contains("body_type: \"text\""), "#199: text body → body_type text:\n\(md)")
+    }
+
+    func testRun_bodyTypeHtml_whenHtmlOnly() throws {
+        let md = try readWrittenMd(runOne(makeEmail(textBody: nil, htmlBody: "<p>only html</p>")))
+        XCTAssertTrue(md.contains("body_type: \"html\""), "#199: html-only body → body_type html:\n\(md)")
+    }
+
+    func testRun_bodyTypeCoexistsWithCallerExtraFrontmatter() throws {
+        // body_type is appended AFTER caller-supplied extraFrontmatter; both appear.
+        let md = try readWrittenMd(runOne(makeEmail(textBody: "x"), extra: [("account", "work")]))
+        XCTAssertTrue(md.contains("account: \"work\""), "caller extra preserved")
+        XCTAssertTrue(md.contains("body_type: \"text\""), "body_type added alongside caller extras")
     }
 
     func testRun_partialFailure_continues() throws {

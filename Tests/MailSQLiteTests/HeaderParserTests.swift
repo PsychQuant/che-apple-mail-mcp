@@ -13,6 +13,15 @@ final class HeaderParserTests: XCTestCase {
         XCTAssertEqual(headers["subject"], "Hello")
     }
 
+    /// #198: `export_emails_markdown` reads `In-Reply-To` via `headers["in-reply-to"]`
+    /// (lowercased key) to populate the `in_reply_to` frontmatter field for reply
+    /// threading — pins that the header is surfaced.
+    func testParseInReplyToHeader() {
+        let raw = "From: a@x\r\nIn-Reply-To: <parent-id@example.com>\r\nSubject: Re: hi\r\n\r\nBody"
+        let headers = RFC822Parser.parseHeaders(from: Data(raw.utf8))
+        XCTAssertEqual(headers["in-reply-to"], "<parent-id@example.com>")
+    }
+
     // MARK: - Header folding
 
     func testFoldedHeader() {

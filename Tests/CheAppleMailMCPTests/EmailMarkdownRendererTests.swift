@@ -11,11 +11,13 @@ final class EmailMarkdownRendererTests: XCTestCase {
         cc: [String] = [],
         date: String = "Sat, 13 Jun 2026 16:01:14 +0800",
         messageId: String = "<CAKM2gv@mail.gmail.com>",
+        inReplyTo: String = "",
         textBody: String? = "Body line one.\n\n> quoted reply\n--JP"
     ) -> EmailContent {
         EmailContent(
             subject: subject, sender: sender, toRecipients: to, ccRecipients: cc,
-            date: date, messageId: messageId, textBody: textBody, htmlBody: nil, rawSource: nil
+            date: date, messageId: messageId, inReplyTo: inReplyTo,
+            textBody: textBody, htmlBody: nil, rawSource: nil
         )
     }
 
