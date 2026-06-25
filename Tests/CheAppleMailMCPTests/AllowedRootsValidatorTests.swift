@@ -158,4 +158,23 @@ final class AllowedRootsValidatorTests: XCTestCase {
         }
         XCTAssertNoThrow(try validator.validate(root + "/sub", allowedRoots: [root]))
     }
+
+    // MARK: - #197 case-insensitive denylist (6-AI verify — Security + DA)
+
+    /// On case-insensitive APFS `~/.KUBE` and `~/.kube` are the same directory.
+    /// `canonicalize` only normalizes *existing* ancestors, so an absent denied
+    /// dir keeps the attacker's case verbatim — a case-SENSITIVE match would let
+    /// `~/.NETRC/x` (≡ `~/.netrc` on disk) bypass the denylist. These entries are
+    /// credential *files* (very unlikely to exist as dirs), so the case is kept
+    /// and the case-INSENSITIVE match is what denies them.
+    func testValidate_caseVariantOfDeniedHomeDir_denied() {
+        for variant in ["/.NETRC/x", "/.Git-Credentials/x", "/.PgPass/x", "/.SSH/authorized_keys"] {
+            let target = NSHomeDirectory() + variant
+            XCTAssertThrowsError(try validator.validate(target, allowedRoots: [])) { error in
+                guard case AllowedRootsError.deniedHomePath = error else {
+                    return XCTFail("expected deniedHomePath for case-variant '\(variant)', got \(error)")
+                }
+            }
+        }
+    }
 }

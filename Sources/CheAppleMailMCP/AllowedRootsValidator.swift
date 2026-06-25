@@ -47,12 +47,20 @@ struct AllowedRootsValidator {
     /// code-exec / credential targets. Deliberately an **explicit** set, not a
     /// blanket "any dotfile" rule, so a legitimate `~/.mailarchive` is not
     /// surprised — a deployment wanting a hidden export dir can configure it via
-    /// `export_allowed_roots`. The list is inherently incomplete (the documented
-    /// residual); the strict-allowlist config is the escape hatch for the wary.
+    /// `CHE_MAIL_EXPORT_ALLOWED_ROOTS`. The list is inherently incomplete (the
+    /// documented residual); the strict-allowlist config is the escape hatch.
+    ///
+    /// **Entries are lowercase and matched case-INSENSITIVELY** (see `validate`):
+    /// the default macOS volume is case-insensitive APFS, so `~/.KUBE` and
+    /// `~/.kube` are the *same* directory. A case-sensitive match would let
+    /// `~/.KUBE/config` (an absent dir whose case `canonicalize` can't normalize)
+    /// slip past while still resolving to the real `~/.kube/config` inode — a
+    /// credential-exfiltration bypass (6-AI verify, Security + Devil's-Advocate).
     static let homeRelativeDenylist: Set<String> = [
-        "Library", "bin",
+        "library", "bin", "applications",
         ".ssh", ".config", ".gnupg", ".aws", ".docker", ".kube", ".local",
         ".zshrc", ".bashrc", ".bash_profile", ".zprofile", ".profile",
+        ".netrc", ".pgpass", ".git-credentials", ".gitconfig",
     ]
 
     init() {}
@@ -82,7 +90,10 @@ struct AllowedRootsValidator {
         if canonicalPath == homePath || canonicalPath.hasPrefix(homePath + "/") {
             let relative = canonicalPath.dropFirst(homePath.count).drop(while: { $0 == "/" })
             let firstComponent = relative.split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""
-            if Self.homeRelativeDenylist.contains(firstComponent) {
+            // Case-INSENSITIVE: the default macOS volume is case-insensitive APFS,
+            // so `~/.KUBE` == `~/.kube` on disk; a case-sensitive match would let
+            // an absent-dir case variant bypass the denylist (6-AI verify).
+            if Self.homeRelativeDenylist.contains(firstComponent.lowercased()) {
                 throw AllowedRootsError.deniedHomePath(path: canonicalPath)
             }
         }
