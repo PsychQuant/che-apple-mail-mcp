@@ -19,6 +19,12 @@ public enum MailSQLiteError: Error, LocalizedError {
     /// the AppleScript path which can stream-write large files.
     case attachmentTooLarge(name: String, size: Int, limit: Int)
 
+    /// An `account_name` (or `account_id`) was supplied to an account-scoped
+    /// query but resolved to no configured account (#202). Surfaced instead of
+    /// silently returning every account's data (the `list_mailboxes`
+    /// return-all-unscoped latent bug).
+    case accountNotResolvable(name: String)
+
     public var errorDescription: String? {
         switch self {
         case .databaseNotAccessible(let msg):
@@ -35,6 +41,8 @@ public enum MailSQLiteError: Error, LocalizedError {
             return "Attachment '\(name)' not found in message MIME parts"
         case .attachmentTooLarge(let name, let size, let limit):
             return "Attachment '\(name)' is \(size) bytes, exceeds in-memory limit of \(limit) bytes"
+        case .accountNotResolvable(let name):
+            return "Account '\(name)' not found — use list_accounts to see configured accounts (pass account_id to disambiguate an email-form name)"
         }
     }
 }

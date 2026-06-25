@@ -123,16 +123,19 @@ actor MailController {
     }
 
     /// Get account details
-    func getAccountInfo(accountName: String) throws -> [String: Any] {
+    func getAccountInfo(accountName: String, accountId: String? = nil) throws -> [String: Any] {
+        // #202: select via resolveAccountRef — UUID selector when accountId is
+        // present, else the legacy `account "<name>"` form (byte-identical).
+        let acctRef = resolveAccountRef(accountId: accountId, accountName: accountName)
         let enabledScript = """
         tell application "Mail"
-            get enabled of account "\(appleScriptEscape(accountName))"
+            get enabled of \(acctRef)
         end tell
         """
 
         let emailsScript = """
         tell application "Mail"
-            get email addresses of account "\(appleScriptEscape(accountName))"
+            get email addresses of \(acctRef)
         end tell
         """
 
@@ -149,13 +152,18 @@ actor MailController {
     // MARK: - Mailbox Operations
 
     /// List mailboxes for an account
-    func listMailboxes(accountName: String? = nil) throws -> [[String: Any]] {
+    func listMailboxes(accountName: String? = nil, accountId: String? = nil) throws -> [[String: Any]] {
         // Simplified: get mailbox names
         let namesScript: String
-        if let account = accountName {
+        let hasSelector = (accountId.map { !$0.isEmpty } ?? false)
+            || (accountName.map { !$0.isEmpty } ?? false)
+        if hasSelector {
+            // #202: UUID selector when accountId present, else `account "<name>"`
+            // (byte-identical to the legacy form).
+            let acctRef = resolveAccountRef(accountId: accountId, accountName: accountName ?? "")
             namesScript = """
             tell application "Mail"
-                get name of every mailbox of account "\(appleScriptEscape(account))"
+                get name of every mailbox of \(acctRef)
             end tell
             """
         } else {
