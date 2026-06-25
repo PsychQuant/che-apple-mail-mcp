@@ -1672,12 +1672,14 @@ class CheAppleMailMCPServer {
                           let mailboxUrl = try exportReader.mailboxURL(forMessageId: rowId) else { return [] }
                     return Array(try EmlxParser.attachmentNames(rowId: rowId, mailboxURL: mailboxUrl))
                 },
-                saveAttachment: { id, name, dest in
+                attachmentData: { id, name in
                     guard let rowId = Int(id),
                           let mailboxUrl = try exportReader.mailboxURL(forMessageId: rowId) else {
                         throw MailError.invalidParameter("rowId not resolvable for attachment '\(name)'")
                     }
-                    try EmlxParser.saveAttachment(rowId: rowId, mailboxURL: mailboxUrl, attachmentName: name, destination: dest)
+                    // #200: extract bytes only — ExportEmailsMarkdown owns the
+                    // race-free write via RaceFreeFileWriter.
+                    return try EmlxParser.attachmentData(rowId: rowId, mailboxURL: mailboxUrl, attachmentName: name)
                 })
             return formatJSON(exportManifest.jsonObject)
 

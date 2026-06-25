@@ -56,6 +56,25 @@ extension EmlxParser {
         attachmentName: String,
         destination: URL
     ) throws {
+        // #200: delegate extraction to attachmentData, then atomic-write. Keeps
+        // the `save_attachment` tool path byte-identical while letting the export
+        // path (race-free writer) own the write via `attachmentData`.
+        let data = try attachmentData(
+            rowId: rowId, mailboxURL: mailboxURL, attachmentName: attachmentName)
+        try data.write(to: destination, options: .atomic)
+    }
+
+    /// Extract an attachment's decoded bytes from the local Mail store **without
+    /// writing** (#200) — the extraction half of `saveAttachment`. Lets a caller
+    /// (the race-free `export_emails_markdown` writer) own the filesystem write
+    /// via an `openat`-relative, no-follow descent. Throws the same errors as
+    /// `saveAttachment` (`emlxNotFound` / `emlxParseFailed` / `attachmentNotFound`
+    /// / `attachmentTooLarge`).
+    public static func attachmentData(
+        rowId: Int,
+        mailboxURL: String,
+        attachmentName: String
+    ) throws -> Data {
         // Step 1: resolve .emlx path. Reuses mailStoragePathOverride
         // transparently (task 4.6).
         guard let path = resolveEmlxPath(rowId: rowId, mailboxURL: mailboxURL) else {
@@ -111,8 +130,7 @@ extension EmlxParser {
                         limit: attachmentInMemoryLimit
                     )
                 }
-                try externalBytes.write(to: destination, options: .atomic)
-                return
+                return externalBytes
             }
             // Inline body empty AND no external file — treat as missing
             // so the AppleScript fallback can have a turn (or surface the
@@ -131,9 +149,8 @@ extension EmlxParser {
             )
         }
 
-        // Step 6: write decoded bytes. Use atomic write so partial files
-        // never appear on disk on failure.
-        try part.decodedData.write(to: destination, options: .atomic)
+        // Step 6: return decoded bytes (caller writes).
+        return part.decodedData
     }
 
     /// Look up the externalised attachment binary that Apple Mail stores
