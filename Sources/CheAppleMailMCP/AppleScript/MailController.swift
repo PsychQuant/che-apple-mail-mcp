@@ -1,4 +1,5 @@
 import Foundation
+import MailSQLite  // #194: SearchField — the fallback honors the same field/date filters as the SQLite path
 #if canImport(AppKit)
 import AppKit  // #175: NSPasteboard for full-fidelity clipboard preserve/restore
 #endif
@@ -507,23 +508,67 @@ actor MailController {
     }
 
     /// Search emails
-    func searchEmails(query: String, mailbox: String? = nil, accountName: String? = nil, accountId: String? = nil, limit: Int = 20, sort: String = "desc") throws -> [[String: Any]] {
+    ///
+    /// #194: this AppleScript fallback honors the same `field` / `dateFrom` /
+    /// `dateTo` filters the SQLite primary path honors. `subject`/`sender`/`any`
+    /// use a fast `whose` substring predicate; `recipient` has no reliable `whose`
+    /// form (recipient props are object lists — `whose … contains` over a list is
+    /// element-equality, not substring) so it is filtered **in-loop**. **Known
+    /// limitation:** `field == .any` here covers subject+sender only; recipient-only
+    /// matches require the SQLite index (a stderr note is emitted when this path
+    /// runs with `field == .any`).
+    func searchEmails(query: String, mailbox: String? = nil, accountName: String? = nil, accountId: String? = nil, limit: Int = 20, sort: String = "desc", field: SearchField = .any, dateFrom: Date? = nil, dateTo: Date? = nil) throws -> [[String: Any]] {
         let escapedQuery = appleScriptEscape(query)
         let sep = "⏐"  // Separator unlikely to appear in email fields
+
+        if field == .any {
+            FileHandle.standardError.write(Data((
+                "search_emails AppleScript fallback: field=any matches subject+sender; "
+                + "recipient-only matches require the SQLite index (#194 known limitation)\n").utf8))
+        } else if field == .recipient {
+            FileHandle.standardError.write(Data((
+                "search_emails AppleScript fallback: field=recipient enumerates the mailbox in-loop "
+                + "(O(mailbox) — slow on large mailboxes); the SQLite index is the fast path (#194)\n").utf8))
+        }
+        let dateClause = searchEmailsDateClause(dateFrom: dateFrom, dateTo: dateTo)
+        let whoseSuffix = searchEmailsWhoseSuffix(
+            field: field, escapedQuery: escapedQuery, datePredicate: dateClause.predicate)
+        // Per-message loop body, shared by all 3 branches. `collect` is the
+        // branch-specific `set end of results …` statement; for `.recipient` the
+        // body wraps it in the in-loop address/name match gate so `limit` counts
+        // only matched messages (parity with the SQLite recipient filter).
+        func loopBody(collect: String) -> String {
+            let guardLimit = "if counter ≥ \(limit) then exit repeat"
+            if field == .recipient {
+                return """
+                \(guardLimit)
+                \(searchEmailsRecipientMatchBlock(escapedQuery: escapedQuery))
+                if _matched then
+                \(collect)
+                set counter to counter + 1
+                end if
+                """
+            }
+            return """
+            \(guardLimit)
+            \(collect)
+            set counter to counter + 1
+            """
+        }
 
         let script: String
         if let mailbox = mailbox, let accountName = accountName {
             // Search specific mailbox of specific account
+            let collect = "set end of results to (id of msg as string) & \"\(sep)\" & (subject of msg) & \"\(sep)\" & (sender of msg) & \"\(sep)\" & (date received of msg as string) & \"\(sep)\" & \"\(appleScriptEscape(accountName))\" & \"\(sep)\" & \"\(appleScriptEscape(mailbox))\""
             script = """
             tell application "Mail"
+            \(dateClause.setup)
                 set mb to \(mailboxRef(mailbox, account: accountName, accountId: accountId))
-                set foundMsgs to (messages of mb whose subject contains "\(escapedQuery)" or sender contains "\(escapedQuery)")
+                set foundMsgs to (messages of mb\(whoseSuffix))
                 set results to {}
                 set counter to 0
                 repeat with msg in foundMsgs
-                    if counter ≥ \(limit) then exit repeat
-                    set end of results to (id of msg as string) & "\(sep)" & (subject of msg) & "\(sep)" & (sender of msg) & "\(sep)" & (date received of msg as string) & "\(sep)" & "\(appleScriptEscape(accountName))" & "\(sep)" & "\(appleScriptEscape(mailbox))"
-                    set counter to counter + 1
+                \(loopBody(collect: collect))
                 end repeat
                 return results
             end tell
@@ -538,8 +583,10 @@ actor MailController {
             // supplied), aligning the AppleScript fallback with the SQLite
             // primary path, which already filters by account.
             let accountRef = resolveAccountRef(accountId: accountId, accountName: accountName ?? "")
+            let collect = "set end of results to (id of msg as string) & \"\(sep)\" & (subject of msg) & \"\(sep)\" & (sender of msg) & \"\(sep)\" & (date received of msg as string) & \"\(sep)\" & acctName & \"\(sep)\" & mboxName"
             script = """
             tell application "Mail"
+            \(dateClause.setup)
                 set results to {}
                 set counter to 0
                 set acct to \(accountRef)
@@ -547,11 +594,9 @@ actor MailController {
                 repeat with mbox in every mailbox of acct
                     try
                         set mboxName to name of mbox
-                        set foundMsgs to (messages of mbox whose subject contains "\(escapedQuery)" or sender contains "\(escapedQuery)")
+                        set foundMsgs to (messages of mbox\(whoseSuffix))
                         repeat with msg in foundMsgs
-                            if counter ≥ \(limit) then exit repeat
-                            set end of results to (id of msg as string) & "\(sep)" & (subject of msg) & "\(sep)" & (sender of msg) & "\(sep)" & (date received of msg as string) & "\(sep)" & acctName & "\(sep)" & mboxName
-                            set counter to counter + 1
+                        \(loopBody(collect: collect))
                         end repeat
                     end try
                     if counter ≥ \(limit) then exit repeat
@@ -561,8 +606,10 @@ actor MailController {
             """
         } else {
             // Search across all accounts and mailboxes
+            let collect = "set end of results to (id of msg as string) & \"\(sep)\" & (subject of msg) & \"\(sep)\" & (sender of msg) & \"\(sep)\" & (date received of msg as string) & \"\(sep)\" & acctName & \"\(sep)\" & mboxName"
             script = """
             tell application "Mail"
+            \(dateClause.setup)
                 set results to {}
                 set counter to 0
                 repeat with acct in every account
@@ -571,11 +618,9 @@ actor MailController {
                         repeat with mbox in every mailbox of acct
                             try
                                 set mboxName to name of mbox
-                                set foundMsgs to (messages of mbox whose subject contains "\(escapedQuery)" or sender contains "\(escapedQuery)")
+                                set foundMsgs to (messages of mbox\(whoseSuffix))
                                 repeat with msg in foundMsgs
-                                    if counter ≥ \(limit) then exit repeat
-                                    set end of results to (id of msg as string) & "\(sep)" & (subject of msg) & "\(sep)" & (sender of msg) & "\(sep)" & (date received of msg as string) & "\(sep)" & acctName & "\(sep)" & mboxName
-                                    set counter to counter + 1
+                                \(loopBody(collect: collect))
                                 end repeat
                             end try
                             if counter ≥ \(limit) then exit repeat

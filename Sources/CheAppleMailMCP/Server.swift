@@ -983,6 +983,11 @@ class CheAppleMailMCPServer {
             let fieldStr = arguments["field"]?.stringValue ?? "any"
             let dateFromStr = arguments["date_from"]?.stringValue
             let dateToStr = arguments["date_to"]?.stringValue
+            // #194: parse field + date bounds ONCE so BOTH the SQLite path and the
+            // AppleScript fallback honor them (the fallback previously dropped all 3).
+            let field = SearchField(rawValue: fieldStr) ?? .any
+            let dateFrom = dateFromStr.flatMap { Self.parseDate($0) }
+            let dateTo = dateToStr.flatMap { Self.parseDate($0) }
 
             // #208: projection / dedup for cheap bulk collection (ids feeds export_emails_markdown).
             // Validation extracted to a pure static helper so the spec's normative
@@ -993,10 +998,7 @@ class CheAppleMailMCPServer {
 
             // Use SQLite search if available
             if let reader = indexReader {
-                let field = SearchField(rawValue: fieldStr) ?? .any
                 let sortOrder = SortOrder(rawValue: sort) ?? .desc
-                let dateFrom = dateFromStr.flatMap { Self.parseDate($0) }
-                let dateTo = dateToStr.flatMap { Self.parseDate($0) }
                 let params = SearchParameters(
                     query: query, field: field, accountName: accountName,
                     mailbox: mailbox, dateFrom: dateFrom, dateTo: dateTo,
@@ -1027,7 +1029,7 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("projection '\(projection)' requires the SQLite envelope index, which is unavailable. " + FullDiskAccessHelp.unavailableSuffix())
             }
             let accountId = decodeAccountId(arguments, tool: invokedTool)
-            let results = try await mailController.searchEmails(query: query, mailbox: mailbox, accountName: accountName, accountId: accountId, limit: limit, sort: sort)
+            let results = try await mailController.searchEmails(query: query, mailbox: mailbox, accountName: accountName, accountId: accountId, limit: limit, sort: sort, field: field, dateFrom: dateFrom, dateTo: dateTo)
             // Fallback can't fetch limit+1 cheaply; truncated is best-effort heuristic (#204).
             return formatJSON(Self.resultEnvelope(results: results, limit: limit, truncated: results.count == limit))
 
