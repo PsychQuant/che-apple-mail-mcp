@@ -1641,11 +1641,16 @@ class CheAppleMailMCPServer {
             if let extra = exportOpts["extra_frontmatter"]?.objectValue {
                 for (k, v) in extra { if let s = v.stringValue { extraFrontmatter.append((k, s)) } }
             }
-            // Validate output_dir (home-only by default; a configurable
-            // export_allowed_roots whitelist is a documented follow-up).
+            // #197: validate output_dir. Default = anywhere under $HOME except the
+            // home-relative denylist (~/Library, ~/.ssh, dotfiles, ~/bin, …). A
+            // deployment can set CHE_MAIL_EXPORT_ALLOWED_ROOTS (`:`-separated
+            // absolute paths) to opt into a strict allowlist — those roots then
+            // REPLACE home as the allowed set (deny-by-default).
+            let exportAllowedRoots = (ProcessInfo.processInfo.environment["CHE_MAIL_EXPORT_ALLOWED_ROOTS"] ?? "")
+                .split(separator: ":").map(String.init)
             let validatedDir: URL
             do {
-                validatedDir = try AllowedRootsValidator().validate(outputDir, allowedRoots: [])
+                validatedDir = try AllowedRootsValidator().validate(outputDir, allowedRoots: exportAllowedRoots)
             } catch {
                 throw MailError.invalidParameter("output_dir rejected by write-safety check: \(error)")
             }

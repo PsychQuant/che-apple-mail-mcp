@@ -82,4 +82,80 @@ final class AllowedRootsValidatorTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - #197 home-relative denylist (always applies, defense-in-depth)
+
+    func testValidate_homeLibraryLaunchAgents_denied() {
+        // ~/Library/LaunchAgents — the macOS persistence target — must be refused
+        // even though it is under home.
+        let target = NSHomeDirectory() + "/Library/LaunchAgents/evil.plist"
+        XCTAssertThrowsError(try validator.validate(target, allowedRoots: [])) { error in
+            guard case AllowedRootsError.deniedHomePath = error else {
+                return XCTFail("expected deniedHomePath for ~/Library, got \(error)")
+            }
+        }
+    }
+
+    func testValidate_homeSsh_denied() {
+        let target = NSHomeDirectory() + "/.ssh/authorized_keys"
+        XCTAssertThrowsError(try validator.validate(target, allowedRoots: [])) { error in
+            guard case AllowedRootsError.deniedHomePath = error else {
+                return XCTFail("expected deniedHomePath for ~/.ssh, got \(error)")
+            }
+        }
+    }
+
+    func testValidate_homeConfig_denied() {
+        let target = NSHomeDirectory() + "/.config/git"
+        XCTAssertThrowsError(try validator.validate(target, allowedRoots: [])) { error in
+            guard case AllowedRootsError.deniedHomePath = error else {
+                return XCTFail("expected deniedHomePath for ~/.config, got \(error)")
+            }
+        }
+    }
+
+    func testValidate_homeBin_denied() {
+        // ~/bin — where wrapped MCP binaries live (code-exec target).
+        let target = NSHomeDirectory() + "/bin/wrapped-binary"
+        XCTAssertThrowsError(try validator.validate(target, allowedRoots: [])) { error in
+            guard case AllowedRootsError.deniedHomePath = error else {
+                return XCTFail("expected deniedHomePath for ~/bin, got \(error)")
+            }
+        }
+    }
+
+    func testValidate_dotDotIntoDeniedHomeDir_denied() {
+        // ~/Documents/../Library/X collapses to ~/Library/X → denied (the denylist
+        // runs on the canonical, ..-collapsed path).
+        let target = NSHomeDirectory() + "/Documents/../Library/X"
+        XCTAssertThrowsError(try validator.validate(target, allowedRoots: [])) { error in
+            guard case AllowedRootsError.deniedHomePath = error else {
+                return XCTFail("expected deniedHomePath after ..-collapse, got \(error)")
+            }
+        }
+    }
+
+    func testValidate_normalHomeSubdir_stillAccepts() throws {
+        // A non-denied home subdir must still work (backward-compat).
+        let target = NSHomeDirectory() + "/Documents/MailArchive-\(UUID().uuidString)"
+        XCTAssertNoThrow(try validator.validate(target, allowedRoots: []))
+    }
+
+    // MARK: - #197 strict allowlist (non-empty roots REPLACES home)
+
+    func testValidate_strictMode_homeRejectedWhenRootsConfigured() throws {
+        // With an explicit allowed root configured, home is no longer auto-allowed
+        // (opt-in deny-by-default). The configured root still accepts.
+        let root = NSTemporaryDirectory() + "idd197-strict-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        let homeTarget = NSHomeDirectory() + "/Documents/x-\(UUID().uuidString)"
+        XCTAssertThrowsError(try validator.validate(homeTarget, allowedRoots: [root])) { error in
+            guard case AllowedRootsError.escapesAllowedRoots = error else {
+                return XCTFail("strict mode: a home path must escape when roots are configured, got \(error)")
+            }
+        }
+        XCTAssertNoThrow(try validator.validate(root + "/sub", allowedRoots: [root]))
+    }
 }

@@ -9,6 +9,11 @@ enum AllowedRootsError: Error, Equatable {
     /// The canonical path resolves under a denied system directory
     /// (defence-in-depth, even if a misconfigured allowed root pointed there).
     case systemPath(path: String)
+    /// The canonical path resolves under a denied **home-relative** directory
+    /// (#197) — `~/Library`, `~/.ssh`, `~/.config`, dotfiles, `~/bin`, … — the
+    /// real macOS persistence / code-exec targets. Applies even in the default
+    /// "all of `$HOME`" mode, and even if such a path were a configured root.
+    case deniedHomePath(path: String)
 }
 
 /// Validates a caller-supplied `output_dir` against an allowed-roots
@@ -37,6 +42,19 @@ struct AllowedRootsValidator {
         "/System", "/usr", "/bin", "/sbin", "/etc", "/private/etc", "/Library",
     ]
 
+    /// First-component-under-home names that are never writable (#197), even in
+    /// the default "all of `$HOME`" mode. These are the real macOS persistence /
+    /// code-exec / credential targets. Deliberately an **explicit** set, not a
+    /// blanket "any dotfile" rule, so a legitimate `~/.mailarchive` is not
+    /// surprised — a deployment wanting a hidden export dir can configure it via
+    /// `export_allowed_roots`. The list is inherently incomplete (the documented
+    /// residual); the strict-allowlist config is the escape hatch for the wary.
+    static let homeRelativeDenylist: Set<String> = [
+        "Library", "bin",
+        ".ssh", ".config", ".gnupg", ".aws", ".docker", ".kube", ".local",
+        ".zshrc", ".bashrc", ".bash_profile", ".zprofile", ".profile",
+    ]
+
     init() {}
 
     /// Validate `outputDir` against the user's home plus `allowedRoots`.
@@ -56,10 +74,24 @@ struct AllowedRootsValidator {
             }
         }
 
-        var roots = [Self.canonicalize(NSHomeDirectory())]
-        for root in allowedRoots where !root.isEmpty {
-            roots.append(Self.canonicalize(root))
+        // #197: home-relative denylist — refuse the sensitive home subdirs even
+        // in the default all-of-home mode (and even if such a path were a
+        // configured root). Runs on the canonical, `..`-collapsed path so
+        // `~/Documents/../Library` is caught.
+        let homePath = Self.canonicalize(NSHomeDirectory()).path
+        if canonicalPath == homePath || canonicalPath.hasPrefix(homePath + "/") {
+            let relative = canonicalPath.dropFirst(homePath.count).drop(while: { $0 == "/" })
+            let firstComponent = relative.split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""
+            if Self.homeRelativeDenylist.contains(firstComponent) {
+                throw AllowedRootsError.deniedHomePath(path: canonicalPath)
+            }
         }
+
+        // #197: roots policy. No configured roots → default to the user's home
+        // (backward-compatible). One or more configured roots → those REPLACE
+        // home (opt-in strict allowlist / deny-by-default).
+        let configured = allowedRoots.filter { !$0.isEmpty }.map { Self.canonicalize($0) }
+        let roots = configured.isEmpty ? [Self.canonicalize(NSHomeDirectory())] : configured
 
         for root in roots {
             let rootPath = root.path
