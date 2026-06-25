@@ -972,6 +972,17 @@ actor MailController {
         FileHandle.standardError.write(Data(msg.utf8))
     }
 
+    /// #218 — surface (never swallow) a reply/forward clean-paste failure before
+    /// falling back to the legacy injection path. Mirrors `warnMailtoFallback`
+    /// (the `r-must-direct-db` observability rule): a silent fallback would hide
+    /// the wrapper regression returning.
+    private func warnReplyForwardPasteFallback(_ error: Error) {
+        let msg = "reply/forward clean-paste path failed (#218): "
+            + "\(error.localizedDescription); falling back to AppleScript injection "
+            + "— new body will be wrapped in <blockquote type=\"cite\"> (looks quoted on some mobile clients)\n"
+        FileHandle.standardError.write(Data(msg.utf8))
+    }
+
     /// Reply to an email. Optionally add extra CC, attach files, and/or save as draft instead of sending.
     func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]? = nil, saveAsDraft: Bool = false, format: BodyFormat = .plain, sanitizeLinks: Bool = false, accountId: String? = nil) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
@@ -986,6 +997,35 @@ actor MailController {
             dedupedCC = nil
         }
         let ref = resolveMsgRef(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName)
+
+        // #218: prefer the wrapper-free native-verb + paste path. Mail's native
+        // `reply` builds the quoted original itself (correct cite-blockquote +
+        // threading headers) and we paste ONLY the new body at the cursor — never
+        // `set content`/`set html content`, so the user's new text is not wrapped
+        // in the URLShare/cite wrapper. The clean path needs NO #43 pre-fetch
+        // (Mail quotes the original). Falls back to the legacy injection path
+        // (wrapped new body) for markdown/html, without Accessibility, when
+        // disabled via env (CHE_MAIL_DISABLE_PASTE_REPLY), or on any GUI failure.
+        if shouldUsePasteReplyForward(format: format,
+                                      accessibilityTrusted: AccessibilityStatus.isTrusted,
+                                      disabledByEnv: replyForwardPasteDisabledByEnv()) {
+            do {
+                let pasteScript = buildReplyEmailPasteScript(
+                    messageRef: ref,
+                    newBody: body,
+                    replyAll: replyAll,
+                    ccAdditional: dedupedCC,
+                    attachments: attachments,
+                    saveAsDraft: saveAsDraft
+                )
+                // Always preserve the user's clipboard — the paste path sets it to
+                // the new body for the ⌘V (full-fidelity restore, like #175 attach).
+                return try withClipboardPreserved { try runScript(pasteScript) }
+            } catch {
+                warnReplyForwardPasteFallback(error)
+                // fall through to legacy injection
+            }
+        }
 
         // Issue #43: pre-fetch unconditionally — plain mode also needs originalPlain
         // so composeReplyPlainText can build RFC 3676 quoted body. AppleScript's
@@ -1038,6 +1078,28 @@ actor MailController {
         // Issue #41: validate forward recipients at the boundary.
         try validateEmailAddresses(to, field: "to")
         let ref = resolveMsgRef(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName)
+
+        // #218: prefer the wrapper-free native-verb + paste path — but ONLY when a
+        // NEW body is provided. A forward with no body injects nothing, so the
+        // legacy path is already wrapper-free (`buildForwardEmailScript` with
+        // userBody: nil omits the content mutation). Mail's native `forward` builds
+        // the quoted original; we paste only the new note at the cursor — never
+        // `set content`/`set html content`. Falls back to legacy injection for
+        // markdown/html, without Accessibility, when disabled via env, or on any
+        // GUI failure.
+        if let newBody = body,
+           shouldUsePasteReplyForward(format: format,
+                                      accessibilityTrusted: AccessibilityStatus.isTrusted,
+                                      disabledByEnv: replyForwardPasteDisabledByEnv()) {
+            do {
+                let pasteScript = buildForwardEmailPasteScript(
+                    messageRef: ref, to: to, newBody: newBody)
+                return try withClipboardPreserved { try runScript(pasteScript) }
+            } catch {
+                warnReplyForwardPasteFallback(error)
+                // fall through to legacy injection
+            }
+        }
 
         // Issue #44 (mirrors #43): pre-fetch unconditionally when body is provided.
         // Plain mode also needs originalPlain so composeReplyPlainText can build

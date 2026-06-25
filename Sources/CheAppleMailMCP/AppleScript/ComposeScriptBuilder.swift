@@ -112,6 +112,17 @@ private func recipientFragment(_ addresses: [String], kind: String) -> String {
 //     save/restore is done by the caller in Swift (full-fidelity NSPasteboard,
 //     failure-safe) — this script does NOT save/restore.
 // Delays are env-overridable (#64 pattern) because GUI timing drifts under load.
+
+// #218: the GUI dispatch keystroke is shared between the mailto compose path
+// (#175) and the native-verb reply/forward paste path. Locale-independent
+// shortcuts: ⇧⌘D = send, ⌘S = save draft. Extracted so both paths emit
+// byte-identical dispatch (and a single place to change it).
+func composeDispatchKeystroke(send: Bool) -> String {
+    return send
+        ? "keystroke \"d\" using {command down, shift down}"
+        : "keystroke \"s\" using command down"
+}
+
 func buildMailtoComposeScript(
     url: String,
     subject: String,
@@ -121,9 +132,7 @@ func buildMailtoComposeScript(
     let windowDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_WINDOW_DELAY", fallback: 1.8)
     let stepDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_STEP_DELAY", fallback: 0.7)
     let attachDrain = resolvedDelay(envKey: "CHE_MAIL_MAILTO_ATTACH_DRAIN", fallback: 1.5)
-    let dispatchKey = send
-        ? "keystroke \"d\" using {command down, shift down}"
-        : "keystroke \"s\" using command down"
+    let dispatchKey = composeDispatchKeystroke(send: send)
     let dispatchLabel = send
         ? "Email sent successfully (mailto path)"
         : "Draft created successfully (mailto path)"
@@ -591,6 +600,239 @@ func buildForwardEmailScript(
         originalHTML: originalHTML,
         originalPlain: originalPlain,
         sanitizeLinks: sanitizeLinks
+    )
+}
+
+// MARK: - #218 native-verb + paste reply/forward (wrapper-free new body)
+//
+// The legacy `buildReplyEmailScript` / `buildForwardEmailScript` above open the
+// reply/forward window with the native verb but then OVERWRITE Mail's content
+// with a self-composed body via `set content` / `set html content` — which Mail
+// wraps in `Apple-Mail-URLShareWrapperClass` / `blockquote type="cite"` (the
+// #218 bug, same mechanism as #175 compose).
+//
+// These builders keep Mail's NATIVE quote (the `reply`/`forward` verb builds it,
+// correctly, in its own cite-blockquote + sets threading headers) and inject the
+// NEW body ONLY via a System Events clipboard paste at the cursor — never `set
+// content`/`set html content`. So the quoted original stays a proper quote and
+// the user's new text is clean. Plain-only + Accessibility-gated (see
+// `shouldUsePasteReplyForward`); the caller falls back to the legacy builders
+// for markdown/html, no Accessibility, or any GUI failure.
+//
+// Window identity = id-delta (the `Re:`/`Fwd:` title prefix is LOCALIZED, so it
+// is never matched). We capture window ids before the verb, diff to find the new
+// window, read its ACTUAL title (`name of _w`, whatever locale) and bridge that
+// real title into the System Events / AX context (where Mail's window id is not
+// visible). On-error cleanup closes ONLY the windows we created (by id) — never a
+// pre-existing user window (the #175-round-2 data-loss guard).
+
+/// Shared core for the clean reply/forward paste path. `openVerb` is the native
+/// Mail verb (`reply` / `reply all` / `forward`); `nativeLines` is the (already
+/// `\n`-prefixed, helper-indented) cc/to/attachment fragment block to set on the
+/// reply/forward message object, or `""` for none. Delays reuse the #175 mailto
+/// env keys (same GUI-timing class).
+private func buildReplyForwardPasteScript(
+    messageRef: String,
+    openVerb: String,
+    msgVar: String,
+    newBody: String,
+    nativeLines: String,
+    needsAttachDrain: Bool,
+    send: Bool,
+    successLabel: String,
+    notOpenedError: String
+) -> String {
+    let windowDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_WINDOW_DELAY", fallback: 1.8)
+    let stepDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_STEP_DELAY", fallback: 0.7)
+    let attachDrain = resolvedDelay(envKey: "CHE_MAIL_MAILTO_ATTACH_DRAIN", fallback: 1.5)
+    let dispatchKey = composeDispatchKeystroke(send: send)
+    let bodyEsc = appleScriptEscape(newBody)
+
+    // WINDOW IDENTITY — front-window-id guard (#218 verify; live-verified).
+    //
+    // The id-delta uniquely identifies OUR newly-opened window in the Mail object
+    // model. But the keystrokes go through System Events / AX, and AX has no view
+    // of Mail's window id. The mailto path (#175) bridges to AX by window TITLE —
+    // which does NOT work here: Mail's reply/forward COMPOSE windows expose an
+    // EMPTY `name` (the live test proved a reply window's title is ""), so a
+    // title match would either refuse the (common) empty-title case → legacy-wrap,
+    // or match the wrong same-titled window. Instead we use the guard the verify
+    // reviewers (Logic + Devil's Advocate) recommended: in the MAIL context, gate
+    // each keystroke phase on `id of front window` ∈ the id-delta set — i.e. OUR
+    // window is the frontmost Mail window. `reply/forward with opening window`
+    // opens the window frontmost; if the user stole focus during a delay, the id
+    // won't match → error → on-error close (scoped to our ids) → MailController
+    // catch → legacy injection fallback. Then `set frontmost to true` + keystroke
+    // hits that frontmost window. RESIDUAL (inherent GUI automation, documented):
+    // a sub-second TOCTOU between the Mail-side check and the AX keystroke remains
+    // — same class as the #175 mailto residual; a detectable change degrades to
+    // the legacy fallback.
+    let frontGuard = """
+        tell application "Mail"
+            if (count of windows) is 0 then error "no Mail window to target (falling back)"
+            if (id of front window) is not in _newIds then error "our reply/forward window is not frontmost (focus changed) — falling back"
+        end tell
+    """
+
+    // 1. Capture ids, drive the native verb, compute the new-window id delta.
+    var s = """
+    tell application "Mail"
+        set _beforeIds to (id of every window)
+        set originalMsg to \(messageRef)
+        set \(msgVar) to \(openVerb) originalMsg with opening window
+    end tell
+    delay \(windowDelay)
+    tell application "Mail"
+        set _afterIds to (id of every window)
+        set _newIds to {}
+        repeat with _k from 1 to (count of _afterIds)
+            set _thisId to item _k of _afterIds
+            if _beforeIds does not contain _thisId then set end of _newIds to _thisId
+        end repeat
+        if (count of _newIds) is 0 then error "\(notOpenedError)"
+    end tell
+    try
+    \(frontGuard)
+        tell application "System Events"
+            tell process "Mail"
+                set frontmost to true
+                delay 0.25
+                set the clipboard to "\(bodyEsc)"
+                keystroke "v" using command down
+                delay \(stepDelay)
+            end tell
+        end tell
+    """
+
+    // 2. Native cc/to/attachments on the message object — set AFTER the body
+    // paste so the fresh body-top cursor is undisturbed (the paste lands above
+    // Mail's quote; object mutations don't move the GUI insertion point).
+    if !nativeLines.isEmpty {
+        s += """
+
+        tell application "Mail"
+            tell \(msgVar)\(nativeLines)
+            end tell
+        end tell
+        """
+    }
+    if needsAttachDrain {
+        s += "\n        delay \(attachDrain)\n"
+    }
+
+    // 3. Re-confirm our window is still frontmost + no lingering panel + dispatch;
+    // on-error closes ONLY the windows we created (by id), never a pre-existing
+    // user window.
+    //
+    // Draft path closes its own window AFTER the dispatch succeeds: a saved-draft
+    // ⌘S leaves the compose window OPEN (unlike a ⇧⌘D send, which closes it), so
+    // without this every quiet draft accumulates a window — and an open compose
+    // window also holds the draft, blocking later deletion. The close lives
+    // OUTSIDE the `try` (best-effort, own inner `try`): a close failure must NOT
+    // propagate into the legacy fallback, which would save a SECOND draft (the
+    // double-dispatch hazard the "dispatch is the last statement in `try`"
+    // ordering deliberately avoids). `saving yes` is a harmless re-save of the
+    // already-saved draft, never a discard.
+    // Both window closes ITERATE `every window` and test id membership, rather
+    // than the `first window whose id is X` FILTER form — that filter is
+    // unreliable on Mail compose windows (it silently fails the same way
+    // `whose message id is` does), leaving the window open. Iteration + an
+    // `(id of _cw) is in _newIds` membership check closes reliably (live-verified).
+    let draftWindowClose = send ? "" : """
+
+
+    tell application "Mail"
+        repeat with _cw in (every window)
+            try
+                if (id of _cw) is in _newIds then close _cw saving yes
+            end try
+        end repeat
+    end tell
+    """
+    s += """
+
+    \(frontGuard)
+        tell application "System Events"
+            tell process "Mail"
+                set frontmost to true
+                delay 0.25
+                if (count of sheets of window 1) is not 0 then error "a sheet/panel is still open on the compose window"
+                \(dispatchKey)
+            end tell
+        end tell
+    on error _mErr
+        tell application "Mail"
+            repeat with _cw in (every window)
+                try
+                    if (id of _cw) is in _newIds then close _cw saving no
+                end try
+            end repeat
+        end tell
+        error _mErr
+    end try
+    delay \(stepDelay)\(draftWindowClose)
+    return "\(successLabel)"
+    """
+    return s
+}
+
+/// #218 — wrapper-free reply: native `reply`/`reply all` verb (Mail quotes the
+/// original) + clipboard paste of the plain new body at the cursor. cc/attachments
+/// are set natively on the reply message (unchanged from #34/#60). `saveAsDraft`
+/// ⌘S vs send ⇧⌘D. The new body is NEVER `set content`/`set html content`.
+func buildReplyEmailPasteScript(
+    messageRef: String,
+    newBody: String,
+    replyAll: Bool,
+    ccAdditional: [String]? = nil,
+    attachments: [String]? = nil,
+    saveAsDraft: Bool
+) -> String {
+    var fragments: [String] = []
+    if let cc = ccAdditional, !cc.isEmpty {
+        fragments.append(recipientFragment(cc, kind: "cc"))
+    }
+    let hasAttachments = (attachments?.isEmpty == false)
+    if let atts = attachments, !atts.isEmpty {
+        fragments.append(attachmentFragment(for: atts))
+    }
+    let nativeLines = fragments.isEmpty ? "" : "\n" + fragments.joined(separator: "\n")
+
+    return buildReplyForwardPasteScript(
+        messageRef: messageRef,
+        openVerb: replyAll ? "reply all" : "reply",
+        msgVar: "replyMsg",
+        newBody: newBody,
+        nativeLines: nativeLines,
+        needsAttachDrain: hasAttachments,
+        send: !saveAsDraft,
+        successLabel: saveAsDraft ? "Reply saved as draft (paste path)"
+                                  : "Reply sent successfully (paste path)",
+        notOpenedError: "reply did not open a compose window"
+    )
+}
+
+/// #218 — wrapper-free forward: native `forward` verb (Mail quotes the original)
+/// + clipboard paste of the plain new note at the cursor. `to` recipients are set
+/// natively on the forward message. Forward always sends (no draft mode in the
+/// `forward_email` tool). The new note is NEVER `set content`/`set html content`.
+func buildForwardEmailPasteScript(
+    messageRef: String,
+    to: [String],
+    newBody: String
+) -> String {
+    let nativeLines = to.isEmpty ? "" : "\n" + recipientFragment(to, kind: "to")
+
+    return buildReplyForwardPasteScript(
+        messageRef: messageRef,
+        openVerb: "forward",
+        msgVar: "fwdMsg",
+        newBody: newBody,
+        nativeLines: nativeLines,
+        needsAttachDrain: false,
+        send: true,
+        successLabel: "Email forwarded successfully (paste path)",
+        notOpenedError: "forward did not open a compose window"
     )
 }
 

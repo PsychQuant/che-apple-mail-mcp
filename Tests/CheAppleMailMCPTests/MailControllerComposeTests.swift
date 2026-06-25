@@ -1025,6 +1025,202 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertFalse(script.contains("(account id"))
     }
 
+    // MARK: - #218 buildReplyEmailPasteScript (wrapper-free clean reply)
+    //
+    // The clean path drives Mail's NATIVE `reply` verb (Mail quotes the original
+    // itself, correctly, in a `blockquote type="cite"`) and pastes ONLY the new
+    // body at the cursor via System Events — NEVER `set content` / `set html
+    // content` for the new body (that path is what wraps the user's text in the
+    // URLShare/cite wrapper). Window identity = id-delta in the Mail model + a
+    // front-window-id guard (reply compose windows have an EMPTY title, so the AX
+    // layer is gated on "our window is the frontmost Mail window", never on title).
+
+    func testBuildReplyPasteScript_usesNativeReplyVerb_pastesBody_neverInjectsContent() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "Clean reply text",
+            replyAll: false, saveAsDraft: false)
+        XCTAssertTrue(s.contains("reply originalMsg with opening window"),
+                      "must drive Mail's native reply verb (so Mail quotes the original)")
+        // THE #218 PROPERTY: the new body must NOT be injected (would re-wrap).
+        XCTAssertFalse(s.contains("set content to"),
+                       "paste path MUST NOT `set content` for the new body (#218 wrapper)")
+        XCTAssertFalse(s.contains("set html content to"),
+                       "paste path MUST NOT `set html content` for the new body (#218 wrapper)")
+        // new body lands via clipboard paste at the cursor (above the native quote)
+        XCTAssertTrue(s.contains("set the clipboard to \"Clean reply text\""))
+        XCTAssertTrue(s.contains("keystroke \"v\" using command down"))
+    }
+
+    func testBuildReplyPasteScript_send_usesSendShortcut_andLabel() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "B", replyAll: false, saveAsDraft: false)
+        XCTAssertTrue(s.contains("keystroke \"d\" using {command down, shift down}"))
+        XCTAssertFalse(s.contains("keystroke \"s\" using command down"))
+        XCTAssertTrue(s.contains("Reply sent successfully (paste path)"))
+    }
+
+    func testBuildReplyPasteScript_draft_usesSaveShortcut_andLabel() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "B", replyAll: false, saveAsDraft: true)
+        XCTAssertTrue(s.contains("keystroke \"s\" using command down"))
+        XCTAssertFalse(s.contains("keystroke \"d\" using {command down, shift down}"))
+        XCTAssertTrue(s.contains("Reply saved as draft (paste path)"))
+    }
+
+    func testBuildReplyPasteScript_replyAll_usesReplyAllVerb() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "B", replyAll: true, saveAsDraft: false)
+        XCTAssertTrue(s.contains("reply all originalMsg with opening window"))
+    }
+
+    func testBuildReplyPasteScript_windowIdDeltaGuard_frontWindowNotTitle() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "B", replyAll: false, saveAsDraft: false)
+        // identify the window by id-delta in the Mail model and gate keystrokes on
+        // "OUR window is the frontmost Mail window" (its id is in the delta set).
+        // Reply compose windows have an EMPTY title (live-verified), so we must NOT
+        // depend on a window title or a localized Re:/Fwd: prefix.
+        XCTAssertTrue(s.contains("set _beforeIds to (id of every window)"),
+                      "must snapshot window ids before the reply verb")
+        XCTAssertTrue(s.contains("if _beforeIds does not contain _thisId then set end of _newIds"),
+                      "must compute the new-window id delta")
+        XCTAssertTrue(s.contains("if (id of front window) is not in _newIds then error"),
+                      "must gate keystrokes on OUR window being the frontmost Mail window (id-based, not title)")
+        XCTAssertTrue(s.contains("set frontmost to true"),
+                      "must bring Mail frontmost before keystrokes")
+        XCTAssertTrue(s.contains("count of sheets of window 1"),
+                      "must refuse dispatch while a sheet/panel is open on the frontmost window")
+        // MUST NOT depend on the window title (empty for reply windows)
+        XCTAssertFalse(s.contains("name of _w"), "must NOT read the window title (empty for reply windows)")
+        XCTAssertFalse(s.contains("title of _cand"), "must NOT match the AX window by title")
+        XCTAssertFalse(s.contains("Re:"), "must NOT hardcode a localized reply-prefix title")
+        XCTAssertFalse(s.contains("Fwd:"), "must NOT hardcode a localized forward-prefix title")
+    }
+
+    // #218 verify follow-up: the clean-path saveAsDraft must CLOSE its reply
+    // window after ⌘S (the send path's ⇧⌘D closes the window itself). Otherwise
+    // every quiet draft leaves a lingering compose window, and an open compose
+    // window also holds the draft (blocking deletion). The close must live OUTSIDE
+    // the `try` — a close failure must NOT propagate into the legacy fallback
+    // (that would produce a second draft, the bug the dispatch-is-last-statement
+    // ordering deliberately avoids). It closes by id (`item 1 of _newIds`) with
+    // `saving yes` (harmless re-save), distinct from the on-error `saving no`.
+    func testBuildReplyPasteScript_saveAsDraft_closesWindowAfterSave() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "B", replyAll: false, saveAsDraft: true)
+        // close by ITERATION + id membership (the reliable form; the `whose id is`
+        // filter silently fails on compose windows). `saving yes` re-saves the
+        // already-saved draft harmlessly.
+        XCTAssertTrue(s.contains("if (id of _cw) is in _newIds then close _cw saving yes"),
+                      "saveAsDraft must close the saved draft window by id-iteration (quiet draft)")
+        // must be AFTER the try block (so a close failure can't trigger fallback)
+        assertOrdered(s, "saving yes", between: "end try", and: "return")
+    }
+
+    func testBuildReplyPasteScript_send_noExplicitWindowClose() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "B", replyAll: false, saveAsDraft: false)
+        // send path: ⇧⌘D sends + closes the compose window itself — no `saving yes` close.
+        XCTAssertFalse(s.contains("saving yes"),
+                       "send path must not add an explicit draft-window close (⇧⌘D closes it)")
+    }
+
+    func testBuildForwardPasteScript_send_noExplicitWindowClose() {
+        // forward always sends → no explicit close (matches reply send path).
+        let s = buildForwardEmailPasteScript(
+            messageRef: "msgRef", to: ["x@y.z"], newBody: "B")
+        XCTAssertFalse(s.contains("saving yes"))
+    }
+
+    func testBuildReplyPasteScript_onError_closesOnlyNewWindows_noDataLoss() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "B", replyAll: false, saveAsDraft: false)
+        XCTAssertTrue(s.contains("on error _mErr"))
+        // cleanup closes ONLY windows we created (id membership), never a
+        // pre-existing user window — and must NOT batch-close by title (data-loss
+        // bug, #175 r2). `saving no` discards the abandoned compose.
+        XCTAssertTrue(s.contains("if (id of _cw) is in _newIds then close _cw saving no"))
+        XCTAssertFalse(s.contains("close (every window whose name"))
+    }
+
+    func testBuildReplyPasteScript_ccAndAttachments_setNativelyAfterPaste() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "B", replyAll: false,
+            ccAdditional: ["x@y.z"], attachments: ["/tmp/a.pdf"], saveAsDraft: false)
+        // cc / attachments are set on the reply message object natively (unchanged
+        // from #34/#60), inside `tell replyMsg`, AFTER the body paste so the
+        // body-top cursor is undisturbed.
+        assertOrdered(s, "make new cc recipient", between: "tell replyMsg", and: "on error _mErr")
+        assertOrdered(s, "make new attachment", between: "tell replyMsg", and: "on error _mErr")
+        XCTAssertTrue(s.contains("address:\"x@y.z\""))
+        XCTAssertTrue(s.contains("POSIX file \"/tmp/a.pdf\""))
+        // paste must come before the native object mutations (cursor safety)
+        assertOrdered(s, "keystroke \"v\" using command down",
+                      between: "reply originalMsg with opening window", and: "make new cc recipient")
+    }
+
+    func testBuildReplyPasteScript_noCcNoAttachments_omitsTellReplyMsgBlock() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "B", replyAll: false, saveAsDraft: false)
+        XCTAssertFalse(s.contains("make new cc recipient"))
+        XCTAssertFalse(s.contains("make new attachment"))
+    }
+
+    func testBuildReplyPasteScript_escapesBodyQuotes() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "say \"hi\"", replyAll: false, saveAsDraft: false)
+        XCTAssertTrue(s.contains("set the clipboard to \"say \\\"hi\\\"\""))
+    }
+
+    func testBuildReplyPasteScript_embedsMessageRefVerbatim() {
+        let uuidRef = resolveMsgRef(id: "42", mailbox: "INBOX",
+                                    accountId: "C38E0583-47F8-4468-BE70-43155C15549D",
+                                    accountName: "alice@example.com")
+        let s = buildReplyEmailPasteScript(
+            messageRef: uuidRef, newBody: "B", replyAll: false, saveAsDraft: false)
+        XCTAssertTrue(s.contains("(account id \"C38E0583-47F8-4468-BE70-43155C15549D\")"),
+                      "messageRef must be embedded verbatim into `set originalMsg to`")
+        XCTAssertTrue(s.contains("set originalMsg to (first message"))
+    }
+
+    // MARK: - #218 buildForwardEmailPasteScript (wrapper-free clean forward)
+
+    func testBuildForwardPasteScript_usesNativeForwardVerb_pastesBody_neverInjectsContent() {
+        let s = buildForwardEmailPasteScript(
+            messageRef: "msgRef", to: ["x@y.z"], newBody: "Clean forward note")
+        XCTAssertTrue(s.contains("forward originalMsg with opening window"))
+        XCTAssertFalse(s.contains("set content to"),
+                       "paste path MUST NOT `set content` for the new body (#218 wrapper)")
+        XCTAssertFalse(s.contains("set html content to"))
+        XCTAssertTrue(s.contains("set the clipboard to \"Clean forward note\""))
+        XCTAssertTrue(s.contains("keystroke \"v\" using command down"))
+    }
+
+    func testBuildForwardPasteScript_send_usesSendShortcut_andLabel() {
+        let s = buildForwardEmailPasteScript(
+            messageRef: "msgRef", to: ["x@y.z"], newBody: "B")
+        XCTAssertTrue(s.contains("keystroke \"d\" using {command down, shift down}"))
+        XCTAssertTrue(s.contains("Email forwarded successfully (paste path)"))
+    }
+
+    func testBuildForwardPasteScript_toRecipientsSetNatively() {
+        let s = buildForwardEmailPasteScript(
+            messageRef: "msgRef", to: ["a@b.c", "d@e.f"], newBody: "B")
+        assertOrdered(s, "make new to recipient", between: "tell fwdMsg", and: "on error _mErr")
+        XCTAssertTrue(s.contains("address:\"a@b.c\""))
+        XCTAssertTrue(s.contains("address:\"d@e.f\""))
+    }
+
+    func testBuildForwardPasteScript_windowIdDeltaGuard_frontWindowNotTitle() {
+        let s = buildForwardEmailPasteScript(
+            messageRef: "msgRef", to: ["x@y.z"], newBody: "B")
+        XCTAssertTrue(s.contains("set _beforeIds to (id of every window)"))
+        XCTAssertTrue(s.contains("if (id of front window) is not in _newIds then error"))
+        XCTAssertTrue(s.contains("on error _mErr"))
+        XCTAssertFalse(s.contains("name of _w"))
+        XCTAssertFalse(s.contains("Fwd:"))
+    }
+
     // MARK: - validateEmailAddresses (#41)
 
     func testValidateEmailAddresses_acceptsValid() async throws {

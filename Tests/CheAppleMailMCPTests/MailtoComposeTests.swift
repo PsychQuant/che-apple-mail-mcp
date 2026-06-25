@@ -198,4 +198,48 @@ final class MailtoComposeTests: XCTestCase {
         // subject is escaped wherever it's embedded (title compare + on-error close)
         XCTAssertTrue(s.contains("say \\\"hi\\\""), s)
     }
+
+    // MARK: - #218 shouldUsePasteReplyForward (clean reply/forward fallback decision)
+    //
+    // Reply/forward have the same wrapper bug as #175 compose, but the fix drives
+    // Mail's NATIVE `reply`/`forward` verb (Mail quotes the original itself) and
+    // pastes only the NEW body at the cursor — never `set content`/`set html
+    // content`. The clean path is plain-only + needs Accessibility (GUI paste),
+    // and an env hatch can force the legacy injection path.
+
+    func testShouldUsePasteReplyForward_plain_trusted_enabled_true() {
+        XCTAssertTrue(shouldUsePasteReplyForward(format: .plain,
+                                                 accessibilityTrusted: true,
+                                                 disabledByEnv: false))
+    }
+
+    func testShouldUsePasteReplyForward_htmlOrMarkdown_false() {
+        // paste path carries plain text only — markdown/html keep the legacy path.
+        XCTAssertFalse(shouldUsePasteReplyForward(format: .html,
+                                                  accessibilityTrusted: true,
+                                                  disabledByEnv: false))
+        XCTAssertFalse(shouldUsePasteReplyForward(format: .markdown,
+                                                  accessibilityTrusted: true,
+                                                  disabledByEnv: false))
+    }
+
+    func testShouldUsePasteReplyForward_noAccessibility_false() {
+        XCTAssertFalse(shouldUsePasteReplyForward(format: .plain,
+                                                  accessibilityTrusted: false,
+                                                  disabledByEnv: false))
+    }
+
+    func testShouldUsePasteReplyForward_disabledByEnv_false() {
+        XCTAssertFalse(shouldUsePasteReplyForward(format: .plain,
+                                                  accessibilityTrusted: true,
+                                                  disabledByEnv: true))
+    }
+
+    func testReplyForwardPasteDisabledByEnv_detectsTruthyValues() {
+        XCTAssertTrue(replyForwardPasteDisabledByEnv([replyForwardPasteDisableEnvKey: "1"]))
+        XCTAssertTrue(replyForwardPasteDisabledByEnv([replyForwardPasteDisableEnvKey: "true"]))
+        XCTAssertTrue(replyForwardPasteDisabledByEnv([replyForwardPasteDisableEnvKey: "YES"]))
+        XCTAssertFalse(replyForwardPasteDisabledByEnv([replyForwardPasteDisableEnvKey: "0"]))
+        XCTAssertFalse(replyForwardPasteDisabledByEnv([:]))
+    }
 }
