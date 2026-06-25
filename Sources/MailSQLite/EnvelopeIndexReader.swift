@@ -203,18 +203,33 @@ public final class EnvelopeIndexReader {
     }
 
     /// List mailboxes from the SQLite mailboxes table.
-    /// - Parameter accountName: Optional account filter (matches against account mapping).
-    public func listMailboxes(accountName: String? = nil) throws -> [[String: Any]] {
+    /// - Parameters:
+    ///   - accountName: Optional account filter (display name or email-form,
+    ///     resolved via the account mapping).
+    ///   - accountId: Optional account UUID escape hatch (#202). Non-empty wins
+    ///     over `accountName` and filters by UUID directly.
+    /// - Throws: `MailSQLiteError.accountNotResolvable` if a non-empty
+    ///   `accountName` resolves to no configured account (never silently returns
+    ///   every account's mailboxes — the #202 latent bug).
+    public func listMailboxes(accountName: String? = nil, accountId: String? = nil) throws -> [[String: Any]] {
         guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
 
         var sql = "SELECT url, total_count, unread_count FROM mailboxes"
         var bindings: [String] = []
 
-        if let accountName = accountName {
-            if let uuid = accountUUIDs(forName: accountName).first {
-                sql += " WHERE url LIKE ?"
-                bindings.append("%://\(uuid)/%")
+        // #202: resolve the account scope to a UUID. A non-empty `accountId` wins
+        // (the escape hatch). Otherwise a given `accountName` MUST resolve to a
+        // UUID — if it doesn't, THROW rather than silently dropping the WHERE
+        // clause (which returned *every* account's mailboxes). No selector → all.
+        if let accountId = accountId, !accountId.isEmpty {
+            sql += " WHERE url LIKE ?"
+            bindings.append("%://\(accountId)/%")
+        } else if let accountName = accountName, !accountName.isEmpty {
+            guard let uuid = accountUUIDs(forName: accountName).first else {
+                throw MailSQLiteError.accountNotResolvable(name: accountName)
             }
+            sql += " WHERE url LIKE ?"
+            bindings.append("%://\(uuid)/%")
         }
 
         var stmt: OpaquePointer?

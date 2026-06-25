@@ -126,6 +126,31 @@ final class ServerSchemaTests: XCTestCase {
         XCTAssertFalse(required.contains("account_id"), "account_id must stay optional")
     }
 
+    // MARK: - get_account_info / list_mailboxes account_id escape hatch (#202)
+
+    /// The two read tools the #176/#191 sweep missed must advertise the same
+    /// optional `account_id` escape hatch so an email-form account_name (or a
+    /// UUID-only caller) can be served. account_name stays where it was.
+    func testGetAccountInfo_advertisesOptionalAccountId() {
+        guard let t = tool(named: "get_account_info"), let props = propertiesObject(of: t) else {
+            XCTFail("get_account_info schema missing"); return
+        }
+        XCTAssertNotNil(props["account_id"], "get_account_info must advertise account_id (#202)")
+        XCTAssertNotNil(props["account_name"], "get_account_info must still advertise account_name")
+        let required = requiredArray(of: t) ?? []
+        XCTAssertFalse(required.contains("account_id"), "account_id must stay optional")
+    }
+
+    func testListMailboxes_advertisesOptionalAccountId() {
+        guard let t = tool(named: "list_mailboxes"), let props = propertiesObject(of: t) else {
+            XCTFail("list_mailboxes schema missing"); return
+        }
+        XCTAssertNotNil(props["account_id"], "list_mailboxes must advertise account_id (#202)")
+        XCTAssertNotNil(props["account_name"], "list_mailboxes must still advertise account_name")
+        let required = requiredArray(of: t) ?? []
+        XCTAssertFalse(required.contains("account_id"), "account_id must stay optional")
+    }
+
     // MARK: - reply_email new optional params (issue #33)
 
     func testReplyEmail_advertisesCcAdditionalAttachmentsAndSaveAsDraft() throws {
@@ -598,6 +623,31 @@ final class ServerSchemaTests: XCTestCase {
                 body.contains("try resolveAccountIdForTool(accountId: decodeAccountId"),
                 "\(tool) handler must thread resolveAccountIdForTool over decodeAccountId (#176); "
                 + "a raw decodeAccountId re-opens the -1728 email→description gap")
+        }
+    }
+
+    /// #202: the two read handlers the #176/#191 sweep missed must thread
+    /// resolveAccountIdForTool too — structural pin so a future edit can't drop
+    /// the email→UUID wiring (which re-opens the -1728 / silent return-all gap).
+    func testReadHandlers202_threadResolveAccountIdForTool() throws {
+        let serverSource = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/CheAppleMailMCP/Server.swift")
+        let source = try String(contentsOf: serverSource, encoding: .utf8)
+
+        func caseBody(_ tool: String) -> String? {
+            guard let start = source.range(of: "case \"\(tool)\":") else { return nil }
+            let tail = source[start.upperBound...]
+            return tail.range(of: "\n        case \"").map { String(tail[..<$0.lowerBound]) } ?? String(tail)
+        }
+
+        for tool in ["get_account_info", "list_mailboxes"] {
+            guard let body = caseBody(tool) else {
+                XCTFail("\(tool) case not found in Server.swift"); continue
+            }
+            XCTAssertTrue(
+                body.contains("try resolveAccountIdForTool(accountId: decodeAccountId"),
+                "\(tool) handler must thread resolveAccountIdForTool over decodeAccountId (#202)")
         }
     }
 

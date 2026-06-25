@@ -77,7 +77,8 @@ class CheAppleMailMCPServer {
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "account_name": .object(["type": .string("string"), "description": .string("The name of the mail account")])
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account's display name OR email address. If an email-form name is ambiguous across accounts, also pass account_id.")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Mail.app's globally-unique account UUID (from list_accounts / search_emails `account_id`). Optional escape hatch when account_name is an email-form name or ambiguous display name (#202).")])
                     ]),
                     "required": .array([.string("account_name")])
                 ])
@@ -90,7 +91,8 @@ class CheAppleMailMCPServer {
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "account_name": .object(["type": .string("string"), "description": .string("The name of the mail account (optional, lists all if omitted)")])
+                        "account_name": .object(["type": .string("string"), "description": .string("The mail account's display name OR email address (optional — lists all accounts' mailboxes if omitted). A name that resolves to no account is rejected, not silently expanded to every account.")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Mail.app's globally-unique account UUID (from list_accounts / search_emails `account_id`). Optional escape hatch when account_name is an email-form name or ambiguous display name (#202).")])
                     ])
                 ])
             ),
@@ -853,23 +855,36 @@ class CheAppleMailMCPServer {
             guard let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("account_name is required")
             }
+            // #202: resolve account_id (email→UUID upgrade / ambiguous-throw).
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             if let reader = indexReader {
                 let accounts = reader.listAccounts()
+                // Match by resolved UUID when known (so an email-form account_name
+                // works), else by name. Neither → the account doesn't exist; throw
+                // rather than falling through to the AppleScript path's -1728.
+                if let aid = accountId, !aid.isEmpty,
+                   let acct = accounts.first(where: { ($0["id"] as? String) == aid }) {
+                    return formatJSON(acct)
+                }
                 if let acct = accounts.first(where: { ($0["name"] as? String) == accountName }) {
                     return formatJSON(acct)
                 }
+                throw MailError.invalidParameter("account not found: \(accountName) — use list_accounts to see configured accounts (pass account_id to disambiguate an email-form name)")
             }
-            let info = try await mailController.getAccountInfo(accountName: accountName)
+            let info = try await mailController.getAccountInfo(accountName: accountName, accountId: accountId)
             return formatJSON(info)
 
         // Mailbox Tools
         case "list_mailboxes":
             let accountName = arguments["account_name"]?.stringValue
+            // #202: resolve account_id; an unresolvable name throws (in the reader
+            // / resolveAccountIdForTool) instead of returning every account's boxes.
+            let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName ?? "", tool: invokedTool)
             if let reader = indexReader {
-                let mailboxes = try reader.listMailboxes(accountName: accountName)
+                let mailboxes = try reader.listMailboxes(accountName: accountName, accountId: accountId)
                 return formatJSON(mailboxes)
             }
-            let mailboxes = try await mailController.listMailboxes(accountName: accountName)
+            let mailboxes = try await mailController.listMailboxes(accountName: accountName, accountId: accountId)
             return formatJSON(mailboxes)
 
         case "create_mailbox":
