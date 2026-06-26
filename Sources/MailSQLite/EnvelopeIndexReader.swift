@@ -565,6 +565,74 @@ public final class EnvelopeIndexReader {
         try searchPage(params).results
     }
 
+    /// #177: triage (`summary`) projection — `id/subject/sender/date/mailbox`
+    /// only, performing **no** per-row recipient subquery (the cost `full` pays).
+    /// With `dedup`, collapses mailbox-duplicate rows via `GROUP BY` + `MIN(ROWID)`
+    /// (SQLite's single-aggregate bare-column rule returns each group's
+    /// `MIN(ROWID)`-row values). Same definitive `limit + 1` truncation as
+    /// `searchPage`/`searchIds`. Returns `SearchResult`s with empty `toRecipients`
+    /// (the summary shape drops recipients); the caller emits the 5 triage fields.
+    public func searchSummaryPage(_ params: SearchParameters, dedup: Bool = false) throws -> (results: [SearchResult], truncated: Bool) {
+        guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
+
+        let limit = min(max(params.limit, 0), Int(Int32.max) - 1)
+        let (conditions, bindings) = buildSearchConditions(params)
+        let sortDirection = params.sort == .asc ? "ASC" : "DESC"
+        let whereClause = conditions.joined(separator: " AND ")
+
+        let rowIdExpr = dedup ? "MIN(m.ROWID)" : "m.ROWID"
+        let groupBy = dedup ? "GROUP BY s.subject, a.address, m.date_received" : ""
+        let sql = """
+            SELECT \(rowIdExpr), s.subject, a.address, a.comment, m.date_received, mb.url
+            FROM messages m
+            JOIN subjects s ON m.subject = s.ROWID
+            JOIN addresses a ON m.sender = a.ROWID
+            JOIN mailboxes mb ON m.mailbox = mb.ROWID
+            WHERE \(whereClause)
+            \(groupBy)
+            ORDER BY m.date_received \(sortDirection), \(rowIdExpr) \(sortDirection)
+            LIMIT ?
+            """
+
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw MailSQLiteError.queryFailed("Prepare failed: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        var idx: Int32 = 1
+        for binding in bindings {
+            sqlite3_bind_text(stmt, idx, binding, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            idx += 1
+        }
+        let fetchLimit = limit + 1
+        sqlite3_bind_int(stmt, idx, Int32(fetchLimit))
+
+        var results: [SearchResult] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let rowId = Int(sqlite3_column_int64(stmt, 0))
+            let subject = columnText(stmt, 1)
+            let senderAddr = columnText(stmt, 2)
+            let senderName = columnText(stmt, 3)
+            let dateReceived = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 4)))
+            let mailboxUrl = columnText(stmt, 5)
+
+            let parsed = MailboxURL.decode(mailboxUrl)
+            let acctName = parsed.map { accountName(for: $0.accountUUID) } ?? ""
+            let acctId = parsed?.accountUUID
+            let mbPath = parsed?.mailboxPath ?? mailboxUrl
+
+            results.append(SearchResult(
+                id: rowId, subject: subject, senderAddress: senderAddr, senderName: senderName,
+                dateReceived: dateReceived, accountName: acctName, accountId: acctId,
+                mailboxPath: mbPath, isRead: false, isFlagged: false, toRecipients: []
+            ))
+        }
+
+        let truncated = results.count > limit
+        return (Array(results.prefix(limit)), truncated)
+    }
+
     /// Build the shared WHERE conditions + positional bindings for a search query.
     /// Used by `searchPage` (full rows), `searchIds` (rowId projection), and
     /// `searchCount`. Defining the field / date / account / mailbox semantics

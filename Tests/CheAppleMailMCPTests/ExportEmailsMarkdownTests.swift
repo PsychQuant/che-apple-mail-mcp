@@ -299,4 +299,43 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         XCTAssertTrue(md.contains("Attachments:"))
         XCTAssertTrue(md.contains("data/data.csv"))
     }
+
+    // MARK: - #177 dedup skip-set
+
+    func testRun_skipMessageIds_skipsAlreadyArchived() throws {
+        let out = tempDir()
+        // id "10" → already archived (Message-ID in the skip set); id "11" → new.
+        let manifest = ExportEmailsMarkdown.run(
+            ids: ["10", "11"], outputDir: out, direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { id in self.makeEmail(subject: "S\(id)", messageId: "<\(id)@x>") },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() },
+            skipMessageIds: ["<10@x>"])
+
+        let byId = Dictionary(uniqueKeysWithValues: manifest.items.map { ($0.id, $0) })
+        XCTAssertEqual(byId["10"]?.status, "skipped", "an already-archived Message-ID must be skipped")
+        XCTAssertEqual(byId["10"]?.messageId, "<10@x>")
+        XCTAssertNil(byId["10"]?.writtenPath, "a skipped email must not be written")
+        XCTAssertEqual(byId["11"]?.status, "written")
+        XCTAssertEqual(manifest.skipped, 1)
+        XCTAssertEqual(manifest.written, 1)
+        XCTAssertEqual(manifest.jsonObject["skipped"] as? Int, 1)
+    }
+
+    func testRun_noSkipSet_skippedCountZeroAndAllWritten() throws {
+        let out = tempDir()
+        let manifest = ExportEmailsMarkdown.run(
+            ids: ["10"], outputDir: out, direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { _ in self.makeEmail(messageId: "<10@x>") },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() })
+        XCTAssertEqual(manifest.skipped, 0)
+        XCTAssertEqual(manifest.items[0].status, "written")
+        // written items carry message_id (already present; pinned here for #177)
+        XCTAssertEqual(manifest.items[0].messageId, "<10@x>")
+    }
 }

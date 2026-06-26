@@ -168,7 +168,7 @@ class CheAppleMailMCPServer {
                         "date_to": .object(["type": .string("string"), "description": .string("End date filter, ISO 8601 (e.g., '2026-03-31')")]),
                         "limit": .object(["type": .string("integer"), "description": .string("Maximum results (default: 50)")]),
                         "sort": .object(["type": .string("string"), "description": .string("Sort order by date: 'desc' (newest first, default) or 'asc' (oldest first)")]),
-                        "projection": .object(["type": .string("string"), "description": .string("Result shape: 'full' (default, the {results,returned,limit,truncated} envelope of full objects), 'ids' (envelope whose `results` is an array of message rowId strings only — orders-of-magnitude smaller, for bulk collection feeding export_emails_markdown), or 'count' (just {count}, the total matches ignoring `limit`, for scoping). 'ids'/'count' require the SQLite index (#208).")]),
+                        "projection": .object(["type": .string("string"), "description": .string("Result shape: 'full' (default, the {results,returned,limit,truncated} envelope of full objects), 'ids' (envelope whose `results` is an array of message rowId strings only — orders-of-magnitude smaller, for bulk collection feeding export_emails_markdown), 'summary' (envelope whose `results` elements are triage objects with only `id`/`date`/`sender`/`subject`/`mailbox` — between `ids` and `full`, for human triage without the full per-row cost), or 'count' (just {count}, the total matches ignoring `limit`, for scoping). 'ids'/'summary'/'count' require the SQLite index (#208/#177).")]),
                         "dedup": .object(["type": .string("string"), "description": .string("'none' (default) or 'logical'. 'logical' collapses mailbox-duplicate copies (same subject+sender+date_received, e.g. Gmail INBOX/Archive/All Mail) to one row server-side. Only valid with projection 'ids' or 'count' (#208).")])
                     ]),
                     "required": .array([.string("query")])
@@ -736,6 +736,7 @@ class CheAppleMailMCPServer {
                         "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox name; used only to label direction (sent when it looks like a Sent mailbox, else received)")]),
                         "account_name": .object(["type": .string("string"), "description": .string("Optional mail account (accepted for consistency; the SQLite fast path is account-agnostic)")]),
                         "output_dir": .object(["type": .string("string"), "description": .string("Directory to write .md files into. Must resolve under the user's home (path traversal and system directories are rejected).")]),
+                        "skip_message_ids_path": .object(["type": .string("string"), "description": .string("Optional dedup escape hatch (#177): path to a file listing already-archived RFC 5322 Message-IDs (one per line; blank lines and `#` comments ignored). Emails whose Message-ID is in the set are skipped (status 'skipped', counted in the manifest's `skipped`), not rewritten — so a re-run only writes new mail. Validated read-only under the same allowed-roots policy as output_dir; missing/unreadable file → no skips.")]),
                         "opts": .object([
                             "type": .string("object"),
                             "description": .string("Optional export options"),
@@ -1032,6 +1033,11 @@ class CheAppleMailMCPServer {
                 case "count":
                     let count = try reader.searchCount(params, dedup: dedup)
                     return formatJSON(["count": count])
+                case "summary":
+                    // #177: triage shape — id/date/sender/subject/mailbox only.
+                    let page = try reader.searchSummaryPage(params, dedup: dedup)
+                    let formatted: [[String: Any]] = page.results.map(Self.formatSummaryResultForJSON)
+                    return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
                 default:
                     let page = try reader.searchPage(params)
                     let formatted: [[String: Any]] = page.results.map(Self.formatSearchResultForJSON)
@@ -1669,6 +1675,32 @@ class CheAppleMailMCPServer {
             } catch {
                 throw MailError.invalidParameter("output_dir rejected by write-safety check: \(error)")
             }
+            // #177: optional dedup skip-set — a file (validated read-only under the
+            // SAME allowed-roots policy as output_dir) listing already-archived
+            // RFC 5322 Message-IDs, one per line; blank lines and `#` comments
+            // ignored. Missing/unreadable → empty set (a first-ever archive has no
+            // index yet); out-of-roots → write-safety error. The file is parsed only
+            // as a Message-ID list and never echoed back.
+            var skipMessageIds: Set<String> = []
+            if let skipPath = arguments["skip_message_ids_path"]?.stringValue, !skipPath.isEmpty {
+                let validatedSkip: URL
+                do {
+                    validatedSkip = try AllowedRootsValidator().validate(skipPath, allowedRoots: exportAllowedRoots)
+                } catch {
+                    throw MailError.invalidParameter("skip_message_ids_path rejected by write-safety check: \(error)")
+                }
+                if let contents = try? String(contentsOf: validatedSkip, encoding: .utf8) {
+                    for line in contents.split(separator: "\n", omittingEmptySubsequences: false) {
+                        let trimmed = line.trimmingCharacters(in: .whitespaces)
+                        if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                        skipMessageIds.insert(trimmed)
+                    }
+                } else {
+                    FileHandle.standardError.write(Data((
+                        "export_emails_markdown: skip_message_ids_path not readable — "
+                        + "treating as empty skip-set (#177)\n").utf8))
+                }
+            }
             let exportManifest = ExportEmailsMarkdown.run(
                 ids: exportIds, outputDir: validatedDir, direction: exportDirection,
                 includeAttachments: includeAttachments, filenameTemplate: filenameTemplate,
@@ -1695,7 +1727,8 @@ class CheAppleMailMCPServer {
                     // #200: extract bytes only — ExportEmailsMarkdown owns the
                     // race-free write via RaceFreeFileWriter.
                     return try EmlxParser.attachmentData(rowId: rowId, mailboxURL: mailboxUrl, attachmentName: name)
-                })
+                },
+                skipMessageIds: skipMessageIds)
             return formatJSON(exportManifest.jsonObject)
 
         case "get_emails_batch":
@@ -1734,7 +1767,8 @@ class CheAppleMailMCPServer {
                             let content = try EmlxParser.readEmail(rowId: rowId, mailboxURL: mailboxUrl, format: format)
                             var entry: [String: Any] = [
                                 "id": id, "subject": content.subject, "sender": content.sender,
-                                "date": content.date, "to": content.toRecipients, "cc": content.ccRecipients
+                                "date": content.date, "to": content.toRecipients, "cc": content.ccRecipients,
+                                "message_id": content.messageId   // #177: parity with single get_email
                             ]
                             if let text = content.textBody { entry["text_body"] = text }
                             if let html = content.htmlBody { entry["html_body"] = html }
@@ -1888,6 +1922,19 @@ class CheAppleMailMCPServer {
         return dict
     }
 
+    /// #177: the triage (`summary`) projection JSON — exactly `id/date/sender/
+    /// subject/mailbox` (no recipient list, no account fields). `date` carries the
+    /// same ISO 8601 value as `full`'s `date_received`.
+    static func formatSummaryResultForJSON(_ r: SearchResult) -> [String: Any] {
+        [
+            "id": String(r.id),
+            "date": ISO8601DateFormatter().string(from: r.dateReceived),
+            "sender": r.senderAddress.isEmpty ? r.senderName : "\(r.senderName) <\(r.senderAddress)>",
+            "subject": r.subject,
+            "mailbox": r.mailboxPath,
+        ]
+    }
+
     private static func parseDate(_ string: String) -> Date? {
         // Try ISO 8601 with time
         let isoFormatter = ISO8601DateFormatter()
@@ -1918,15 +1965,18 @@ class CheAppleMailMCPServer {
     /// (unknown enum value, or `dedup: logical` with `projection: full`) is
     /// unit-testable. Returns the validated projection + a `dedup` bool.
     static func validateSearchProjection(projection: String, dedup dedupStr: String) throws -> (projection: String, dedup: Bool) {
-        guard ["full", "ids", "count"].contains(projection) else {
-            throw MailError.invalidParameter("projection must be 'full', 'ids', or 'count'")
+        // #177: `summary` joins ids/count/full. Like ids/count it requires the
+        // SQLite index and supports `dedup: logical` (it performs no recipient
+        // subquery, so the full-row-dedup ambiguity that bars `full` doesn't apply).
+        guard ["full", "ids", "summary", "count"].contains(projection) else {
+            throw MailError.invalidParameter("projection must be 'full', 'ids', 'summary', or 'count'")
         }
         guard ["none", "logical"].contains(dedupStr) else {
             throw MailError.invalidParameter("dedup must be 'none' or 'logical'")
         }
         let dedup = dedupStr == "logical"
         if dedup && projection == "full" {
-            throw MailError.invalidParameter("dedup 'logical' is only supported with projection 'ids' or 'count' (full-row dedup is not implemented)")
+            throw MailError.invalidParameter("dedup 'logical' is only supported with projection 'ids', 'summary', or 'count' (full-row dedup is not implemented)")
         }
         return (projection, dedup)
     }

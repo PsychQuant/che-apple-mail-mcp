@@ -33,6 +33,22 @@ final class SearchProjectionValidationTests: XCTestCase {
         XCTAssertFalse(r.dedup)
     }
 
+    // MARK: - #177 summary projection
+
+    func testSummaryWithoutDedup() throws {
+        let r = try CheAppleMailMCPServer.validateSearchProjection(projection: "summary", dedup: "none")
+        XCTAssertEqual(r.projection, "summary")
+        XCTAssertFalse(r.dedup)
+    }
+
+    func testSummaryWithDedupAllowed() throws {
+        // summary performs no recipient subquery, so logical dedup IS supported
+        // (unlike full).
+        let r = try CheAppleMailMCPServer.validateSearchProjection(projection: "summary", dedup: "logical")
+        XCTAssertEqual(r.projection, "summary")
+        XCTAssertTrue(r.dedup)
+    }
+
     // MARK: - Rejected combinations (spec: SHALL reject)
 
     func testUnknownProjectionRejected() {
