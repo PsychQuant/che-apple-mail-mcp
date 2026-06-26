@@ -8,7 +8,7 @@ struct ExportManifestItem {
     let writtenPath: String?         // absolute path of the written .md (nil on error)
     let attachments: [String]        // paths of saved attachments (relative to output_dir)
     let attachmentErrors: [String]   // per-attachment failures (never silently dropped)
-    let status: String               // "written" | "error"
+    let status: String               // "written" | "error" | "skipped" (#177 dedup)
     let error: String?
 
     var jsonObject: [String: Any] {

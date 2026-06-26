@@ -169,7 +169,7 @@ class CheAppleMailMCPServer {
                         "limit": .object(["type": .string("integer"), "description": .string("Maximum results (default: 50)")]),
                         "sort": .object(["type": .string("string"), "description": .string("Sort order by date: 'desc' (newest first, default) or 'asc' (oldest first)")]),
                         "projection": .object(["type": .string("string"), "description": .string("Result shape: 'full' (default, the {results,returned,limit,truncated} envelope of full objects), 'ids' (envelope whose `results` is an array of message rowId strings only — orders-of-magnitude smaller, for bulk collection feeding export_emails_markdown), 'summary' (envelope whose `results` elements are triage objects with only `id`/`date`/`sender`/`subject`/`mailbox` — between `ids` and `full`, for human triage without the full per-row cost), or 'count' (just {count}, the total matches ignoring `limit`, for scoping). 'ids'/'summary'/'count' require the SQLite index (#208/#177).")]),
-                        "dedup": .object(["type": .string("string"), "description": .string("'none' (default) or 'logical'. 'logical' collapses mailbox-duplicate copies (same subject+sender+date_received, e.g. Gmail INBOX/Archive/All Mail) to one row server-side. Only valid with projection 'ids' or 'count' (#208).")])
+                        "dedup": .object(["type": .string("string"), "description": .string("'none' (default) or 'logical'. 'logical' collapses mailbox-duplicate copies (same subject+sender+date_received, e.g. Gmail INBOX/Archive/All Mail) to one row server-side. Valid with projection 'ids', 'summary', or 'count' — not 'full' (#208/#177).")])
                     ]),
                     "required": .array([.string("query")])
                 ])
@@ -1689,15 +1689,23 @@ class CheAppleMailMCPServer {
                 } catch {
                     throw MailError.invalidParameter("skip_message_ids_path rejected by write-safety check: \(error)")
                 }
-                if let contents = try? String(contentsOf: validatedSkip, encoding: .utf8) {
-                    for line in contents.split(separator: "\n", omittingEmptySubsequences: false) {
-                        let trimmed = line.trimmingCharacters(in: .whitespaces)
-                        if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
-                        skipMessageIds.insert(trimmed)
+                // Read only a regular file ≤64MB (stat BEFORE open: a FIFO would
+                // hang `String(contentsOf:)`, a huge file would OOM — neither is a
+                // legit archive index). Any miss → empty skip-set + stderr note.
+                let skipContents: String? = {
+                    let fm = FileManager.default
+                    guard let attrs = try? fm.attributesOfItem(atPath: validatedSkip.path),
+                          (attrs[.type] as? FileAttributeType) == .typeRegular,
+                          (attrs[.size] as? Int ?? Int.max) <= 64 * 1024 * 1024 else {
+                        return nil
                     }
+                    return try? String(contentsOf: validatedSkip, encoding: .utf8)
+                }()
+                if let contents = skipContents {
+                    skipMessageIds = Self.parseSkipMessageIds(contents)
                 } else {
                     FileHandle.standardError.write(Data((
-                        "export_emails_markdown: skip_message_ids_path not readable — "
+                        "export_emails_markdown: skip_message_ids_path not a readable regular file ≤64MB — "
                         + "treating as empty skip-set (#177)\n").utf8))
                 }
             }
@@ -1979,6 +1987,22 @@ class CheAppleMailMCPServer {
             throw MailError.invalidParameter("dedup 'logical' is only supported with projection 'ids', 'summary', or 'count' (full-row dedup is not implemented)")
         }
         return (projection, dedup)
+    }
+
+    /// #177: parse a `skip_message_ids_path` file body into the dedup Message-ID
+    /// set. Pure (no I/O) so the CRLF/line-ending handling is unit-testable.
+    /// Splits on **any** newline (LF / CR / CRLF — a CRLF file is a single `\r\n`
+    /// grapheme, so a bare `split("\n")` mis-parses the whole file as one entry),
+    /// trims surrounding whitespace + newlines, and ignores blank lines and `#`
+    /// comments. Matching is exact on the trimmed full Message-ID string.
+    static func parseSkipMessageIds(_ contents: String) -> Set<String> {
+        var set: Set<String> = []
+        for line in contents.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            set.insert(trimmed)
+        }
+        return set
     }
 
     private func formatJSON(_ value: Any) -> String {
