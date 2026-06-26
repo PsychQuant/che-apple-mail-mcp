@@ -151,6 +151,46 @@ final class ServerSchemaTests: XCTestCase {
         XCTAssertFalse(required.contains("account_id"), "account_id must stay optional")
     }
 
+    // MARK: - #177 summary projection + batch message_id
+
+    /// #177: the `search_emails` `projection` enum must advertise `summary`.
+    /// Source-scan (the schema `Value` navigation is ambiguous to type-check).
+    func testSearchEmails_projectionAdvertisesSummary() throws {
+        let serverSource = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/CheAppleMailMCP/Server.swift")
+        let source = try String(contentsOf: serverSource, encoding: .utf8)
+        XCTAssertTrue(source.contains("'summary' (envelope"),
+                      "search_emails projection schema must advertise the 'summary' triage shape (#177)")
+    }
+
+    /// #177: the `export_emails_markdown` schema must advertise `skip_message_ids_path`.
+    func testExportEmailsMarkdown_advertisesSkipMessageIdsPath() {
+        guard let t = tool(named: "export_emails_markdown"), let props = propertiesObject(of: t) else {
+            XCTFail("export_emails_markdown schema missing"); return
+        }
+        XCTAssertNotNil(props["skip_message_ids_path"],
+                        "export_emails_markdown must advertise skip_message_ids_path (#177)")
+        let required = requiredArray(of: t) ?? []
+        XCTAssertFalse(required.contains("skip_message_ids_path"), "skip_message_ids_path is optional")
+    }
+
+    /// #177: the `get_emails_batch` per-email result must include `message_id`
+    /// (parity with single `get_email`). Structural pin (handler isn't actor-unit-testable).
+    func testGetEmailsBatch_resultIncludesMessageId() throws {
+        let serverSource = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/CheAppleMailMCP/Server.swift")
+        let source = try String(contentsOf: serverSource, encoding: .utf8)
+        guard let start = source.range(of: "case \"get_emails_batch\":") else {
+            XCTFail("get_emails_batch case not found in Server.swift"); return
+        }
+        let tail = source[start.upperBound...]
+        let body = tail.range(of: "\n        case \"").map { String(tail[..<$0.lowerBound]) } ?? String(tail)
+        XCTAssertTrue(body.contains("\"message_id\": content.messageId"),
+                      "get_emails_batch per-email result must include message_id (#177)")
+    }
+
     // MARK: - reply_email new optional params (issue #33)
 
     func testReplyEmail_advertisesCcAdditionalAttachmentsAndSaveAsDraft() throws {

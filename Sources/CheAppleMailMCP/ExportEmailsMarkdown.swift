@@ -8,7 +8,7 @@ struct ExportManifestItem {
     let writtenPath: String?         // absolute path of the written .md (nil on error)
     let attachments: [String]        // paths of saved attachments (relative to output_dir)
     let attachmentErrors: [String]   // per-attachment failures (never silently dropped)
-    let status: String               // "written" | "error"
+    let status: String               // "written" | "error" | "skipped" (#177 dedup)
     let error: String?
 
     var jsonObject: [String: Any] {
@@ -28,12 +28,15 @@ struct ExportManifest {
 
     var written: Int { items.filter { $0.status == "written" }.count }
     var errors: Int { items.filter { $0.status == "error" }.count }
+    /// #177: dedup-skipped (already-archived Message-ID) count.
+    var skipped: Int { items.filter { $0.status == "skipped" }.count }
 
     var jsonObject: [String: Any] {
         [
             "output_dir": outputDir,
             "written": written,
             "errors": errors,
+            "skipped": skipped,
             "items": items.map { $0.jsonObject },
         ]
     }
@@ -204,6 +207,7 @@ enum ExportEmailsMarkdown {
         fetch: (String) throws -> EmailContent,
         attachmentNamesFor: (String) throws -> [String],
         attachmentData: (String, String) throws -> Data,
+        skipMessageIds: Set<String> = [],
         fileManager: FileManager = .default
     ) -> ExportManifest {
         try? fileManager.createDirectory(at: outputDir, withIntermediateDirectories: true)
@@ -224,6 +228,18 @@ enum ExportEmailsMarkdown {
                     id: id, messageId: nil, writtenPath: nil, attachments: [],
                     attachmentErrors: [], status: "error",
                     error: "fetch: \(error.localizedDescription)"))
+                continue
+            }
+
+            // #177: dedup — skip an already-archived email (Message-ID in the
+            // caller-supplied set) BEFORE any render/write. The content was fetched
+            // binary-side (it never enters LLM context); a skip is recorded in the
+            // manifest summary only.
+            if !skipMessageIds.isEmpty, !content.messageId.isEmpty,
+               skipMessageIds.contains(content.messageId) {
+                items.append(ExportManifestItem(
+                    id: id, messageId: content.messageId, writtenPath: nil, attachments: [],
+                    attachmentErrors: [], status: "skipped", error: nil))
                 continue
             }
 
