@@ -1,21 +1,21 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.kiki830621/che-apple-mail-mcp",
+  "name": "io.github.PsychQuant/che-apple-mail-mcp",
   "description": "Apple Mail MCP \u2014 47 tools, SQLite millisecond search, .emlx parser, batch ops",
-  "version": "2.0.1",
+  "version": "2.17.0",
   "repository": {
-    "url": "https://github.com/kiki830621/che-apple-mail-mcp",
+    "url": "https://github.com/PsychQuant/che-apple-mail-mcp",
     "source": "github"
   },
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/kiki830621/che-apple-mail-mcp/releases/download/v2.0.1/CheAppleMailMCP",
-      "version": "2.0.1",
+      "identifier": "https://github.com/PsychQuant/che-apple-mail-mcp/releases/download/v2.17.0/CheAppleMailMCP",
+      "version": "2.17.0",
       "transport": {
         "type": "stdio"
       },
-      "fileSha256": "a532b80e0d0390dc755d0b64a319398df5806f399f982b427fe56d527726513a"
+      "fileSha256": "a40f6bb82702ef9aae406b0f54857398f9c09123dedf519470a7e184e9cd35dd"
     }
   ]
 }
