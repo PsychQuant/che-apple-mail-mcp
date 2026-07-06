@@ -193,6 +193,38 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         }
     }
 
+    // MARK: - #232 cross-call filename collision (must not silently overwrite)
+
+    /// A second `run()` to the SAME outputDir must not reuse a filename already
+    /// on disk from an earlier call. Before #232 the `-N` collision suffix only
+    /// tracked names emitted *within one call* (in-memory `usedFilenames`), so a
+    /// mixed-direction corpus split into two calls (forced by the single
+    /// `mailbox`/direction param) silently overwrote same-(date,slug) files.
+    func testRun_crossCallCollision_secondCallDoesNotOverwriteFirst() throws {
+        let out = tempDir()
+        let email = makeEmail(subject: "Report")  // same subject + date → same (date, slug)
+
+        func exportOnce(_ id: String) throws -> String {
+            let m = ExportEmailsMarkdown.run(
+                ids: [id], outputDir: out, direction: "received",
+                includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+                extraFrontmatter: [],
+                fetch: { _ in email },
+                attachmentNamesFor: { _ in [] },
+                attachmentData: { _, _ in Data() })
+            return try XCTUnwrap(m.items.first?.writtenPath)
+        }
+
+        let path1 = try exportOnce("10")   // writes the base filename
+        let path2 = try exportOnce("11")   // separate call, same (date, slug)
+
+        XCTAssertNotEqual(path1, path2,
+            "second export to the same outputDir must not reuse the first call's filename (#232)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path1),
+            "first call's file must survive the second export (#232)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path2))
+    }
+
     // MARK: - #198 in_reply_to threading + #199 body_type frontmatter
 
     private func readWrittenMd(_ manifest: ExportManifest) throws -> String {

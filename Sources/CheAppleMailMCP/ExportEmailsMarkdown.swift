@@ -219,6 +219,22 @@ enum ExportEmailsMarkdown {
         var seen: [String: Int] = [:]          // default-branch (date,slug) counter
         var usedFilenames: Set<String> = []    // every .md filename emitted this run
 
+        // #232: seed the collision guard with `.md` files already present in
+        // outputDir from PRIOR run() calls, so the `-N` suffix continues ACROSS
+        // calls — not just within one call. Without this, a second export to the
+        // same outputDir (e.g. a mixed-direction corpus split into a received +
+        // a sent batch, forced by the single `direction` param) re-derives
+        // filenames from an empty set and silently overwrites same-(date,slug)
+        // files written earlier. `uniquify()` (applied to every filename branch
+        // at the resolution site below) consults this set, so seeding it is
+        // sufficient to make the suffix span calls.
+        if let existing = try? fileManager.contentsOfDirectory(
+                at: outputDir, includingPropertiesForKeys: nil, options: []) {
+            for url in existing where url.pathExtension == "md" {
+                usedFilenames.insert(url.lastPathComponent)
+            }
+        }
+
         for id in ids {
             let content: EmailContent
             do {
