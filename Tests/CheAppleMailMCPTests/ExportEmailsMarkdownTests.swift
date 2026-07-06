@@ -199,30 +199,47 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     /// on disk from an earlier call. Before #232 the `-N` collision suffix only
     /// tracked names emitted *within one call* (in-memory `usedFilenames`), so a
     /// mixed-direction corpus split into two calls (forced by the single
-    /// `mailbox`/direction param) silently overwrote same-(date,slug) files.
+    /// `direction` param) silently overwrote same-(date,slug) files.
+    ///
+    /// Each call writes id-distinct BODY content and the earlier file is read
+    /// back, so the test proves the first file's *content survives* — not merely
+    /// that two path strings differ (a same-content test would still pass on a
+    /// silent clobber). Covers both the default (date,slug) branch and the
+    /// caller-supplied `filenameTemplate` branch.
     func testRun_crossCallCollision_secondCallDoesNotOverwriteFirst() throws {
         let out = tempDir()
-        let email = makeEmail(subject: "Report")  // same subject + date → same (date, slug)
 
-        func exportOnce(_ id: String) throws -> String {
+        func exportOnce(_ id: String, body: String, template: String? = nil) throws -> String {
             let m = ExportEmailsMarkdown.run(
                 ids: [id], outputDir: out, direction: "received",
-                includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+                includeAttachments: false, filenameTemplate: template, filenameOverrides: [:],
                 extraFrontmatter: [],
-                fetch: { _ in email },
+                fetch: { _ in self.makeEmail(subject: "Report", textBody: body) },
                 attachmentNamesFor: { _ in [] },
                 attachmentData: { _, _ in Data() })
             return try XCTUnwrap(m.items.first?.writtenPath)
         }
 
-        let path1 = try exportOnce("10")   // writes the base filename
-        let path2 = try exportOnce("11")   // separate call, same (date, slug)
-
+        // --- default (date,slug) branch: same subject+date → same base name ---
+        let path1 = try exportOnce("10", body: "FIRST-CALL-BODY")
+        let path2 = try exportOnce("11", body: "SECOND-CALL-BODY")
         XCTAssertNotEqual(path1, path2,
-            "second export to the same outputDir must not reuse the first call's filename (#232)")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: path1),
-            "first call's file must survive the second export (#232)")
+            "second export must not reuse the first call's filename (#232)")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path1))
         XCTAssertTrue(FileManager.default.fileExists(atPath: path2))
+        // Content proof: call 1's file still holds call 1's body (not clobbered).
+        XCTAssertTrue(try String(contentsOfFile: path1, encoding: .utf8).contains("FIRST-CALL-BODY"),
+            "first call's content must survive the second export (#232)")
+        XCTAssertTrue(try String(contentsOfFile: path2, encoding: .utf8).contains("SECOND-CALL-BODY"))
+
+        // --- template branch: a fixed template yields the same name each call ---
+        let tpl = "fixed-name"   // no placeholders → "fixed-name.md" every call
+        let tpath1 = try exportOnce("20", body: "TPL-FIRST", template: tpl)
+        let tpath2 = try exportOnce("21", body: "TPL-SECOND", template: tpl)
+        XCTAssertNotEqual(tpath1, tpath2,
+            "template branch must also continue the -N suffix across calls (#232)")
+        XCTAssertTrue(try String(contentsOfFile: tpath1, encoding: .utf8).contains("TPL-FIRST"),
+            "template branch: first call's content must survive (#232)")
     }
 
     // MARK: - #198 in_reply_to threading + #199 body_type frontmatter
