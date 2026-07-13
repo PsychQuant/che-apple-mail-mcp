@@ -145,8 +145,8 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 | Tool | Description |
 |------|-------------|
 | `compose_email` | Send new email (supports cc/bcc/attachments; `format`: plain/markdown/html; optional `from_address` for multi-account sender selection — see [#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131)). Plain-text bodies send via the wrapper-free native path when Accessibility is granted — see [#175](https://github.com/PsychQuant/che-apple-mail-mcp/issues/175) / `check_accessibility` |
-| `reply_email` | Reply to email. Optional: `cc_additional`, `attachments`, `save_as_draft`, `format` (since v2.4.0). Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0 / #43) |
-| `forward_email` | Forward email. Optional `body` + `format`. Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0+ / #44) |
+| `reply_email` | Reply to email. Optional: `cc_additional`, `attachments`, `save_as_draft`, `format` (since v2.4.0). Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0 / #43). Plain-text new body uses the wrapper-free paste path when Accessibility is granted ([#218](https://github.com/PsychQuant/che-apple-mail-mcp/issues/218)); legacy-path results disclose the reason ([#229](https://github.com/PsychQuant/che-apple-mail-mcp/issues/229)) |
+| `forward_email` | Forward email. Optional `body` + `format`. Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0+ / #44). Bodyless forward is always wrapper-free; with a body, same clean-path rules as `reply_email` ([#218](https://github.com/PsychQuant/che-apple-mail-mcp/issues/218) / [#229](https://github.com/PsychQuant/che-apple-mail-mcp/issues/229)) |
 | `redirect_email` | Redirect email (keeps original sender) |
 | `open_mailto` | Open mailto URL |
 
