@@ -118,11 +118,15 @@ func shouldUseMailtoCompose(
     hasCustomSender: Bool,
     hasSubject: Bool
 ) -> Bool {
-    if disabledByEnv { return false }
-    if hasCustomSender { return false }
-    if !hasSubject { return false }
-    guard format == .plain else { return false }
-    return accessibilityTrusted
+    // #237: thin wrapper over the reason-returning variant so the routing
+    // decision and the disclosed reason can never disagree.
+    return mailtoIneligibilityReason(
+        format: format,
+        accessibilityTrusted: accessibilityTrusted,
+        disabledByEnv: disabledByEnv,
+        hasCustomSender: hasCustomSender,
+        hasSubject: hasSubject
+    ) == nil
 }
 
 // MARK: - #218 clean reply/forward (native-verb + paste)
@@ -180,4 +184,57 @@ func shouldUsePasteReplyForward(
     if disabledByEnv { return false }
     guard format == .plain else { return false }
     return accessibilityTrusted
+}
+
+// MARK: - #237 legacy-path disclosure
+
+/// #237 — why this compose call cannot use the wrapper-free mailto path.
+/// `nil` = eligible. Check order mirrors `shouldUseMailtoCompose`'s
+/// short-circuit so the two can never disagree (guarded by the
+/// `consistentWithShouldUseMailtoCompose` matrix test).
+///
+/// Motivation (#237 RCA): every 2026-07-09 `create_draft` carried a custom
+/// `from_address`, silently routing to the legacy injection path whose body
+/// Mail wraps in `<blockquote type="cite">` at MIME-serialization time. The
+/// ineligibility itself is by design (#131/#175) — the bug was that nothing
+/// disclosed it. This function names the reason so the result string, the
+/// stderr warn, and the tool description can all surface the same fact.
+func mailtoIneligibilityReason(
+    format: BodyFormat,
+    accessibilityTrusted: Bool,
+    disabledByEnv: Bool,
+    hasCustomSender: Bool,
+    hasSubject: Bool
+) -> String? {
+    if disabledByEnv {
+        return "mailto compose disabled via \(mailtoComposeDisableEnvKey)"
+    }
+    if hasCustomSender {
+        return "custom from_address — mailto: composes from the default account only; "
+            + "a verified sender-popup is pending #219"
+    }
+    if !hasSubject {
+        return "empty subject — the GUI dispatch guard identifies our compose window "
+            + "by its title (= subject)"
+    }
+    guard format == .plain else {
+        return "format '\(format.rawValue)' — the mailto: URL carries plain text only"
+    }
+    if !accessibilityTrusted {
+        return "Accessibility (AXIsProcessTrusted) not granted — GUI keystrokes for "
+            + "save/send/attach would silently fail"
+    }
+    return nil
+}
+
+/// #237 — suffix appended to legacy-path result strings so the MCP caller
+/// (not just stderr) learns the body will render as a quote on some mobile
+/// clients. Append-only: the historical `Draft created successfully` /
+/// `Email sent successfully` prefixes stay intact for prefix-parsing callers.
+func legacyPathDisclosure(reason: String) -> String {
+    return " [legacy path — body wrapped in <blockquote type=\"cite\">, renders as "
+        + "quoted text on some mobile clients. Reason: \(reason). Wrapper-free "
+        + "eligibility: plain format + non-empty subject + default sender + "
+        + "Accessibility granted + \(mailtoComposeDisableEnvKey) unset "
+        + "(#175; custom-sender clean path pending #219)]"
 }

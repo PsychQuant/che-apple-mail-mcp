@@ -927,15 +927,28 @@ actor MailController {
         // legacy AppleScript injection (which wraps the body) on any failure,
         // for markdown/html, for a custom sender, without Accessibility, or
         // when disabled via env. See MailtoCompose.swift.
-        if mailtoComposeEligible(format: format, fromAddress: fromAddress, subject: subject) {
+        // #237: the fallback is no longer silent — the named reason goes to
+        // stderr AND onto the returned result string.
+        var legacyReason = mailtoIneligibilityReasonForCall(
+            format: format, fromAddress: fromAddress, subject: subject)
+        if legacyReason == nil {
             do {
                 return try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
                     attachments: attachments, send: true)
             } catch {
                 warnMailtoFallback(error)
+                // #237 verify: clamp the echoed error to one bounded line — GUI
+                // error text is system-generated but can be long / multi-line,
+                // and it lands verbatim in the MCP result suffix.
+                let clamped = error.localizedDescription
+                    .replacingOccurrences(of: "\n", with: " ")
+                    .prefix(200)
+                legacyReason = "mailto GUI path failed: \(clamped)"
                 // fall through to legacy injection
             }
+        } else {
+            warnMailtoIneligible(legacyReason!)
         }
 
         let script = try buildComposeEmailScript(
@@ -949,22 +962,37 @@ actor MailController {
             sanitizeLinks: sanitizeLinks,
             fromAddress: fromAddress
         )
-        return try runScript(script)
+        let result = try runScript(script)
+        return result + legacyPathDisclosure(reason: legacyReason ?? "unknown")
     }
 
-    /// #175 — true iff this compose call should use the wrapper-free mailto path.
-    /// Probes Accessibility + the env escape hatch at call time; custom sender
+    /// #175/#237 — nil iff this compose call should use the wrapper-free mailto
+    /// path; otherwise the named reason for routing to the legacy path. Probes
+    /// Accessibility + the env escape hatch at call time; custom sender
     /// (`fromAddress`) and an empty subject both route to the legacy path (mailto
     /// can't pick a non-default account; the GUI dispatch guard identifies the
     /// compose window by its title = subject).
-    private func mailtoComposeEligible(format: BodyFormat, fromAddress: String?, subject: String) -> Bool {
-        return shouldUseMailtoCompose(
+    private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String) -> String? {
+        return mailtoIneligibilityReason(
             format: format,
             accessibilityTrusted: AccessibilityStatus.isTrusted,
             disabledByEnv: mailtoComposeDisabledByEnv(),
             hasCustomSender: (fromAddress?.isEmpty == false),
             hasSubject: !subject.isEmpty
         )
+    }
+
+    /// #237 — surface (never swallow) that a compose call never even attempted
+    /// the wrapper-free mailto path. Sibling of `warnMailtoFallback`: that one
+    /// fires when mailto was TRIED and failed; this one fires when the call was
+    /// ineligible from the start (custom sender / format / no subject / no
+    /// Accessibility / env hatch). The 2026-07-09 #237 regression report came
+    /// from exactly this silent branch.
+    private func warnMailtoIneligible(_ reason: String) {
+        let msg = "mailto clean-compose path skipped (#237): \(reason); "
+            + "using legacy AppleScript injection — body will be wrapped in "
+            + "<blockquote type=\"cite\"> (looks quoted on some mobile clients)\n"
+        FileHandle.standardError.write(Data(msg.utf8))
     }
 
     /// #175 — run the wrapper-free mailto compose path. Builds the percent-encoded
@@ -1234,15 +1262,28 @@ actor MailController {
 
         // #175: prefer the wrapper-free mailto path (save draft via ⌘S);
         // graceful fallback to legacy injection. See composeEmail above.
-        if mailtoComposeEligible(format: format, fromAddress: fromAddress, subject: subject) {
+        // #237: the fallback is no longer silent — the named reason goes to
+        // stderr AND onto the returned result string.
+        var legacyReason = mailtoIneligibilityReasonForCall(
+            format: format, fromAddress: fromAddress, subject: subject)
+        if legacyReason == nil {
             do {
                 return try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
                     attachments: attachments, send: false)
             } catch {
                 warnMailtoFallback(error)
+                // #237 verify: clamp the echoed error to one bounded line — GUI
+                // error text is system-generated but can be long / multi-line,
+                // and it lands verbatim in the MCP result suffix.
+                let clamped = error.localizedDescription
+                    .replacingOccurrences(of: "\n", with: " ")
+                    .prefix(200)
+                legacyReason = "mailto GUI path failed: \(clamped)"
                 // fall through to legacy injection
             }
+        } else {
+            warnMailtoIneligible(legacyReason!)
         }
 
         let script = try buildCreateDraftScript(
@@ -1256,7 +1297,8 @@ actor MailController {
             sanitizeLinks: sanitizeLinks,
             fromAddress: fromAddress
         )
-        return try runScript(script)
+        let result = try runScript(script)
+        return result + legacyPathDisclosure(reason: legacyReason ?? "unknown")
     }
 
     // MARK: - Attachment Operations

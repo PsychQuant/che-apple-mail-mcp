@@ -242,4 +242,117 @@ final class MailtoComposeTests: XCTestCase {
         XCTAssertFalse(replyForwardPasteDisabledByEnv([replyForwardPasteDisableEnvKey: "0"]))
         XCTAssertFalse(replyForwardPasteDisabledByEnv([:]))
     }
+
+    // MARK: - #237 mailtoIneligibilityReason (named reasons for the legacy fallback)
+
+    func testIneligibilityReason_eligibleCall_returnsNil() {
+        XCTAssertNil(mailtoIneligibilityReason(format: .plain,
+                                               accessibilityTrusted: true,
+                                               disabledByEnv: false,
+                                               hasCustomSender: false,
+                                               hasSubject: true))
+    }
+
+    func testIneligibilityReason_disabledByEnv_namesEnvKey() {
+        let reason = mailtoIneligibilityReason(format: .plain,
+                                               accessibilityTrusted: true,
+                                               disabledByEnv: true,
+                                               hasCustomSender: false,
+                                               hasSubject: true)
+        XCTAssertNotNil(reason)
+        XCTAssertTrue(reason?.contains(mailtoComposeDisableEnvKey) == true,
+                      "env reason must name the escape-hatch key: \(reason ?? "nil")")
+    }
+
+    func testIneligibilityReason_customSender_namesFromAddressAnd219() {
+        let reason = mailtoIneligibilityReason(format: .plain,
+                                               accessibilityTrusted: true,
+                                               disabledByEnv: false,
+                                               hasCustomSender: true,
+                                               hasSubject: true)
+        XCTAssertNotNil(reason)
+        XCTAssertTrue(reason?.contains("from_address") == true,
+                      "custom-sender reason must name the parameter: \(reason ?? "nil")")
+        XCTAssertTrue(reason?.contains("#219") == true,
+                      "custom-sender reason must point at the sender-popup follow-up: \(reason ?? "nil")")
+    }
+
+    func testIneligibilityReason_emptySubject_namesSubject() {
+        let reason = mailtoIneligibilityReason(format: .plain,
+                                               accessibilityTrusted: true,
+                                               disabledByEnv: false,
+                                               hasCustomSender: false,
+                                               hasSubject: false)
+        XCTAssertNotNil(reason)
+        XCTAssertTrue(reason?.lowercased().contains("subject") == true,
+                      "empty-subject reason must mention the subject: \(reason ?? "nil")")
+    }
+
+    func testIneligibilityReason_nonPlainFormat_namesFormat() {
+        for format in [BodyFormat.markdown, BodyFormat.html] {
+            let reason = mailtoIneligibilityReason(format: format,
+                                                   accessibilityTrusted: true,
+                                                   disabledByEnv: false,
+                                                   hasCustomSender: false,
+                                                   hasSubject: true)
+            XCTAssertNotNil(reason, "\(format) must be ineligible")
+            XCTAssertTrue(reason?.contains(format.rawValue) == true,
+                          "format reason must name the format: \(reason ?? "nil")")
+        }
+    }
+
+    func testIneligibilityReason_noAccessibility_namesAccessibility() {
+        let reason = mailtoIneligibilityReason(format: .plain,
+                                               accessibilityTrusted: false,
+                                               disabledByEnv: false,
+                                               hasCustomSender: false,
+                                               hasSubject: true)
+        XCTAssertNotNil(reason)
+        XCTAssertTrue(reason?.contains("Accessibility") == true,
+                      "accessibility reason must name the missing grant: \(reason ?? "nil")")
+    }
+
+    func testIneligibilityReason_consistentWithShouldUseMailtoCompose() {
+        // The boolean decision and the named reason must never disagree —
+        // shouldUseMailtoCompose() is the routing source of truth (#175) and
+        // mailtoIneligibilityReason() is its #237 disclosure companion.
+        let bools = [false, true]
+        for format in [BodyFormat.plain, .markdown, .html] {
+            for ax in bools { for env in bools { for cs in bools { for subj in bools {
+                let should = shouldUseMailtoCompose(format: format,
+                                                    accessibilityTrusted: ax,
+                                                    disabledByEnv: env,
+                                                    hasCustomSender: cs,
+                                                    hasSubject: subj)
+                let reason = mailtoIneligibilityReason(format: format,
+                                                       accessibilityTrusted: ax,
+                                                       disabledByEnv: env,
+                                                       hasCustomSender: cs,
+                                                       hasSubject: subj)
+                XCTAssertEqual(should, reason == nil,
+                               "decision/reason mismatch for format=\(format) ax=\(ax) env=\(env) customSender=\(cs) hasSubject=\(subj)")
+            }}}}
+        }
+    }
+
+    // MARK: - #237 legacyPathDisclosure (result-string suffix)
+
+    func testLegacyPathDisclosure_containsReasonAndWrapperWarning() {
+        let suffix = legacyPathDisclosure(reason: "custom from_address test-reason")
+        XCTAssertTrue(suffix.contains("legacy path"),
+                      "disclosure must name the path: \(suffix)")
+        XCTAssertTrue(suffix.contains("custom from_address test-reason"),
+                      "disclosure must carry the named reason: \(suffix)")
+        XCTAssertTrue(suffix.lowercased().contains("quoted"),
+                      "disclosure must warn about quoted rendering on mobile clients: \(suffix)")
+    }
+
+    func testLegacyPathDisclosure_appendedResultKeepsSuccessPrefix() {
+        // Callers may parse the historical success prefix — the disclosure is
+        // append-only (#237 risk note).
+        let result = "Draft created successfully" + legacyPathDisclosure(reason: "r")
+        XCTAssertTrue(result.hasPrefix("Draft created successfully"), result)
+        let sent = "Email sent successfully" + legacyPathDisclosure(reason: "r")
+        XCTAssertTrue(sent.hasPrefix("Email sent successfully"), sent)
+    }
 }

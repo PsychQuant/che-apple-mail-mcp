@@ -251,7 +251,7 @@ class CheAppleMailMCPServer {
             // Compose Tools
             Tool(
                 name: "compose_email",
-                description: "Compose and send a new email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text).",
+                description: "Compose and send a new email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Wrapper-free clean-body path (#175) is used only when ALL hold: format='plain' + non-empty subject + no from_address + Accessibility granted + CHE_MAIL_DISABLE_MAILTO_COMPOSE not set. Otherwise the legacy path runs and Mail wraps the body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#237).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -261,9 +261,9 @@ class CheAppleMailMCPServer {
                         "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("CC recipients (optional)")]),
                         "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("BCC recipients (optional)")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")]),
-                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is; 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML.")]),
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is and is the only format eligible for the wrapper-free clean-body path (#175); 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML — both route to the legacy path whose body Mail wraps in a quote block on some mobile clients.")]),
                         "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true AND `format` is `markdown`, link URLs whose scheme is not in {http, https, mailto, tel} are rendered as plain text (no `<a>` wrapper) — defends against `[click](javascript:...)` and `data:`/`file:`/`vbscript:` XSS injection. Default false (preserves backward compat). No effect when `format` is `plain` (no link parsing happens) or `html` (caller-trusted raw HTML — you must sanitize your own anchors). Non-absolute URLs (e.g. `[home](/relative/path)` or empty `[text]()`) also have their anchor dropped under sanitize_links=true since they lack an allowlisted scheme.")]),
-                        "from_address": .object(["type": .string("string"), "description": .string("Optional — email address (or 'Name <email>') of the account to send FROM. Must match one of your Mail.app accounts' addresses. Omit to use Mail.app's default account. Use list_accounts to discover available email addresses.")])
+                        "from_address": .object(["type": .string("string"), "description": .string("Optional — email address (or 'Name <email>') of the account to send FROM. Must match one of your Mail.app accounts' addresses. Omit to use Mail.app's default account. Use list_accounts to discover available email addresses. ⚠ Setting this forces the legacy path until #219 lands: the body gets wrapped in <blockquote type=\"cite\"> and renders as quoted text on some mobile clients. For a clean body from a non-default account, omit from_address and switch the sender manually in Mail's compose window.")])
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
@@ -323,7 +323,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "create_draft",
-                description: "Create a new draft email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text).",
+                description: "Create a new draft email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Wrapper-free clean-body path (#175) is used only when ALL hold: format='plain' + non-empty subject + no from_address + Accessibility granted + CHE_MAIL_DISABLE_MAILTO_COMPOSE not set. Otherwise the legacy path runs and Mail wraps the body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#237).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -333,9 +333,9 @@ class CheAppleMailMCPServer {
                         "subject": .object(["type": .string("string"), "description": .string("Email subject")]),
                         "body": .object(["type": .string("string"), "description": .string("Email body content (interpreted according to 'format')")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")]),
-                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is; 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML.")]),
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is and is the only format eligible for the wrapper-free clean-body path (#175); 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML — both route to the legacy path whose body Mail wraps in a quote block on some mobile clients.")]),
                         "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true AND `format` is `markdown`, link URLs whose scheme is not in {http, https, mailto, tel} are rendered as plain text (no `<a>` wrapper) — defends against `[click](javascript:...)` and `data:`/`file:`/`vbscript:` XSS injection. Default false (preserves backward compat). No effect when `format` is `plain` (no link parsing happens) or `html` (caller-trusted raw HTML — you must sanitize your own anchors). Non-absolute URLs (e.g. `[home](/relative/path)` or empty `[text]()`) also have their anchor dropped under sanitize_links=true since they lack an allowlisted scheme.")]),
-                        "from_address": .object(["type": .string("string"), "description": .string("Optional — email address of the account to save the draft UNDER (sender selection). Must match one of your Mail.app accounts' addresses. Omit to use Mail.app's default account. Use list_accounts to discover available email addresses.")])
+                        "from_address": .object(["type": .string("string"), "description": .string("Optional — email address of the account to save the draft UNDER (sender selection). Must match one of your Mail.app accounts' addresses. Omit to use Mail.app's default account. Use list_accounts to discover available email addresses. ⚠ Setting this forces the legacy path until #219 lands: the body gets wrapped in <blockquote type=\"cite\"> and renders as quoted text on some mobile clients. For a clean body from a non-default account, omit from_address and switch the sender manually in Mail's compose window.")])
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
