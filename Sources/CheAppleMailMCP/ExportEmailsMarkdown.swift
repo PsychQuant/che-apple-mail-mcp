@@ -63,7 +63,16 @@ struct ExportDirLock {
 
     static func acquire(outputDir: URL) throws -> ExportDirLock {
         let path = outputDir.appendingPathComponent(lockFileName).path
-        let fd = open(path, O_WRONLY | O_CREAT, 0o644)
+        // #236 verify hardening: O_NOFOLLOW refuses a planted symlink at the
+        // fixed lockfile path (parity with every RaceFreeFileWriter open —
+        // #200 discipline); O_NONBLOCK turns a planted reader-less FIFO into
+        // an immediate ENXIO instead of an open() hang BEFORE flock's LOCK_NB
+        // fail-fast is even reached. O_NONBLOCK is a no-op for regular files.
+        // O_CLOEXEC deliberately omitted: the export/tool path spawns no child
+        // processes (AppleScript runs in-process via NSAppleScript) and the
+        // codebase has no O_CLOEXEC convention — recorded in the #236 verify
+        // report rather than cargo-culted.
+        let fd = open(path, O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0o644)
         guard fd >= 0 else {
             throw ExportDirLockError.lockFailed(dir: outputDir.path, errno: errno)
         }

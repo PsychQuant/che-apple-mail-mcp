@@ -440,6 +440,42 @@ final class ExportEmailsMarkdownTests: XCTestCase {
                        "locked-out run must not write any .md: \(written)")
     }
 
+    func testExportDirLock_symlinkAtLockfilePath_refusedNotFollowed() throws {
+        // #236 verify (security MEDIUM): a co-resident process planting a
+        // symlink at the fixed .export.lock path must not be followed —
+        // O_NOFOLLOW parity with every other open in the export write path
+        // (#200 discipline). Follow-through would allow out-of-tree file
+        // creation and, via a FIFO target, a pre-flock open() hang.
+        let dir = tempDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let target = dir.appendingPathComponent("innocent-target")
+        FileManager.default.createFile(atPath: target.path, contents: Data())
+        try FileManager.default.createSymbolicLink(
+            at: dir.appendingPathComponent(ExportDirLock.lockFileName),
+            withDestinationURL: target)
+        XCTAssertThrowsError(try ExportDirLock.acquire(outputDir: dir)) { error in
+            guard case ExportDirLockError.lockFailed = error else {
+                XCTFail("symlinked lockfile must refuse (ELOOP), got \(error)"); return
+            }
+        }
+    }
+
+    func testExportDirLock_fifoAtLockfilePath_failsFastNotHang() throws {
+        // With O_NONBLOCK, opening a reader-less FIFO for write returns ENXIO
+        // immediately instead of blocking before flock's LOCK_NB is reached —
+        // the fail-fast invariant must hold even against a planted FIFO.
+        let dir = tempDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fifoPath = dir.appendingPathComponent(ExportDirLock.lockFileName).path
+        guard mkfifo(fifoPath, 0o644) == 0 else {
+            throw XCTSkip("mkfifo unavailable in this environment (errno \(errno))")
+        }
+        let start = Date()
+        XCTAssertThrowsError(try ExportDirLock.acquire(outputDir: dir))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2.0,
+                          "FIFO at lockfile path must fail fast, not block")
+    }
+
     func testExportDirLockError_localizedDescription_isActionable() {
         // Server.swift renders tool errors via error.localizedDescription — a
         // bare enum would render as an opaque "(ExportDirLockError error 0)".
@@ -475,5 +511,26 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(
             atPath: dir.appendingPathComponent(ExportDirLock.lockFileName).path),
             "lockfile persists between runs by design (unlink would race)")
+    }
+
+    func testRun_preExistingLockfile_doesNotPerturbFilenameSeeding() throws {
+        // #236 verify (codex): direct assertion that a pre-existing
+        // .export.lock in output_dir never counts as a used filename — the
+        // exported file must get the BASE name, not a -1 suffix.
+        let dir = tempDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: dir.appendingPathComponent(ExportDirLock.lockFileName).path,
+            contents: Data())
+        let manifest = try ExportEmailsMarkdown.run(
+            ids: ["1"], outputDir: dir, direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { _ in self.makeEmail() },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() })
+        let written = try XCTUnwrap(manifest.items.first?.writtenPath)
+        XCTAssertTrue(written.hasSuffix("/2026-06-13_Topic.md"),
+                      "base name expected — lockfile must not trigger a -N suffix: \(written)")
     }
 }
