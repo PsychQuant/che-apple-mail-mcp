@@ -355,4 +355,96 @@ final class MailtoComposeTests: XCTestCase {
         let sent = "Email sent successfully" + legacyPathDisclosure(reason: "r")
         XCTAssertTrue(sent.hasPrefix("Email sent successfully"), sent)
     }
+
+    // MARK: - #229 pasteReplyForwardIneligibilityReason (named reasons, reply/forward family)
+
+    func testPasteReplyIneligibilityReason_eligibleCall_returnsNil() {
+        XCTAssertNil(pasteReplyForwardIneligibilityReason(format: .plain,
+                                                          accessibilityTrusted: true,
+                                                          disabledByEnv: false))
+    }
+
+    func testPasteReplyIneligibilityReason_disabledByEnv_namesEnvKey() {
+        let reason = pasteReplyForwardIneligibilityReason(format: .plain,
+                                                          accessibilityTrusted: true,
+                                                          disabledByEnv: true)
+        XCTAssertNotNil(reason)
+        XCTAssertTrue(reason?.contains(replyForwardPasteDisableEnvKey) == true,
+                      "env reason must name the escape-hatch key: \(reason ?? "nil")")
+    }
+
+    func testPasteReplyIneligibilityReason_nonPlainFormat_namesFormat() {
+        for format in [BodyFormat.markdown, BodyFormat.html] {
+            let reason = pasteReplyForwardIneligibilityReason(format: format,
+                                                              accessibilityTrusted: true,
+                                                              disabledByEnv: false)
+            XCTAssertNotNil(reason, "\(format) must be ineligible")
+            XCTAssertTrue(reason?.contains(format.rawValue) == true,
+                          "format reason must name the format: \(reason ?? "nil")")
+        }
+    }
+
+    func testPasteReplyIneligibilityReason_noAccessibility_namesAccessibility() {
+        let reason = pasteReplyForwardIneligibilityReason(format: .plain,
+                                                          accessibilityTrusted: false,
+                                                          disabledByEnv: false)
+        XCTAssertNotNil(reason)
+        XCTAssertTrue(reason?.contains("Accessibility") == true,
+                      "accessibility reason must name the missing grant: \(reason ?? "nil")")
+    }
+
+    func testPasteReplyIneligibilityReason_consistentWithShouldUsePasteReplyForward() {
+        // Same never-disagree contract as the #237 compose pair:
+        // shouldUsePasteReplyForward() routes (#218), the reason names why not.
+        let bools = [false, true]
+        for format in [BodyFormat.plain, .markdown, .html] {
+            for ax in bools { for env in bools {
+                let should = shouldUsePasteReplyForward(format: format,
+                                                        accessibilityTrusted: ax,
+                                                        disabledByEnv: env)
+                let reason = pasteReplyForwardIneligibilityReason(format: format,
+                                                                  accessibilityTrusted: ax,
+                                                                  disabledByEnv: env)
+                XCTAssertEqual(should, reason == nil,
+                               "decision/reason mismatch for format=\(format) ax=\(ax) env=\(env)")
+            }}
+        }
+    }
+
+    // MARK: - #229 legacyReplyPathDisclosure (result-string suffix, reply/forward family)
+
+    func testLegacyReplyPathDisclosure_scopesWarningToNewBodyAndCarriesReason() {
+        let suffix = legacyReplyPathDisclosure(reason: "format 'markdown' test-reason")
+        XCTAssertTrue(suffix.contains("legacy path"),
+                      "disclosure must name the path: \(suffix)")
+        XCTAssertTrue(suffix.contains("format 'markdown' test-reason"),
+                      "disclosure must carry the named reason: \(suffix)")
+        XCTAssertTrue(suffix.contains("new body"),
+                      "disclosure must scope the warning to the NEW body — the quoted original's cite blockquote is legitimate (#218): \(suffix)")
+        XCTAssertTrue(suffix.lowercased().contains("quoted"),
+                      "disclosure must warn about quoted rendering on mobile clients: \(suffix)")
+    }
+
+    func testClampedErrorEcho_foldsAllNewlineFlavorsAndControls_andCapsLength() {
+        // #229 verify finding: \n-only folding left \r / CRLF / U+2028 / U+2029 /
+        // control chars able to break the one-bounded-line contract.
+        let messy = "line1\r\nline2\rline3\u{2028}line4\u{2029}line5\tline6\nend"
+        let out = clampedErrorEcho(messy)
+        for bad in ["\n", "\r", "\u{2028}", "\u{2029}", "\t"] {
+            XCTAssertFalse(out.contains(bad), "separator/control must be folded: \(out.debugDescription)")
+        }
+        XCTAssertTrue(out.contains("line1  line2"),
+                      "CRLF folds to two spaces (one per scalar) — content preserved: \(out.debugDescription)")
+        let long = String(repeating: "x", count: 500)
+        XCTAssertEqual(clampedErrorEcho(long).count, 200, "default cap is 200 chars")
+    }
+
+    func testLegacyReplyPathDisclosure_appendedKeepsSuccessPrefixes() {
+        // Legacy reply/forward success strings (ComposeScriptBuilder) must stay
+        // prefix-stable for prefix-parsing callers — append-only, like #237.
+        for prefix in ["Reply sent successfully", "Reply saved as draft", "Email forwarded successfully"] {
+            let result = prefix + legacyReplyPathDisclosure(reason: "r")
+            XCTAssertTrue(result.hasPrefix(prefix), result)
+        }
+    }
 }

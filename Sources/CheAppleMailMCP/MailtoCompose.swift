@@ -181,9 +181,68 @@ func shouldUsePasteReplyForward(
     accessibilityTrusted: Bool,
     disabledByEnv: Bool
 ) -> Bool {
-    if disabledByEnv { return false }
-    guard format == .plain else { return false }
-    return accessibilityTrusted
+    // #229: thin wrapper over the reason-returning variant so the routing
+    // decision and the disclosed reason can never disagree (mirrors #237's
+    // shouldUseMailtoCompose / mailtoIneligibilityReason pair).
+    return pasteReplyForwardIneligibilityReason(
+        format: format,
+        accessibilityTrusted: accessibilityTrusted,
+        disabledByEnv: disabledByEnv
+    ) == nil
+}
+
+// MARK: - #229 legacy-path disclosure (reply/forward family)
+
+/// #229 — why this reply/forward call cannot use the clean native-verb + paste
+/// path (#218). `nil` = eligible. Check order mirrors
+/// `shouldUsePasteReplyForward`'s short-circuit so the two can never disagree
+/// (guarded by the consistency matrix test).
+///
+/// Motivation: the #218 clean path degrades to the legacy injection (which
+/// wraps the NEW body in `<blockquote type="cite">`) for markdown/html, without
+/// Accessibility, or via the env hatch — previously with no result-level
+/// disclosure at all (ineligible calls were fully silent). Same failure shape
+/// as compose's #237; this names the reason for the reply/forward family.
+func pasteReplyForwardIneligibilityReason(
+    format: BodyFormat,
+    accessibilityTrusted: Bool,
+    disabledByEnv: Bool
+) -> String? {
+    if disabledByEnv {
+        return "paste reply/forward disabled via \(replyForwardPasteDisableEnvKey)"
+    }
+    guard format == .plain else {
+        return "format '\(format.rawValue)' — the clipboard paste carries plain text only"
+    }
+    if !accessibilityTrusted {
+        return "Accessibility (AXIsProcessTrusted) not granted — the GUI paste/dispatch "
+            + "keystrokes would silently fail"
+    }
+    return nil
+}
+
+/// #229 — fold every newline flavor (\n, \r, CRLF, U+2028, U+2029, NEL) and
+/// control character to a single space and cap the length, so an echoed GUI
+/// error stays one bounded line inside a result-string disclosure.
+func clampedErrorEcho(_ text: String, limit: Int = 200) -> String {
+    let separators = CharacterSet.newlines.union(.controlCharacters)
+    let folded = text.unicodeScalars
+        .map { separators.contains($0) ? " " : String($0) }
+        .joined()
+    return String(folded.prefix(limit))
+}
+
+/// #229 — suffix appended to legacy-path reply/forward result strings so the
+/// MCP caller learns the NEW body will render as a quote on some mobile
+/// clients. Scoped to the new body on purpose: the quoted ORIGINAL's cite
+/// blockquote is the legitimate structure Mail builds for a reply (#218).
+/// Append-only: the historical `Reply sent successfully` / `Reply saved as
+/// draft` / `Email forwarded successfully` prefixes stay intact.
+func legacyReplyPathDisclosure(reason: String) -> String {
+    return " [legacy path — the new body is wrapped in <blockquote type=\"cite\">, renders as "
+        + "quoted text on some mobile clients (the quoted original's cite block is normal). "
+        + "Reason: \(reason). Clean-path eligibility: plain format + Accessibility granted + "
+        + "\(replyForwardPasteDisableEnvKey) unset (#218)]"
 }
 
 // MARK: - #237 legacy-path disclosure
