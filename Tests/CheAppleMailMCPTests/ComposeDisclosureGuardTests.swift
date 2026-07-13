@@ -66,7 +66,16 @@ final class ComposeDisclosureGuardTests: XCTestCase {
             }
             let window = lines[nameIdx..<min(nameIdx + 3, lines.count)].joined(separator: "\n")
             XCTAssertTrue(window.lowercased().contains("wrapper-free"),
-                "\(tool) tool description must mention the wrapper-free path and its eligibility: \(window.prefix(240))")
+                "\(tool) tool description must mention the wrapper-free path: \(window.prefix(240))")
+            // #237 verify DA-6: pin the ELIGIBILITY LIST itself, not just the
+            // phrase — a rewrite keeping "wrapper-free" but dropping the
+            // conditions would otherwise still pass this guard (the same
+            // silent-drop failure mode #237 is about, one level up).
+            for condition in ["plain", "subject", "from_address",
+                              "Accessibility", "CHE_MAIL_DISABLE_MAILTO_COMPOSE"] {
+                XCTAssertTrue(window.contains(condition),
+                    "\(tool) tool description must state eligibility condition '\(condition)': \(window.prefix(240))")
+            }
         }
     }
 }

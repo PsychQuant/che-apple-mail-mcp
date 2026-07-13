@@ -938,7 +938,13 @@ actor MailController {
                     attachments: attachments, send: true)
             } catch {
                 warnMailtoFallback(error)
-                legacyReason = "mailto GUI path failed: \(error.localizedDescription)"
+                // #237 verify: clamp the echoed error to one bounded line — GUI
+                // error text is system-generated but can be long / multi-line,
+                // and it lands verbatim in the MCP result suffix.
+                let clamped = error.localizedDescription
+                    .replacingOccurrences(of: "\n", with: " ")
+                    .prefix(200)
+                legacyReason = "mailto GUI path failed: \(clamped)"
                 // fall through to legacy injection
             }
         } else {
@@ -1267,7 +1273,13 @@ actor MailController {
                     attachments: attachments, send: false)
             } catch {
                 warnMailtoFallback(error)
-                legacyReason = "mailto GUI path failed: \(error.localizedDescription)"
+                // #237 verify: clamp the echoed error to one bounded line — GUI
+                // error text is system-generated but can be long / multi-line,
+                // and it lands verbatim in the MCP result suffix.
+                let clamped = error.localizedDescription
+                    .replacingOccurrences(of: "\n", with: " ")
+                    .prefix(200)
+                legacyReason = "mailto GUI path failed: \(clamped)"
                 // fall through to legacy injection
             }
         } else {

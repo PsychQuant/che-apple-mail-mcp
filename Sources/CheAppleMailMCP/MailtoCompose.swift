@@ -235,5 +235,6 @@ func legacyPathDisclosure(reason: String) -> String {
     return " [legacy path — body wrapped in <blockquote type=\"cite\">, renders as "
         + "quoted text on some mobile clients. Reason: \(reason). Wrapper-free "
         + "eligibility: plain format + non-empty subject + default sender + "
-        + "Accessibility granted (#175; custom-sender clean path pending #219)]"
+        + "Accessibility granted + \(mailtoComposeDisableEnvKey) unset "
+        + "(#175; custom-sender clean path pending #219)]"
 }
