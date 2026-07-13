@@ -938,12 +938,10 @@ actor MailController {
                     attachments: attachments, send: true)
             } catch {
                 warnMailtoFallback(error)
-                // #237 verify: clamp the echoed error to one bounded line — GUI
-                // error text is system-generated but can be long / multi-line,
-                // and it lands verbatim in the MCP result suffix.
-                let clamped = error.localizedDescription
-                    .replacingOccurrences(of: "\n", with: " ")
-                    .prefix(200)
+                // #237/#229 parity: clamp via the tested helper (all newline
+                // flavors + control chars, 200-char cap) — one clamp for all
+                // four compose/reply/forward fallback sites.
+                let clamped = clampedErrorEcho(error.localizedDescription)
                 legacyReason = "mailto GUI path failed: \(clamped)"
                 // fall through to legacy injection
             }
@@ -1215,10 +1213,10 @@ actor MailController {
                     return try withClipboardPreserved { try runScript(pasteScript) }
                 } catch {
                     warnReplyForwardPasteFallback(error)
-                    // #229: clamp the echoed error to one bounded line.
-                    let clamped = error.localizedDescription
-                        .replacingOccurrences(of: "\n", with: " ")
-                        .prefix(200)
+                    // #229 parity commit: this forward site was missed by the
+                    // f5a4bf6 reply-site switch (different comment text broke
+                    // the replace) — unified onto the tested helper here.
+                    let clamped = clampedErrorEcho(error.localizedDescription)
                     legacyForwardReason = "paste GUI path failed: \(clamped)"
                     // fall through to legacy injection
                 }
@@ -1323,12 +1321,10 @@ actor MailController {
                     attachments: attachments, send: false)
             } catch {
                 warnMailtoFallback(error)
-                // #237 verify: clamp the echoed error to one bounded line — GUI
-                // error text is system-generated but can be long / multi-line,
-                // and it lands verbatim in the MCP result suffix.
-                let clamped = error.localizedDescription
-                    .replacingOccurrences(of: "\n", with: " ")
-                    .prefix(200)
+                // #237/#229 parity: clamp via the tested helper (all newline
+                // flavors + control chars, 200-char cap) — one clamp for all
+                // four compose/reply/forward fallback sites.
+                let clamped = clampedErrorEcho(error.localizedDescription)
                 legacyReason = "mailto GUI path failed: \(clamped)"
                 // fall through to legacy injection
             }
