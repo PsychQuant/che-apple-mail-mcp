@@ -14,5 +14,5 @@
 
 ## 3. 文件
 
-- [x] 3.1 [P] `README.md`：Batch/Export 工具表加 `batch_export_emails_markdown` 行、舊名行標 deprecated；工具計數統一為 49（同時修正既有 47/48 不一致）；驗證：內容審閱 + grep 計數字樣
+- [x] 3.1 [P] `README.md`：Batch/Export 工具表加 `batch_export_emails_markdown` 行、舊名行標 deprecated；工具計數統一為實測 51（原估 49 — verify round 修正；同時修正既有 47/48 不一致）；驗證：內容審閱 + grep 計數字樣
 - [x] 3.2 [P] `CHANGELOG.md` [Unreleased] Added 段：rename + deprecated alias + v3.0 移除 gate + caller 遷移指引（archive-mail SOP 於 distribution sync 改名）；驗證：內容審閱

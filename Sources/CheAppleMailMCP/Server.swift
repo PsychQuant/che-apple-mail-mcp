@@ -729,7 +729,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "export_emails_markdown",
-                description: "DEPRECATED — renamed to batch_export_emails_markdown; this alias will be removed in the next major release (v3.0). "
+                description: "DEPRECATED — renamed to batch_export_emails_markdown; this alias will not be removed before the next major release (v3.0). "
                     + exportEmailsMarkdownDescription,
                 inputSchema: exportEmailsMarkdownInputSchema
             ),
@@ -2498,5 +2498,5 @@ func crossValidateAttachments(
 /// exactly one trailing newline so it stays a single stderr line.
 func exportAliasDeprecationWarning() -> String {
     return "export_emails_markdown is DEPRECATED (renamed in #233) — call "
-        + "batch_export_emails_markdown instead; the old name will be removed in v3.0\n"
+        + "batch_export_emails_markdown instead; the old name will not be removed before v3.0\n"
 }

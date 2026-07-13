@@ -8,7 +8,7 @@
 - 既有 **`export_emails_markdown` 降為 DEPRECATED alias**：
   - description 前綴 `DEPRECATED — renamed to batch_export_emails_markdown; this alias will be removed in the next major release (v3.0).`（其餘 description 內容保留，行為不變）
   - 以舊名呼叫時輸出一行 stderr deprecation warn（觀測性慣例；回傳結果不變）
-- tool 總數 48 → 49（過渡期；README 計數與工具表同步 — 順帶修正 README 既有 47/48 不一致）
+- tool 總數過渡期為 **51**（實測 `defineTools()`；README 原 47/48 宣稱本就不準，一併修正 — 原估 49 為未實測前的低估，verify round 修正此紀錄）
 - CHANGELOG [Unreleased] 記錄 rename + deprecation window + caller 遷移指引
 - **移除 gate（normative）**：舊名移除**不得早於下一個 major（v3.0）**，寫入 batch-operations spec
 
