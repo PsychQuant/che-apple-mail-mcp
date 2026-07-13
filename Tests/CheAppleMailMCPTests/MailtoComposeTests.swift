@@ -425,6 +425,20 @@ final class MailtoComposeTests: XCTestCase {
                       "disclosure must warn about quoted rendering on mobile clients: \(suffix)")
     }
 
+    func testClampedErrorEcho_foldsAllNewlineFlavorsAndControls_andCapsLength() {
+        // #229 verify finding: \n-only folding left \r / CRLF / U+2028 / U+2029 /
+        // control chars able to break the one-bounded-line contract.
+        let messy = "line1\r\nline2\rline3\u{2028}line4\u{2029}line5\tline6\nend"
+        let out = clampedErrorEcho(messy)
+        for bad in ["\n", "\r", "\u{2028}", "\u{2029}", "\t"] {
+            XCTAssertFalse(out.contains(bad), "separator/control must be folded: \(out.debugDescription)")
+        }
+        XCTAssertTrue(out.contains("line1  line2"),
+                      "CRLF folds to two spaces (one per scalar) — content preserved: \(out.debugDescription)")
+        let long = String(repeating: "x", count: 500)
+        XCTAssertEqual(clampedErrorEcho(long).count, 200, "default cap is 200 chars")
+    }
+
     func testLegacyReplyPathDisclosure_appendedKeepsSuccessPrefixes() {
         // Legacy reply/forward success strings (ComposeScriptBuilder) must stay
         // prefix-stable for prefix-parsing callers — append-only, like #237.

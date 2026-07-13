@@ -1128,11 +1128,10 @@ actor MailController {
                 return try withClipboardPreserved { try runScript(pasteScript) }
             } catch {
                 warnReplyForwardPasteFallback(error)
-                // #229: clamp the echoed error to one bounded line (same
-                // discipline as #237 compose — verify finding).
-                let clamped = error.localizedDescription
-                    .replacingOccurrences(of: "\n", with: " ")
-                    .prefix(200)
+                // #229: clamp the echoed error to one bounded line — all
+                // newline flavors + control chars, via the tested helper
+                // (verify-round hardening over the \n-only fold).
+                let clamped = clampedErrorEcho(error.localizedDescription)
                 legacyReplyReason = "paste GUI path failed: \(clamped)"
                 // fall through to legacy injection
             }

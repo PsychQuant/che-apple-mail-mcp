@@ -221,6 +221,17 @@ func pasteReplyForwardIneligibilityReason(
     return nil
 }
 
+/// #229 — fold every newline flavor (\n, \r, CRLF, U+2028, U+2029, NEL) and
+/// control character to a single space and cap the length, so an echoed GUI
+/// error stays one bounded line inside a result-string disclosure.
+func clampedErrorEcho(_ text: String, limit: Int = 200) -> String {
+    let separators = CharacterSet.newlines.union(.controlCharacters)
+    let folded = text.unicodeScalars
+        .map { separators.contains($0) ? " " : String($0) }
+        .joined()
+    return String(folded.prefix(limit))
+}
+
 /// #229 — suffix appended to legacy-path reply/forward result strings so the
 /// MCP caller learns the NEW body will render as a quote on some mobile
 /// clients. Scoped to the new body on purpose: the quoted ORIGINAL's cite

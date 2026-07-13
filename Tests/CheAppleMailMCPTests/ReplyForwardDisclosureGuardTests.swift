@@ -38,6 +38,13 @@ final class ReplyForwardDisclosureGuardTests: XCTestCase {
                 XCTAssertTrue(window.contains(condition),
                     "\(tool) tool description must state clean-path condition/consequence '\(condition)': \(window.prefix(240))")
             }
+            // #229 verify round: pin the conjunction phrasing too, so a rewrite
+            // can't keep the keywords but drop the "all conditions required"
+            // semantics (or the env-unset direction).
+            XCTAssertTrue(window.contains("ALL hold"),
+                "\(tool) description must state the ALL-hold conjunction: \(window.prefix(240))")
+            XCTAssertTrue(window.contains("not set"),
+                "\(tool) description must state the env-unset direction: \(window.prefix(240))")
         }
     }
 
