@@ -3,7 +3,7 @@
 ## 1. 雙註冊與 deprecation 行為（Server.swift）
 
 - [x] 1.1 `Sources/CheAppleMailMCP/Server.swift`：tool list 新增 `batch_export_emails_markdown` entry — 沿用現行 export 完整 description（含 #236 併發契約與 #177 dedup 說明）與完整 inputSchema；驗證：schema 測試斷言兩名的 inputSchema 深度相等
-- [x] 1.2 `Sources/CheAppleMailMCP/Server.swift`：既有 `export_emails_markdown` entry 的 description 改為以 `DEPRECATED — renamed to batch_export_emails_markdown; this alias will be removed in the next major release (v3.0).` 開頭（原內容保留於其後）；驗證：guard test 斷言 deprecated 前綴存在且 canonical entry 不含 DEPRECATED
+- [x] 1.2 `Sources/CheAppleMailMCP/Server.swift`：既有 `export_emails_markdown` entry 的 description 改為以 `DEPRECATED — renamed to batch_export_emails_markdown; this alias will not be removed before the next major release (v3.0).` 開頭（原內容保留於其後）；驗證：guard test 斷言 deprecated 前綴存在且 canonical entry 不含 DEPRECATED
 - [x] 1.3 `Sources/CheAppleMailMCP/Server.swift`：dispatch 改為 `case "export_emails_markdown", "batch_export_emails_markdown":`，並在舊名分支輸出一行 stderr deprecation warn（含 canonical 名；結果內容不變）；驗證：單元測試斷言兩名路由同 handler（藉由 handler 回傳一致），stderr warn 訊息由 pure helper 組字並測試
 
 ## 2. 測試（TDD — 先 RED 後實作）

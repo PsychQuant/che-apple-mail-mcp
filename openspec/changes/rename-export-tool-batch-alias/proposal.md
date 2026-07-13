@@ -6,7 +6,7 @@
 
 - 新增 MCP tool **`batch_export_emails_markdown`** 為 canonical 主名：與 `export_emails_markdown` **同 handler、同 input schema、同 manifest 輸出**（dispatch 雙 case label + tool list 加一 entry，零行為分歧）
 - 既有 **`export_emails_markdown` 降為 DEPRECATED alias**：
-  - description 前綴 `DEPRECATED — renamed to batch_export_emails_markdown; this alias will be removed in the next major release (v3.0).`（其餘 description 內容保留，行為不變）
+  - description 前綴 `DEPRECATED — renamed to batch_export_emails_markdown; this alias will not be removed before the next major release (v3.0).`（其餘 description 內容保留，行為不變）
   - 以舊名呼叫時輸出一行 stderr deprecation warn（觀測性慣例；回傳結果不變）
 - tool 總數過渡期為 **51**（實測 `defineTools()`；README 原 47/48 宣稱本就不準，一併修正 — 原估 49 為未實測前的低估，verify round 修正此紀錄）
 - CHANGELOG [Unreleased] 記錄 rename + deprecation window + caller 遷移指引
