@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**The most comprehensive Apple Mail MCP server** - 48 tools with SQLite-powered millisecond search across 250K+ emails.
+**The most comprehensive Apple Mail MCP server** - 51 tools with SQLite-powered millisecond search across 250K+ emails.
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +15,7 @@
 
 | Feature | Other MCPs | che-apple-mail-mcp |
 |---------|------------|-------------------|
-| Total Tools | ~20 | **47** |
+| Total Tools | ~20 | **51** |
 | Language | Python | **Swift (Native)** |
 | Search Speed | Seconds (AppleScript) | **Milliseconds (SQLite)** |
 | Search Fields | Subject/Sender | **Subject/Sender/Recipient/Date** |
@@ -84,7 +84,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## All 48 Tools
+## All 51 Tools
 
 <details>
 <summary><b>Accounts (2)</b></summary>
@@ -236,6 +236,18 @@ reply_email(
 |------|-------------|
 | `check_for_new_mail` | Check for new mail |
 | `synchronize_account` | Sync IMAP account |
+
+</details>
+
+<details>
+<summary><b>Batch (4)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `get_emails_batch` | Get up to 50 emails in one call (per-item errors) |
+| `list_attachments_batch` | List attachments for up to 50 emails |
+| `batch_export_emails_markdown` | Server-side bulk export to verbatim markdown + attachments (frozen frontmatter manifest; concurrency-serialized per output_dir — [#193](https://github.com/PsychQuant/che-apple-mail-mcp/issues/193) / [#236](https://github.com/PsychQuant/che-apple-mail-mcp/issues/236)) |
+| `export_emails_markdown` | **DEPRECATED** — renamed to `batch_export_emails_markdown` ([#233](https://github.com/PsychQuant/che-apple-mail-mcp/issues/233)); alias removed no earlier than v3.0 |
 
 </details>
 
