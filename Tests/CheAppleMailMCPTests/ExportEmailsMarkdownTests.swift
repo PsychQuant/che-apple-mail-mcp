@@ -97,7 +97,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         try? FileManager.default.removeItem(at: evil)
         addTeardownBlock { try? FileManager.default.removeItem(at: evil) }
 
-        let manifest = ExportEmailsMarkdown.run(
+        let manifest = try ExportEmailsMarkdown.run(
             ids: ["10"], outputDir: out, direction: "received",
             includeAttachments: true, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
@@ -120,7 +120,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         try? FileManager.default.removeItem(at: parentEvil)
         addTeardownBlock { try? FileManager.default.removeItem(at: parentEvil) }
 
-        let manifest = ExportEmailsMarkdown.run(
+        let manifest = try ExportEmailsMarkdown.run(
             ids: ["10"], outputDir: out, direction: "received",
             includeAttachments: false, filenameTemplate: nil,
             filenameOverrides: ["10": "../../evil"], extraFrontmatter: [],
@@ -139,7 +139,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     func testRun_templateCollision_noSilentOverwrite() throws {
         let out = tempDir()
         // Both emails resolve to the same template name → must NOT overwrite.
-        let manifest = ExportEmailsMarkdown.run(
+        let manifest = try ExportEmailsMarkdown.run(
             ids: ["10", "11"], outputDir: out, direction: "received",
             includeAttachments: false, filenameTemplate: "{date}", filenameOverrides: [:],
             extraFrontmatter: [],
@@ -156,7 +156,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     func testRun_attachmentSaveFailure_recordedInManifest() throws {
         let out = tempDir()
         struct Boom: Error {}
-        let manifest = ExportEmailsMarkdown.run(
+        let manifest = try ExportEmailsMarkdown.run(
             ids: ["10"], outputDir: out, direction: "received",
             includeAttachments: true, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
@@ -176,7 +176,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     func testRun_writesMarkdownAndManifest() throws {
         let out = tempDir()
         let emails = ["10": makeEmail(subject: "First"), "11": makeEmail(subject: "Second")]
-        let manifest = ExportEmailsMarkdown.run(
+        let manifest = try ExportEmailsMarkdown.run(
             ids: ["10", "11"], outputDir: out, direction: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
@@ -210,7 +210,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         let out = tempDir()
 
         func exportOnce(_ id: String, body: String, template: String? = nil) throws -> String {
-            let m = ExportEmailsMarkdown.run(
+            let m = try ExportEmailsMarkdown.run(
                 ids: [id], outputDir: out, direction: "received",
                 includeAttachments: false, filenameTemplate: template, filenameOverrides: [:],
                 extraFrontmatter: [],
@@ -249,8 +249,8 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         return try String(contentsOfFile: path, encoding: .utf8)
     }
 
-    private func runOne(_ email: EmailContent, extra: [(String, String)] = []) -> ExportManifest {
-        ExportEmailsMarkdown.run(
+    private func runOne(_ email: EmailContent, extra: [(String, String)] = []) throws -> ExportManifest {
+        try ExportEmailsMarkdown.run(
             ids: ["10"], outputDir: tempDir(), direction: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: extra,
@@ -260,30 +260,30 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     }
 
     func testRun_threadsInReplyToIntoFrontmatter() throws {
-        let md = try readWrittenMd(runOne(makeEmail(inReplyTo: "<parent@example.com>")))
+        let md = try readWrittenMd(try runOne(makeEmail(inReplyTo: "<parent@example.com>")))
         XCTAssertTrue(md.contains("in_reply_to: \"<parent@example.com>\""),
                       "#198: in_reply_to must be threaded from EmailContent, not hard-coded empty:\n\(md)")
     }
 
     func testRun_inReplyToEmptyWhenAbsent() throws {
-        let md = try readWrittenMd(runOne(makeEmail(inReplyTo: "")))
+        let md = try readWrittenMd(try runOne(makeEmail(inReplyTo: "")))
         XCTAssertTrue(md.contains("in_reply_to: \"\""),
                       "absent In-Reply-To → empty (preserves prior behavior)")
     }
 
     func testRun_bodyTypeText_whenTextBodyPresent() throws {
-        let md = try readWrittenMd(runOne(makeEmail(textBody: "plain body", htmlBody: nil)))
+        let md = try readWrittenMd(try runOne(makeEmail(textBody: "plain body", htmlBody: nil)))
         XCTAssertTrue(md.contains("body_type: \"text\""), "#199: text body → body_type text:\n\(md)")
     }
 
     func testRun_bodyTypeHtml_whenHtmlOnly() throws {
-        let md = try readWrittenMd(runOne(makeEmail(textBody: nil, htmlBody: "<p>only html</p>")))
+        let md = try readWrittenMd(try runOne(makeEmail(textBody: nil, htmlBody: "<p>only html</p>")))
         XCTAssertTrue(md.contains("body_type: \"html\""), "#199: html-only body → body_type html:\n\(md)")
     }
 
     func testRun_bodyTypeCoexistsWithCallerExtraFrontmatter() throws {
         // body_type is appended AFTER caller-supplied extraFrontmatter; both appear.
-        let md = try readWrittenMd(runOne(makeEmail(textBody: "x"), extra: [("account", "work")]))
+        let md = try readWrittenMd(try runOne(makeEmail(textBody: "x"), extra: [("account", "work")]))
         XCTAssertTrue(md.contains("account: \"work\""), "caller extra preserved")
         XCTAssertTrue(md.contains("body_type: \"text\""), "body_type added alongside caller extras")
     }
@@ -291,7 +291,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     func testRun_partialFailure_continues() throws {
         let out = tempDir()
         struct Boom: Error {}
-        let manifest = ExportEmailsMarkdown.run(
+        let manifest = try ExportEmailsMarkdown.run(
             ids: ["10", "bad", "11"], outputDir: out, direction: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
@@ -309,7 +309,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     func testRun_collisionSuffix_onDisk() throws {
         let out = tempDir()
         // Two emails, same date + same subject → second gets -1 suffix.
-        let manifest = ExportEmailsMarkdown.run(
+        let manifest = try ExportEmailsMarkdown.run(
             ids: ["10", "11"], outputDir: out, direction: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
@@ -324,7 +324,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
 
     func testRun_includeAttachments_routesByClass() throws {
         let out = tempDir()
-        let manifest = ExportEmailsMarkdown.run(
+        let manifest = try ExportEmailsMarkdown.run(
             ids: ["10"], outputDir: out, direction: "received",
             includeAttachments: true, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
@@ -354,7 +354,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     func testRun_skipMessageIds_skipsAlreadyArchived() throws {
         let out = tempDir()
         // id "10" → already archived (Message-ID in the skip set); id "11" → new.
-        let manifest = ExportEmailsMarkdown.run(
+        let manifest = try ExportEmailsMarkdown.run(
             ids: ["10", "11"], outputDir: out, direction: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
@@ -375,7 +375,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
 
     func testRun_noSkipSet_skippedCountZeroAndAllWritten() throws {
         let out = tempDir()
-        let manifest = ExportEmailsMarkdown.run(
+        let manifest = try ExportEmailsMarkdown.run(
             ids: ["10"], outputDir: out, direction: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
@@ -386,5 +386,151 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         XCTAssertEqual(manifest.items[0].status, "written")
         // written items carry message_id (already present; pinned here for #177)
         XCTAssertEqual(manifest.items[0].messageId, "<10@x>")
+    }
+
+    // MARK: - #236 ExportDirLock (concurrent-run serialization)
+
+    func testExportDirLock_sequentialAcquireReleaseAcquire_ok() throws {
+        let dir = tempDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let first = try ExportDirLock.acquire(outputDir: dir)
+        first.release()
+        let second = try ExportDirLock.acquire(outputDir: dir)
+        second.release()
+    }
+
+    func testExportDirLock_contention_failsFastWithBusy() throws {
+        // flock is per open-file-description — two separate open()s of the same
+        // lockfile conflict even within one process, so contention is testable
+        // in-process (mirrors the cross-process concurrent-export case).
+        let dir = tempDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let holder = try ExportDirLock.acquire(outputDir: dir)
+        defer { holder.release() }
+        XCTAssertThrowsError(try ExportDirLock.acquire(outputDir: dir)) { error in
+            guard case ExportDirLockError.busy(let lockedDir) = error else {
+                XCTFail("expected .busy, got \(error)"); return
+            }
+            XCTAssertTrue(lockedDir.contains(dir.lastPathComponent),
+                          "busy error must name the contended output_dir: \(lockedDir)")
+        }
+    }
+
+    func testRun_whileAnotherExportHoldsLock_failsFast_notSilentOverwrite() throws {
+        let dir = tempDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let holder = try ExportDirLock.acquire(outputDir: dir)
+        defer { holder.release() }
+        XCTAssertThrowsError(
+            try ExportEmailsMarkdown.run(
+                ids: ["1"], outputDir: dir, direction: "received",
+                includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+                extraFrontmatter: [],
+                fetch: { _ in self.makeEmail() },
+                attachmentNamesFor: { _ in [] },
+                attachmentData: { _, _ in Data() })
+        ) { error in
+            guard case ExportDirLockError.busy = error else {
+                XCTFail("run under contention must fail fast with .busy, got \(error)"); return
+            }
+        }
+        // fail-fast means NOTHING was written by the losing run
+        let written = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        XCTAssertFalse(written.contains { $0.hasSuffix(".md") },
+                       "locked-out run must not write any .md: \(written)")
+    }
+
+    func testExportDirLock_symlinkAtLockfilePath_refusedNotFollowed() throws {
+        // #236 verify (security MEDIUM): a co-resident process planting a
+        // symlink at the fixed .export.lock path must not be followed —
+        // O_NOFOLLOW parity with every other open in the export write path
+        // (#200 discipline). Follow-through would allow out-of-tree file
+        // creation and, via a FIFO target, a pre-flock open() hang.
+        let dir = tempDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let target = dir.appendingPathComponent("innocent-target")
+        FileManager.default.createFile(atPath: target.path, contents: Data())
+        try FileManager.default.createSymbolicLink(
+            at: dir.appendingPathComponent(ExportDirLock.lockFileName),
+            withDestinationURL: target)
+        XCTAssertThrowsError(try ExportDirLock.acquire(outputDir: dir)) { error in
+            guard case ExportDirLockError.lockFailed = error else {
+                XCTFail("symlinked lockfile must refuse (ELOOP), got \(error)"); return
+            }
+        }
+    }
+
+    func testExportDirLock_fifoAtLockfilePath_failsFastNotHang() throws {
+        // With O_NONBLOCK, opening a reader-less FIFO for write returns ENXIO
+        // immediately instead of blocking before flock's LOCK_NB is reached —
+        // the fail-fast invariant must hold even against a planted FIFO.
+        let dir = tempDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fifoPath = dir.appendingPathComponent(ExportDirLock.lockFileName).path
+        guard mkfifo(fifoPath, 0o644) == 0 else {
+            throw XCTSkip("mkfifo unavailable in this environment (errno \(errno))")
+        }
+        let start = Date()
+        XCTAssertThrowsError(try ExportDirLock.acquire(outputDir: dir))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2.0,
+                          "FIFO at lockfile path must fail fast, not block")
+    }
+
+    func testExportDirLockError_localizedDescription_isActionable() {
+        // Server.swift renders tool errors via error.localizedDescription — a
+        // bare enum would render as an opaque "(ExportDirLockError error 0)".
+        let msg = ExportDirLockError.busy(dir: "/tmp/x").localizedDescription
+        XCTAssertTrue(msg.contains("/tmp/x"), msg)
+        XCTAssertTrue(msg.contains("retry"), "busy message must tell the caller to retry: \(msg)")
+        XCTAssertTrue(msg.contains("#236"), "message should cite the serialization contract: \(msg)")
+    }
+
+    func testRun_lockfileHygiene_notSeededNotInManifest_andLockReleased() throws {
+        let dir = tempDir()
+        // First run writes one email; lockfile is created as a side effect.
+        let m1 = try ExportEmailsMarkdown.run(
+            ids: ["1"], outputDir: dir, direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { _ in self.makeEmail(messageId: "<a@x>") },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() })
+        XCTAssertEqual(m1.written, 1)
+        XCTAssertFalse(m1.items.contains { $0.jsonObject.description.contains(ExportDirLock.lockFileName) },
+                       "lockfile must never appear as a manifest item")
+        // Second sequential run works (lock released) and the dotfile lockfile
+        // (not .md) must not perturb the (date,slug) collision seeding.
+        let m2 = try ExportEmailsMarkdown.run(
+            ids: ["2"], outputDir: dir, direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { _ in self.makeEmail(subject: "Other", messageId: "<b@x>") },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() })
+        XCTAssertEqual(m2.written, 1)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: dir.appendingPathComponent(ExportDirLock.lockFileName).path),
+            "lockfile persists between runs by design (unlink would race)")
+    }
+
+    func testRun_preExistingLockfile_doesNotPerturbFilenameSeeding() throws {
+        // #236 verify (codex): direct assertion that a pre-existing
+        // .export.lock in output_dir never counts as a used filename — the
+        // exported file must get the BASE name, not a -1 suffix.
+        let dir = tempDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: dir.appendingPathComponent(ExportDirLock.lockFileName).path,
+            contents: Data())
+        let manifest = try ExportEmailsMarkdown.run(
+            ids: ["1"], outputDir: dir, direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { _ in self.makeEmail() },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() })
+        let written = try XCTUnwrap(manifest.items.first?.writtenPath)
+        XCTAssertTrue(written.hasSuffix("/2026-06-13_Topic.md"),
+                      "base name expected — lockfile must not trigger a -N suffix: \(written)")
     }
 }

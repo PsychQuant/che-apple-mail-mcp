@@ -724,7 +724,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "export_emails_markdown",
-                description: "Export a batch of emails to verbatim markdown files server-side (frozen 6-field frontmatter + verbatim body), optionally with attachments, into an allowed-roots-validated output_dir. Returns a per-email manifest. Designed for large archive jobs: one call replaces per-email fetch + client-side transcription.",
+                description: "Export a batch of emails to verbatim markdown files server-side (frozen 6-field frontmatter + verbatim body), optionally with attachments, into an allowed-roots-validated output_dir. Returns a per-email manifest. Designed for large archive jobs: one call replaces per-email fetch + client-side transcription. Concurrency contract (#236): exports to the SAME output_dir are serialized via an advisory lock (.export.lock) — an overlapping call fails fast with a clear error instead of silently overwriting colliding filenames; wait for the other run and retry. Different output_dirs run freely in parallel. The lock serializes same-host runs on a local filesystem only (flock semantics) — two machines exporting to one cloud-synced folder are not coordinated.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1709,7 +1709,7 @@ class CheAppleMailMCPServer {
                         + "treating as empty skip-set (#177)\n").utf8))
                 }
             }
-            let exportManifest = ExportEmailsMarkdown.run(
+            let exportManifest = try ExportEmailsMarkdown.run(
                 ids: exportIds, outputDir: validatedDir, direction: exportDirection,
                 includeAttachments: includeAttachments, filenameTemplate: filenameTemplate,
                 filenameOverrides: filenameOverrides, extraFrontmatter: extraFrontmatter,

@@ -21,6 +21,80 @@ struct ExportManifestItem {
     }
 }
 
+/// #236 — a concurrent `run()` against the same `output_dir` would race the
+/// snapshot-seeded collision guard (both runs derive the same (date,slug)
+/// filename before either writes) and the deterministic `.idd200.tmp` temp
+/// names — silent last-rename-wins overwrites plus cross-run spurious errors.
+enum ExportDirLockError: Error, CustomStringConvertible, LocalizedError {
+    /// Another export run holds the lock on this output_dir.
+    case busy(dir: String)
+    /// The lockfile could not be opened / locked for an unexpected reason.
+    case lockFailed(dir: String, errno: Int32)
+
+    /// Server.swift renders tool errors via `error.localizedDescription` — a
+    /// bare enum would render as an opaque "(ExportDirLockError error 0.)".
+    var errorDescription: String? { description }
+
+    var description: String {
+        switch self {
+        case .busy(let dir):
+            return "another export_emails_markdown run is currently writing to "
+                + "'\(dir)' — concurrent exports to the same output_dir are "
+                + "serialized to prevent silent filename-collision overwrites "
+                + "(#236). Wait for the other run to finish and retry."
+        case .lockFailed(let dir, let e):
+            return "could not acquire the export lock in '\(dir)' "
+                + "(errno \(e) — \(String(cString: strerror(e))))"
+        }
+    }
+}
+
+/// #236 — advisory per-output_dir lock covering an entire `run()`. Makes the
+/// concurrent case equal the sequential case (which #232's cross-call seeding
+/// already handles). `flock` is per open-file-description, so it serializes
+/// both in-process overlapping tool calls AND separate server processes
+/// (Claude Code plugin + Claude Desktop extension installs). Advisory only —
+/// both writers we control are this binary; external writers are outside the
+/// threat model (same assumption as #197/#200). Fail-fast (`LOCK_NB`), never
+/// a blocking wait: an MCP tool call must not hang behind a long export.
+struct ExportDirLock {
+    static let lockFileName = ".export.lock"
+    private let fd: Int32
+
+    static func acquire(outputDir: URL) throws -> ExportDirLock {
+        let path = outputDir.appendingPathComponent(lockFileName).path
+        // #236 verify hardening: O_NOFOLLOW refuses a planted symlink at the
+        // fixed lockfile path (parity with every RaceFreeFileWriter open —
+        // #200 discipline); O_NONBLOCK turns a planted reader-less FIFO into
+        // an immediate ENXIO instead of an open() hang BEFORE flock's LOCK_NB
+        // fail-fast is even reached. O_NONBLOCK is a no-op for regular files.
+        // O_CLOEXEC deliberately omitted: the export/tool path spawns no child
+        // processes (AppleScript runs in-process via NSAppleScript) and the
+        // codebase has no O_CLOEXEC convention — recorded in the #236 verify
+        // report rather than cargo-culted.
+        let fd = open(path, O_WRONLY | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0o644)
+        guard fd >= 0 else {
+            throw ExportDirLockError.lockFailed(dir: outputDir.path, errno: errno)
+        }
+        if flock(fd, LOCK_EX | LOCK_NB) != 0 {
+            let e = errno
+            close(fd)
+            if e == EWOULDBLOCK {
+                throw ExportDirLockError.busy(dir: outputDir.path)
+            }
+            throw ExportDirLockError.lockFailed(dir: outputDir.path, errno: e)
+        }
+        return ExportDirLock(fd: fd)
+    }
+
+    /// The lockfile itself persists between runs by design — unlinking it on
+    /// release would reintroduce a race (a third run could lock a file the
+    /// second run just unlinked). A stale dotfile in output_dir is harmless.
+    func release() {
+        close(fd)
+    }
+}
+
 /// Result of an `export_emails_markdown` run.
 struct ExportManifest {
     let outputDir: String
@@ -209,8 +283,14 @@ enum ExportEmailsMarkdown {
         attachmentData: (String, String) throws -> Data,
         skipMessageIds: Set<String> = [],
         fileManager: FileManager = .default
-    ) -> ExportManifest {
+    ) throws -> ExportManifest {
         try? fileManager.createDirectory(at: outputDir, withIntermediateDirectories: true)
+
+        // #236: serialize whole-run access to this output_dir — the snapshot
+        // seeding below and every write/manifest emit happen under the lock,
+        // so an overlapping run fails fast instead of silently overwriting.
+        let exportLock = try ExportDirLock.acquire(outputDir: outputDir)
+        defer { exportLock.release() }
         // Canonical root every leaf path must stay within (the caller already
         // validated outputDir via AllowedRootsValidator).
         let canonicalRoot = AllowedRootsValidator.canonicalize(outputDir.path).path
