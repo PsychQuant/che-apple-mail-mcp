@@ -1709,7 +1709,7 @@ class CheAppleMailMCPServer {
                         + "treating as empty skip-set (#177)\n").utf8))
                 }
             }
-            let exportManifest = ExportEmailsMarkdown.run(
+            let exportManifest = try ExportEmailsMarkdown.run(
                 ids: exportIds, outputDir: validatedDir, direction: exportDirection,
                 includeAttachments: includeAttachments, filenameTemplate: filenameTemplate,
                 filenameOverrides: filenameOverrides, extraFrontmatter: extraFrontmatter,
