@@ -910,7 +910,7 @@ code:
 ---
 ### Requirement: Server-side markdown export
 
-The system SHALL provide an `export_emails_markdown` MCP tool that, given a list of message ids, fetches each email's full content, renders it to a markdown file with a fixed frontmatter contract, optionally writes its attachments, and returns a per-email manifest — performing the entire email→markdown+attachments transcription server-side so callers do not transcribe email bodies themselves. The tool SHALL be additive: it MUST NOT change the input schema or behaviour of any existing tool, nor `MIMEParser.parseBody` / `ParsedEmailContent`.
+The system SHALL provide a server-side markdown export MCP tool under the canonical name `batch_export_emails_markdown` — with `export_emails_markdown` as a deprecated alias, per the "Batch export tool naming and deprecation alias" requirement below (scenario steps in this requirement that invoke `export_emails_markdown` apply equally under either name) — that, given a list of message ids, fetches each email's full content, renders it to a markdown file with a fixed frontmatter contract, optionally writes its attachments, and returns a per-email manifest — performing the entire email→markdown+attachments transcription server-side so callers do not transcribe email bodies themselves. The tool SHALL be additive: it MUST NOT change the input schema or behaviour of any existing tool, nor `MIMEParser.parseBody` / `ParsedEmailContent`.
 
 The tool input SHALL accept `ids` (array), `mailbox`, `account_name`, `output_dir`, and an optional `opts` object with `include_attachments` (bool), `filename_template` (string), `filenames` (per-id map), and `extra_frontmatter` (object of static key/value pairs appended to every file's frontmatter after the six core fields).
 
@@ -1003,6 +1003,7 @@ Each per-email result object returned by `get_emails_batch` SHALL include a `mes
 - **WHEN** `get_emails_batch` processes an email whose source has no Message-ID header
 - **THEN** that result object's `message_id` field is the empty string (the field is present)
 
+---
 ### Requirement: Markdown export manifest carries Message-ID
 
 Each item in the `export_emails_markdown` manifest SHALL include a `message_id` field carrying the resolved RFC 5322 Message-ID of the exported email (empty string when the source has none, mirroring the existing `in_reply_to` convention). This lets a caller reconcile a Message-ID-keyed archive index from the manifest alone, without re-fetching email content. The field is additive; the markdown/frontmatter/filename output format is unchanged.
@@ -1013,6 +1014,7 @@ Each item in the `export_emails_markdown` manifest SHALL include a `message_id` 
 - **THEN** the corresponding manifest item includes a `message_id` field equal to that email's RFC 5322 Message-ID
 - **AND** the written markdown file's format (frontmatter, filename) is unchanged from before this field was added
 
+---
 ### Requirement: Markdown export Message-ID dedup skip-set
 
 `export_emails_markdown` SHALL accept an optional `skip_message_ids_path` parameter: a filesystem path to a file listing already-archived RFC 5322 Message-IDs, one per line, where blank lines and lines beginning with `#` are ignored. When provided, for each candidate email whose resolved Message-ID is present in that set, the system SHALL **skip** writing the email and instead record it in the manifest as an item with `status: "skipped"` (including its `id` and `message_id`); the manifest summary SHALL include a `skipped` count alongside the existing `written` and `errors` counts. Email content of skipped (or written) emails SHALL NOT enter the tool's textual response — only the manifest summary is returned.
@@ -1042,3 +1044,35 @@ When `skip_message_ids_path` is omitted, behavior SHALL be identical to before t
 
 - **WHEN** `export_emails_markdown` is called without `skip_message_ids_path`
 - **THEN** no email is skipped, the manifest contains no `skipped`-status items, and the result is otherwise identical to the pre-skip-set behavior
+
+---
+### Requirement: Batch export tool naming and deprecation alias
+
+The system SHALL register the server-side markdown export tool under the canonical name `batch_export_emails_markdown`. The pre-existing name `export_emails_markdown` SHALL remain registered as a deprecated alias: both names SHALL dispatch to the same handler, accept the identical input schema, and return the identical manifest — the two registrations MUST NOT diverge in behaviour in any way. Every normative clause of the "Server-side markdown export" requirement SHALL apply equally to calls made under either name.
+
+The deprecated alias's tool description SHALL begin with the literal prefix `DEPRECATED — renamed to batch_export_emails_markdown` and SHALL state the removal gate. A call made under the deprecated name SHALL emit a single-line deprecation warning to stderr naming the canonical replacement; the call's result content SHALL be unaffected.
+
+The deprecated alias SHALL NOT be removed before the next major release (v3.0). Removing the alias SHALL be treated as a breaking change requiring its own change proposal, CHANGELOG entry, and caller-migration note.
+
+#### Scenario: Canonical name dispatches identically
+
+- **WHEN** `batch_export_emails_markdown` is called with any input that is valid for `export_emails_markdown`
+- **THEN** the call SHALL behave exactly as the same call under `export_emails_markdown` — same validation, same files written, same manifest shape — with no deprecation warning emitted
+
+#### Scenario: Deprecated alias still works and warns on stderr
+
+- **WHEN** `export_emails_markdown` is called with a valid input
+- **THEN** the call SHALL succeed with identical behaviour and manifest as under the canonical name
+- **AND** exactly one deprecation warning line naming `batch_export_emails_markdown` SHALL be written to stderr
+- **AND** the returned result SHALL NOT contain the deprecation warning
+
+#### Scenario: Alias description marks deprecation
+
+- **WHEN** the tool list is enumerated
+- **THEN** the `export_emails_markdown` entry's description SHALL begin with `DEPRECATED — renamed to batch_export_emails_markdown`
+- **AND** the `batch_export_emails_markdown` entry SHALL carry the full (non-deprecated) tool description
+
+#### Scenario: Alias survives until the next major release
+
+- **WHEN** any release with major version 2 is built
+- **THEN** both `batch_export_emails_markdown` and `export_emails_markdown` SHALL be present in the tool list
