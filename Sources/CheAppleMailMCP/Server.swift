@@ -723,36 +723,50 @@ class CheAppleMailMCPServer {
                 ])
             ),
             Tool(
+                name: "batch_export_emails_markdown",
+                description: exportEmailsMarkdownDescription,
+                inputSchema: exportEmailsMarkdownInputSchema
+            ),
+            Tool(
                 name: "export_emails_markdown",
-                description: "Export a batch of emails to verbatim markdown files server-side (frozen 6-field frontmatter + verbatim body), optionally with attachments, into an allowed-roots-validated output_dir. Returns a per-email manifest. Designed for large archive jobs: one call replaces per-email fetch + client-side transcription. Concurrency contract (#236): exports to the SAME output_dir are serialized via an advisory lock (.export.lock) — an overlapping call fails fast with a clear error instead of silently overwriting colliding filenames; wait for the other run and retry. Different output_dirs run freely in parallel. The lock serializes same-host runs on a local filesystem only (flock semantics) — two machines exporting to one cloud-synced folder are not coordinated.",
-                inputSchema: .object([
-                    "type": .string("object"),
-                    "properties": .object([
-                        "ids": .object([
-                            "type": .string("array"),
-                            "description": .string("Array of message id strings (SQLite rowIds)"),
-                            "items": .object(["type": .string("string")])
-                        ]),
-                        "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox name; used only to label direction (sent when it looks like a Sent mailbox, else received)")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("Optional mail account (accepted for consistency; the SQLite fast path is account-agnostic)")]),
-                        "output_dir": .object(["type": .string("string"), "description": .string("Directory to write .md files into. Must resolve under the user's home (path traversal and system directories are rejected).")]),
-                        "skip_message_ids_path": .object(["type": .string("string"), "description": .string("Optional dedup escape hatch (#177): path to a file listing already-archived RFC 5322 Message-IDs (one per line; blank lines and `#` comments ignored). Emails whose Message-ID is in the set are skipped (status 'skipped', counted in the manifest's `skipped`), not rewritten — so a re-run only writes new mail. Validated read-only under the same allowed-roots policy as output_dir; missing/unreadable file → no skips.")]),
-                        "opts": .object([
-                            "type": .string("object"),
-                            "description": .string("Optional export options"),
-                            "properties": .object([
-                                "include_attachments": .object(["type": .string("boolean"), "description": .string("Also export each email's attachments (data extensions → output_dir/data/, others → output_dir/attachments/<stem>/)")]),
-                                "filename_template": .object(["type": .string("string"), "description": .string("Override filename with placeholders {date}/{subject}/{sender}/{message_id}")]),
-                                "filenames": .object(["type": .string("object"), "description": .string("Per-id filename override map { id: name }")]),
-                                "extra_frontmatter": .object(["type": .string("object"), "description": .string("Static key/value pairs appended to every file's frontmatter after the six core fields")])
-                            ])
-                        ])
-                    ]),
-                    "required": .array([.string("ids"), .string("output_dir")])
-                ])
+                description: "DEPRECATED — renamed to batch_export_emails_markdown; this alias will not be removed before the next major release (v3.0). "
+                    + exportEmailsMarkdownDescription,
+                inputSchema: exportEmailsMarkdownInputSchema
             ),
         ]
     }
+
+    /// #233 — the canonical batch-export description, shared by the canonical
+    /// name and the deprecated alias so the two registrations can never diverge.
+    static let exportEmailsMarkdownDescription =
+        "Export a batch of emails to verbatim markdown files server-side (frozen 6-field frontmatter + verbatim body), optionally with attachments, into an allowed-roots-validated output_dir. Returns a per-email manifest. Designed for large archive jobs: one call replaces per-email fetch + client-side transcription. Concurrency contract (#236): exports to the SAME output_dir are serialized via an advisory lock (.export.lock) — an overlapping call fails fast with a clear error instead of silently overwriting colliding filenames; wait for the other run and retry. Different output_dirs run freely in parallel. The lock serializes same-host runs on a local filesystem only (flock semantics) — two machines exporting to one cloud-synced folder are not coordinated."
+
+    /// #233 — the shared input schema (see the description note above).
+    static let exportEmailsMarkdownInputSchema: Value = .object([
+        "type": .string("object"),
+        "properties": .object([
+            "ids": .object([
+                "type": .string("array"),
+                "description": .string("Array of message id strings (SQLite rowIds)"),
+                "items": .object(["type": .string("string")])
+            ]),
+            "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox name; used only to label direction (sent when it looks like a Sent mailbox, else received)")]),
+            "account_name": .object(["type": .string("string"), "description": .string("Optional mail account (accepted for consistency; the SQLite fast path is account-agnostic)")]),
+            "output_dir": .object(["type": .string("string"), "description": .string("Directory to write .md files into. Must resolve under the user's home (path traversal and system directories are rejected).")]),
+            "skip_message_ids_path": .object(["type": .string("string"), "description": .string("Optional dedup escape hatch (#177): path to a file listing already-archived RFC 5322 Message-IDs (one per line; blank lines and `#` comments ignored). Emails whose Message-ID is in the set are skipped (status 'skipped', counted in the manifest's `skipped`), not rewritten — so a re-run only writes new mail. Validated read-only under the same allowed-roots policy as output_dir; missing/unreadable file → no skips.")]),
+            "opts": .object([
+                "type": .string("object"),
+                "description": .string("Optional export options"),
+                "properties": .object([
+                    "include_attachments": .object(["type": .string("boolean"), "description": .string("Also export each email's attachments (data extensions → output_dir/data/, others → output_dir/attachments/<stem>/)")]),
+                    "filename_template": .object(["type": .string("string"), "description": .string("Override filename with placeholders {date}/{subject}/{sender}/{message_id}")]),
+                    "filenames": .object(["type": .string("object"), "description": .string("Per-id filename override map { id: name }")]),
+                    "extra_frontmatter": .object(["type": .string("object"), "description": .string("Static key/value pairs appended to every file's frontmatter after the six core fields")])
+                ])
+            ])
+        ]),
+        "required": .array([.string("ids"), .string("output_dir")])
+    ])
 
     // MARK: - Handler Registration
 
@@ -1630,7 +1644,13 @@ class CheAppleMailMCPServer {
             return try await mailController.importMailbox(path: path)
 
         // Batch Tools
-        case "export_emails_markdown":
+        case "export_emails_markdown", "batch_export_emails_markdown":
+            // #233: one dual-name case label — the canonical name and the
+            // deprecated alias can never diverge in behavior. Old-name calls
+            // get a one-line stderr deprecation warn; the result is identical.
+            if name == "export_emails_markdown" {
+                FileHandle.standardError.write(Data(exportAliasDeprecationWarning().utf8))
+            }
             guard let idsArray = arguments["ids"]?.arrayValue else {
                 throw MailError.invalidParameter("ids array is required")
             }
@@ -2471,4 +2491,12 @@ func crossValidateAttachments(
         }
         return stamped
     }
+}
+
+/// #233 — single-line stderr deprecation warning emitted when the batch-export
+/// tool is invoked under its deprecated pre-rename name. Pure (testable);
+/// exactly one trailing newline so it stays a single stderr line.
+func exportAliasDeprecationWarning() -> String {
+    return "export_emails_markdown is DEPRECATED (renamed in #233) — call "
+        + "batch_export_emails_markdown instead; the old name will not be removed before v3.0\n"
 }
