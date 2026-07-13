@@ -1064,6 +1064,29 @@ actor MailController {
         FileHandle.standardError.write(Data(msg.utf8))
     }
 
+    /// #218/#229 — nil iff this reply/forward call should use the clean
+    /// native-verb + paste path; otherwise the named reason for the legacy
+    /// route. Probes Accessibility + the env escape hatch at call time.
+    private func pasteReplyForwardIneligibilityReasonForCall(format: BodyFormat) -> String? {
+        return pasteReplyForwardIneligibilityReason(
+            format: format,
+            accessibilityTrusted: AccessibilityStatus.isTrusted,
+            disabledByEnv: replyForwardPasteDisabledByEnv()
+        )
+    }
+
+    /// #229 — surface (never swallow) that a reply/forward call never even
+    /// attempted the clean paste path. Sibling of `warnReplyForwardPasteFallback`:
+    /// that one fires when the paste path was TRIED and failed; this one fires
+    /// when the call was ineligible from the start (format / no Accessibility /
+    /// env hatch) — previously a fully silent branch.
+    private func warnPasteReplyIneligible(_ reason: String) {
+        let msg = "reply/forward clean-paste path skipped (#229): \(reason); "
+            + "using legacy AppleScript injection — the NEW body will be wrapped in "
+            + "<blockquote type=\"cite\"> (looks quoted on some mobile clients)\n"
+        FileHandle.standardError.write(Data(msg.utf8))
+    }
+
     /// Reply to an email. Optionally add extra CC, attach files, and/or save as draft instead of sending.
     func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]? = nil, saveAsDraft: Bool = false, format: BodyFormat = .plain, sanitizeLinks: Bool = false, accountId: String? = nil) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
@@ -1087,9 +1110,10 @@ actor MailController {
         // (Mail quotes the original). Falls back to the legacy injection path
         // (wrapped new body) for markdown/html, without Accessibility, when
         // disabled via env (CHE_MAIL_DISABLE_PASTE_REPLY), or on any GUI failure.
-        if shouldUsePasteReplyForward(format: format,
-                                      accessibilityTrusted: AccessibilityStatus.isTrusted,
-                                      disabledByEnv: replyForwardPasteDisabledByEnv()) {
+        // #229: the fallback is no longer silent — the named reason goes to
+        // stderr AND onto the returned result string (mirrors #237 compose).
+        var legacyReplyReason = pasteReplyForwardIneligibilityReasonForCall(format: format)
+        if legacyReplyReason == nil {
             do {
                 let pasteScript = buildReplyEmailPasteScript(
                     messageRef: ref,
@@ -1104,8 +1128,16 @@ actor MailController {
                 return try withClipboardPreserved { try runScript(pasteScript) }
             } catch {
                 warnReplyForwardPasteFallback(error)
+                // #229: clamp the echoed error to one bounded line (same
+                // discipline as #237 compose — verify finding).
+                let clamped = error.localizedDescription
+                    .replacingOccurrences(of: "\n", with: " ")
+                    .prefix(200)
+                legacyReplyReason = "paste GUI path failed: \(clamped)"
                 // fall through to legacy injection
             }
+        } else {
+            warnPasteReplyIneligible(legacyReplyReason!)
         }
 
         // Issue #43: pre-fetch unconditionally — plain mode also needs originalPlain
@@ -1151,7 +1183,9 @@ actor MailController {
             originalPlain: originalPlain,
             sanitizeLinks: sanitizeLinks
         )
-        return try runScript(script)
+        let result = try runScript(script)
+        // #229: a reply always injects a new body on the legacy path → always disclose.
+        return result + legacyReplyPathDisclosure(reason: legacyReplyReason ?? "unknown")
     }
 
     /// Forward an email
@@ -1168,17 +1202,29 @@ actor MailController {
         // `set content`/`set html content`. Falls back to legacy injection for
         // markdown/html, without Accessibility, when disabled via env, or on any
         // GUI failure.
-        if let newBody = body,
-           shouldUsePasteReplyForward(format: format,
-                                      accessibilityTrusted: AccessibilityStatus.isTrusted,
-                                      disabledByEnv: replyForwardPasteDisabledByEnv()) {
-            do {
-                let pasteScript = buildForwardEmailPasteScript(
-                    messageRef: ref, to: to, newBody: newBody)
-                return try withClipboardPreserved { try runScript(pasteScript) }
-            } catch {
-                warnReplyForwardPasteFallback(error)
-                // fall through to legacy injection
+        // #229: when a NEW body is present, the fallback is no longer silent —
+        // the named reason goes to stderr AND onto the returned result string.
+        // A forward with NO body never gets a disclosure suffix: the legacy
+        // path injects nothing there and is already wrapper-free.
+        var legacyForwardReason: String? = nil
+        if let newBody = body {
+            legacyForwardReason = pasteReplyForwardIneligibilityReasonForCall(format: format)
+            if legacyForwardReason == nil {
+                do {
+                    let pasteScript = buildForwardEmailPasteScript(
+                        messageRef: ref, to: to, newBody: newBody)
+                    return try withClipboardPreserved { try runScript(pasteScript) }
+                } catch {
+                    warnReplyForwardPasteFallback(error)
+                    // #229: clamp the echoed error to one bounded line.
+                    let clamped = error.localizedDescription
+                        .replacingOccurrences(of: "\n", with: " ")
+                        .prefix(200)
+                    legacyForwardReason = "paste GUI path failed: \(clamped)"
+                    // fall through to legacy injection
+                }
+            } else {
+                warnPasteReplyIneligible(legacyForwardReason!)
             }
         }
 
@@ -1220,7 +1266,12 @@ actor MailController {
             originalPlain: originalPlain,
             sanitizeLinks: sanitizeLinks
         )
-        return try runScript(script)
+        let result = try runScript(script)
+        // #229: disclose only when a new body was injected by the legacy path.
+        if let reason = legacyForwardReason {
+            return result + legacyReplyPathDisclosure(reason: reason)
+        }
+        return result
     }
 
     // MARK: - Draft Operations
