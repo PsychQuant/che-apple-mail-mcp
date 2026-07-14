@@ -808,7 +808,7 @@ class CheAppleMailMCPServer {
                 // The probe reads the file; the SQLite open is a proxy, so phrase as
                 // "should work" rather than asserting availability (#213 verify, DA #7).
                 return "✅ " + FDAStatus.summary(probe)
-                    + "\nThe SQLite fast path (search_emails projection, export_emails_markdown) should now work."
+                    + "\nThe SQLite fast path (search_emails projection, batch_export_emails_markdown) should now work."
             case .denied:
                 return "⚠️ " + FDAStatus.summary(probe) + "\n\n"
                     + FullDiskAccessHelp.guidance(reason: "Full Disk Access is required for the SQLite fast path.")
@@ -1665,7 +1665,7 @@ class CheAppleMailMCPServer {
                 throw MailError.invalidParameter("output_dir is required")
             }
             guard let exportReader = indexReader else {
-                throw MailError.invalidParameter("export_emails_markdown requires the SQLite envelope index, which is unavailable. " + FullDiskAccessHelp.unavailableSuffix())
+                throw MailError.invalidParameter("batch_export_emails_markdown (alias: export_emails_markdown) requires the SQLite envelope index, which is unavailable. " + FullDiskAccessHelp.unavailableSuffix())
             }
             // direction derived from the optional mailbox label (no AppleScript fallback path).
             let exportMailbox = arguments["mailbox"]?.stringValue ?? ""
