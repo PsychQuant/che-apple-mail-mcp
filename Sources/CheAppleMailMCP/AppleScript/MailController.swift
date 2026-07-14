@@ -958,7 +958,21 @@ actor MailController {
             disclosure: { legacyPathDisclosure(reason: $0) },
             warnIneligible: { warnMailtoIneligible($0) },
             warnTriedAndFailed: { warnMailtoFallback($0) },
-            fallbackReason: { "mailto GUI path failed: \(clampedErrorEcho($0.localizedDescription))" })
+            fallbackReason: { "mailto GUI path failed: \(clampedErrorEcho($0.localizedDescription))" },
+            // #242: once the send keystroke has been dispatched the send state
+            // is UNKNOWN — refuse the legacy re-send (duplicate outbound risk)
+            // and tell the caller what to check instead.
+            shouldFallback: { !isPostDispatchError($0) },
+            mapNoFallbackError: {
+                MailError.scriptFailed(
+                    message: "the send keystroke was already dispatched but the GUI step failed "
+                        + "afterwards — the send state is UNKNOWN and the mail may already be on "
+                        + "the wire. NOT retrying via the legacy path (that could send a duplicate). "
+                        + "Check Mail's Sent mailbox / Outbox before re-sending. The compose window "
+                        + "(if still open) was left untouched for inspection. Original error: "
+                        + clampedErrorEcho($0.localizedDescription),
+                    code: -1)
+            })
     }
 
     /// #175/#237 — nil iff this compose call should use the wrapper-free mailto

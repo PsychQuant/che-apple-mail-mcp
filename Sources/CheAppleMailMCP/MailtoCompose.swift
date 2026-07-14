@@ -313,6 +313,23 @@ func legacyPathDisclosure(reason: String) -> String {
 ///   `warnIneligible` fires once; the legacy result is suffixed with
 ///   `disclosure(reason)`.
 /// - `legacyPath` errors always propagate.
+
+/// #242 — true iff `error` carries the POSTDISPATCH sentinel that
+/// `buildMailtoComposeScript` (send:true) attaches to any error thrown at or
+/// after the send-keystroke dispatch. Such errors mean the send state is
+/// UNKNOWN (the mail may already be on the wire) — the caller must NOT fall
+/// back to a legacy re-send.
+func isPostDispatchError(_ error: Error) -> Bool {
+    if case MailError.scriptFailed(let message, _) = error {
+        return message.contains("POSTDISPATCH:")
+    }
+    return false
+}
+
+/// #242 — `shouldFallback` gates the tried-and-failed branch: when it returns
+/// false (a POSTDISPATCH send-stage error), the router rethrows
+/// `mapNoFallbackError(error)` immediately — no fallback warn, no legacy run,
+/// no disclosure. Defaults preserve the pre-#242 behavior for every other site.
 func routeWrapperFreeCompose(
     ineligibilityReason: String?,
     cleanPath: () throws -> String,
@@ -320,13 +337,18 @@ func routeWrapperFreeCompose(
     disclosure: (String) -> String,
     warnIneligible: (String) -> Void,
     warnTriedAndFailed: (Error) -> Void,
-    fallbackReason: (Error) -> String
+    fallbackReason: (Error) -> String,
+    shouldFallback: (Error) -> Bool = { _ in true },
+    mapNoFallbackError: (Error) -> Error = { $0 }
 ) throws -> String {
     var legacyReason = ineligibilityReason
     if legacyReason == nil {
         do {
             return try cleanPath()
         } catch {
+            guard shouldFallback(error) else {
+                throw mapNoFallbackError(error)
+            }
             warnTriedAndFailed(error)
             legacyReason = fallbackReason(error)
             // fall through to legacy injection
