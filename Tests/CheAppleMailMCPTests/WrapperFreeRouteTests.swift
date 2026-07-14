@@ -270,6 +270,14 @@ final class SendStageNoRefallbackTests: XCTestCase {
 /// flag on the success-path tail, cleanup skipped on unknown send state.
 final class ReplyForwardSendStageTests: XCTestCase {
 
+    override func tearDown() async throws {
+        // Deterministic seam reset (verify #254 DA) — a fire-and-forget Task
+        // reset is a detached mutation race on the shared actor whose safety
+        // would rest only on incidental test-class ordering.
+        await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil)
+        try await super.tearDown()
+    }
+
     private func replyScript(saveAsDraft: Bool) -> String {
         buildReplyEmailPasteScript(
             messageRef: "message id 1 of mailbox \"INBOX\"",
@@ -334,7 +342,6 @@ final class ReplyForwardSendStageTests: XCTestCase {
         // End-to-end through the #254 seam: the paste script throws a
         // sentinel-marked error → replyEmail must REFUSE the legacy fallback
         // (runner called exactly once) and surface unknown-send-state.
-        defer { Task { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) } }
         var calls = 0
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in
