@@ -6,7 +6,7 @@ import Foundation
 /// special-mailbox names; with an account selector it returns *that account's*
 /// real (localized / provider) names — resolved by the #174 unified-children
 /// reverse-lookup, generalized here from drafts (`ListDraftsScriptBuilder`)
-/// across drafts/sent/trash/junk (inbox deferred — see `perAccountSpecialMailboxes`).
+/// across drafts/sent/trash/junk/inbox (#249 lifted the inbox deferral).
 ///
 /// `outbox` is deliberately excluded (design D4): it is an app-level transient
 /// send queue with no per-account child like the other unified special mailboxes.
@@ -18,19 +18,21 @@ import Foundation
 /// JSON key in the per-account result; `container` is the app-level unified
 /// mailbox whose per-account children are enumerated.
 ///
-/// Scope (#179 verify): only the four `<X> mailbox` special mailboxes — drafts,
-/// sent, trash, junk — are shipped. They are the **same structural kind** as the
-/// drafts mailbox #174 empirically proved exposes per-account children, so the
-/// reverse-lookup generalizes by analogy. `inbox` is deliberately **deferred**:
-/// it is referenced as `inbox` (not `<X> mailbox`) and its per-account child
-/// semantics are genuinely different + unverified (design D4 / task 4.2's live
-/// multi-account check). Shipping it now would assert unverified behavior; it is
-/// added once 4.2 confirms `every mailbox of inbox` yields per-account children.
+/// Scope: the four `<X> mailbox` special mailboxes (drafts/sent/trash/junk —
+/// #179) plus `inbox` (#249). Inbox was initially deferred because it is
+/// referenced as `inbox` (not `<X> mailbox`) and its per-account child
+/// semantics were unverified; the 2026-07-14 live multi-account check (#249,
+/// the deferral condition #179's spec set) confirmed `every mailbox of inbox`
+/// exposes per-account children on all 7 configured accounts — including a
+/// LOCALIZED real name on an Exchange account (收件匣), proving the
+/// resolution carries real value. Appended last so the n0…n3 positions of
+/// the original four stay stable.
 let perAccountSpecialMailboxes: [(key: String, container: String)] = [
     ("drafts", "drafts mailbox"),
     ("sent", "sent mailbox"),
     ("trash", "trash mailbox"),
     ("junk", "junk mailbox"),
+    ("inbox", "inbox"),
 ]
 
 /// Build the per-account special-mailbox-name AppleScript.
@@ -48,7 +50,7 @@ let perAccountSpecialMailboxes: [(key: String, container: String)] = [
 ///   - accountName: Matched against `name of account` (Mail's account description)
 ///     in the fallback path; NOT necessarily the email (#173/#176).
 /// - Returns: a complete AppleScript returning ONE list:
-///   `{matchedId, matchedName, matchCount, n0…n3}` where `n0…n3` are the matched
+///   `{matchedId, matchedName, matchCount, n0…n4}` where `n0…n4` are the matched
 ///   child's names parallel to `perAccountSpecialMailboxes` (`""` = no such child).
 ///   Both the account-finding loop and each container enumeration are `try`-guarded
 ///   so an account-less child or an absent unified container is non-fatal (design D3).
@@ -135,7 +137,7 @@ enum SpecialMailboxesResolution: Equatable {
 }
 
 /// Parse `buildSpecialMailboxNamesScript`'s result list
-/// `[matchedId, matchedName, matchCount, n0…n3]`.
+/// `[matchedId, matchedName, matchCount, n0…n4]`.
 ///
 /// - `matchedId` empty → `.noMatch` (no such account — distinct from an account
 ///   that merely lacks some special children).

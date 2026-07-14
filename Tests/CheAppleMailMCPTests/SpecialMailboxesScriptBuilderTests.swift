@@ -31,14 +31,13 @@ final class SpecialMailboxesScriptBuilderTests: XCTestCase {
                        "account_name must not leak into the UUID-mode script")
     }
 
-    /// D4: outbox excluded (transient send queue); inbox deferred (unverified
-    /// per-account semantics, #179 verify) — neither container is enumerated.
-    func testOutboxAndInboxExcludedFromPerAccountResolution() {
+    /// D4: outbox excluded (transient send queue, no per-account child).
+    /// Inbox WAS deferred here until the #249 live check confirmed per-account
+    /// children — it is now resolved (see the #249 extension below).
+    func testOutboxExcludedFromPerAccountResolution() {
         let script = buildSpecialMailboxNamesScript(accountId: "UUID-A", accountName: "Google")
         XCTAssertFalse(script.contains("outbox"),
                        "outbox must NOT be resolved per-account (#179 D4); got:\n\(script)")
-        XCTAssertFalse(script.contains("every mailbox of inbox"),
-                       "inbox per-account resolution is deferred pending the live D4 check; got:\n\(script)")
     }
 
     // MARK: - Builder: name mode (legacy fallback)
@@ -299,5 +298,44 @@ final class SpecialMailboxesScriptBuilderTests: XCTestCase {
         let result = try await MailController.shared.runScriptAsList(#"{"a", "", "b", ""}"#)
         XCTAssertEqual(result, ["a", "", "b", ""],
                        "runScriptAsList must preserve empty-string slots so the #179 fixed tuple never shifts left")
+    }
+}
+
+// MARK: - #249 per-account inbox (deferral lifted by the live check)
+
+extension SpecialMailboxesScriptBuilderTests {
+
+    func testPerAccountList_includesInbox_lastPosition() {
+        // #249: the 2026-07-14 live check confirmed `every mailbox of inbox`
+        // exposes per-account children on all 7 accounts (NTU Exchange even
+        // localizes: 收件匣) — the spec's own deferral condition is met.
+        // Appended LAST so n0…n3 positions (drafts/sent/trash/junk) are stable.
+        XCTAssertEqual(perAccountSpecialMailboxes.map(\.key),
+                       ["drafts", "sent", "trash", "junk", "inbox"])
+        XCTAssertEqual(perAccountSpecialMailboxes.last?.container, "inbox",
+                       "the unified inbox is referenced as `inbox`, not `inbox mailbox`")
+    }
+
+    func testScript_enumeratesInboxChildren() {
+        let script = buildSpecialMailboxNamesScript(accountId: "UUID-X", accountName: "")
+        XCTAssertTrue(script.contains("every mailbox of inbox"),
+                      "per-account inbox resolution must enumerate the unified inbox's children")
+    }
+
+    func testResolve_mapsFifthNameToInboxKey() {
+        let raw = ["UUID-X", "Google", "1", "草稿", "寄件備份", "垃圾桶", "垃圾郵件", "收件匣"]
+        guard case .resolved(let obj) = resolveSpecialMailboxesResult(raw) else {
+            return XCTFail("expected .resolved")
+        }
+        XCTAssertEqual(obj["inbox"], "收件匣")
+        XCTAssertEqual(obj["drafts"], "草稿")
+    }
+
+    func testResolve_absentInboxChildOmitted() {
+        let raw = ["UUID-X", "Google", "1", "草稿", "寄件備份", "垃圾桶", "垃圾郵件", ""]
+        guard case .resolved(let obj) = resolveSpecialMailboxesResult(raw) else {
+            return XCTFail("expected .resolved")
+        }
+        XCTAssertNil(obj["inbox"], "empty child name = omitted key (D3)")
     }
 }
