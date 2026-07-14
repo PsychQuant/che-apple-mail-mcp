@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**最完整的 Apple Mail MCP 伺服器** - 47 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
+**最完整的 Apple Mail MCP 伺服器** - 51 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +15,7 @@
 
 | 功能 | 其他 MCP | che-apple-mail-mcp |
 |------|----------|-------------------|
-| 工具總數 | ~20 | **47** |
+| 工具總數 | ~20 | **51** |
 | 開發語言 | Python | **Swift (原生)** |
 | 搜尋速度 | 秒級 (AppleScript) | **毫秒級 (SQLite)** |
 | 搜尋欄位 | 主旨/寄件人 | **主旨/寄件人/收件人/日期** |
@@ -52,7 +52,7 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 
 ---
 
-## 全部 47 個工具
+## 全部 51 個工具
 
 <details>
 <summary><b>帳戶 (2)</b></summary>
@@ -192,6 +192,18 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 </details>
 
 <details>
+<summary><b>批次 (4)</b></summary>
+
+| 工具 | 說明 |
+|------|------|
+| `get_emails_batch` | 一次呼叫取得最多 50 封郵件（逐項錯誤回報） |
+| `list_attachments_batch` | 一次列出最多 50 封郵件的附件 |
+| `batch_export_emails_markdown` | 伺服器端批次匯出逐字 markdown + 附件（凍結 frontmatter、manifest；同 output_dir 併發序列化 — [#193](https://github.com/PsychQuant/che-apple-mail-mcp/issues/193) / [#236](https://github.com/PsychQuant/che-apple-mail-mcp/issues/236)） |
+| `export_emails_markdown` | **已棄用** — 改名為 `batch_export_emails_markdown`（[#233](https://github.com/PsychQuant/che-apple-mail-mcp/issues/233)）；alias 不早於 v3.0 移除 |
+
+</details>
+
+<details>
 <summary><b>工具程式 (4)</b></summary>
 
 | 工具 | 說明 |
@@ -200,6 +212,16 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 | `extract_address` | 從完整地址擷取郵件地址 |
 | `get_mail_app_info` | 取得 Mail.app 資訊 |
 | `import_mailbox` | 從檔案匯入信箱 |
+
+</details>
+
+<details>
+<summary><b>診斷 (2)</b></summary>
+
+| 工具 | 說明 |
+|------|------|
+| `check_fda` | 檢查「完整磁碟取用權限」狀態（SQLite 快速路徑可用性） |
+| `check_accessibility` | 檢查「輔助使用」權限（wrapper-free 撰寫／回覆 GUI 路徑） |
 
 </details>
 

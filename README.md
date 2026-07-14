@@ -263,6 +263,16 @@ reply_email(
 
 </details>
 
+<details>
+<summary><b>Diagnostics (2)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `check_fda` | Check Full Disk Access status (SQLite fast-path availability) |
+| `check_accessibility` | Check Accessibility permission (wrapper-free compose/reply GUI paths) |
+
+</details>
+
 ### Response shape: `search_emails` / `list_emails`
 
 Both tools return an **envelope object** `{ results, returned, limit, truncated }` — **not** a bare array (changed in [v2.14.0](CHANGELOG.md), [#204](https://github.com/PsychQuant/che-apple-mail-mcp/issues/204)). Read the matches from `.results`:

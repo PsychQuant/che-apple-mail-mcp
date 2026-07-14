@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Doc/manifest tool-count census — every documented count now equals `defineTools()` (51), pinned by a guard test** ([#248](https://github.com/PsychQuant/che-apple-mail-mcp/issues/248)). Counts had drifted across six locations (server.json 47, mcpb/manifest.json 48×2, README_zh-TW.md 47×3, README.md section sub-counts summing 49) because each tool addition updated only some of them; `check_fda` / `check_accessibility` (#213) had never been tabled at all, and README_zh-TW.md was missing the entire Batch section (#233-era). All six locations now read 51; both READMEs gain a Diagnostics section (and zh the Batch section); two internal diagnostic strings referencing the pre-#233 tool name now name the canonical `batch_export_emails_markdown`. A new `ToolCountCensusGuardTests` (8 tests) asserts every count claim AND the exact tool-name set of both README tables against `defineTools()`, so a future tool addition fails the suite until the docs are synced.
+
 ## [2.18.0] - 2026-07-14
 
 ### Added
