@@ -260,8 +260,9 @@ final class SendStageNoRefallbackTests: XCTestCase {
         XCTAssertTrue(source.contains("shouldFallback: { !isPostDispatchError($0) }"),
                       "composeEmail must refuse legacy fallback for post-dispatch send errors (#242)")
         XCTAssertEqual(
-            source.components(separatedBy: "isPostDispatchError").count - 1, 3,
-            "the three send-capable sites (composeEmail, replyEmail, forwardEmail) consult the sentinel (#254)")
+            source.components(separatedBy: "isPostDispatchError").count - 1, 4,
+            "the three send-capable router sites (composeEmail, replyEmail, forwardEmail) "
+            + "plus the #239 strict compose branch consult the sentinel")
     }
 }
 
