@@ -10,7 +10,7 @@ import MailSQLite
 /// message_id: "<...>"
 /// thread_key: "bare subject"
 /// in_reply_to: "<...>"        (empty string when none)
-/// date: 2026-06-13T08:01:14Z  (ISO 8601 UTC)
+/// date: 2026-06-13T16:01:14+08:00  (ISO 8601, original Date-header offset; UTC renders Z)
 /// sender: bare@example.com
 /// direction: received          (received | sent)
 /// ---
@@ -120,8 +120,15 @@ enum EmailMarkdownRenderer {
     /// UTC; an unparseable date is returned unchanged (never crashes / never
     /// drops data).
     static func rfc822ToISO8601(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return trimmed }
+        let original = raw.trimmingCharacters(in: .whitespaces)
+        guard !original.isEmpty else { return original }
+
+        // RFC 2822 obsolete trailing comment — `+0800 (CST)` / `+0000 (UTC)`,
+        // 3.2% of a live corpus (#244 verify) — defeats every parse format
+        // below AND the end-anchored offset regex. Strip it for parsing; the
+        // unparseable passthrough still returns the untouched original.
+        let trimmed = original.replacingOccurrences(
+            of: #"\s*\([^()]*\)\s*$"#, with: "", options: .regularExpression)
 
         let formats = [
             "EEE, d MMM yyyy HH:mm:ss Z",
@@ -148,7 +155,7 @@ enum EmailMarkdownRenderer {
                 return out.string(from: date)
             }
         }
-        return trimmed
+        return original
     }
 
     /// Extract the numeric zone token (`+0800` / `-0530`) from an RFC 2822

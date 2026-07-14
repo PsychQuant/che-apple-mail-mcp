@@ -184,6 +184,17 @@ enum ExportEmailsMarkdown {
     /// template, and override branches so two emails can never silently
     /// overwrite each other (the per-`(date,slug)` counter only covers the
     /// default branch).
+    /// Derive the default filename's `YYYY-MM-DD` part from the helper's ISO
+    /// output. A passthrough (unparseable Date header) yields `unknown-date`
+    /// rather than a fragment of the raw header ("13" from "Mon, 13 Jul …" —
+    /// #244 verify): the prefix must be a complete calendar date or nothing.
+    static func filenameDatePart(fromISO iso: String) -> String {
+        let prefix = String(iso.prefix(10))
+        let isCalendarDate = prefix.range(
+            of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil
+        return isCalendarDate ? prefix : "unknown-date"
+    }
+
     static func uniquify(_ filename: String, used: inout Set<String>) -> String {
         if !used.contains(filename) { used.insert(filename); return filename }
         let base = filename.hasSuffix(".md") ? String(filename.dropLast(3)) : filename
@@ -359,10 +370,7 @@ enum ExportEmailsMarkdown {
 
             let threadKey = EmailMarkdownRenderer.stripReplyPrefixes(content.subject)
             let iso = EmailMarkdownRenderer.rfc822ToISO8601(content.date)
-            // Date may be unparseable (rfc822ToISO8601 passes it through), so
-            // keep only digits/dashes — never let a raw header reach a path.
-            let rawDate = String(iso.prefix(10)).filter { $0.isNumber || $0 == "-" }
-            let localDate = rawDate.isEmpty ? "unknown-date" : rawDate
+            let localDate = Self.filenameDatePart(fromISO: iso)
             let bareSender = EmailMarkdownRenderer.bareEmail(content.sender)
 
             // Resolve filename: per-id override > template > default(+collision).

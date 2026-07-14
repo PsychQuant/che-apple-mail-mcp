@@ -89,6 +89,22 @@ final class EmailMarkdownRendererTests: XCTestCase {
             "2026-06-13T16:01:14Z")
     }
 
+    func testRfc822ToISO8601_trailingCommentStripped_offsetStillPreserved() {
+        // #244 verify (DA corpus scan: 3.2% of live mail) — RFC 2822 obsolete
+        // trailing comments (Outlook/Exchange `(CST)`, Gmail `(UTC)`) must not
+        // defeat parsing or offset extraction.
+        XCTAssertEqual(
+            EmailMarkdownRenderer.rfc822ToISO8601("Mon, 13 Jul 2026 16:49:57 +0800 (CST)"),
+            "2026-07-13T16:49:57+08:00", "trailing comment must be ignored, offset preserved")
+        XCTAssertEqual(
+            EmailMarkdownRenderer.rfc822ToISO8601("Sun, 3 May 2026 01:09:32 +0000 (UTC)"),
+            "2026-05-03T01:09:32Z", "Gmail-style +0000 (UTC) renders the historical Z")
+        // A comment on an otherwise-unparseable date: passthrough returns the
+        // ORIGINAL string (comment included) — never drop data.
+        XCTAssertEqual(
+            EmailMarkdownRenderer.rfc822ToISO8601("garbage (CST)"), "garbage (CST)")
+    }
+
     func testRfc822ToISO8601_unparseablePassesThrough() {
         // Unparseable → passthrough (never drop data)
         XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("not a date"), "not a date")
@@ -165,6 +181,18 @@ final class EmailMarkdownRendererTests: XCTestCase {
             "export filename/manifest date must come from the shared helper (#244)")
         XCTAssertFalse(source.contains("rfc822ToISO8601UTC"),
                        "no call site may keep the removed UTC-pinned helper name")
+    }
+
+    func testFilenameDatePart_completeCalendarDateOrUnknown() {
+        // #244 verify — a passthrough raw header must never leak a fragment
+        // ("13" from "Mon, 13 Jul …") into the filename.
+        XCTAssertEqual(ExportEmailsMarkdown.filenameDatePart(fromISO: "2026-07-13T16:49:57+08:00"),
+                       "2026-07-13")
+        XCTAssertEqual(ExportEmailsMarkdown.filenameDatePart(fromISO: "2026-05-03T01:09:32Z"),
+                       "2026-05-03")
+        XCTAssertEqual(ExportEmailsMarkdown.filenameDatePart(fromISO: "Mon, 13 Jul 2026 16:49:57 +0800 (CST)"),
+                       "unknown-date")
+        XCTAssertEqual(ExportEmailsMarkdown.filenameDatePart(fromISO: ""), "unknown-date")
     }
 
     func testSingleLine_flattensControlChars() {
