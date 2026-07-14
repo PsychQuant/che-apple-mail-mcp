@@ -234,25 +234,54 @@ func buildMailtoComposeScript(
     }
 
     // 3. Final re-raise + no-lingering-panel check + dispatch.
+    // #242: for send:true the dispatch keystroke is wrapped in its own
+    // POSTDISPATCH sentinel — once ⇧⌘D has been attempted, the send state is
+    // UNKNOWN (the mail may already be on the wire), so the Swift layer must
+    // not fall back to a legacy re-send (duplicate outbound). Pre-dispatch
+    // errors (window lost, lingering sheet) stay unmarked → safe fallback.
+    // ⌘S (draft save) keeps the plain fallback: a duplicated draft is visible
+    // and harmless, unlike a duplicated send.
+    let dispatchBlock: String
+    if send {
+        dispatchBlock = """
+                try
+                    \(dispatchKey)
+                on error _dErr
+                    error "POSTDISPATCH: " & _dErr
+                end try
+        """
+    } else {
+        dispatchBlock = "            \(dispatchKey)"
+    }
+    // #242: the on-error cleanup must NOT close the compose window when the
+    // send state is unknown — that window is the user's only evidence. Only
+    // send:true can produce sentinel-marked errors, so send:false keeps the
+    // unconditional (pre-#242, byte-identical) cleanup.
+    let cleanupBody = """
+            tell application "Mail"
+                repeat with _k from 1 to (count of _newIds)
+                    set _nid to item _k of _newIds
+                    try
+                        set _cw to (first window whose id is _nid)
+                        if (name of _cw) is "\(subjEsc)" then close _cw saving no
+                    end try
+                end repeat
+            end tell
+    """
+    let cleanupBlock = send
+        ? "    if _mErr does not start with \"POSTDISPATCH:\" then\n\(cleanupBody)\n    end if"
+        : cleanupBody
     s += """
 
         tell application "System Events"
             tell process "Mail"
                 set frontmost to true
     \(verifyNoSheet)
-                \(dispatchKey)
+    \(dispatchBlock)
             end tell
         end tell
     on error _mErr
-        tell application "Mail"
-            repeat with _k from 1 to (count of _newIds)
-                set _nid to item _k of _newIds
-                try
-                    set _cw to (first window whose id is _nid)
-                    if (name of _cw) is "\(subjEsc)" then close _cw saving no
-                end try
-            end repeat
-        end tell
+    \(cleanupBlock)
         error _mErr
     end try
     delay \(stepDelay)
