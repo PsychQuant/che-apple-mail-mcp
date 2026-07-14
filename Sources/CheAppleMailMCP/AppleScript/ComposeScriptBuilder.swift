@@ -168,6 +168,13 @@ func buildMailtoComposeScript(
                 if (count of sheets of _w) is not 0 then error "a sheet/panel is still open on the compose window"
     """
 
+    // #242 verify hardening (Codex HIGH + DA): `_dispatched` guards the tail —
+    // the post-dispatch `delay` runs ONLY on the success path (mail definitely
+    // sent), so an error there must be sentinel-marked too, not just keystroke
+    // errors. Flag initialized BEFORE the outer try so the handler can always
+    // reference it.
+    let flagInit = send ? "set _dispatched to false\n    " : ""
+
     // 1. Capture Mail window ids BEFORE the mailto, hand it off, then compute the
     // NEW window id(s). On-error cleanup closes ONLY a newly-appeared window whose
     // name matches our subject — never a pre-existing same-titled draft the user
@@ -190,7 +197,7 @@ func buildMailtoComposeScript(
             if _beforeIds does not contain _thisId then set end of _newIds to _thisId
         end repeat
     end tell
-    try
+    \(flagInit)try
         tell application "System Events"
             tell process "Mail"
                 set frontmost to true
@@ -249,6 +256,7 @@ func buildMailtoComposeScript(
                 on error _dErr
                     error "POSTDISPATCH: " & _dErr
                 end try
+                set _dispatched to true
         """
     } else {
         dispatchBlock = "            \(dispatchKey)"
@@ -256,7 +264,9 @@ func buildMailtoComposeScript(
     // #242: the on-error cleanup must NOT close the compose window when the
     // send state is unknown — that window is the user's only evidence. Only
     // send:true can produce sentinel-marked errors, so send:false keeps the
-    // unconditional (pre-#242, byte-identical) cleanup.
+    // unconditional cleanup (AppleScript-equivalent to the pre-#242 script;
+    // the cleanupBody extraction shifts leading whitespace, which AppleScript
+    // ignores — verify #242, regression lens).
     let cleanupBody = """
             tell application "Mail"
                 repeat with _k from 1 to (count of _newIds)
@@ -268,9 +278,25 @@ func buildMailtoComposeScript(
                 end repeat
             end tell
     """
-    let cleanupBlock = send
-        ? "    if _mErr does not start with \"POSTDISPATCH:\" then\n\(cleanupBody)\n    end if"
-        : cleanupBody
+    // send:true handler: three branches, all rethrow — sentinel-marked errors
+    // (keystroke) pass through untouched; unmarked errors with the flag set
+    // (tail) get marked here; genuine pre-dispatch errors clean up + rethrow.
+    let handlerBlock = send
+        ? """
+            if _mErr starts with "POSTDISPATCH:" then
+                error _mErr
+            else if _dispatched then
+                error "POSTDISPATCH: " & _mErr
+            else
+        \(cleanupBody)
+                error _mErr
+            end if
+        """
+        : "\(cleanupBody)\n        error _mErr"
+    // send:true keeps the settle delay INSIDE the outer try (flag-guarded);
+    // send:false keeps it after end try, as before.
+    let preHandlerTail = send ? "\n        delay \(stepDelay)" : ""
+    let postTryTail = send ? "" : "\n    delay \(stepDelay)"
     s += """
 
         tell application "System Events"
@@ -279,12 +305,10 @@ func buildMailtoComposeScript(
     \(verifyNoSheet)
     \(dispatchBlock)
             end tell
-        end tell
+        end tell\(preHandlerTail)
     on error _mErr
-    \(cleanupBlock)
-        error _mErr
-    end try
-    delay \(stepDelay)
+    \(handlerBlock)
+    end try\(postTryTail)
     return "\(dispatchLabel)"
     """
     return s

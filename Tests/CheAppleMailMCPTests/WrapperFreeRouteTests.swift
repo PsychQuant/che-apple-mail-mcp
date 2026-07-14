@@ -139,9 +139,18 @@ final class SendStageNoRefallbackTests: XCTestCase {
     func testMailtoScript_sendTrue_cleanupSkipsCloseOnPostDispatch() {
         let script = buildMailtoComposeScript(
             url: "mailto:a@b.c?subject=s", subject: "s", attachments: [], send: true)
-        XCTAssertTrue(script.contains("does not start with \"POSTDISPATCH:\""),
-                      "on-error cleanup must NOT close the compose window when send state is unknown"
-                      + " — the window is the user's only evidence")
+        // Three-branch handler: sentinel-marked rethrow / flag-marked rethrow /
+        // genuine pre-dispatch cleanup. The close-cleanup must sit in the ELSE
+        // branch only — never reachable for a marked or flag-set error.
+        XCTAssertTrue(script.contains("if _mErr starts with \"POSTDISPATCH:\" then"),
+                      "on-error handler must branch on the sentinel before any cleanup")
+        guard let elseBranch = script.range(of: "else if _dispatched then"),
+              let cleanup = script.range(of: "close _cw saving no") else {
+            return XCTFail("flag branch and cleanup must both be present")
+        }
+        XCTAssertLessThan(elseBranch.lowerBound, cleanup.lowerBound,
+                          "cleanup (window close) must come after both rethrow branches"
+                          + " — the window is the user's only evidence on unknown send state")
     }
 
     func testMailtoScript_sendFalse_noSentinel() {
@@ -151,6 +160,32 @@ final class SendStageNoRefallbackTests: XCTestCase {
             url: "mailto:a@b.c?subject=s", subject: "s", attachments: [], send: false)
         XCTAssertFalse(script.contains("POSTDISPATCH"),
                        "draft save path must not carry the send sentinel")
+        XCTAssertFalse(script.contains("_dispatched"),
+                       "draft save path must not carry the dispatch flag either")
+    }
+
+    func testMailtoScript_sendTrue_tailProtectedByDispatchedFlag() {
+        // #242 verify REQUIRED hardening (Codex HIGH + DA): the post-dispatch
+        // tail (`delay`) runs ONLY on the success path — the mail is DEFINITELY
+        // sent — so an error there must be sentinel-marked, never an unmarked
+        // error that re-enters the legacy fallback (guaranteed duplicate).
+        let script = buildMailtoComposeScript(
+            url: "mailto:a@b.c?subject=s", subject: "s", attachments: [], send: true)
+        XCTAssertTrue(script.contains("set _dispatched to false"),
+                      "flag must be initialized before the GUI try block")
+        let keystroke = script.range(of: "keystroke \"d\" using {command down, shift down}")
+        let flagSet = script.range(of: "set _dispatched to true")
+        let tailDelay = script.range(of: "delay", range: (flagSet?.upperBound ?? script.startIndex)..<script.endIndex)
+        let outerHandler = script.range(of: "on error _mErr")
+        guard let k = keystroke, let f = flagSet, let d = tailDelay, let h = outerHandler else {
+            return XCTFail("keystroke / flag-set / tail delay / outer handler must all be present")
+        }
+        XCTAssertLessThan(k.lowerBound, f.lowerBound, "flag set after the dispatch keystroke")
+        XCTAssertLessThan(f.lowerBound, d.lowerBound, "tail delay after the flag set")
+        XCTAssertLessThan(d.lowerBound, h.lowerBound,
+                          "tail delay must sit INSIDE the outer try (before its handler)")
+        XCTAssertTrue(script.contains("else if _dispatched then"),
+                      "outer handler must sentinel-mark tail errors via the flag")
     }
 
     // MARK: Swift-side sentinel detection
@@ -161,6 +196,12 @@ final class SendStageNoRefallbackTests: XCTestCase {
         let pre = MailError.scriptFailed(message: "a sheet/panel is still open on the compose window", code: -1)
         XCTAssertFalse(isPostDispatchError(pre))
         XCTAssertFalse(isPostDispatchError(MailError.scriptCreationFailed))
+        // #242 verify hardening: prefix-only, symmetric with the AppleScript
+        // `does not start with` check — a mid-string token (user-controlled
+        // content echoed into a pre-dispatch error) must NOT classify.
+        let midString = MailError.scriptFailed(message: "file 'POSTDISPATCH: evil.pdf' not found", code: -1)
+        XCTAssertFalse(isPostDispatchError(midString),
+                       "sentinel must match as a PREFIX only")
     }
 
     // MARK: router no-fallback branch

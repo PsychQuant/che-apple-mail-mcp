@@ -321,7 +321,10 @@ func legacyPathDisclosure(reason: String) -> String {
 /// back to a legacy re-send.
 func isPostDispatchError(_ error: Error) -> Bool {
     if case MailError.scriptFailed(let message, _) = error {
-        return message.contains("POSTDISPATCH:")
+        // Prefix-only, symmetric with the AppleScript `does not start with`
+        // cleanup check — a mid-string token (user-controlled content echoed
+        // into a pre-dispatch error) must not classify (#242 verify).
+        return message.hasPrefix("POSTDISPATCH:")
     }
     return false
 }
