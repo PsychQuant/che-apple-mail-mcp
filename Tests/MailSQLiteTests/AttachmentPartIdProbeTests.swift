@@ -153,3 +153,49 @@ final class AttachmentPartIdProbeTests: XCTestCase {
         }
     }
 }
+
+// MARK: #183 verify REQUIRED — hidden-file / symlink hardening
+
+extension AttachmentPartIdProbeTests {
+
+    func testPartIdProbe_ignoresDSStore_stillFindsTheAttachment() throws {
+        // Finder creates .DS_Store the moment a user browses the Attachments
+        // dir — the probe must filter hidden files, not bail on count != 1.
+        let mailboxURL = try install(placeholder: true, externalPartId: "2")
+        let partDir = tempRoot.appendingPathComponent(
+            "Library/Mail/V10/\(accountUUID)/INBOX.mbox/\(storeUUID)/Data/2/6/2/Attachments/\(rowId)/2")
+        try Data("junk".utf8).write(to: partDir.appendingPathComponent(".DS_Store"))
+        let data = try EmlxParser.attachmentData(
+            rowId: rowId, mailboxURL: mailboxURL,
+            attachmentName: mimeName, partId: "2")
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "PDFBYTES-ground-truth")
+    }
+
+    func testPartIdProbe_lonelyDotfile_isNotAnAttachment() throws {
+        // A part dir whose ONLY entry is hidden metadata must not be treated
+        // as the attachment (wrong-bytes tail of the verify finding).
+        let mailboxURL = try install(placeholder: true, externalPartId: nil)
+        let partDir = tempRoot.appendingPathComponent(
+            "Library/Mail/V10/\(accountUUID)/INBOX.mbox/\(storeUUID)/Data/2/6/2/Attachments/\(rowId)/2")
+        try FileManager.default.createDirectory(at: partDir, withIntermediateDirectories: true)
+        try Data("junk".utf8).write(to: partDir.appendingPathComponent(".DS_Store"))
+        XCTAssertThrowsError(try EmlxParser.attachmentData(
+            rowId: rowId, mailboxURL: mailboxURL,
+            attachmentName: mimeName, partId: "2"))
+    }
+
+    func testPartIdProbe_symlinkEntry_rejected() throws {
+        let mailboxURL = try install(placeholder: true, externalPartId: nil)
+        let partDir = tempRoot.appendingPathComponent(
+            "Library/Mail/V10/\(accountUUID)/INBOX.mbox/\(storeUUID)/Data/2/6/2/Attachments/\(rowId)/2")
+        try FileManager.default.createDirectory(at: partDir, withIntermediateDirectories: true)
+        let target = tempRoot.appendingPathComponent("outside-secret.txt")
+        try Data("SECRET".utf8).write(to: target)
+        try FileManager.default.createSymbolicLink(
+            at: partDir.appendingPathComponent("link.pdf"), withDestinationURL: target)
+        XCTAssertThrowsError(try EmlxParser.attachmentData(
+            rowId: rowId, mailboxURL: mailboxURL,
+            attachmentName: mimeName, partId: "2"),
+            "a symlink lone entry must be rejected, never followed")
+    }
+}

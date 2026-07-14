@@ -1359,9 +1359,12 @@ class CheAppleMailMCPServer {
                 )
             } catch MailError.scriptFailed(let message, let code) {
                 // #238: local .emlx state proved the part is server-side only —
-                // both tiers failing means there is NO local recovery path; say
-                // so instead of the opaque -10000.
-                if localCopyNotDownloaded {
+                // both tiers failing on the GENERIC AppleEvent failure (-10000,
+                // the "not found"-class Mail raises for an unfetched binary)
+                // means there is no local recovery path; say so instead of the
+                // opaque -10000. Other codes (permissions, bad destination)
+                // keep their own specific errors (#238 verify REQUIRED).
+                if localCopyNotDownloaded && code == -10000 {
                     throw MailError.operationFailed(
                         MailSQLiteError.attachmentNotDownloaded(name: attachmentName)
                             .localizedDescription)

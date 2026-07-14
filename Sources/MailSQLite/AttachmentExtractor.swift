@@ -249,11 +249,21 @@ extension EmlxParser {
             .appendingPathComponent("\(rowId)", isDirectory: true)
             .appendingPathComponent(partId, isDirectory: true)
         let fm = FileManager.default
-        guard let entries = try? fm.contentsOfDirectory(atPath: partDir.path),
-              entries.count == 1, let only = entries.first else { return nil }
+        // #183 verify REQUIRED: Finder drops `.DS_Store` (and `._*` sidecars)
+        // into any browsed directory — filter hidden entries BEFORE the
+        // exactly-one check, and never accept a hidden lone entry as the
+        // attachment. The survivor must be a REGULAR file: symlinks are
+        // rejected via resourceValues (never followed — the name-free probe
+        // has no filename constraint, so following a planted link would read
+        // an arbitrary target).
+        guard let entries = try? fm.contentsOfDirectory(atPath: partDir.path) else { return nil }
+        let visible = entries.filter { !$0.hasPrefix(".") }
+        guard visible.count == 1, let only = visible.first else { return nil }
         let candidate = partDir.appendingPathComponent(only)
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: candidate.path, isDirectory: &isDir), !isDir.boolValue else {
+        guard let values = try? candidate.resourceValues(
+                  forKeys: [.isRegularFileKey, .isSymbolicLinkKey]),
+              values.isSymbolicLink != true,
+              values.isRegularFile == true else {
             return nil
         }
         return candidate
