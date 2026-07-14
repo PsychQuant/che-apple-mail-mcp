@@ -10,7 +10,7 @@ import MailSQLite
 /// message_id: "<...>"
 /// thread_key: "bare subject"
 /// in_reply_to: "<...>"        (empty string when none)
-/// date: 2026-06-13T08:01:14Z  (ISO 8601 UTC)
+/// date: 2026-06-13T16:01:14+08:00  (ISO 8601, original Date-header offset; UTC renders Z)
 /// sender: bare@example.com
 /// direction: received          (received | sent)
 /// ---
@@ -48,7 +48,7 @@ enum EmailMarkdownRenderer {
         extraFrontmatter: [(String, String)] = []
     ) -> String {
         let threadKey = stripReplyPrefixes(content.subject)
-        let isoDate = rfc822ToISO8601UTC(content.date)
+        let isoDate = rfc822ToISO8601(content.date)
         let bareSender = bareEmail(content.sender)
 
         var out = "---\n"
@@ -113,12 +113,22 @@ enum EmailMarkdownRenderer {
         return sender.trimmingCharacters(in: .whitespaces).lowercased()
     }
 
-    /// Convert an RFC 822 / RFC 2822 email `Date` header to ISO 8601 in UTC
-    /// (`yyyy-MM-dd'T'HH:mm:ss'Z'`). Returns the original string unchanged if
-    /// it cannot be parsed (never crashes / never drops data).
-    static func rfc822ToISO8601UTC(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return trimmed }
+    /// Convert an RFC 822 / RFC 2822 email `Date` header to ISO 8601,
+    /// preserving the header's numeric UTC offset (`+0800` → `…+08:00`) so the
+    /// frontmatter agrees with the body `Date:` line (#244). A zero offset
+    /// renders as the historical `Z`; a named or missing zone falls back to
+    /// UTC; an unparseable date is returned unchanged (never crashes / never
+    /// drops data).
+    static func rfc822ToISO8601(_ raw: String) -> String {
+        let original = raw.trimmingCharacters(in: .whitespaces)
+        guard !original.isEmpty else { return original }
+
+        // RFC 2822 obsolete trailing comment — `+0800 (CST)` / `+0000 (UTC)`,
+        // 3.2% of a live corpus (#244 verify) — defeats every parse format
+        // below AND the end-anchored offset regex. Strip it for parsing; the
+        // unparseable passthrough still returns the untouched original.
+        let trimmed = original.replacingOccurrences(
+            of: #"\s*\([^()]*\)\s*$"#, with: "", options: .regularExpression)
 
         let formats = [
             "EEE, d MMM yyyy HH:mm:ss Z",
@@ -134,12 +144,35 @@ enum EmailMarkdownRenderer {
             if let date = parser.date(from: trimmed) {
                 let out = DateFormatter()
                 out.locale = Locale(identifier: "en_US_POSIX")
-                out.timeZone = TimeZone(identifier: "UTC")
-                out.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
+                if let offset = numericZoneOffsetSeconds(in: trimmed), offset != 0,
+                   let zone = TimeZone(secondsFromGMT: offset) {
+                    out.timeZone = zone
+                    out.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZZZZZ"
+                } else {
+                    out.timeZone = TimeZone(identifier: "UTC")
+                    out.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'"
+                }
                 return out.string(from: date)
             }
         }
-        return trimmed
+        return original
+    }
+
+    /// Extract the numeric zone token (`+0800` / `-0530`) from an RFC 2822
+    /// date string as seconds from GMT, or nil when the zone is named/absent.
+    /// Anchored to the end of the string (where RFC 2822 puts the zone) so a
+    /// `+`/`-` inside an obsolete comment can't be mistaken for the offset.
+    private static func numericZoneOffsetSeconds(in dateString: String) -> Int? {
+        guard let match = dateString.range(
+            of: #"[+-]\d{4}\s*$"#, options: .regularExpression) else { return nil }
+        let token = dateString[match].trimmingCharacters(in: .whitespaces)
+        let sign = token.hasPrefix("-") ? -1 : 1
+        let digits = token.dropFirst()
+        guard digits.count == 4,
+              let hours = Int(digits.prefix(2)),
+              let minutes = Int(digits.suffix(2)),
+              hours <= 14, minutes < 60 else { return nil }
+        return sign * (hours * 3600 + minutes * 60)
     }
 
     /// Wrap a value in double quotes for YAML frontmatter, replacing any
