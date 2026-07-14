@@ -956,7 +956,8 @@ actor MailController {
         // wrapped draft; a clean-path error propagates with NO legacy fallback.
         if requireWrapperFree {
             if let reason = mailtoIneligibilityReasonForCall(
-                format: format, fromAddress: fromAddress, subject: subject) {
+                format: format, fromAddress: fromAddress, subject: subject,
+                attachments: attachments) {
                 throw MailError.invalidParameter(requireWrapperFreeRefusal(reason: reason))
             }
             do {
@@ -976,7 +977,8 @@ actor MailController {
         // via source scan, this wiring).
         return try routeWrapperFreeCompose(
             ineligibilityReason: mailtoIneligibilityReasonForCall(
-                format: format, fromAddress: fromAddress, subject: subject),
+                format: format, fromAddress: fromAddress, subject: subject,
+                attachments: attachments),
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
@@ -1013,14 +1015,15 @@ actor MailController {
     /// (`fromAddress`) and an empty subject both route to the legacy path (mailto
     /// can't pick a non-default account; the GUI dispatch guard identifies the
     /// compose window by its title = subject).
-    private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String) -> String? {
+    private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil) -> String? {
         if let override = ineligibilityOverride { return override() }
         return mailtoIneligibilityReason(
             format: format,
             accessibilityTrusted: AccessibilityStatus.isTrusted,
             disabledByEnv: mailtoComposeDisabledByEnv(),
             hasCustomSender: (fromAddress?.isEmpty == false),
-            hasSubject: !subject.isEmpty
+            hasSubject: !subject.isEmpty,
+            attachmentsGuiSafe: attachmentPathsGuiSafe(attachments)
         )
     }
 
@@ -1379,7 +1382,8 @@ actor MailController {
         // #239: strict mode (see composeEmail above).
         if requireWrapperFree {
             if let reason = mailtoIneligibilityReasonForCall(
-                format: format, fromAddress: fromAddress, subject: subject) {
+                format: format, fromAddress: fromAddress, subject: subject,
+                attachments: attachments) {
                 throw MailError.invalidParameter(requireWrapperFreeRefusal(reason: reason))
             }
             return try composeViaMailto(
@@ -1394,7 +1398,8 @@ actor MailController {
         // #241: control flow lives in the tested router (see composeEmail).
         return try routeWrapperFreeCompose(
             ineligibilityReason: mailtoIneligibilityReasonForCall(
-                format: format, fromAddress: fromAddress, subject: subject),
+                format: format, fromAddress: fromAddress, subject: subject,
+                attachments: attachments),
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,

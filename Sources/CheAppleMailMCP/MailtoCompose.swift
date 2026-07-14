@@ -258,12 +258,24 @@ func legacyReplyPathDisclosure(reason: String) -> String {
 /// ineligibility itself is by design (#131/#175) — the bug was that nothing
 /// disclosed it. This function names the reason so the result string, the
 /// stderr warn, and the tool description can all surface the same fact.
+/// #220 — true iff every attachment path is pure ASCII. The mailto path
+/// attaches via the GUI go-to-folder sheet (⇧⌘G + paste), which hangs
+/// deterministically on CJK/fullwidth paths (live repro, v2.17.0) — the
+/// panel-closed proxy can't detect a sheet that never accepts its input.
+/// ASCII-only paths are the known-good set; anything else routes to the
+/// legacy path, whose native `POSIX file` attachment handles any path.
+func attachmentPathsGuiSafe(_ paths: [String]?) -> Bool {
+    guard let paths, !paths.isEmpty else { return true }
+    return paths.allSatisfy { $0.allSatisfy(\.isASCII) }
+}
+
 func mailtoIneligibilityReason(
     format: BodyFormat,
     accessibilityTrusted: Bool,
     disabledByEnv: Bool,
     hasCustomSender: Bool,
-    hasSubject: Bool
+    hasSubject: Bool,
+    attachmentsGuiSafe: Bool = true
 ) -> String? {
     if disabledByEnv {
         return "mailto compose disabled via \(mailtoComposeDisableEnvKey)"
@@ -283,6 +295,10 @@ func mailtoIneligibilityReason(
         return "Accessibility (AXIsProcessTrusted) not granted — GUI keystrokes for "
             + "save/send/attach would silently fail"
     }
+    if !attachmentsGuiSafe {
+        return "attachment path contains non-ASCII characters — the GUI go-to-folder "
+            + "attach flow hangs there (#220); the legacy path attaches natively instead"
+    }
     return nil
 }
 
@@ -294,7 +310,8 @@ func legacyPathDisclosure(reason: String) -> String {
     return " [legacy path — body wrapped in <blockquote type=\"cite\">, renders as "
         + "quoted text on some mobile clients. Reason: \(reason). Wrapper-free "
         + "eligibility: plain format + non-empty subject + default sender + "
-        + "Accessibility granted + \(mailtoComposeDisableEnvKey) unset "
+        + "Accessibility granted + \(mailtoComposeDisableEnvKey) unset + "
+        + "ASCII-only attachment paths (#220) "
         + "(#175; custom-sender clean path pending #219)]"
 }
 
@@ -372,6 +389,7 @@ func requireWrapperFreeRefusal(reason: String) -> String {
         + "omit from_address (compose from the default account and switch sender manually in "
         + "the compose window — clean custom-sender path is pending #219); use format 'plain'; "
         + "provide a non-empty subject; grant Accessibility (check_accessibility); "
+        + "use ASCII-only attachment paths (#220); "
         + "unset \(mailtoComposeDisableEnvKey). Or drop require_wrapper_free to accept the "
         + "legacy path (body wrapped in <blockquote type=\"cite\"> on some mobile clients)."
 }

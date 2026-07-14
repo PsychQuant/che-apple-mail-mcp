@@ -448,3 +448,36 @@ final class MailtoComposeTests: XCTestCase {
         }
     }
 }
+
+// MARK: - #220 non-ASCII attachment paths route to the legacy (native-attach) path
+
+extension MailtoComposeTests {
+
+    func testAttachmentPathsGuiSafe() {
+        XCTAssertTrue(attachmentPathsGuiSafe(nil))
+        XCTAssertTrue(attachmentPathsGuiSafe([]))
+        XCTAssertTrue(attachmentPathsGuiSafe(["/Users/che/report.pdf", "/tmp/data.csv"]))
+        XCTAssertFalse(attachmentPathsGuiSafe(["/Users/che/「議程」.pdf"]),
+                       "fullwidth brackets hang the go-to-folder sheet (#220)")
+        XCTAssertFalse(attachmentPathsGuiSafe(["/Users/che/會議通知.pdf"]))
+        XCTAssertFalse(attachmentPathsGuiSafe(["/ok/a.pdf", "/bad/附件.pdf"]),
+                       "one unsafe path taints the batch — the GUI loop attaches all of them")
+    }
+
+    func testIneligibility_nonAsciiAttachmentPath_namedReason() {
+        let reason = mailtoIneligibilityReason(
+            format: .plain, accessibilityTrusted: true, disabledByEnv: false,
+            hasCustomSender: false, hasSubject: true,
+            attachmentsGuiSafe: false)
+        XCTAssertNotNil(reason)
+        XCTAssertTrue(reason!.contains("#220"), "reason must cite the hang issue: \(reason!)")
+        XCTAssertTrue(reason!.contains("non-ASCII"), reason!)
+    }
+
+    func testIneligibility_asciiAttachments_stillEligible() {
+        XCTAssertNil(mailtoIneligibilityReason(
+            format: .plain, accessibilityTrusted: true, disabledByEnv: false,
+            hasCustomSender: false, hasSubject: true,
+            attachmentsGuiSafe: true))
+    }
+}
