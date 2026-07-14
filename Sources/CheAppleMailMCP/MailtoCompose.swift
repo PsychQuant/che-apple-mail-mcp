@@ -297,3 +297,43 @@ func legacyPathDisclosure(reason: String) -> String {
         + "Accessibility granted + \(mailtoComposeDisableEnvKey) unset "
         + "(#175; custom-sender clean path pending #219)]"
 }
+
+/// #241 — the #237/#229 clean-path-or-disclosed-legacy control flow, extracted
+/// from the four `MailController` compose-family sites (compose_email /
+/// create_draft / reply_email / forward_email-with-body) behind injectable
+/// closures so the WIRING itself has a runnable regression lock (the pure
+/// helpers were pinned, but deleting the inline wiring kept the suite green —
+/// the #237 silent-regression pattern one level up).
+///
+/// Contract (byte-identical to the previous inline wiring):
+/// - `ineligibilityReason == nil` → try `cleanPath`; its success returns
+///   verbatim (NO suffix). Its failure fires `warnTriedAndFailed` once, then
+///   the legacy result is suffixed with `disclosure(fallbackReason(error))`.
+/// - `ineligibilityReason != nil` → `cleanPath` is never attempted;
+///   `warnIneligible` fires once; the legacy result is suffixed with
+///   `disclosure(reason)`.
+/// - `legacyPath` errors always propagate.
+func routeWrapperFreeCompose(
+    ineligibilityReason: String?,
+    cleanPath: () throws -> String,
+    legacyPath: () throws -> String,
+    disclosure: (String) -> String,
+    warnIneligible: (String) -> Void,
+    warnTriedAndFailed: (Error) -> Void,
+    fallbackReason: (Error) -> String
+) throws -> String {
+    var legacyReason = ineligibilityReason
+    if legacyReason == nil {
+        do {
+            return try cleanPath()
+        } catch {
+            warnTriedAndFailed(error)
+            legacyReason = fallbackReason(error)
+            // fall through to legacy injection
+        }
+    } else {
+        warnIneligible(legacyReason!)
+    }
+    let result = try legacyPath()
+    return result + disclosure(legacyReason ?? "unknown")
+}

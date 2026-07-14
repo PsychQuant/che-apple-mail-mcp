@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Internal
+- **The #237/#229 disclosure wiring now has a runnable regression lock** ([#241](https://github.com/PsychQuant/che-apple-mail-mcp/issues/241)). The clean-path-or-disclosed-legacy control flow (try wrapper-free GUI path → on ineligibility warn + on failure warn → legacy result carries the `[legacy path — …]` suffix) lived inline in the `MailController` singleton actor with zero non-live coverage — deleting the wiring kept the whole suite green, the #237 silent-regression pattern one level up. The flow is extracted into a pure `routeWrapperFreeCompose(ineligibilityReason:cleanPath:legacyPath:disclosure:warnIneligible:warnTriedAndFailed:fallbackReason:)` router (MailtoCompose.swift) and all FOUR compose-family sites (`compose_email`, `create_draft`, `reply_email`, `forward_email`-with-body) now route through it — behavior byte-identical, pinned by a consistency test suite (`WrapperFreeRouteTests`: clean-success carries no suffix, tried-and-failed warns once + suffixes the clamped echo, ineligible warns once + never attempts the clean path, legacy errors propagate, clamp bounds the suffix) plus a source-scan wiring guard (exactly 4 router call sites; the inline `var legacyReason` pattern is gone). A bodyless `forward_email` still bypasses the router entirely (it injects nothing and never gets a suffix — the #229 invariant).
+
 ## [2.18.0] - 2026-07-14
 
 ### Added
