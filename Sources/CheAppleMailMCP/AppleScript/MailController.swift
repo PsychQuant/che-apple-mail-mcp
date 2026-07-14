@@ -1214,7 +1214,22 @@ actor MailController {
             disclosure: { legacyReplyPathDisclosure(reason: $0) },
             warnIneligible: { warnPasteReplyIneligible($0) },
             warnTriedAndFailed: { warnReplyForwardPasteFallback($0) },
-            fallbackReason: { "paste GUI path failed: \(clampedErrorEcho($0.localizedDescription))" })
+            fallbackReason: { "paste GUI path failed: \(clampedErrorEcho($0.localizedDescription))" },
+            // #254: once the send keystroke has been dispatched (or the
+            // success-path tail errored — mail definitely sent), refuse the
+            // legacy re-send and surface unknown-send-state (#242 pattern).
+            shouldFallback: { !isPostDispatchError($0) },
+            mapNoFallbackError: {
+                MailError.scriptFailed(
+                    message: "the send keystroke was already dispatched but a GUI step failed "
+                        + "afterwards — the send state is UNKNOWN and the reply/forward may already "
+                        + "be on the wire. NOT retrying via the legacy path (that could send a "
+                        + "duplicate). Check Mail's Sent mailbox / Outbox and the original thread "
+                        + "before re-sending. The compose window (if still open) was left untouched "
+                        + "for inspection. Original error: "
+                        + clampedErrorEcho($0.localizedDescription),
+                    code: -1)
+            })
     }
 
     /// Forward an email
@@ -1294,7 +1309,22 @@ actor MailController {
                 disclosure: { legacyReplyPathDisclosure(reason: $0) },
                 warnIneligible: { warnPasteReplyIneligible($0) },
                 warnTriedAndFailed: { warnReplyForwardPasteFallback($0) },
-                fallbackReason: { "paste GUI path failed: \(clampedErrorEcho($0.localizedDescription))" })
+                fallbackReason: { "paste GUI path failed: \(clampedErrorEcho($0.localizedDescription))" },
+            // #254: once the send keystroke has been dispatched (or the
+            // success-path tail errored — mail definitely sent), refuse the
+            // legacy re-send and surface unknown-send-state (#242 pattern).
+            shouldFallback: { !isPostDispatchError($0) },
+            mapNoFallbackError: {
+                MailError.scriptFailed(
+                    message: "the send keystroke was already dispatched but a GUI step failed "
+                        + "afterwards — the send state is UNKNOWN and the reply/forward may already "
+                        + "be on the wire. NOT retrying via the legacy path (that could send a "
+                        + "duplicate). Check Mail's Sent mailbox / Outbox and the original thread "
+                        + "before re-sending. The compose window (if still open) was left untouched "
+                        + "for inspection. Original error: "
+                        + clampedErrorEcho($0.localizedDescription),
+                    code: -1)
+            })
         }
         return try runLegacyForward()
     }

@@ -250,9 +250,9 @@ final class SendStageNoRefallbackTests: XCTestCase {
     // MARK: production wiring
 
     func testWiring_composeEmailRefusesPostDispatchFallback() throws {
-        // compose_email (send path) must consult isPostDispatchError; the
-        // draft/reply/forward sites must NOT (their dispatch is ⌘S / their own
-        // builders — sister scope, tracked separately).
+        // The three send-capable sites (compose_email; reply_email and
+        // forward_email since #254) consult isPostDispatchError; create_draft
+        // (⌘S) must NOT — a duplicated draft is visible and harmless.
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift")
@@ -260,7 +260,96 @@ final class SendStageNoRefallbackTests: XCTestCase {
         XCTAssertTrue(source.contains("shouldFallback: { !isPostDispatchError($0) }"),
                       "composeEmail must refuse legacy fallback for post-dispatch send errors (#242)")
         XCTAssertEqual(
-            source.components(separatedBy: "isPostDispatchError").count - 1, 1,
-            "exactly one site (composeEmail send) consults the sentinel")
+            source.components(separatedBy: "isPostDispatchError").count - 1, 3,
+            "the three send-capable sites (composeEmail, replyEmail, forwardEmail) consult the sentinel (#254)")
+    }
+}
+
+/// #254 — the reply/forward paste builder gets the same POSTDISPATCH
+/// protection as compose (#242): sentinel on the send keystroke, `_dispatched`
+/// flag on the success-path tail, cleanup skipped on unknown send state.
+final class ReplyForwardSendStageTests: XCTestCase {
+
+    private func replyScript(saveAsDraft: Bool) -> String {
+        buildReplyEmailPasteScript(
+            messageRef: "message id 1 of mailbox \"INBOX\"",
+            newBody: "hi", replyAll: false, ccAdditional: nil,
+            attachments: nil, saveAsDraft: saveAsDraft)
+    }
+
+    func testReplySend_sentinelAndFlagProtectDispatchAndTail() {
+        let script = replyScript(saveAsDraft: false)
+        XCTAssertTrue(script.contains("set _dispatched to false"))
+        XCTAssertTrue(script.contains("POSTDISPATCH: "))
+        XCTAssertTrue(script.contains("else if _dispatched then"))
+        let keystroke = script.range(of: "keystroke \"d\" using {command down, shift down}")
+        let flagSet = script.range(of: "set _dispatched to true")
+        let handler = script.range(of: "on error _mErr")
+        guard let k = keystroke, let f = flagSet, let h = handler else {
+            return XCTFail("dispatch, flag set and handler must all be present")
+        }
+        XCTAssertLessThan(k.lowerBound, f.lowerBound)
+        XCTAssertLessThan(f.lowerBound, h.lowerBound)
+        // tail delay must be INSIDE the outer try: between flag set and handler
+        let tail = script.range(of: "delay", range: f.upperBound..<script.endIndex)
+        guard let d = tail else { return XCTFail("tail delay missing") }
+        XCTAssertLessThan(d.lowerBound, h.lowerBound,
+                          "success-path tail must sit inside the outer try (#242 pattern)")
+    }
+
+    func testReplyDraft_noSentinel_draftCloseStillAfterTry() {
+        let script = replyScript(saveAsDraft: true)
+        XCTAssertFalse(script.contains("POSTDISPATCH"),
+                       "draft save keeps the plain fallback — duplicate draft is visible/harmless")
+        XCTAssertFalse(script.contains("_dispatched"))
+        // the saved-draft window close stays AFTER end try (its own inner try;
+        // a close failure must never re-enter the legacy fallback)
+        guard let endTry = script.range(of: "end try"),
+              let close = script.range(of: "close _cw saving yes") else {
+            return XCTFail("end try and draft close must both be present")
+        }
+        XCTAssertLessThan(endTry.lowerBound, close.lowerBound)
+    }
+
+    func testForwardPaste_alwaysSend_carriesSentinel() {
+        let script = buildForwardEmailPasteScript(
+            messageRef: "message id 1 of mailbox \"INBOX\"", to: ["x@y.z"], newBody: "note")
+        XCTAssertTrue(script.contains("POSTDISPATCH: "))
+        XCTAssertTrue(script.contains("set _dispatched to true"))
+    }
+
+    func testReplySend_cleanupSkippedOnMarkedError() {
+        let script = replyScript(saveAsDraft: false)
+        XCTAssertTrue(script.contains("if _mErr starts with \"POSTDISPATCH:\" then"),
+                      "handler must branch on the sentinel before the window-close cleanup")
+        guard let flagBranch = script.range(of: "else if _dispatched then"),
+              let cleanup = script.range(of: "close _cw saving no") else {
+            return XCTFail("flag branch and cleanup must both be present")
+        }
+        XCTAssertLessThan(flagBranch.lowerBound, cleanup.lowerBound,
+                          "cleanup must be unreachable for marked/flag errors — the window is evidence")
+    }
+
+    func testProductionSite_replyPostDispatch_refusesFallback() async throws {
+        // End-to-end through the #254 seam: the paste script throws a
+        // sentinel-marked error → replyEmail must REFUSE the legacy fallback
+        // (runner called exactly once) and surface unknown-send-state.
+        defer { Task { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) } }
+        var calls = 0
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in
+                calls += 1
+                throw MailError.scriptFailed(message: "POSTDISPATCH: window gone mid-send", code: -1)
+            },
+            ineligibility: { nil })
+        do {
+            _ = try await MailController.shared.replyEmail(
+                id: "123", mailbox: "INBOX", accountName: "a@b.c", body: "new text")
+            XCTFail("post-dispatch reply failure must throw, not fall back")
+        } catch {
+            XCTAssertTrue("\(error)".contains("Sent"),
+                          "unknown-send-state error must direct the user to check Sent/Outbox: \(error)")
+        }
+        XCTAssertEqual(calls, 1, "legacy path must NEVER run after a post-dispatch send failure")
     }
 }
