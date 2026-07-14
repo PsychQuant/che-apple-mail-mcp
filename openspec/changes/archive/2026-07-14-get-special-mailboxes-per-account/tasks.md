@@ -16,5 +16,5 @@
 ## 4. Verify + docs
 
 - [x] 4.1 `swift build` clean + `swift test --skip MailAppIntegrationTests` 全綠（0 `CheAppleMailMCPTests` failures）
-- [ ] 4.2 Live check + inbox follow-up（FDA + Gmail/iCloud 多帳號，DEFERRED — classifier-blocked on live Mail）：(a) 確認 drafts/sent/trash/junk per-account 回本地化實名（Gmail `草稿`/`垃圾郵件`、iCloud `Drafts`/`Junk`）；(b) 實測 `every mailbox of inbox` 是否有 per-account child —— 若有，把 `inbox` 加回 `perAccountSpecialMailboxes` + spec + 測試（目前 inbox 已**保守 deferred**，未 ship）；手動實測紀錄貼到 #179  <!-- BLOCKED: needs live Mail.app (FDA + Gmail/iCloud); deferred per #179 apply -->
+- [x] 4.2 【transferred → #249，未執行】Live check + inbox follow-up（FDA + Gmail/iCloud 多帳號，DEFERRED — classifier-blocked on live Mail）：(a) 確認 drafts/sent/trash/junk per-account 回本地化實名（Gmail `草稿`/`垃圾郵件`、iCloud `Drafts`/`Junk`）；(b) 實測 `every mailbox of inbox` 是否有 per-account child —— 若有，把 `inbox` 加回 `perAccountSpecialMailboxes` + spec + 測試（目前 inbox 已**保守 deferred**，未 ship）；手動實測紀錄貼到 #179  <!-- BLOCKED: needs live Mail.app (FDA + Gmail/iCloud); deferred per #179 apply -->
 - [x] 4.3 [P] `CHANGELOG.md` `[Unreleased]` Added 條目（`get_special_mailboxes` per-account；backward-compat 省略路徑不變；Refs #179）
