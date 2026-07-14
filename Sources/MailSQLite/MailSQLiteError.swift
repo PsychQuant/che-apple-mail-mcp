@@ -13,6 +13,12 @@ public enum MailSQLiteError: Error, LocalizedError {
     /// to the AppleScript path (the SQLite metadata and the on-disk
     /// .emlx may be out of sync).
     case attachmentNotFound(name: String)
+    /// #238 — the attachment exists in the envelope but its body was never
+    /// fetched from the server (`X-Apple-Content-Length` placeholder, empty
+    /// body, no external cache file). Distinct from `attachmentNotFound` so
+    /// the caller can act (open the message in Mail) instead of concluding
+    /// the attachment doesn't exist.
+    case attachmentNotDownloaded(name: String)
 
     /// A matching attachment was found but its decoded size exceeds the
     /// hard limit for in-memory extraction. Dispatchers fall through to
@@ -39,6 +45,11 @@ public enum MailSQLiteError: Error, LocalizedError {
             return "Batch size exceeds maximum of \(limit) items"
         case .attachmentNotFound(let name):
             return "Attachment '\(name)' not found in message MIME parts"
+        case .attachmentNotDownloaded(let name):
+            return "Attachment '\(name)' is not downloaded — it exists on the server but Mail has "
+                + "not fetched its content (placeholder-only MIME part, no local cache). Open the "
+                + "message in Mail (or set Settings > Accounts > Download Attachments: All) to "
+                + "fetch it, then retry (#238)"
         case .attachmentTooLarge(let name, let size, let limit):
             return "Attachment '\(name)' is \(size) bytes, exceeds in-memory limit of \(limit) bytes"
         case .accountNotResolvable(let name):

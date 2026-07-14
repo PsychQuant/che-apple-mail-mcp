@@ -344,7 +344,7 @@ class CheAppleMailMCPServer {
             // Attachment Tools
             Tool(
                 name: "list_attachments",
-                description: "List attachments of an email",
+                description: "List attachments of an email. Each item carries `savable` (whether save_attachment can fulfill it from the local Mail store) and, when false, `savable_reason`: 'not_downloaded' (the content is server-side only — open the message in Mail to fetch it, #238) vs 'not_extractable'.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1208,17 +1208,30 @@ class CheAppleMailMCPServer {
                 // SQLite results to names actually present in the .emlx body.
                 if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
                     do {
-                        // #105: attachmentSavability's keys ARE the validated
-                        // names (== attachmentNames), so one .emlx parse yields
-                        // both the cross-validation set and the savable field.
-                        let savability = try EmlxParser.attachmentSavability(
+                        // #105: the savability keys ARE the validated names
+                        // (== attachmentNames), so one .emlx parse yields both
+                        // the cross-validation set and the savable field.
+                        // #183: thread the SQLite attachment_id per name so the
+                        // name-free part-dir probe can rescue degraded-disk-name
+                        // false negatives; #238: a negative verdict carries a
+                        // reason (not_downloaded vs not_extractable).
+                        var partIds = [String: String]()
+                        for entry in sqliteAttachments {
+                            if let n = entry["name"] as? String,
+                               let pid = entry["attachment_id"] as? String {
+                                partIds[n] = pid
+                            }
+                        }
+                        let detail = try EmlxParser.attachmentSavabilityDetail(
                             rowId: rowId,
-                            mailboxURL: mailboxUrl
+                            mailboxURL: mailboxUrl,
+                            partIds: partIds
                         )
                         let validated = crossValidateAttachments(
                             sqliteAttachments: sqliteAttachments,
-                            realNames: Set(savability.keys),
-                            savability: savability
+                            realNames: Set(detail.keys),
+                            savability: detail.mapValues(\.savable),
+                            unsavableReasons: detail.compactMapValues { $0.reason?.rawValue }
                         )
                         // #115 observability: cross-validation silently
                         // dropping every SQLite row is the symptom users hit
@@ -1230,7 +1243,7 @@ class CheAppleMailMCPServer {
                                 + "all \(sqliteAttachments.count) SQLite attachment row(s) "
                                 + "for rowId=\(rowId): no SQLite name matched a .emlx-parsed "
                                 + "attachment name (parsed names: "
-                                + "\(Set(savability.keys).sorted())); returning []\n"
+                                + "\(Set(detail.keys).sorted())); returning []\n"
                             FileHandle.standardError.write(Data(message.utf8))
                         }
                         return formatJSON(validated)
@@ -1287,21 +1300,36 @@ class CheAppleMailMCPServer {
             // from local `.emlx` state that the binary is absent — thread that
             // into the Tier-2 -10000 hint so the message can be definitive.
             var localCopyConfirmedMissing = false
+            var localCopyNotDownloaded = false
             if let reader = indexReader, let rowId = Int(id) {
                 do {
                     if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
                         let destination = URL(fileURLWithPath: savePath)
+                        // #183: thread the Envelope Index attachment_id so the
+                        // name-free part-dir probe can rescue a degraded disk
+                        // filename (best-effort lookup; nil keeps prior behavior).
+                        let partId = (try? reader.listAttachments(messageId: rowId))?
+                            .first { ($0["name"] as? String) == attachmentName }?["attachment_id"] as? String
                         try EmlxParser.saveAttachment(
                             rowId: rowId,
                             mailboxURL: mailboxUrl,
                             attachmentName: attachmentName,
-                            destination: destination
+                            destination: destination,
+                            partId: partId
                         )
                         return "Attachment saved to \(savePath)"
                     }
                 } catch {
                     if case MailSQLiteError.attachmentNotFound = error {
                         localCopyConfirmedMissing = true
+                    }
+                    // #238: local state PROVES the part was never fetched from
+                    // the server. Still give AppleScript a turn (it may trigger
+                    // a fetch — unverified, #238 (a)), but remember the proof so
+                    // a Tier-2 failure surfaces the actionable message instead
+                    // of the opaque -10000.
+                    if case MailSQLiteError.attachmentNotDownloaded = error {
+                        localCopyNotDownloaded = true
                     }
                     // Log the cause so silent fallbacks are observable,
                     // then fall through to the AppleScript fallback below.
@@ -1330,6 +1358,14 @@ class CheAppleMailMCPServer {
                     savePath: savePath
                 )
             } catch MailError.scriptFailed(let message, let code) {
+                // #238: local .emlx state proved the part is server-side only —
+                // both tiers failing means there is NO local recovery path; say
+                // so instead of the opaque -10000.
+                if localCopyNotDownloaded {
+                    throw MailError.operationFailed(
+                        MailSQLiteError.attachmentNotDownloaded(name: attachmentName)
+                            .localizedDescription)
+                }
                 // #103: re-word the generic -10000 "AppleEvent handler failed"
                 // into actionable recovery steps; any other code rethrows as-is.
                 if let hint = saveAttachmentAppleEventHint(
@@ -2477,7 +2513,8 @@ func parseBodyFormatArgument(_ raw: Value?) throws -> BodyFormat {
 func crossValidateAttachments(
     sqliteAttachments: [[String: Any]],
     realNames: Set<String>,
-    savability: [String: Bool] = [:]
+    savability: [String: Bool] = [:],
+    unsavableReasons: [String: String] = [:]
 ) -> [[String: Any]] {
     return sqliteAttachments.compactMap { entry in
         guard let name = entry["name"] as? String, realNames.contains(name) else { return nil }
@@ -2488,6 +2525,11 @@ func crossValidateAttachments(
         // must NOT read an absent `savable` as `false`.
         if let savable = savability[name] {
             stamped["savable"] = savable
+            // #238: when not savable, say WHY — "not_downloaded" (open the
+            // message in Mail to fetch it) vs "not_extractable".
+            if !savable, let reason = unsavableReasons[name] {
+                stamped["savable_reason"] = reason
+            }
         }
         return stamped
     }

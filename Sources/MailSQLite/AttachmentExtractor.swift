@@ -54,13 +54,15 @@ extension EmlxParser {
         rowId: Int,
         mailboxURL: String,
         attachmentName: String,
-        destination: URL
+        destination: URL,
+        partId: String? = nil
     ) throws {
         // #200: delegate extraction to attachmentData, then atomic-write. Keeps
         // the `save_attachment` tool path byte-identical while letting the export
         // path (race-free writer) own the write via `attachmentData`.
         let data = try attachmentData(
-            rowId: rowId, mailboxURL: mailboxURL, attachmentName: attachmentName)
+            rowId: rowId, mailboxURL: mailboxURL, attachmentName: attachmentName,
+            partId: partId)
         try data.write(to: destination, options: .atomic)
     }
 
@@ -73,7 +75,8 @@ extension EmlxParser {
     public static func attachmentData(
         rowId: Int,
         mailboxURL: String,
-        attachmentName: String
+        attachmentName: String,
+        partId: String? = nil
     ) throws -> Data {
         // Step 1: resolve .emlx path. Reuses mailStoragePathOverride
         // transparently (task 4.6).
@@ -117,11 +120,15 @@ extension EmlxParser {
         // we would silently `data.write(...)` an empty `Data()` and lie
         // about success.
         if part.decodedData.isEmpty {
-            if let externalURL = externalAttachmentURL(
-                emlxPath: path,
-                rowId: rowId,
-                attachmentName: attachmentName
-            ) {
+            // Name-based external lookup first (fast path), then the #183
+            // name-free part-dir probe (Mail's on-disk filename can be a
+            // degraded rendition of the MIME name — live-proven).
+            let externalURL = externalAttachmentURL(
+                emlxPath: path, rowId: rowId, attachmentName: attachmentName)
+                ?? partId.flatMap {
+                    externalAttachmentPartFileURL(emlxPath: path, rowId: rowId, partId: $0)
+                }
+            if let externalURL {
                 let externalBytes = try Data(contentsOf: externalURL)
                 if externalBytes.count > attachmentInMemoryLimit {
                     throw MailSQLiteError.attachmentTooLarge(
@@ -132,10 +139,15 @@ extension EmlxParser {
                 }
                 return externalBytes
             }
-            // Inline body empty AND no external file — treat as missing
-            // so the AppleScript fallback can have a turn (or surface the
-            // failure to the caller). NEVER write a 0-byte file: that's
-            // the silent-failure mode bug #66 was filed for.
+            // Inline body empty AND no external file. #238: a part carrying
+            // Apple's placeholder header was never fetched from the server —
+            // surface the actionable "not downloaded" error instead of the
+            // misleading "not found". Otherwise treat as missing so the
+            // AppleScript fallback can have a turn. NEVER write a 0-byte
+            // file: that's the silent-failure mode bug #66 was filed for.
+            if part.headers["x-apple-content-length"] != nil {
+                throw MailSQLiteError.attachmentNotDownloaded(name: attachmentName)
+            }
             throw MailSQLiteError.attachmentNotFound(name: attachmentName)
         }
 
@@ -212,6 +224,39 @@ extension EmlxParser {
             }
         }
         return nil
+    }
+
+    /// #183 — name-free probe: the single file inside
+    /// `Attachments/<rowId>/<partId>/`, or nil. Mail writes the external cache
+    /// under its OWN rendition of the filename, which can be degraded
+    /// (`?`-substituted CJK + whitespace drift — live-proven on message
+    /// 274368), so the byte-for-byte name match above can false-negative even
+    /// though the bytes are right there. The part directory name, however,
+    /// equals the Envelope Index `attachment_id`, and a part dir holds exactly
+    /// one file — a deterministic, name-independent lookup. `partId` comes
+    /// from our own SQLite read (an integer-like token, never caller-shaped);
+    /// a defensive single-segment guard keeps it path-safe anyway.
+    private static func externalAttachmentPartFileURL(
+        emlxPath: String,
+        rowId: Int,
+        partId: String
+    ) -> URL? {
+        guard !partId.isEmpty, !partId.contains("/"),
+              partId != ".", partId != ".." else { return nil }
+        let messagesDir = URL(fileURLWithPath: emlxPath).deletingLastPathComponent()
+        let partDir = messagesDir.deletingLastPathComponent()
+            .appendingPathComponent("Attachments", isDirectory: true)
+            .appendingPathComponent("\(rowId)", isDirectory: true)
+            .appendingPathComponent(partId, isDirectory: true)
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: partDir.path),
+              entries.count == 1, let only = entries.first else { return nil }
+        let candidate = partDir.appendingPathComponent(only)
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: candidate.path, isDirectory: &isDir), !isDir.boolValue else {
+            return nil
+        }
+        return candidate
     }
 
     /// First-match predicate: part's resolved filename equals request, or
@@ -339,5 +384,62 @@ extension EmlxParser {
                 || externalAttachmentURL(emlxPath: path, rowId: rowId, attachmentName: name) != nil
         }
         return savability
+    }
+
+    /// #238 — why an attachment is not savable, so callers can distinguish
+    /// "open the message in Mail to fetch it" from "cannot be extracted".
+    public enum UnsavableReason: String {
+        case notDownloaded = "not_downloaded"
+        case notExtractable = "not_extractable"
+    }
+
+    /// One attachment's savability verdict plus the reason when negative.
+    public struct SavabilityDetail {
+        public let savable: Bool
+        public let reason: UnsavableReason?
+    }
+
+    /// #183/#238 — `attachmentSavability` with two upgrades:
+    /// - `partIds` (name → Envelope Index `attachment_id`) enables the
+    ///   name-free part-directory probe, rescuing the degraded-disk-name
+    ///   false negative (#183);
+    /// - a negative verdict carries a reason: `.notDownloaded` when the part
+    ///   is an `X-Apple-Content-Length` placeholder (server-side only),
+    ///   `.notExtractable` otherwise (#238).
+    public static func attachmentSavabilityDetail(
+        rowId: Int,
+        mailboxURL: String,
+        partIds: [String: String] = [:]
+    ) throws -> [String: SavabilityDetail] {
+        guard let path = resolveEmlxPath(rowId: rowId, mailboxURL: mailboxURL) else {
+            throw MailSQLiteError.emlxNotFound(
+                messageId: rowId,
+                path: "Could not resolve .emlx path for message \(rowId)"
+            )
+        }
+        let fileData = try Data(contentsOf: URL(fileURLWithPath: path))
+        let messageData = try EmlxFormat.extractMessageData(from: fileData)
+        let headers = RFC822Parser.parseHeaders(from: messageData)
+        guard let bodyOffset = RFC822Parser.headerBodySplitOffset(in: messageData) else {
+            throw MailSQLiteError.emlxParseFailed(
+                "No header/body split found in message \(rowId)"
+            )
+        }
+        let bodyData = Data(messageData[bodyOffset...])
+        let states = try MIMEParser.enumerateAttachmentInlineState(bodyData, headers: headers)
+
+        var detail = [String: SavabilityDetail]()
+        for (name, state) in states {
+            let savable = state.inlinePresent
+                || externalAttachmentURL(emlxPath: path, rowId: rowId, attachmentName: name) != nil
+                || partIds[name].flatMap {
+                    externalAttachmentPartFileURL(emlxPath: path, rowId: rowId, partId: $0)
+                } != nil
+            detail[name] = SavabilityDetail(
+                savable: savable,
+                reason: savable ? nil
+                    : (state.applePlaceholder ? .notDownloaded : .notExtractable))
+        }
+        return detail
     }
 }

@@ -151,6 +151,40 @@ public enum MIMEParser {
     ///
     /// - Throws: `MailSQLiteError.emlxParseFailed` on the same malformed
     ///   top-level-multipart condition as `enumerateAttachmentNames` (#26).
+    /// #238 — per-attachment inline state: presence (as below) plus whether
+    /// the part carries Apple's `X-Apple-Content-Length` placeholder header —
+    /// Mail's marker for "the body exists server-side but was never fetched".
+    /// Placeholder + empty body = *not downloaded* (recoverable by opening
+    /// the message in Mail), distinct from *not extractable*.
+    public struct AttachmentInlineState {
+        public let inlinePresent: Bool
+        public let applePlaceholder: Bool
+    }
+
+    public static func enumerateAttachmentInlineState(
+        _ bodyData: Data,
+        headers: [String: String]
+    ) throws -> [String: AttachmentInlineState] {
+        let presence = try enumerateAttachmentInlinePresence(bodyData, headers: headers)
+        var placeholders = Set<String>()
+        var scratch = [String: Bool]()
+        var malformed = false
+        collectAttachmentNames(
+            body: bodyData,
+            partHeaders: headers,
+            contentType: headers["content-type"] ?? "text/plain",
+            depth: 0,
+            out: &scratch,
+            topLevelMultipartSplitFailed: &malformed,
+            placeholders: &placeholders
+        )
+        return presence.reduce(into: [:]) { acc, kv in
+            acc[kv.key] = AttachmentInlineState(
+                inlinePresent: kv.value,
+                applePlaceholder: placeholders.contains(kv.key))
+        }
+    }
+
     public static func enumerateAttachmentInlinePresence(
         _ bodyData: Data,
         headers: [String: String]
@@ -208,6 +242,23 @@ public enum MIMEParser {
         out: inout [String: Bool],
         topLevelMultipartSplitFailed: inout Bool
     ) {
+        var placeholders = Set<String>()
+        collectAttachmentNames(
+            body: body, partHeaders: partHeaders, contentType: contentType,
+            depth: depth, out: &out,
+            topLevelMultipartSplitFailed: &topLevelMultipartSplitFailed,
+            placeholders: &placeholders)
+    }
+
+    private static func collectAttachmentNames(
+        body: Data,
+        partHeaders: [String: String],
+        contentType: String,
+        depth: Int,
+        out: inout [String: Bool],
+        topLevelMultipartSplitFailed: inout Bool,
+        placeholders: inout Set<String>
+    ) {
         guard depth < maxMultipartDepth else {
             // Depth exceeded at non-top level — just stop recursion.
             // Top-level depth-exceeded is impossible (depth starts at 0).
@@ -239,7 +290,8 @@ public enum MIMEParser {
                     contentType: childCT,
                     depth: depth + 1,
                     out: &out,
-                    topLevelMultipartSplitFailed: &topLevelMultipartSplitFailed
+                    topLevelMultipartSplitFailed: &topLevelMultipartSplitFailed,
+                    placeholders: &placeholders
                 )
             }
             // Top-level multipart declared but NO child parsed (split
@@ -266,11 +318,13 @@ public enum MIMEParser {
         )
         // First occurrence in document order wins — see the docstring: this
         // mirrors saveAttachment's `parts.first(where:)` selection (#105).
+        let hasApplePlaceholder = partHeaders["x-apple-content-length"] != nil
         if let filename = resolveFilename(
             dispositionParams: dispositionParams,
             contentTypeParams: params
         ), out[filename] == nil {
             out[filename] = inlinePresent
+            if hasApplePlaceholder { placeholders.insert(filename) }
         }
         // Legacy `Content-Type: name=` add point. Apply the same per-parameter
         // RFC 2047 decode as `resolveFilename` path 4 — symmetric — so the
@@ -280,6 +334,7 @@ public enum MIMEParser {
             let decoded = decodeRFC2047IfApplicable(name)
             if out[decoded] == nil {
                 out[decoded] = inlinePresent
+                if hasApplePlaceholder { placeholders.insert(decoded) }
             }
         }
     }
