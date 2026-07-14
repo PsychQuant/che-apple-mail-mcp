@@ -10,10 +10,32 @@ actor MailController {
 
     private init() {}
 
+    // MARK: - #254 test seams (production never sets these)
+
+    /// When set, `runScript` routes through this closure instead of
+    /// NSAppleScript — lets production-site behavioral tests drive the real
+    /// compose/reply/forward methods with a fake script runner (no live Mail).
+    private var scriptRunnerOverride: ((String) throws -> String)?
+    /// When set, both wrapper-free eligibility probes return this closure's
+    /// value (nil = eligible) instead of probing Accessibility/env — lets
+    /// tests select the branch deterministically.
+    private var ineligibilityOverride: (() -> String?)?
+
+    func setTestSeams(
+        scriptRunner: ((String) throws -> String)?,
+        ineligibility: (() -> String?)?
+    ) {
+        scriptRunnerOverride = scriptRunner
+        ineligibilityOverride = ineligibility
+    }
+
     // MARK: - AppleScript Execution
 
     /// Execute AppleScript and return result
     func runScript(_ source: String) throws -> String {
+        if let override = scriptRunnerOverride {
+            return try override(source)
+        }
         var error: NSDictionary?
         guard let script = NSAppleScript(source: source) else {
             throw MailError.scriptCreationFailed
@@ -982,6 +1004,7 @@ actor MailController {
     /// can't pick a non-default account; the GUI dispatch guard identifies the
     /// compose window by its title = subject).
     private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String) -> String? {
+        if let override = ineligibilityOverride { return override() }
         return mailtoIneligibilityReason(
             format: format,
             accessibilityTrusted: AccessibilityStatus.isTrusted,
@@ -1077,6 +1100,7 @@ actor MailController {
     /// native-verb + paste path; otherwise the named reason for the legacy
     /// route. Probes Accessibility + the env escape hatch at call time.
     private func pasteReplyForwardIneligibilityReasonForCall(format: BodyFormat) -> String? {
+        if let override = ineligibilityOverride { return override() }
         return pasteReplyForwardIneligibilityReason(
             format: format,
             accessibilityTrusted: AccessibilityStatus.isTrusted,
