@@ -727,6 +727,10 @@ private func buildReplyForwardPasteScript(
         end tell
     """
 
+    // #254: `_dispatched` flag (see the #242 block below) — initialized before
+    // the outer try so the handler can always reference it; send-only.
+    let rfFlagInit = send ? "set _dispatched to false\n    " : ""
+
     // 1. Capture ids, drive the native verb, compute the new-window id delta.
     var s = """
     tell application "Mail"
@@ -744,7 +748,7 @@ private func buildReplyForwardPasteScript(
         end repeat
         if (count of _newIds) is 0 then error "\(notOpenedError)"
     end tell
-    try
+    \(rfFlagInit)try
     \(frontGuard)
         tell application "System Events"
             tell process "Mail"
@@ -802,6 +806,49 @@ private func buildReplyForwardPasteScript(
         end repeat
     end tell
     """
+    // #254 (the #242 pattern, verbatim): for send:true the dispatch keystroke
+    // gets its own POSTDISPATCH sentinel and the `_dispatched` flag marks any
+    // error from the success-path tail — once ⇧⌘D has been attempted the send
+    // state is UNKNOWN and the Swift layer must not fall back to a legacy
+    // re-send (duplicate outbound reply/forward). The draft path (⌘S) keeps
+    // the plain fallback and its post-try window close (a close failure must
+    // never re-enter the legacy fallback — the double-dispatch hazard).
+    let rfDispatchBlock: String
+    if send {
+        rfDispatchBlock = """
+                    try
+                        \(dispatchKey)
+                    on error _dErr
+                        error "POSTDISPATCH: " & _dErr
+                    end try
+                    set _dispatched to true
+        """
+    } else {
+        rfDispatchBlock = "                \(dispatchKey)"
+    }
+    let rfCleanupBody = """
+            tell application "Mail"
+                repeat with _cw in (every window)
+                    try
+                        if (id of _cw) is in _newIds then close _cw saving no
+                    end try
+                end repeat
+            end tell
+    """
+    let rfHandlerBlock = send
+        ? """
+            if _mErr starts with "POSTDISPATCH:" then
+                error _mErr
+            else if _dispatched then
+                error "POSTDISPATCH: " & _mErr
+            else
+        \(rfCleanupBody)
+                error _mErr
+            end if
+        """
+        : "\(rfCleanupBody)\n        error _mErr"
+    let rfPreHandlerTail = send ? "\n    delay \(stepDelay)" : ""
+    let rfPostTryTail = send ? "" : "\n    delay \(stepDelay)"
     s += """
 
     \(frontGuard)
@@ -810,20 +857,12 @@ private func buildReplyForwardPasteScript(
                 set frontmost to true
                 delay 0.25
                 if (count of sheets of window 1) is not 0 then error "a sheet/panel is still open on the compose window"
-                \(dispatchKey)
+    \(rfDispatchBlock)
             end tell
-        end tell
+        end tell\(rfPreHandlerTail)
     on error _mErr
-        tell application "Mail"
-            repeat with _cw in (every window)
-                try
-                    if (id of _cw) is in _newIds then close _cw saving no
-                end try
-            end repeat
-        end tell
-        error _mErr
-    end try
-    delay \(stepDelay)\(draftWindowClose)
+    \(rfHandlerBlock)
+    end try\(rfPostTryTail)\(draftWindowClose)
     return "\(successLabel)"
     """
     return s
