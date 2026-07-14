@@ -481,3 +481,24 @@ extension MailtoComposeTests {
             attachmentsGuiSafe: true))
     }
 }
+
+
+// MARK: - #220 wiring lock
+
+extension MailtoComposeTests {
+
+    func testWiring_allFourProbeSitesThreadAttachments() throws {
+        // Reverting the `attachments:` argument at any one probe site keeps
+        // the suite green otherwise (the seam override short-circuits before
+        // the real probe) — pin the wiring by source scan, the repo's
+        // idiomatic lock for behaviorally-unreachable invariants (#220).
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        let count = source.components(separatedBy: "attachments: attachments)").count - 1
+        XCTAssertEqual(count, 4,
+                       "all four compose-family probe sites must thread attachments into "
+                       + "mailtoIneligibilityReasonForCall (#220); found \(count)")
+    }
+}
