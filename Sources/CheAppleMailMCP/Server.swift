@@ -251,7 +251,7 @@ class CheAppleMailMCPServer {
             // Compose Tools
             Tool(
                 name: "compose_email",
-                description: "Compose and send a new email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Wrapper-free clean-body path (#175) is used only when ALL hold: format='plain' + non-empty subject + no from_address + Accessibility granted + CHE_MAIL_DISABLE_MAILTO_COMPOSE not set. Otherwise the legacy path runs and Mail wraps the body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#237). If the clean path fails AT the send-keystroke stage, the tool does NOT retry via the legacy path (the mail may already be sent — a retry could send a duplicate): it returns an unknown-send-state error telling you to check Sent/Outbox before re-sending (#242).",
+                description: "Compose and send a new email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Wrapper-free clean-body path (#175) is used only when ALL hold: format='plain' + non-empty subject + no from_address + Accessibility granted + CHE_MAIL_DISABLE_MAILTO_COMPOSE not set + ASCII-only attachment paths (non-ASCII paths hang the GUI attach flow, #220 — they route to the legacy path whose native attach handles any path). Otherwise the legacy path runs and Mail wraps the body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#237). If the clean path fails AT the send-keystroke stage, the tool does NOT retry via the legacy path (the mail may already be sent — a retry could send a duplicate): it returns an unknown-send-state error telling you to check Sent/Outbox before re-sending (#242).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -324,7 +324,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "create_draft",
-                description: "Create a new draft email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Wrapper-free clean-body path (#175) is used only when ALL hold: format='plain' + non-empty subject + no from_address + Accessibility granted + CHE_MAIL_DISABLE_MAILTO_COMPOSE not set. Otherwise the legacy path runs and Mail wraps the body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#237).",
+                description: "Create a new draft email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Wrapper-free clean-body path (#175) is used only when ALL hold: format='plain' + non-empty subject + no from_address + Accessibility granted + CHE_MAIL_DISABLE_MAILTO_COMPOSE not set + ASCII-only attachment paths (non-ASCII paths hang the GUI attach flow, #220 — they route to the legacy path whose native attach handles any path). Otherwise the legacy path runs and Mail wraps the body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#237).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
