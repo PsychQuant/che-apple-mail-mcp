@@ -929,39 +929,36 @@ actor MailController {
         // when disabled via env. See MailtoCompose.swift.
         // #237: the fallback is no longer silent — the named reason goes to
         // stderr AND onto the returned result string.
-        var legacyReason = mailtoIneligibilityReasonForCall(
-            format: format, fromAddress: fromAddress, subject: subject)
-        if legacyReason == nil {
-            do {
-                return try composeViaMailto(
+        // #241: the clean-or-disclosed-legacy control flow lives in the tested
+        // routeWrapperFreeCompose router; this site only supplies the real
+        // closures (WrapperFreeRouteTests locks both the router behavior and,
+        // via source scan, this wiring).
+        return try routeWrapperFreeCompose(
+            ineligibilityReason: mailtoIneligibilityReasonForCall(
+                format: format, fromAddress: fromAddress, subject: subject),
+            cleanPath: {
+                try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
                     attachments: attachments, send: true)
-            } catch {
-                warnMailtoFallback(error)
-                // #237/#229 parity: clamp via the tested helper (all newline
-                // flavors + control chars, 200-char cap) — one clamp for all
-                // four compose/reply/forward fallback sites.
-                let clamped = clampedErrorEcho(error.localizedDescription)
-                legacyReason = "mailto GUI path failed: \(clamped)"
-                // fall through to legacy injection
-            }
-        } else {
-            warnMailtoIneligible(legacyReason!)
-        }
-
-        let script = try buildComposeEmailScript(
-            to: to,
-            subject: subject,
-            body: body,
-            cc: cc,
-            bcc: bcc,
-            attachments: attachments,
-            format: format,
-            sanitizeLinks: sanitizeLinks,
-            fromAddress: fromAddress
-        )
-        let result = try runScript(script)
-        return result + legacyPathDisclosure(reason: legacyReason ?? "unknown")
+            },
+            legacyPath: {
+                let script = try buildComposeEmailScript(
+                    to: to,
+                    subject: subject,
+                    body: body,
+                    cc: cc,
+                    bcc: bcc,
+                    attachments: attachments,
+                    format: format,
+                    sanitizeLinks: sanitizeLinks,
+                    fromAddress: fromAddress
+                )
+                return try runScript(script)
+            },
+            disclosure: { legacyPathDisclosure(reason: $0) },
+            warnIneligible: { warnMailtoIneligible($0) },
+            warnTriedAndFailed: { warnMailtoFallback($0) },
+            fallbackReason: { "mailto GUI path failed: \(clampedErrorEcho($0.localizedDescription))" })
     }
 
     /// #175/#237 — nil iff this compose call should use the wrapper-free mailto
@@ -1110,9 +1107,59 @@ actor MailController {
         // disabled via env (CHE_MAIL_DISABLE_PASTE_REPLY), or on any GUI failure.
         // #229: the fallback is no longer silent — the named reason goes to
         // stderr AND onto the returned result string (mirrors #237 compose).
-        var legacyReplyReason = pasteReplyForwardIneligibilityReasonForCall(format: format)
-        if legacyReplyReason == nil {
+        // #241: control flow lives in the tested router (see composeEmail).
+        // The legacy closure keeps the #43 pre-fetch + build + run sequence.
+        func runLegacyReply() throws -> String {
+            // Issue #43: pre-fetch unconditionally — plain mode also needs originalPlain
+            // so composeReplyPlainText can build RFC 3676 quoted body. AppleScript's
+            // `& content` against a freshly-created outgoing message reads as empty
+            // before Mail.app's GUI populates it, which silently dropped the quoted
+            // original from every plain reply since b8a4a89 (initial release).
+            //
+            // Round-1 hardening (#43 verify Logic #4 / DA-3): pre-fetch failure
+            // (sandbox -1743, message deleted, ICloud server-side body) must not
+            // hard-fail the whole reply. Fall back to "no quote" so the user's
+            // body is still preserved and the reply can still be sent/saved.
+            let originalHTML: String?
+            let originalPlain: String
             do {
+                let fetched = try runScript(buildFetchOriginalContentScript(messageRef: ref))
+                let parsed = parseFetchedOriginalContent(fetched)
+                originalHTML = parsed.html
+                originalPlain = parsed.plain
+            } catch {
+                originalHTML = nil
+                originalPlain = ""
+            }
+
+            // #134: use the (id:mailbox:accountId:accountName:) overload — the
+            // resolveMsgRef call is internalized there, so ComposeScriptBuilderTests
+            // locks the wiring (reverting resolveMsgRef→msgRef inside the overload
+            // would now fail the unit test). Pre-fetch path still computes `ref`
+            // inline because it threads through buildFetchOriginalContentScript;
+            // wiring lock for the fetch path is out of #134's scope.
+            let script = try buildReplyEmailScript(
+                id: id,
+                mailbox: mailbox,
+                accountId: accountId,
+                accountName: accountName,
+                userBody: body,
+                userFormat: format,
+                replyAll: replyAll,
+                ccAdditional: dedupedCC,
+                attachments: attachments,
+                saveAsDraft: saveAsDraft,
+                originalHTML: originalHTML,
+                originalPlain: originalPlain,
+                sanitizeLinks: sanitizeLinks
+            )
+            return try runScript(script)
+        }
+
+        // #229: a reply always injects a new body on the legacy path → always disclose.
+        return try routeWrapperFreeCompose(
+            ineligibilityReason: pasteReplyForwardIneligibilityReasonForCall(format: format),
+            cleanPath: {
                 let pasteScript = buildReplyEmailPasteScript(
                     messageRef: ref,
                     newBody: body,
@@ -1124,65 +1171,12 @@ actor MailController {
                 // Always preserve the user's clipboard — the paste path sets it to
                 // the new body for the ⌘V (full-fidelity restore, like #175 attach).
                 return try withClipboardPreserved { try runScript(pasteScript) }
-            } catch {
-                warnReplyForwardPasteFallback(error)
-                // #229: clamp the echoed error to one bounded line — all
-                // newline flavors + control chars, via the tested helper
-                // (verify-round hardening over the \n-only fold).
-                let clamped = clampedErrorEcho(error.localizedDescription)
-                legacyReplyReason = "paste GUI path failed: \(clamped)"
-                // fall through to legacy injection
-            }
-        } else {
-            warnPasteReplyIneligible(legacyReplyReason!)
-        }
-
-        // Issue #43: pre-fetch unconditionally — plain mode also needs originalPlain
-        // so composeReplyPlainText can build RFC 3676 quoted body. AppleScript's
-        // `& content` against a freshly-created outgoing message reads as empty
-        // before Mail.app's GUI populates it, which silently dropped the quoted
-        // original from every plain reply since b8a4a89 (initial release).
-        //
-        // Round-1 hardening (#43 verify Logic #4 / DA-3): pre-fetch failure
-        // (sandbox -1743, message deleted, ICloud server-side body) must not
-        // hard-fail the whole reply. Fall back to "no quote" so the user's
-        // body is still preserved and the reply can still be sent/saved.
-        let originalHTML: String?
-        let originalPlain: String
-        do {
-            let fetched = try runScript(buildFetchOriginalContentScript(messageRef: ref))
-            let parsed = parseFetchedOriginalContent(fetched)
-            originalHTML = parsed.html
-            originalPlain = parsed.plain
-        } catch {
-            originalHTML = nil
-            originalPlain = ""
-        }
-
-        // #134: use the (id:mailbox:accountId:accountName:) overload — the
-        // resolveMsgRef call is internalized there, so ComposeScriptBuilderTests
-        // locks the wiring (reverting resolveMsgRef→msgRef inside the overload
-        // would now fail the unit test). Pre-fetch path still computes `ref`
-        // inline because it threads through buildFetchOriginalContentScript;
-        // wiring lock for the fetch path is out of #134's scope.
-        let script = try buildReplyEmailScript(
-            id: id,
-            mailbox: mailbox,
-            accountId: accountId,
-            accountName: accountName,
-            userBody: body,
-            userFormat: format,
-            replyAll: replyAll,
-            ccAdditional: dedupedCC,
-            attachments: attachments,
-            saveAsDraft: saveAsDraft,
-            originalHTML: originalHTML,
-            originalPlain: originalPlain,
-            sanitizeLinks: sanitizeLinks
-        )
-        let result = try runScript(script)
-        // #229: a reply always injects a new body on the legacy path → always disclose.
-        return result + legacyReplyPathDisclosure(reason: legacyReplyReason ?? "unknown")
+            },
+            legacyPath: { try runLegacyReply() },
+            disclosure: { legacyReplyPathDisclosure(reason: $0) },
+            warnIneligible: { warnPasteReplyIneligible($0) },
+            warnTriedAndFailed: { warnReplyForwardPasteFallback($0) },
+            fallbackReason: { "paste GUI path failed: \(clampedErrorEcho($0.localizedDescription))" })
     }
 
     /// Forward an email
@@ -1203,72 +1197,68 @@ actor MailController {
         // the named reason goes to stderr AND onto the returned result string.
         // A forward with NO body never gets a disclosure suffix: the legacy
         // path injects nothing there and is already wrapper-free.
-        var legacyForwardReason: String? = nil
-        if let newBody = body {
-            legacyForwardReason = pasteReplyForwardIneligibilityReasonForCall(format: format)
-            if legacyForwardReason == nil {
+        // #241: control flow lives in the tested router (see composeEmail).
+        // The legacy closure is shared with the bodyless path below.
+        func runLegacyForward() throws -> String {
+            // Issue #44 (mirrors #43): pre-fetch unconditionally when body is provided.
+            // Plain mode also needs originalPlain so composeReplyPlainText can build
+            // RFC 3676 quoted body — same root cause as #43 (AppleScript `& content`
+            // against fresh outgoing message returns empty before GUI populates it).
+            // Wrap in try/catch for graceful degrade (mirror #43 round-1 hardening):
+            // pre-fetch failure (sandbox -1743, deleted message) must not hard-fail
+            // the whole forward.
+            let originalHTML: String?
+            let originalPlain: String
+            if body != nil {
                 do {
-                    let pasteScript = buildForwardEmailPasteScript(
-                        messageRef: ref, to: to, newBody: newBody)
-                    return try withClipboardPreserved { try runScript(pasteScript) }
+                    let fetched = try runScript(buildFetchOriginalContentScript(messageRef: ref))
+                    let parsed = parseFetchedOriginalContent(fetched)
+                    originalHTML = parsed.html
+                    originalPlain = parsed.plain
                 } catch {
-                    warnReplyForwardPasteFallback(error)
-                    // #229 parity commit: this forward site was missed by the
-                    // f5a4bf6 reply-site switch (different comment text broke
-                    // the replace) — unified onto the tested helper here.
-                    let clamped = clampedErrorEcho(error.localizedDescription)
-                    legacyForwardReason = "paste GUI path failed: \(clamped)"
-                    // fall through to legacy injection
+                    originalHTML = nil
+                    originalPlain = ""
                 }
             } else {
-                warnPasteReplyIneligible(legacyForwardReason!)
-            }
-        }
-
-        // Issue #44 (mirrors #43): pre-fetch unconditionally when body is provided.
-        // Plain mode also needs originalPlain so composeReplyPlainText can build
-        // RFC 3676 quoted body — same root cause as #43 (AppleScript `& content`
-        // against fresh outgoing message returns empty before GUI populates it).
-        // Wrap in try/catch for graceful degrade (mirror #43 round-1 hardening):
-        // pre-fetch failure (sandbox -1743, deleted message) must not hard-fail
-        // the whole forward.
-        let originalHTML: String?
-        let originalPlain: String
-        if body != nil {
-            do {
-                let fetched = try runScript(buildFetchOriginalContentScript(messageRef: ref))
-                let parsed = parseFetchedOriginalContent(fetched)
-                originalHTML = parsed.html
-                originalPlain = parsed.plain
-            } catch {
                 originalHTML = nil
                 originalPlain = ""
             }
-        } else {
-            originalHTML = nil
-            originalPlain = ""
+
+            // #134: use the (id:mailbox:accountId:accountName:) overload — see
+            // the matching note in replyEmail above.
+            let script = try buildForwardEmailScript(
+                id: id,
+                mailbox: mailbox,
+                accountId: accountId,
+                accountName: accountName,
+                to: to,
+                userBody: body,
+                userFormat: format,
+                originalHTML: originalHTML,
+                originalPlain: originalPlain,
+                sanitizeLinks: sanitizeLinks
+            )
+            return try runScript(script)
         }
 
-        // #134: use the (id:mailbox:accountId:accountName:) overload — see
-        // the matching note in replyEmail above.
-        let script = try buildForwardEmailScript(
-            id: id,
-            mailbox: mailbox,
-            accountId: accountId,
-            accountName: accountName,
-            to: to,
-            userBody: body,
-            userFormat: format,
-            originalHTML: originalHTML,
-            originalPlain: originalPlain,
-            sanitizeLinks: sanitizeLinks
-        )
-        let result = try runScript(script)
-        // #229: disclose only when a new body was injected by the legacy path.
-        if let reason = legacyForwardReason {
-            return result + legacyReplyPathDisclosure(reason: reason)
+        // #229: disclose only when a new body would be injected by the legacy
+        // path — a bodyless forward injects nothing (already wrapper-free), so
+        // it bypasses the router entirely and never gets a suffix.
+        if let newBody = body {
+            return try routeWrapperFreeCompose(
+                ineligibilityReason: pasteReplyForwardIneligibilityReasonForCall(format: format),
+                cleanPath: {
+                    let pasteScript = buildForwardEmailPasteScript(
+                        messageRef: ref, to: to, newBody: newBody)
+                    return try withClipboardPreserved { try runScript(pasteScript) }
+                },
+                legacyPath: { try runLegacyForward() },
+                disclosure: { legacyReplyPathDisclosure(reason: $0) },
+                warnIneligible: { warnPasteReplyIneligible($0) },
+                warnTriedAndFailed: { warnReplyForwardPasteFallback($0) },
+                fallbackReason: { "paste GUI path failed: \(clampedErrorEcho($0.localizedDescription))" })
         }
-        return result
+        return try runLegacyForward()
     }
 
     // MARK: - Draft Operations
@@ -1312,39 +1302,33 @@ actor MailController {
         // graceful fallback to legacy injection. See composeEmail above.
         // #237: the fallback is no longer silent — the named reason goes to
         // stderr AND onto the returned result string.
-        var legacyReason = mailtoIneligibilityReasonForCall(
-            format: format, fromAddress: fromAddress, subject: subject)
-        if legacyReason == nil {
-            do {
-                return try composeViaMailto(
+        // #241: control flow lives in the tested router (see composeEmail).
+        return try routeWrapperFreeCompose(
+            ineligibilityReason: mailtoIneligibilityReasonForCall(
+                format: format, fromAddress: fromAddress, subject: subject),
+            cleanPath: {
+                try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
                     attachments: attachments, send: false)
-            } catch {
-                warnMailtoFallback(error)
-                // #237/#229 parity: clamp via the tested helper (all newline
-                // flavors + control chars, 200-char cap) — one clamp for all
-                // four compose/reply/forward fallback sites.
-                let clamped = clampedErrorEcho(error.localizedDescription)
-                legacyReason = "mailto GUI path failed: \(clamped)"
-                // fall through to legacy injection
-            }
-        } else {
-            warnMailtoIneligible(legacyReason!)
-        }
-
-        let script = try buildCreateDraftScript(
-            to: to,
-            subject: subject,
-            body: body,
-            cc: cc,
-            bcc: bcc,
-            attachments: attachments,
-            format: format,
-            sanitizeLinks: sanitizeLinks,
-            fromAddress: fromAddress
-        )
-        let result = try runScript(script)
-        return result + legacyPathDisclosure(reason: legacyReason ?? "unknown")
+            },
+            legacyPath: {
+                let script = try buildCreateDraftScript(
+                    to: to,
+                    subject: subject,
+                    body: body,
+                    cc: cc,
+                    bcc: bcc,
+                    attachments: attachments,
+                    format: format,
+                    sanitizeLinks: sanitizeLinks,
+                    fromAddress: fromAddress
+                )
+                return try runScript(script)
+            },
+            disclosure: { legacyPathDisclosure(reason: $0) },
+            warnIneligible: { warnMailtoIneligible($0) },
+            warnTriedAndFailed: { warnMailtoFallback($0) },
+            fallbackReason: { "mailto GUI path failed: \(clampedErrorEcho($0.localizedDescription))" })
     }
 
     // MARK: - Attachment Operations
