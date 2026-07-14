@@ -28,7 +28,7 @@ final class EmailMarkdownRendererTests: XCTestCase {
         XCTAssertEqual(lines[1], "message_id: \"<CAKM2gv@mail.gmail.com>\"")
         XCTAssertEqual(lines[2], "thread_key: \"4 papers using MB3.5\"")
         XCTAssertEqual(lines[3], "in_reply_to: \"\"")
-        XCTAssertEqual(lines[4], "date: 2026-06-13T08:01:14Z")
+        XCTAssertEqual(lines[4], "date: 2026-06-13T16:01:14+08:00")
         XCTAssertEqual(lines[5], "sender: peng.cyj@gmail.com")
         XCTAssertEqual(lines[6], "direction: received")
         XCTAssertEqual(lines[7], "---")
@@ -56,15 +56,43 @@ final class EmailMarkdownRendererTests: XCTestCase {
         XCTAssertEqual(EmailMarkdownRenderer.bareEmail("  Spaced <X@Y.COM> "), "x@y.com")
     }
 
-    func testRfc822ToISO8601UTC() {
+    func testRfc822ToISO8601_preservesNumericOffset() {
+        // #244 — the frontmatter date must agree with the body `Date:` line:
+        // keep the original numeric UTC offset instead of converting to Z.
         XCTAssertEqual(
-            EmailMarkdownRenderer.rfc822ToISO8601UTC("Sat, 13 Jun 2026 16:01:14 +0800"),
-            "2026-06-13T08:01:14Z", "Taiwan +0800 must convert to UTC")
+            EmailMarkdownRenderer.rfc822ToISO8601("Sat, 13 Jun 2026 16:01:14 +0800"),
+            "2026-06-13T16:01:14+08:00", "Taiwan +0800 must keep its offset (same instant)")
         XCTAssertEqual(
-            EmailMarkdownRenderer.rfc822ToISO8601UTC("Sun, 3 May 2026 01:09:32 +0000"),
+            EmailMarkdownRenderer.rfc822ToISO8601("Mon, 13 Jul 2026 16:49:57 +0800"),
+            "2026-07-13T16:49:57+08:00", "the #244 reported example")
+        XCTAssertEqual(
+            EmailMarkdownRenderer.rfc822ToISO8601("Wed, 1 Jul 2026 09:15:00 -0530"),
+            "2026-07-01T09:15:00-05:30", "negative half-hour offsets survive")
+    }
+
+    func testRfc822ToISO8601_zeroOffsetRendersZ() {
+        // +0000 / -0000 keep the historical Z rendering (byte-identical to the
+        // pre-#244 output for UTC mail).
+        XCTAssertEqual(
+            EmailMarkdownRenderer.rfc822ToISO8601("Sun, 3 May 2026 01:09:32 +0000"),
             "2026-05-03T01:09:32Z")
+        XCTAssertEqual(
+            EmailMarkdownRenderer.rfc822ToISO8601("Sun, 3 May 2026 01:09:32 -0000"),
+            "2026-05-03T01:09:32Z")
+    }
+
+    func testRfc822ToISO8601_namedZoneFallsBackToUTC() {
+        // Named zones (RFC 5322 obsolete syntax) carry no reliable numeric
+        // offset token — fall back to the historical UTC rendering.
+        XCTAssertEqual(
+            EmailMarkdownRenderer.rfc822ToISO8601("Sat, 13 Jun 2026 16:01:14 GMT"),
+            "2026-06-13T16:01:14Z")
+    }
+
+    func testRfc822ToISO8601_unparseablePassesThrough() {
         // Unparseable → passthrough (never drop data)
-        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601UTC("not a date"), "not a date")
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("not a date"), "not a date")
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601(""), "")
     }
 
     func testRender_verbatimBodyPreserved() {
@@ -104,7 +132,39 @@ final class EmailMarkdownRendererTests: XCTestCase {
                        "newline in message_id must be flattened, not injected as a YAML key")
         // Core fields still present and well-formed.
         XCTAssertTrue(frontmatter.contains("thread_key: \"Topic injected_subj: evil\""))
-        XCTAssertTrue(frontmatter.contains("date: 2026-06-13T08:01:14Z"))
+        XCTAssertTrue(frontmatter.contains("date: 2026-06-13T16:01:14+08:00"))
+    }
+
+    func testRfc822ToISO8601_crossMidnight_datePartIsSenderLocal() {
+        // #244 — 00:30 +0800 is 16:30 UTC the PREVIOUS day. The `YYYY-MM-DD`
+        // prefix (which the export filename takes via prefix(10)) must be the
+        // sender-local calendar date, consistent with the body Date: line.
+        let iso = EmailMarkdownRenderer.rfc822ToISO8601("Mon, 14 Jul 2026 00:30:00 +0800")
+        XCTAssertEqual(iso, "2026-07-14T00:30:00+08:00")
+        XCTAssertEqual(String(iso.prefix(10)), "2026-07-14",
+                       "filename date must be sender-local, not the UTC date 2026-07-13")
+    }
+
+    func testFrontmatterDate_andFilenameDate_shareOneHelper() throws {
+        // Three-way coherence (#244): frontmatter `date`, the manifest/index
+        // value, and the filename `YYYY-MM-DD` all derive from the same
+        // rfc822ToISO8601 output. Assert the render path agrees with the
+        // helper, and pin (via source scan) that the export filename path
+        // calls the same helper rather than growing its own conversion.
+        let md = EmailMarkdownRenderer.render(
+            makeEmail(date: "Mon, 14 Jul 2026 00:30:00 +0800"),
+            direction: "received", inReplyTo: "")
+        XCTAssertTrue(md.contains("date: 2026-07-14T00:30:00+08:00"))
+
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/CheAppleMailMCP/ExportEmailsMarkdown.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(
+            source.contains("EmailMarkdownRenderer.rfc822ToISO8601(content.date)"),
+            "export filename/manifest date must come from the shared helper (#244)")
+        XCTAssertFalse(source.contains("rfc822ToISO8601UTC"),
+                       "no call site may keep the removed UTC-pinned helper name")
     }
 
     func testSingleLine_flattensControlChars() {

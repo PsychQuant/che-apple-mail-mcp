@@ -358,8 +358,8 @@ enum ExportEmailsMarkdown {
             }
 
             let threadKey = EmailMarkdownRenderer.stripReplyPrefixes(content.subject)
-            let iso = EmailMarkdownRenderer.rfc822ToISO8601UTC(content.date)
-            // Date may be unparseable (rfc822ToISO8601UTC passes it through), so
+            let iso = EmailMarkdownRenderer.rfc822ToISO8601(content.date)
+            // Date may be unparseable (rfc822ToISO8601 passes it through), so
             // keep only digits/dashes — never let a raw header reach a path.
             let rawDate = String(iso.prefix(10)).filter { $0.isNumber || $0 == "-" }
             let localDate = rawDate.isEmpty ? "unknown-date" : rawDate
