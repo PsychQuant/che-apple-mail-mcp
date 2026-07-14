@@ -362,3 +362,16 @@ func routeWrapperFreeCompose(
     let result = try legacyPath()
     return result + disclosure(legacyReason ?? "unknown")
 }
+
+/// #239 — the `require_wrapper_free: true` refusal message: names the
+/// ineligibility reason and every actionable alternative, so the caller can
+/// fix the call instead of receiving a silently wrapped draft.
+func requireWrapperFreeRefusal(reason: String) -> String {
+    return "require_wrapper_free is set but the wrapper-free mailto path is not available — "
+        + "reason: \(reason). No draft was created and nothing was sent. Alternatives: "
+        + "omit from_address (compose from the default account and switch sender manually in "
+        + "the compose window — clean custom-sender path is pending #219); use format 'plain'; "
+        + "provide a non-empty subject; grant Accessibility (check_accessibility); "
+        + "unset \(mailtoComposeDisableEnvKey). Or drop require_wrapper_free to accept the "
+        + "legacy path (body wrapped in <blockquote type=\"cite\"> on some mobile clients)."
+}
