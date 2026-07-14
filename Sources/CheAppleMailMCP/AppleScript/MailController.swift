@@ -1759,7 +1759,7 @@ actor MailController {
         let hasAccount = !(accountId ?? "").isEmpty || !(accountName ?? "").isEmpty
         if hasAccount {
             let script = buildSpecialMailboxNamesScript(accountId: accountId, accountName: accountName ?? "")
-            let raw = try runScriptAsList(script)  // [matchedId, matchedName, matchCount, n0…n3] (drafts/sent/trash/junk; inbox deferred)
+            let raw = try runScriptAsList(script)  // [matchedId, matchedName, matchCount, n0…n4] (drafts/sent/trash/junk; inbox deferred)
             // Pure parse + pure throw-translation (both unit-tested without the actor):
             // .resolved → canonical metadata + present special names (absent omitted, D3);
             // .noMatch → operationFailed; .ambiguous → invalidParameter (#179).

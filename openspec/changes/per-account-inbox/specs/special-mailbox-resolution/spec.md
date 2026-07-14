@@ -22,9 +22,9 @@ Special-mailbox names are Mail's AppleScript-model metadata; resolution SHALL be
 
 - **GIVEN** a Gmail account (UUID `G`, localized special names `草稿` / `已寄出` / `垃圾桶` / `垃圾郵件`) and an iCloud account (UUID `I`, names `Drafts` / `Sent` / `Trash` / `Junk`)
 - **WHEN** called with `account_id = G`
-- **THEN** the result is `{account_id: G, account_name: …, drafts: "草稿", sent: "已寄出", trash: "垃圾桶", junk: "垃圾郵件"}` — NOT the iCloud names, and with no `inbox` key
+- **THEN** the result is `{account_id: G, account_name: …, inbox: "INBOX", drafts: "草稿", sent: "已寄出", trash: "垃圾桶", junk: "垃圾郵件"}` — NOT the iCloud names (#249: the live check shows Gmail's per-account inbox child is named `INBOX`; a localized example is the Exchange `收件匣`)
 
-#### Scenario: Per-account inbox is deferred until live verification
+#### Scenario: Per-account inbox is resolved (deferral lifted by the #249 live check)
 
 - **WHEN** `get_special_mailboxes` is called with an account selector
 - **THEN** the result SHALL include the account's per-account `inbox` real name when present — the live multi-account check the previous deferral required has confirmed `every mailbox of inbox` exposes per-account children (#249)

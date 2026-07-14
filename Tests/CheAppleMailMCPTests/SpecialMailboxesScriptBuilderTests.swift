@@ -4,11 +4,11 @@ import Foundation
 
 /// Tests for `buildSpecialMailboxNamesScript` + `resolveSpecialMailboxesResult` (#179)
 /// — per-account special-mailbox real-name resolution via the #174 unified-children
-/// reverse-lookup, generalized across drafts/sent/trash/junk (inbox deferred,
+/// reverse-lookup, generalized across drafts/sent/trash/junk (inbox included since #249
 /// outbox excluded).
 final class SpecialMailboxesScriptBuilderTests: XCTestCase {
 
-    // inbox deferred (#179 verify): only the four `<X> mailbox` special mailboxes ship.
+    // inbox included since #249): only the four `<X> mailbox` special mailboxes ship.
     private let perAccountContainers = ["drafts mailbox", "sent mailbox", "trash mailbox", "junk mailbox"]
 
     // MARK: - Builder: UUID mode
@@ -126,7 +126,7 @@ final class SpecialMailboxesScriptBuilderTests: XCTestCase {
     }
 
     // MARK: - Parser: resolveSpecialMailboxesResult (the runtime contract)
-    // raw = [matchedId, matchedName, matchCount, drafts, sent, trash, junk]  (inbox deferred)
+    // raw = [matchedId, matchedName, matchCount, drafts, sent, trash, junk]  (inbox included since #249)
 
     /// Canonical metadata + all four names present.
     func testParse_resolved_canonicalMetadataAndAllNames() {
@@ -309,7 +309,7 @@ extension SpecialMailboxesScriptBuilderTests {
         // #249: the 2026-07-14 live check confirmed `every mailbox of inbox`
         // exposes per-account children on all 7 accounts (NTU Exchange even
         // localizes: 收件匣) — the spec's own deferral condition is met.
-        // Appended LAST so n0…n3 positions (drafts/sent/trash/junk) are stable.
+        // Appended LAST so n0…n4 positions (drafts/sent/trash/junk) are stable.
         XCTAssertEqual(perAccountSpecialMailboxes.map(\.key),
                        ["drafts", "sent", "trash", "junk", "inbox"])
         XCTAssertEqual(perAccountSpecialMailboxes.last?.container, "inbox",
