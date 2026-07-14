@@ -111,3 +111,156 @@ final class WrapperFreeRouteTests: XCTestCase {
         XCTAssertFalse(source.contains("var legacyForwardReason"))
     }
 }
+
+/// #242 — send-stage failures must NOT blindly fall back to a legacy re-send
+/// (potential duplicate outbound mail). The send keystroke dispatch is wrapped
+/// in a POSTDISPATCH sentinel inside the AppleScript; the Swift layer refuses
+/// fallback for sentinel-marked errors and reports unknown-send-state instead.
+final class SendStageNoRefallbackTests: XCTestCase {
+
+    // MARK: builder sentinel contract
+
+    func testMailtoScript_sendTrue_wrapsDispatchInPostDispatchSentinel() {
+        let script = buildMailtoComposeScript(
+            url: "mailto:a@b.c?subject=s", subject: "s", attachments: [], send: true)
+        XCTAssertTrue(script.contains("POSTDISPATCH: "),
+                      "send:true script must mark post-dispatch errors with the sentinel")
+        // The dispatch keystroke sits inside the sentinel try-block: the
+        // keystroke appears before the sentinel's own `on error _dErr`.
+        let keystroke = script.range(of: "keystroke \"d\" using {command down, shift down}")
+        let sentinelHandler = script.range(of: "on error _dErr")
+        guard let k = keystroke, let h = sentinelHandler else {
+            return XCTFail("send keystroke and sentinel handler must both be present")
+        }
+        XCTAssertLessThan(k.lowerBound, h.lowerBound,
+                          "send keystroke must precede its sentinel on-error handler")
+    }
+
+    func testMailtoScript_sendTrue_cleanupSkipsCloseOnPostDispatch() {
+        let script = buildMailtoComposeScript(
+            url: "mailto:a@b.c?subject=s", subject: "s", attachments: [], send: true)
+        // Three-branch handler: sentinel-marked rethrow / flag-marked rethrow /
+        // genuine pre-dispatch cleanup. The close-cleanup must sit in the ELSE
+        // branch only — never reachable for a marked or flag-set error.
+        XCTAssertTrue(script.contains("if _mErr starts with \"POSTDISPATCH:\" then"),
+                      "on-error handler must branch on the sentinel before any cleanup")
+        guard let elseBranch = script.range(of: "else if _dispatched then"),
+              let cleanup = script.range(of: "close _cw saving no") else {
+            return XCTFail("flag branch and cleanup must both be present")
+        }
+        XCTAssertLessThan(elseBranch.lowerBound, cleanup.lowerBound,
+                          "cleanup (window close) must come after both rethrow branches"
+                          + " — the window is the user's only evidence on unknown send state")
+    }
+
+    func testMailtoScript_sendFalse_noSentinel() {
+        // create_draft (⌘S) keeps the plain fallback: a duplicated DRAFT is
+        // visible and harmless, unlike a duplicated outbound send.
+        let script = buildMailtoComposeScript(
+            url: "mailto:a@b.c?subject=s", subject: "s", attachments: [], send: false)
+        XCTAssertFalse(script.contains("POSTDISPATCH"),
+                       "draft save path must not carry the send sentinel")
+        XCTAssertFalse(script.contains("_dispatched"),
+                       "draft save path must not carry the dispatch flag either")
+    }
+
+    func testMailtoScript_sendTrue_tailProtectedByDispatchedFlag() {
+        // #242 verify REQUIRED hardening (Codex HIGH + DA): the post-dispatch
+        // tail (`delay`) runs ONLY on the success path — the mail is DEFINITELY
+        // sent — so an error there must be sentinel-marked, never an unmarked
+        // error that re-enters the legacy fallback (guaranteed duplicate).
+        let script = buildMailtoComposeScript(
+            url: "mailto:a@b.c?subject=s", subject: "s", attachments: [], send: true)
+        XCTAssertTrue(script.contains("set _dispatched to false"),
+                      "flag must be initialized before the GUI try block")
+        let keystroke = script.range(of: "keystroke \"d\" using {command down, shift down}")
+        let flagSet = script.range(of: "set _dispatched to true")
+        let tailDelay = script.range(of: "delay", range: (flagSet?.upperBound ?? script.startIndex)..<script.endIndex)
+        let outerHandler = script.range(of: "on error _mErr")
+        guard let k = keystroke, let f = flagSet, let d = tailDelay, let h = outerHandler else {
+            return XCTFail("keystroke / flag-set / tail delay / outer handler must all be present")
+        }
+        XCTAssertLessThan(k.lowerBound, f.lowerBound, "flag set after the dispatch keystroke")
+        XCTAssertLessThan(f.lowerBound, d.lowerBound, "tail delay after the flag set")
+        XCTAssertLessThan(d.lowerBound, h.lowerBound,
+                          "tail delay must sit INSIDE the outer try (before its handler)")
+        XCTAssertTrue(script.contains("else if _dispatched then"),
+                      "outer handler must sentinel-mark tail errors via the flag")
+    }
+
+    // MARK: Swift-side sentinel detection
+
+    func testIsPostDispatchError_detectsSentinel() {
+        let post = MailError.scriptFailed(message: "POSTDISPATCH: keystroke failed", code: -1)
+        XCTAssertTrue(isPostDispatchError(post))
+        let pre = MailError.scriptFailed(message: "a sheet/panel is still open on the compose window", code: -1)
+        XCTAssertFalse(isPostDispatchError(pre))
+        XCTAssertFalse(isPostDispatchError(MailError.scriptCreationFailed))
+        // #242 verify hardening: prefix-only, symmetric with the AppleScript
+        // `does not start with` check — a mid-string token (user-controlled
+        // content echoed into a pre-dispatch error) must NOT classify.
+        let midString = MailError.scriptFailed(message: "file 'POSTDISPATCH: evil.pdf' not found", code: -1)
+        XCTAssertFalse(isPostDispatchError(midString),
+                       "sentinel must match as a PREFIX only")
+    }
+
+    // MARK: router no-fallback branch
+
+    private enum Boom: Error, LocalizedError {
+        case post
+        var errorDescription: String? { "POSTDISPATCH: window vanished mid-send" }
+    }
+
+    func testRouter_shouldFallbackFalse_rethrowsMapped_neverRunsLegacy() {
+        var legacyCalls = 0
+        var failedWarns = 0
+        XCTAssertThrowsError(try routeWrapperFreeCompose(
+            ineligibilityReason: nil,
+            cleanPath: { throw Boom.post },
+            legacyPath: { legacyCalls += 1; return "Legacy OK" },
+            disclosure: { _ in "" },
+            warnIneligible: { _ in },
+            warnTriedAndFailed: { _ in failedWarns += 1 },
+            fallbackReason: { _ in "unused" },
+            shouldFallback: { _ in false },
+            mapNoFallbackError: { _ in
+                MailError.scriptFailed(message: "send state UNKNOWN — check Sent/Outbox before retrying", code: -1)
+            })) { error in
+            XCTAssertTrue("\(error)".contains("send state UNKNOWN"),
+                          "no-fallback branch must surface the mapped unknown-send-state error")
+        }
+        XCTAssertEqual(legacyCalls, 0, "legacy path must NEVER run when fallback is refused")
+        XCTAssertEqual(failedWarns, 0, "the tried-and-failed fallback warn must not fire on the refused branch")
+    }
+
+    func testRouter_shouldFallbackDefaultsTrue_existingBehaviorUnchanged() throws {
+        var legacyCalls = 0
+        let result = try routeWrapperFreeCompose(
+            ineligibilityReason: nil,
+            cleanPath: { throw Boom.post },
+            legacyPath: { legacyCalls += 1; return "Legacy OK" },
+            disclosure: { " [\($0)]" },
+            warnIneligible: { _ in },
+            warnTriedAndFailed: { _ in },
+            fallbackReason: { _ in "reason" })
+        XCTAssertEqual(legacyCalls, 1)
+        XCTAssertTrue(result.hasPrefix("Legacy OK"))
+    }
+
+    // MARK: production wiring
+
+    func testWiring_composeEmailRefusesPostDispatchFallback() throws {
+        // compose_email (send path) must consult isPostDispatchError; the
+        // draft/reply/forward sites must NOT (their dispatch is ⌘S / their own
+        // builders — sister scope, tracked separately).
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(source.contains("shouldFallback: { !isPostDispatchError($0) }"),
+                      "composeEmail must refuse legacy fallback for post-dispatch send errors (#242)")
+        XCTAssertEqual(
+            source.components(separatedBy: "isPostDispatchError").count - 1, 1,
+            "exactly one site (composeEmail send) consults the sentinel")
+    }
+}
