@@ -959,9 +959,16 @@ actor MailController {
                 format: format, fromAddress: fromAddress, subject: subject) {
                 throw MailError.invalidParameter(requireWrapperFreeRefusal(reason: reason))
             }
-            return try composeViaMailto(
-                to: to, subject: subject, body: body, cc: cc, bcc: bcc,
-                attachments: attachments, send: true)
+            do {
+                return try composeViaMailto(
+                    to: to, subject: subject, body: body, cc: cc, bcc: bcc,
+                    attachments: attachments, send: true)
+            } catch where isPostDispatchError(error) {
+                // #239 verify REQUIRED: same friendly guardrail as the default
+                // path — a raw POSTDISPATCH token invites an auto-retrying
+                // caller to re-send. Still no legacy fallback.
+                throw unknownSendStateError(error)
+            }
         }
         // #241: the clean-or-disclosed-legacy control flow lives in the tested
         // routeWrapperFreeCompose router; this site only supplies the real
@@ -997,16 +1004,7 @@ actor MailController {
             // is UNKNOWN — refuse the legacy re-send (duplicate outbound risk)
             // and tell the caller what to check instead.
             shouldFallback: { !isPostDispatchError($0) },
-            mapNoFallbackError: {
-                MailError.scriptFailed(
-                    message: "the send keystroke was already dispatched but the GUI step failed "
-                        + "afterwards — the send state is UNKNOWN and the mail may already be on "
-                        + "the wire. NOT retrying via the legacy path (that could send a duplicate). "
-                        + "Check Mail's Sent mailbox / Outbox before re-sending. The compose window "
-                        + "(if still open) was left untouched for inspection. Original error: "
-                        + clampedErrorEcho($0.localizedDescription),
-                    code: -1)
-            })
+            mapNoFallbackError: { unknownSendStateError($0) })
     }
 
     /// #175/#237 — nil iff this compose call should use the wrapper-free mailto

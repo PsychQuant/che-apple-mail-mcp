@@ -61,6 +61,31 @@ final class RequireWrapperFreeTests: XCTestCase {
         XCTAssertEqual(calls, 1, "exactly the clean attempt — legacy must NOT run")
     }
 
+    func testStrictEligible_postDispatchFailure_mapsToUnknownSendState() async throws {
+        // #239 verify REQUIRED (Codex MEDIUM + DA): a strict caller must get
+        // the same "check Sent/Outbox, do NOT retry" guidance the default path
+        // gives — a raw POSTDISPATCH token invites an auto-retrying LLM caller
+        // to re-send (the #242 hazard on a new surface). Still NO fallback.
+        var calls = 0
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in
+                calls += 1
+                throw MailError.scriptFailed(message: "POSTDISPATCH: window gone", code: -1)
+            },
+            ineligibility: { nil })
+        do {
+            _ = try await MailController.shared.composeEmail(
+                to: ["a@b.c"], subject: "s", body: "b", requireWrapperFree: true)
+            XCTFail("must throw")
+        } catch {
+            let msg = error.localizedDescription
+            XCTAssertTrue(msg.contains("Sent"), "must direct to Sent/Outbox: \(msg)")
+            XCTAssertTrue(msg.contains("NOT retrying") || msg.contains("duplicate"),
+                          "must carry the do-not-retry guidance: \(msg)")
+        }
+        XCTAssertEqual(calls, 1, "no legacy fallback")
+    }
+
     func testStrictEligible_cleanPathSucceeds_normalResult() async throws {
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in "Email sent successfully (mailto path)" },
