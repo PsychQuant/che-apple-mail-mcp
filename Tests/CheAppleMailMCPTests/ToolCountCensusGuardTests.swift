@@ -70,6 +70,48 @@ final class ToolCountCensusGuardTests: XCTestCase {
                           patterns: [#"<summary><b>[^<]+ \((\d+)\)</b></summary>"#])
     }
 
+    /// Per-section (header-claimed N, actual tool-row count, section name).
+    /// Guards each section individually so a compensating +1/−1 pair across two
+    /// sections cannot pass the aggregate sum check (verify #248, Codex LOW).
+    private func sectionHeaderVsRows(in text: String) throws -> [(name: String, claimed: Int, rows: Int)] {
+        let sectionRegex = try NSRegularExpression(
+            pattern: #"<summary><b>([^<]+) \((\d+)\)</b></summary>(.*?)</details>"#,
+            options: [.dotMatchesLineSeparators])
+        let rowRegex = try NSRegularExpression(pattern: #"^\| `[a-z0-9_]+` \|"#,
+                                               options: [.anchorsMatchLines])
+        var result: [(String, Int, Int)] = []
+        let range = NSRange(text.startIndex..., in: text)
+        sectionRegex.enumerateMatches(in: text, range: range) { match, _, _ in
+            guard let match,
+                  let nameRange = Range(match.range(at: 1), in: text),
+                  let claimedRange = Range(match.range(at: 2), in: text),
+                  let bodyRange = Range(match.range(at: 3), in: text) else { return }
+            let body = String(text[bodyRange])
+            let rows = rowRegex.numberOfMatches(
+                in: body, range: NSRange(body.startIndex..., in: body))
+            result.append((String(text[nameRange]), Int(text[claimedRange]) ?? -1, rows))
+        }
+        return result
+    }
+
+    private func assertSectionHeadersMatchRows(file relativePath: String) throws {
+        let sections = try sectionHeaderVsRows(in: try read(relativePath))
+        XCTAssertFalse(sections.isEmpty)
+        for section in sections {
+            XCTAssertEqual(section.claimed, section.rows,
+                           "\(relativePath) section '\(section.name)' header claims "
+                           + "\(section.claimed) tools but tables \(section.rows)")
+        }
+    }
+
+    func testReadme_eachSectionHeader_matchesItsRowCount() throws {
+        try assertSectionHeadersMatchRows(file: "README.md")
+    }
+
+    func testReadmeZh_eachSectionHeader_matchesItsRowCount() throws {
+        try assertSectionHeadersMatchRows(file: "README_zh-TW.md")
+    }
+
     // MARK: README.md (English)
 
     func testReadme_countClaims_matchDefineTools() throws {
