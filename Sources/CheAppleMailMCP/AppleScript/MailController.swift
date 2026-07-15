@@ -925,7 +925,7 @@ actor MailController {
     }
 
     /// Compose and send a new email
-    func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false, fromAddress: String? = nil) throws -> String {
+    func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false, fromAddress: String? = nil, requireWrapperFree: Bool = false) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41: validate every recipient field (to / cc / bcc) at the boundary.
         try validateEmailAddresses(to, field: "to")
@@ -951,6 +951,25 @@ actor MailController {
         // when disabled via env. See MailtoCompose.swift.
         // #237: the fallback is no longer silent — the named reason goes to
         // stderr AND onto the returned result string.
+        // #239: strict mode — a caller that requires a wrapper-free body gets a
+        // clean failure (named reason + alternatives) instead of a silently
+        // wrapped draft; a clean-path error propagates with NO legacy fallback.
+        if requireWrapperFree {
+            if let reason = mailtoIneligibilityReasonForCall(
+                format: format, fromAddress: fromAddress, subject: subject) {
+                throw MailError.invalidParameter(requireWrapperFreeRefusal(reason: reason))
+            }
+            do {
+                return try composeViaMailto(
+                    to: to, subject: subject, body: body, cc: cc, bcc: bcc,
+                    attachments: attachments, send: true)
+            } catch where isPostDispatchError(error) {
+                // #239 verify REQUIRED: same friendly guardrail as the default
+                // path — a raw POSTDISPATCH token invites an auto-retrying
+                // caller to re-send. Still no legacy fallback.
+                throw unknownSendStateError(error)
+            }
+        }
         // #241: the clean-or-disclosed-legacy control flow lives in the tested
         // routeWrapperFreeCompose router; this site only supplies the real
         // closures (WrapperFreeRouteTests locks both the router behavior and,
@@ -985,16 +1004,7 @@ actor MailController {
             // is UNKNOWN — refuse the legacy re-send (duplicate outbound risk)
             // and tell the caller what to check instead.
             shouldFallback: { !isPostDispatchError($0) },
-            mapNoFallbackError: {
-                MailError.scriptFailed(
-                    message: "the send keystroke was already dispatched but the GUI step failed "
-                        + "afterwards — the send state is UNKNOWN and the mail may already be on "
-                        + "the wire. NOT retrying via the legacy path (that could send a duplicate). "
-                        + "Check Mail's Sent mailbox / Outbox before re-sending. The compose window "
-                        + "(if still open) was left untouched for inspection. Original error: "
-                        + clampedErrorEcho($0.localizedDescription),
-                    code: -1)
-            })
+            mapNoFallbackError: { unknownSendStateError($0) })
     }
 
     /// #175/#237 — nil iff this compose call should use the wrapper-free mailto
@@ -1355,7 +1365,7 @@ actor MailController {
     }
 
     /// Create a draft
-    func createDraft(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false, fromAddress: String? = nil) throws -> String {
+    func createDraft(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false, fromAddress: String? = nil, requireWrapperFree: Bool = false) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41: validate every recipient field (to / cc / bcc) at the boundary (#107).
         try validateEmailAddresses(to, field: "to")
@@ -1364,6 +1374,17 @@ actor MailController {
         // #131: validate sender address (see composeEmail).
         if let from = fromAddress, !from.isEmpty {
             try validateEmailAddresses([from], field: "from_address")
+        }
+
+        // #239: strict mode (see composeEmail above).
+        if requireWrapperFree {
+            if let reason = mailtoIneligibilityReasonForCall(
+                format: format, fromAddress: fromAddress, subject: subject) {
+                throw MailError.invalidParameter(requireWrapperFreeRefusal(reason: reason))
+            }
+            return try composeViaMailto(
+                to: to, subject: subject, body: body, cc: cc, bcc: bcc,
+                attachments: attachments, send: false)
         }
 
         // #175: prefer the wrapper-free mailto path (save draft via ⌘S);

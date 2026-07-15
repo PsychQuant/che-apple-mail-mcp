@@ -362,3 +362,33 @@ func routeWrapperFreeCompose(
     let result = try legacyPath()
     return result + disclosure(legacyReason ?? "unknown")
 }
+
+/// #239 — the `require_wrapper_free: true` refusal message: names the
+/// ineligibility reason and every actionable alternative, so the caller can
+/// fix the call instead of receiving a silently wrapped draft.
+func requireWrapperFreeRefusal(reason: String) -> String {
+    return "require_wrapper_free is set but the wrapper-free mailto path is not available — "
+        + "reason: \(reason). No draft was created and nothing was sent. Alternatives: "
+        + "omit from_address (compose from the default account and switch sender manually in "
+        + "the compose window — clean custom-sender path is pending #219); use format 'plain'; "
+        + "provide a non-empty subject; grant Accessibility (check_accessibility); "
+        + "unset \(mailtoComposeDisableEnvKey). Or drop require_wrapper_free to accept the "
+        + "legacy path (body wrapped in <blockquote type=\"cite\"> on some mobile clients)."
+}
+
+/// #242/#239 — the canonical unknown-send-state error for a compose-family
+/// send whose dispatch was already attempted: names the hazard, directs the
+/// caller to check Sent/Outbox, and explicitly forbids a retry (an
+/// auto-retrying LLM caller would otherwise re-send — the exact duplicate
+/// hazard the sentinel exists to prevent). Shared by the default path's
+/// router hook and the #239 strict branch.
+func unknownSendStateError(_ error: Error) -> MailError {
+    return MailError.scriptFailed(
+        message: "the send keystroke was already dispatched but the GUI step failed "
+            + "afterwards — the send state is UNKNOWN and the mail may already be on "
+            + "the wire. NOT retrying via the legacy path (that could send a duplicate). "
+            + "Check Mail's Sent mailbox / Outbox before re-sending. The compose window "
+            + "(if still open) was left untouched for inspection. Original error: "
+            + clampedErrorEcho(error.localizedDescription),
+        code: -1)
+}
