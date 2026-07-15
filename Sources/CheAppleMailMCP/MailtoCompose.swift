@@ -295,7 +295,11 @@ func parseRecipient(_ raw: String) -> (name: String?, address: String) {
     }
     let wasQuoted = name.hasPrefix("\"") && name.hasSuffix("\"") && name.count >= 2
     if wasQuoted {
-        name = String(name.dropFirst().dropLast())
+        // #266: decode RFC 5322 quoted-pairs inside the quoted display name so
+        // the native recipient name carries the intended value (`\"` → `"`,
+        // `\\` → `\`), not the backslash-escaped source form. Any `\x` becomes
+        // `x`; an unbalanced trailing backslash is kept literally.
+        name = unescapeQuotedPairs(String(name.dropFirst().dropLast()))
     } else if name.contains("<") || name.contains(">") {
         // Unquoted angles in the name = malformed (extra/unmatched pairs) —
         // fail loudly via whole-string validation, never reinterpret.
@@ -303,6 +307,27 @@ func parseRecipient(_ raw: String) -> (name: String?, address: String) {
     }
     guard !name.isEmpty else { return (nil, trimmed) }
     return (name, address)
+}
+
+/// #266 — decode RFC 5322 quoted-pairs (`\x` → `x`) in a quoted-string body
+/// (outer quotes already stripped). A backslash escapes the next character; a
+/// trailing lone backslash is kept literally. Single pass.
+func unescapeQuotedPairs(_ s: String) -> String {
+    var out = ""
+    out.reserveCapacity(s.count)
+    var escaped = false
+    for ch in s {
+        if escaped {
+            out.append(ch)
+            escaped = false
+        } else if ch == "\\" {
+            escaped = true
+        } else {
+            out.append(ch)
+        }
+    }
+    if escaped { out.append("\\") }
+    return out
 }
 
 /// #251 — true iff any recipient in the given lists carries a display name.
