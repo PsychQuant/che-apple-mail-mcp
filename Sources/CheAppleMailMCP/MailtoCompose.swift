@@ -269,13 +269,41 @@ func attachmentPathsGuiSafe(_ paths: [String]?) -> Bool {
     return paths.allSatisfy { $0.allSatisfy(\.isASCII) }
 }
 
+
+/// #251 — parse an RFC 5322 mailbox form `Name <email>` (or `"Name" <email>`)
+/// into (name, address); a bare address (or a malformed angle form) returns
+/// (nil, input) so the boundary validation rejects genuinely bad input with a
+/// clear message. Whitespace-tolerant.
+func parseRecipient(_ raw: String) -> (name: String?, address: String) {
+    let trimmed = raw.trimmingCharacters(in: .whitespaces)
+    guard trimmed.hasSuffix(">"), let lt = trimmed.lastIndex(of: "<") else {
+        return (nil, trimmed)
+    }
+    let addrStart = trimmed.index(after: lt)
+    let addrEnd = trimmed.index(before: trimmed.endIndex)
+    let address = String(trimmed[addrStart..<addrEnd]).trimmingCharacters(in: .whitespaces)
+    var name = String(trimmed[..<lt]).trimmingCharacters(in: .whitespaces)
+    if name.hasPrefix("\"") && name.hasSuffix("\"") && name.count >= 2 {
+        name = String(name.dropFirst().dropLast())
+    }
+    guard !name.isEmpty, !address.isEmpty else { return (nil, trimmed) }
+    return (name, address)
+}
+
+/// #251 — true iff any recipient in the given lists carries a display name.
+func anyRecipientHasDisplayName(_ recipients: [String]?) -> Bool {
+    guard let recipients else { return false }
+    return recipients.contains { parseRecipient($0).name != nil }
+}
+
 func mailtoIneligibilityReason(
     format: BodyFormat,
     accessibilityTrusted: Bool,
     disabledByEnv: Bool,
     hasCustomSender: Bool,
     hasSubject: Bool,
-    attachmentsGuiSafe: Bool = true
+    attachmentsGuiSafe: Bool = true,
+    recipientsAddrSpecOnly: Bool = true
 ) -> String? {
     if disabledByEnv {
         return "mailto compose disabled via \(mailtoComposeDisableEnvKey)"
@@ -299,6 +327,10 @@ func mailtoIneligibilityReason(
         return "attachment path contains non-ASCII characters — the GUI go-to-folder "
             + "attach flow hangs there (#220); the legacy path attaches natively instead"
     }
+    if !recipientsAddrSpecOnly {
+        return "display-name recipients (Name <email>) — the mailto URL carries "
+            + "addr-spec only (RFC 6068); the legacy path sets recipient names natively (#251)"
+    }
     return nil
 }
 
@@ -311,7 +343,7 @@ func legacyPathDisclosure(reason: String) -> String {
         + "quoted text on some mobile clients. Reason: \(reason). Wrapper-free "
         + "eligibility: plain format + non-empty subject + default sender + "
         + "Accessibility granted + \(mailtoComposeDisableEnvKey) unset + "
-        + "ASCII-only attachment paths (#220) "
+        + "ASCII-only attachment paths (#220) + bare-address recipients (#251) "
         + "(#175; custom-sender clean path pending #219)]"
 }
 
@@ -389,7 +421,7 @@ func requireWrapperFreeRefusal(reason: String) -> String {
         + "omit from_address (compose from the default account and switch sender manually in "
         + "the compose window — clean custom-sender path is pending #219); use format 'plain'; "
         + "provide a non-empty subject; grant Accessibility (check_accessibility); "
-        + "use ASCII-only attachment paths (#220); "
+        + "use ASCII-only attachment paths (#220); use bare addresses without display names (#251); "
         + "unset \(mailtoComposeDisableEnvKey). Or drop require_wrapper_free to accept the "
         + "legacy path (body wrapped in <blockquote type=\"cite\"> on some mobile clients)."
 }

@@ -496,9 +496,15 @@ extension MailtoComposeTests {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift")
         let source = try String(contentsOf: url, encoding: .utf8)
-        let count = source.components(separatedBy: "attachments: attachments)").count - 1
-        XCTAssertEqual(count, 4,
+        let attachCount = source.components(separatedBy: "attachments: attachments,").count - 1
+        XCTAssertEqual(attachCount, 4,
                        "all four compose-family probe sites must thread attachments into "
-                       + "mailtoIneligibilityReasonForCall (#220); found \(count)")
+                       + "mailtoIneligibilityReasonForCall (#220); found \(attachCount)")
+        // #251: the same four sites must also thread the recipient lists so the
+        // display-name dimension is probed.
+        let recipCount = source.components(
+            separatedBy: "recipients: to + (cc ?? []) + (bcc ?? []))").count - 1
+        XCTAssertEqual(recipCount, 4,
+                       "all four probe sites must thread recipients (#251); found \(recipCount)")
     }
 }

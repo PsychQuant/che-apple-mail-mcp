@@ -790,12 +790,16 @@ actor MailController {
     func validateEmailAddresses(_ addresses: [String], field: String) throws {
         guard !addresses.isEmpty else { return }
         var failures: [String] = []
-        for addr in addresses {
-            // Reject control chars + tab + DEL (RFC 5322 forbids in addr-spec).
-            if addr.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) {
-                failures.append("'\(addr)' contains control characters")
+        for raw in addresses {
+            // #251: a `Name <email>` mailbox form is validated on its
+            // addr-spec part (the old whole-string check mis-rejected legal
+            // names containing '@'). The NAME part is checked for control
+            // chars below via the same scan (it is part of `raw`).
+            if raw.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) {
+                failures.append("'\(raw)' contains control characters")
                 continue
             }
+            let addr = parseRecipient(raw).address
             // Structural: exactly one `@`, neither at start nor end.
             let atCount = addr.filter { $0 == "@" }.count
             if atCount != 1 {
@@ -957,7 +961,8 @@ actor MailController {
         if requireWrapperFree {
             if let reason = mailtoIneligibilityReasonForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
-                attachments: attachments) {
+                attachments: attachments,
+                recipients: to + (cc ?? []) + (bcc ?? [])) {
                 throw MailError.invalidParameter(requireWrapperFreeRefusal(reason: reason))
             }
             do {
@@ -978,7 +983,8 @@ actor MailController {
         return try routeWrapperFreeCompose(
             ineligibilityReason: mailtoIneligibilityReasonForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
-                attachments: attachments),
+                attachments: attachments,
+                recipients: to + (cc ?? []) + (bcc ?? [])),
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
@@ -1015,7 +1021,7 @@ actor MailController {
     /// (`fromAddress`) and an empty subject both route to the legacy path (mailto
     /// can't pick a non-default account; the GUI dispatch guard identifies the
     /// compose window by its title = subject).
-    private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil) -> String? {
+    private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, recipients: [String] = []) -> String? {
         if let override = ineligibilityOverride { return override() }
         return mailtoIneligibilityReason(
             format: format,
@@ -1023,7 +1029,8 @@ actor MailController {
             disabledByEnv: mailtoComposeDisabledByEnv(),
             hasCustomSender: (fromAddress?.isEmpty == false),
             hasSubject: !subject.isEmpty,
-            attachmentsGuiSafe: attachmentPathsGuiSafe(attachments)
+            attachmentsGuiSafe: attachmentPathsGuiSafe(attachments),
+            recipientsAddrSpecOnly: !anyRecipientHasDisplayName(recipients)
         )
     }
 
@@ -1383,7 +1390,8 @@ actor MailController {
         if requireWrapperFree {
             if let reason = mailtoIneligibilityReasonForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
-                attachments: attachments) {
+                attachments: attachments,
+                recipients: to + (cc ?? []) + (bcc ?? [])) {
                 throw MailError.invalidParameter(requireWrapperFreeRefusal(reason: reason))
             }
             return try composeViaMailto(
@@ -1399,7 +1407,8 @@ actor MailController {
         return try routeWrapperFreeCompose(
             ineligibilityReason: mailtoIneligibilityReasonForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
-                attachments: attachments),
+                attachments: attachments,
+                recipients: to + (cc ?? []) + (bcc ?? [])),
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,

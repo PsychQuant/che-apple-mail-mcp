@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`to` / `cc` / `bcc` accept RFC 5322 mailbox form (`Name <email>`) — recipients can display a person's name** ([#251](https://github.com/PsychQuant/che-apple-mail-mcp/issues/251)). Previously the recipient parameters were documented as bare addresses; a `Name <email>` string happened to pass the boundary validation (single `@`) and flowed unparsed into AppleScript, while a legal name containing `@` was mis-rejected by the same check. Now a new `parseRecipient` boundary parser splits the mailbox form; validation applies to the addr-spec part; the legacy AppleScript path emits native `{name, address}` recipient properties (Mail displays the person's name — this also silently benefits `reply_email`'s `cc_additional` and `forward_email`'s `to`, which share the fragment builder); and display-name recipients on `compose_email` / `create_draft` become a named mailto-ineligibility (the mailto URL carries addr-spec only per RFC 6068) — the same disclosed legacy-path trade-off as a custom `from_address`: names shown natively, body wrapped + disclosed; with `require_wrapper_free: true`, a clean refusal names the drop-the-names alternative. Bare-address calls are byte-identical. Contacts-based auto-naming stays a follow-up on the issue.
+
 ## [2.19.0] - 2026-07-15
 
 ### Added
