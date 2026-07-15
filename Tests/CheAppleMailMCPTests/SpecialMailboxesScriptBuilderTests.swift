@@ -339,3 +339,111 @@ extension SpecialMailboxesScriptBuilderTests {
         XCTAssertNil(obj["inbox"], "empty child name = omitted key (D3)")
     }
 }
+
+// MARK: - #268 full-path fields (search_emails-parity mailbox path)
+//
+// `search_emails` returns `mailbox` as the FULL decoded path (`[Gmail]/草稿`,
+// via MailboxURL.mailboxPath), while `get_special_mailboxes` historically
+// returned only the LEAF real name (`草稿`, `name of mb`). #109's SOP comparator
+// bridged the gap with a leaf-suffix heuristic that has a documented collision
+// edge (a user folder `專案/草稿` vs the Drafts leaf). #268 adds a PARALLEL
+// `<key>_path` field carrying the full container-joined path so a consumer can
+// compare full-path == full-path directly. Purely additive: the leaf `<key>`
+// stays; a container-walk failure omits `<key>_path` (graceful — leaf still works).
+//
+// The result tuple gains the 5 paths APPENDED after the 5 names:
+//   [matchedId, matchedName, matchCount, n0…n4 (leaf), p0…p4 (full path)]
+extension SpecialMailboxesScriptBuilderTests {
+
+    /// Full 13-element tuple: each present path → `<key>_path` alongside `<key>`.
+    func testParse_resolved_includesFullPaths() {
+        let raw = ["UUID-G", "Google", "1",
+                   "草稿", "寄件備份", "垃圾桶", "垃圾郵件", "收件匣",
+                   "[Gmail]/草稿", "[Gmail]/寄件備份", "[Gmail]/垃圾桶", "[Gmail]/垃圾郵件", "收件匣"]
+        guard case let .resolved(obj) = resolveSpecialMailboxesResult(raw) else {
+            return XCTFail("expected .resolved")
+        }
+        // leaf names still present (backward-compatible)
+        XCTAssertEqual(obj["drafts"], "草稿")
+        XCTAssertEqual(obj["inbox"], "收件匣")
+        // new parallel full-path fields
+        XCTAssertEqual(obj["drafts_path"], "[Gmail]/草稿")
+        XCTAssertEqual(obj["sent_path"], "[Gmail]/寄件備份")
+        XCTAssertEqual(obj["trash_path"], "[Gmail]/垃圾桶")
+        XCTAssertEqual(obj["junk_path"], "[Gmail]/垃圾郵件")
+        // a top-level mailbox (no container) → path == leaf
+        XCTAssertEqual(obj["inbox_path"], "收件匣")
+    }
+
+    /// An empty path slot (container-walk failed / absent child) → `<key>_path` omitted,
+    /// mirroring the leaf-name D3 omit-absent rule; the leaf may still be present.
+    func testParse_resolved_omitsAbsentPath() {
+        let raw = ["UUID-X", "Work", "1",
+                   "Drafts", "Sent", "", "", "",
+                   "Drafts", "", "", "", ""]   // sent has a leaf but no path (walk failed)
+        guard case let .resolved(obj) = resolveSpecialMailboxesResult(raw) else {
+            return XCTFail("expected .resolved")
+        }
+        XCTAssertEqual(obj["drafts_path"], "Drafts")
+        XCTAssertEqual(obj["sent"], "Sent", "leaf survives even if its path walk failed")
+        XCTAssertNil(obj["sent_path"], "empty path slot → omitted, not empty string")
+        XCTAssertNil(obj["trash_path"])
+    }
+
+    /// Backward compat: an old-shape tuple (names only, no appended paths) still
+    /// resolves the leaf names and simply carries no `_path` fields.
+    func testParse_backwardCompat_oldShapeNoPaths() {
+        let raw = ["UUID-G", "Google", "1", "草稿", "寄件備份", "垃圾桶", "垃圾郵件", "收件匣"]
+        guard case let .resolved(obj) = resolveSpecialMailboxesResult(raw) else {
+            return XCTFail("expected .resolved")
+        }
+        XCTAssertEqual(obj["drafts"], "草稿")
+        XCTAssertNil(obj["drafts_path"], "old-shape tuple carries no path fields")
+        XCTAssertNil(obj["inbox_path"])
+    }
+
+    /// The builder must emit a container-walk that joins parent mailbox names with
+    /// `/` up to (but not including) the account, reproducing MailboxURL.mailboxPath.
+    func testScript_containsContainerWalk() {
+        let script = buildSpecialMailboxNamesScript(accountId: "UUID-A", accountName: "Google")
+        XCTAssertTrue(script.contains("container of mb"),
+                      "must start the full-path walk from the matched child's container; got:\n\(script)")
+        XCTAssertTrue(script.contains("class of") && script.contains("is mailbox"),
+                      "must stop the walk at the account boundary (walk while container is a mailbox); got:\n\(script)")
+        XCTAssertTrue(script.contains("& \"/\" &"),
+                      "must join parent names with `/` to match the mailboxPath form; got:\n\(script)")
+    }
+
+    /// The return tuple appends the 5 path slots AFTER the 5 name slots, so the
+    /// existing n0…n4 leaf positions stay stable (the #179 fixed-tuple discipline).
+    func testScript_returnsNamesThenPaths() {
+        let script = buildSpecialMailboxNamesScript(accountId: "UUID-A", accountName: "Google")
+        // names n0..n4 then paths p0..p4 in the return list
+        XCTAssertTrue(script.contains("n0, n1, n2, n3, n4, p0, p1, p2, p3, p4"),
+                      "return tuple must be names-then-paths (stable leaf positions); got:\n\(script)")
+    }
+
+    /// The path walk must be guarded so a failure never loses the already-read leaf
+    /// name (leaf is set BEFORE the walk; the walk has its own try).
+    func testScript_pathWalkGuardedSeparatelyFromLeaf() {
+        let script = buildSpecialMailboxNamesScript(accountId: "UUID-A", accountName: "Google")
+        // Each of the 5 specials: a per-child try + a per-walk try, plus the
+        // container-level try → at least 3 `try` per special.
+        let tryCount = script.components(separatedBy: "try").count - 1
+        XCTAssertGreaterThanOrEqual(tryCount, perAccountSpecialMailboxes.count * 3,
+                      "each special needs container-try + child-try + walk-try; got \(tryCount):\n\(script)")
+    }
+
+    /// A nameless mid-hierarchy container must ABANDON the path (reset fullPath to "")
+    /// so the walk omits `<key>_path` rather than emitting a TRUNCATED path a consumer
+    /// could trust — the "walk failure → omit, never a wrong value" discipline
+    /// (post-verify hardening: correctness + regression + Codex lenses converged on
+    /// the pre-hardening `exit repeat` leaving a partial path).
+    func testScript_namelessContainerAbandonsPathNotTruncates() {
+        let script = buildSpecialMailboxNamesScript(accountId: "UUID-A", accountName: "Google")
+        XCTAssertTrue(script.contains("if parName is missing value then"),
+                      "must special-case a nameless container; got:\n\(script)")
+        XCTAssertTrue(script.contains("set fullPath to \"\""),
+                      "nameless container must reset fullPath to empty (abandon, not truncate); got:\n\(script)")
+    }
+}

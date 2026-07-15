@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+- `get_special_mailboxes` per-account mode now also returns a `<type>_path` field
+  for each present special mailbox — the FULL mailbox path (`drafts_path`
+  `"[Gmail]/草稿"`) matching the `mailbox` field `search_emails` returns, so a
+  consumer can compare full-path == full-path directly instead of the #109
+  leaf-suffix heuristic. Built by an AppleScript container-walk that joins parent
+  mailbox names with `/` up to the account boundary (reproducing
+  `MailboxURL.mailboxPath`); a top-level mailbox's path equals its leaf
+  (`inbox_path "收件匣"`). Purely additive — the leaf `<type>` field is unchanged,
+  and a walk failure omits only that `_path` key. The result tuple appends the 5
+  paths after the 5 leaf names, preserving the #179 fixed-tuple positions
+  (`[matchedId, matchedName, matchCount, n0…n4, p0…p4]`). (#268)
 - **`to` / `cc` / `bcc` accept RFC 5322 mailbox form (`Name <email>`) — recipients can display a person's name** ([#251](https://github.com/PsychQuant/che-apple-mail-mcp/issues/251)). Previously the recipient parameters were documented as bare addresses; a `Name <email>` string happened to pass the boundary validation (single `@`) and flowed unparsed into AppleScript, while a legal name containing `@` was mis-rejected by the same check. Now a new `parseRecipient` boundary parser splits the mailbox form; validation applies to the addr-spec part; the legacy AppleScript path emits native `{name, address}` recipient properties (Mail displays the person's name — this also silently benefits `reply_email`'s `cc_additional` and `forward_email`'s `to`, which share the fragment builder); and display-name recipients on `compose_email` / `create_draft` become a named mailto-ineligibility (the mailto URL carries addr-spec only per RFC 6068) — the same disclosed legacy-path trade-off as a custom `from_address`: names shown natively, body wrapped + disclosed; with `require_wrapper_free: true`, a clean refusal names the drop-the-names alternative. Bare-address calls are byte-identical. Contacts-based auto-naming stays a follow-up on the issue. Verify round (PR #262) hardened the parser: an **unquoted** name containing `<`/`>` (e.g. the multi-angle `Alice <a@x> <b@y>`) is rejected at the boundary instead of silently reinterpreted as a send to the last address (RFC 5322 makes angles specials, forbidden in unquoted atoms; quoted names keep them), and the bare-angle form `<a@b.c>` normalizes to the bare address.
 - **`redirect_email` recipient parity with #251** ([#263](https://github.com/PsychQuant/che-apple-mail-mcp/issues/263)). The shared boundary validation relaxed by #251 let `Name <email>` reach the redirect script builder, which passed the whole string as the AppleScript `address` (Mail's display-name fallback — no mis-send, but malformed-downstream). The builder now delegates to the shared name-aware `recipientFragment`: canonical (unpadded) bare addresses stay byte-identical (the #135 golden is untouched; a whitespace-padded bare address is now trimmed, matching validation and compose/reply/forward), mailbox-form recipients get the native `{name, address}` pair — compose/reply/forward/redirect now behave identically. Well-formed multi-angle inputs (two addr-specs, e.g. `Alice <a@x> <b@y>`) stay rejected at the shared boundary (#251 regression lock added for redirect); a malformed one-`@` multi-angle input still passes the lite validator and lands as a Mail-level-invalid address (no mis-send) — shared-boundary hardening tracked as [#265](https://github.com/PsychQuant/che-apple-mail-mcp/issues/265).
 

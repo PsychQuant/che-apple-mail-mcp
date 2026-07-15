@@ -50,11 +50,15 @@ let perAccountSpecialMailboxes: [(key: String, container: String)] = [
 ///   - accountName: Matched against `name of account` (Mail's account description)
 ///     in the fallback path; NOT necessarily the email (#173/#176).
 /// - Returns: a complete AppleScript returning ONE list:
-///   `{matchedId, matchedName, matchCount, n0…n4}` where `n0…n4` are the matched
-///   child's names parallel to `perAccountSpecialMailboxes` (`""` = no such child).
-///   Both the account-finding loop and each container enumeration are `try`-guarded
-///   so an account-less child or an absent unified container is non-fatal (design D3).
-///   Parse with `resolveSpecialMailboxesResult`.
+///   `{matchedId, matchedName, matchCount, n0…n4, p0…p4}` where `n0…n4` are the
+///   matched child's leaf names parallel to `perAccountSpecialMailboxes`
+///   (`""` = no such child), and `p0…p4` (#268) are the corresponding FULL mailbox
+///   paths (`[Gmail]/草稿`, container-walk-joined to match `MailboxURL.mailboxPath` /
+///   `search_emails`'s `mailbox`; `""` = absent or walk failed). Paths are appended
+///   AFTER all names so the n0…n4 positions stay stable. Both the account-finding
+///   loop and each container enumeration are `try`-guarded, and each path walk has
+///   its own `try`, so an account-less child, an absent unified container, or a
+///   failed walk is non-fatal (design D3). Parse with `resolveSpecialMailboxesResult`.
 func buildSpecialMailboxNamesScript(accountId: String?, accountName: String) -> String {
     let accountCond: String   // on `acc`
     let childCond: String      // on `mb`
@@ -85,14 +89,42 @@ func buildSpecialMailboxNamesScript(accountId: String?, accountName: String) -> 
         // rather than coercing into the literal text "missing value" (the R4-only
         // coercion's leak, R5 finding 9). Matches the `(id of acc as string)` /
         // `(matchCount as string)` discipline below.
+        // #268: alongside the leaf name n<idx>, build the FULL mailbox path p<idx>
+        // by walking `container of mb` up to (not including) the account, joining
+        // parent names with "/" — reproducing MailboxURL.mailboxPath ("[Gmail]/草稿").
+        // The walk is in its OWN try so a failure leaves p<idx> "" (→ omitted key)
+        // WITHOUT losing the already-read leaf name (set before the walk). The stop
+        // condition is `class of par is mailbox`: a top-level mailbox's container is
+        // the account (not a mailbox) → loop body never runs → path == leaf.
+        // A nameless mid-hierarchy container (name is `missing value`) ABANDONS the
+        // path (fullPath → "" → omitted key) rather than emitting a TRUNCATED path
+        // that a consumer might trust — honoring "walk failure → omit, never a wrong
+        // value" (verify convergence: correctness + regression + Codex lenses).
         blocks.append("""
             set n\(idx) to ""
+            set p\(idx) to ""
             try
                 repeat with mb in (every mailbox of \(special.container))
                     try
                         if \(childCond) then
                             set mbName to name of mb
-                            if mbName is not missing value then set n\(idx) to (mbName as string)
+                            if mbName is not missing value then
+                                set n\(idx) to (mbName as string)
+                                try
+                                    set fullPath to (mbName as string)
+                                    set par to container of mb
+                                    repeat while (class of par) is mailbox
+                                        set parName to name of par
+                                        if parName is missing value then
+                                            set fullPath to ""
+                                            exit repeat
+                                        end if
+                                        set fullPath to (parName as string) & "/" & fullPath
+                                        set par to container of par
+                                    end repeat
+                                    set p\(idx) to fullPath
+                                end try
+                            end if
                             exit repeat
                         end if
                     end try
@@ -100,7 +132,10 @@ func buildSpecialMailboxNamesScript(accountId: String?, accountName: String) -> 
             end try
         """)
     }
+    // #268: leaf names first (stable n0…n(N-1) positions — the #179 fixed-tuple
+    // discipline), then the parallel full paths p0…p(N-1) appended after them.
     let names = (0..<perAccountSpecialMailboxes.count).map { "n\($0)" }.joined(separator: ", ")
+    let paths = (0..<perAccountSpecialMailboxes.count).map { "p\($0)" }.joined(separator: ", ")
     return """
     tell application "Mail"
         set matchedId to ""
@@ -118,7 +153,7 @@ func buildSpecialMailboxNamesScript(accountId: String?, accountName: String) -> 
             end try
         end repeat
     \(blocks.joined(separator: "\n"))
-        return {matchedId, matchedName, (matchCount as string), \(names)}
+        return {matchedId, matchedName, (matchCount as string), \(names), \(paths)}
     end tell
     """
 }
@@ -156,9 +191,21 @@ func resolveSpecialMailboxesResult(_ raw: [String]) -> SpecialMailboxesResolutio
     if matchCount == 0 || matchedId.isEmpty { return .noMatch }
     if matchCount > 1 { return .ambiguous(matchCount) }
     var obj: [String: String] = ["account_id": matchedId, "account_name": matchedName]
-    let names = Array(raw.dropFirst(3))
-    for (idx, special) in perAccountSpecialMailboxes.enumerated() where idx < names.count {
-        if !names[idx].isEmpty { obj[special.key] = names[idx] }   // omit absent types (D3)
+    // Tuple after the 3-element metadata header: the N leaf real names, then
+    // (#268) the N full mailbox paths appended in the SAME order —
+    // `[n0…n(N-1), p0…p(N-1)]`. The full path (`[Gmail]/草稿`) reproduces
+    // `search_emails`'s `mailbox` field so a consumer can compare full-path ==
+    // full-path directly instead of the #109 leaf-suffix heuristic. Purely
+    // additive: an old-shape result carrying only names leaves `paths` empty →
+    // no `_path` keys (back-compat); a per-mailbox container-walk failure yields
+    // an empty path slot → that `_path` key is omitted (leaf `<key>` still set).
+    let count = perAccountSpecialMailboxes.count
+    let rest = Array(raw.dropFirst(3))
+    let names = Array(rest.prefix(count))
+    let paths = Array(rest.dropFirst(count))
+    for (idx, special) in perAccountSpecialMailboxes.enumerated() {
+        if idx < names.count, !names[idx].isEmpty { obj[special.key] = names[idx] }              // leaf real name (D3: omit absent)
+        if idx < paths.count, !paths[idx].isEmpty { obj[special.key + "_path"] = paths[idx] }     // #268 full path (omit absent)
     }
     return .resolved(obj)
 }

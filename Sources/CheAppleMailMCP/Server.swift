@@ -610,7 +610,7 @@ class CheAppleMailMCPServer {
             // Special Mailboxes
             Tool(
                 name: "get_special_mailboxes",
-                description: "Get special mailbox names. Without account_id/account_name: the app-level unified names (inbox, drafts, sent, trash, junk, outbox). With an account selector: that account's per-account special-mailbox real (localized/provider) names (inbox, drafts, sent, trash, junk) — e.g. a Gmail account returns drafts \"草稿\", junk \"垃圾郵件\"; an Exchange account's inbox can localize (收件匣) (#179/#249). outbox stays unified-only.",
+                description: "Get special mailbox names. Without account_id/account_name: the app-level unified names (inbox, drafts, sent, trash, junk, outbox). With an account selector: that account's per-account special-mailbox real (localized/provider) LEAF names (inbox, drafts, sent, trash, junk) — e.g. a Gmail account returns drafts \"草稿\", junk \"垃圾郵件\"; an Exchange account's inbox can localize (收件匣) (#179/#249). outbox stays unified-only. In the per-account mode each present type ALSO carries a `<type>_path` field with the FULL mailbox path (e.g. drafts_path \"[Gmail]/草稿\"), matching the `mailbox` field that `search_emails` returns — compare full-path == full-path directly instead of a leaf-suffix heuristic (#268). A top-level mailbox's path equals its leaf (inbox_path \"收件匣\"); `<type>_path` is omitted if the path can't be resolved (the leaf `<type>` still present).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
