@@ -194,7 +194,10 @@ final class RedirectEmailScriptBuilderTests: XCTestCase {
     /// #263 regression lock: the #251 REQUIRED boundary fix (multi-angle
     /// rejection) must protect redirect_email too — reject before any script.
     func testRedirectEmail_multiAngleInput_rejectedAtBoundary() async throws {
-        defer { Task { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) } }
+        // addTeardownBlock (awaited by XCTest) instead of defer+Task — a
+        // detached reset of the process-wide singleton could land after the
+        // next test starts (#264 verify; migrating the #251 sites is #267).
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
             ineligibility: nil)
