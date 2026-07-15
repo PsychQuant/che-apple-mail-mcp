@@ -561,7 +561,7 @@ class CheAppleMailMCPServer {
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
                         "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
-                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipients to redirect to")])
+                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipients to redirect to. Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #263) - redirect is pure AppleScript (no mailto involved), so the name is set natively with no path change.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("to")])
                 ])
