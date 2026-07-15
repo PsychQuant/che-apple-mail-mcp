@@ -200,6 +200,55 @@ final class AttachmentDownloadScriptBuilderTests: XCTestCase {
         }
     }
 
+    /// A non-throwing `"Attachment not found"` (the named part isn't on the
+    /// message — a name-matching problem, not a download delay) must ABORT
+    /// immediately with the honest cause, NOT poll the full timeout and then
+    /// mislabel it a download failure.
+    func testRetryLoop_abortsImmediatelyOnAttachmentNotFound() async throws {
+        let counter = SaveCounter()
+        try await withSeam({ source in
+            if source.contains("source of") { return "" }
+            counter.saves += 1
+            return "Attachment not found"   // definitive negative, no throw
+        }) {
+            do {
+                _ = try await MailController.shared.saveAttachmentRetryingForDownload(
+                    id: "42", mailbox: "INBOX", accountId: nil, accountName: "Google",
+                    attachmentName: "x.pdf", savePath: "/tmp/x.pdf", policy: self.fastPolicy)
+                XCTFail("a definitive not-found must abort, not return or time out")
+            } catch let MailError.operationFailed(msg) {
+                XCTAssertTrue(msg.contains("could not find") && msg.contains("not a download problem"),
+                              "not-found abort must name the honest cause; got: \(msg)")
+                XCTAssertEqual(counter.saves, 1, "must abort on the FIRST not-found, not poll the budget")
+            }
+        }
+    }
+
+    /// The loop must honor a real wall-clock deadline — a never-landing
+    /// attachment throws within a bound tied to policy.timeout, not to a
+    /// sleep-count that ignores each save's IPC cost.
+    func testRetryLoop_honorsWallClockDeadline() async throws {
+        // 40ms budget → must give up quickly (generous 2s ceiling absorbs CI jitter
+        // while still failing loudly if the loop ran unbounded).
+        let policy = DownloadRetryPolicy(timeout: 0.04, pollInterval: 0.004)
+        try await withSeam({ source in
+            if source.contains("source of") { return "" }
+            throw MailError.scriptFailed(message: "-10000", code: -10000)
+        }) {
+            let start = Date()
+            do {
+                _ = try await MailController.shared.saveAttachmentRetryingForDownload(
+                    id: "42", mailbox: "INBOX", accountId: nil, accountName: "Google",
+                    attachmentName: "x.pdf", savePath: "/tmp/x.pdf", policy: policy)
+                XCTFail("never-landing attachment must throw on deadline")
+            } catch let MailError.operationFailed(msg) {
+                XCTAssertTrue(msg.contains("download"), "must be the download-timeout error; got: \(msg)")
+            }
+            XCTAssertLessThan(Date().timeIntervalSince(start), 2.0,
+                              "the deadline loop must not run unbounded")
+        }
+    }
+
     /// A SPECIFIC (non -10000) AppleScript error — bad account, permissions —
     /// is terminal: retrying cannot fix it, so it surfaces immediately instead
     /// of being masked as a download timeout.

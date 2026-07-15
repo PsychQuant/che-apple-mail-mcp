@@ -1523,37 +1523,56 @@ actor MailController {
         policy: DownloadRetryPolicy = .default
     ) async throws -> String {
         // 1. Nudge Mail to materialize the message (best-effort). Errors are
-        //    non-fatal — the save-retry below is the real success test, and a
-        //    transient trigger failure must not pre-empt it.
+        //    non-fatal — the save-retry below is the real success test — but log
+        //    them so a no-op fetch is distinguishable from a working one (the
+        //    r-must-direct-db stderr-observability convention).
         let trigger = buildTriggerDownloadScript(
             id: id, mailbox: mailbox, accountId: accountId, accountName: accountName)
-        _ = try? runScript(trigger)
+        do {
+            _ = try runScript(trigger)
+        } catch {
+            FileHandle.standardError.write(Data(
+                ("download_if_missing: fetch-trigger failed for \"\(attachmentName)\": "
+                 + "\(error.localizedDescription); continuing to poll-retry the save\n").utf8))
+        }
 
-        // 2. Poll: re-attempt the save until it succeeds or the budget is spent.
-        //    A downloaded attachment saves cleanly; a still-server-side one
-        //    raises the generic -10000 (unfetched-binary class) — keep waiting.
+        // 2. Poll: re-attempt the save until it succeeds or the wall-clock budget
+        //    is spent. A downloaded attachment saves cleanly; a still-server-side
+        //    one raises the generic -10000 (unfetched-binary class) — keep waiting.
+        //    The loop is bounded by BOTH a real deadline (each save is itself a
+        //    ~1-2s Mail IPC that a fixed sleep-count would ignore — so the deadline
+        //    keeps real elapsed ≈ policy.timeout) AND `maxAttempts` as a hard cap
+        //    (belt-and-suspenders if the clock misbehaves; the range is always
+        //    valid since maxAttempts ≥ 1).
         let saveScript = buildSaveAttachmentScript(
             id: id, mailbox: mailbox, accountId: accountId, accountName: accountName,
             attachmentName: attachmentName, savePath: savePath)
-        let intervalNanos = UInt64(max(0, policy.pollInterval) * 1_000_000_000)
+        let intervalNanos = UInt64(min(max(0, policy.pollInterval), policy.timeout) * 1_000_000_000)
+        let deadline = Date().addingTimeInterval(max(0, policy.timeout))
         for _ in 1...policy.maxAttempts {
             // Wait BEFORE re-checking: the fetch is asynchronous, so even the
             // first poll gives Mail one interval to land the download.
             try await Task.sleep(nanoseconds: intervalNanos)
             do {
                 let result = try runScript(saveScript)
-                // "Attachment saved to ..." = the binary is now local. Any other
-                // string ("Attachment not found") means the part hasn't landed —
-                // keep polling within budget.
-                if result.contains("saved") { return result }
+                // "Attachment saved to ..." = the binary is now local.
+                if result.hasPrefix("Attachment saved") { return result }
+                // A non-throwing NON-saved result ("Attachment not found") is a
+                // DEFINITIVE negative — the named part isn't on this message (a
+                // name-matching problem, not a download delay). Don't burn the
+                // budget polling it; surface it now with the honest cause.
+                throw MailError.operationFailed(
+                    "save_attachment could not find an attachment named \"\(attachmentName)\" "
+                    + "on the message (download_if_missing aborted — this is not a download problem).")
             } catch MailError.scriptFailed(let message, let code) {
                 // -10000 = still unfetched → keep polling. A SPECIFIC code
-                // (bad account/mailbox, permissions) is terminal — retrying
-                // cannot fix it, so surface it immediately.
+                // (bad account/mailbox, permissions, disk full) is terminal —
+                // retrying cannot fix it, so surface it immediately.
                 if code != -10000 {
                     throw MailError.scriptFailed(message: message, code: code)
                 }
             }
+            if Date() >= deadline { break }   // wall-clock budget spent
         }
         // Budget spent without the attachment landing — honest failure.
         throw MailError.operationFailed(
