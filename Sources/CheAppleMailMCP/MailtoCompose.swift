@@ -271,9 +271,14 @@ func attachmentPathsGuiSafe(_ paths: [String]?) -> Bool {
 
 
 /// #251 — parse an RFC 5322 mailbox form `Name <email>` (or `"Name" <email>`)
-/// into (name, address); a bare address (or a malformed angle form) returns
-/// (nil, input) so the boundary validation rejects genuinely bad input with a
-/// clear message. Whitespace-tolerant.
+/// into (name, address). A bare address returns (nil, input); a bare-angle
+/// form `<email>` normalizes to the inner address (verify round). An UNQUOTED
+/// name containing `<`/`>` is malformed — RFC 5322 makes them specials,
+/// forbidden in unquoted atoms — and returns (nil, input) so the boundary
+/// validation rejects it on the whole string (verify REQUIRED: a multi-angle
+/// input like `A <a@x> <b@y>` must fail loudly, never silently reinterpret
+/// as a send to the LAST address). Quoted names may contain specials.
+/// Whitespace-tolerant.
 func parseRecipient(_ raw: String) -> (name: String?, address: String) {
     let trimmed = raw.trimmingCharacters(in: .whitespaces)
     guard trimmed.hasSuffix(">"), let lt = trimmed.lastIndex(of: "<") else {
@@ -282,11 +287,21 @@ func parseRecipient(_ raw: String) -> (name: String?, address: String) {
     let addrStart = trimmed.index(after: lt)
     let addrEnd = trimmed.index(before: trimmed.endIndex)
     let address = String(trimmed[addrStart..<addrEnd]).trimmingCharacters(in: .whitespaces)
+    guard !address.isEmpty else { return (nil, trimmed) }
     var name = String(trimmed[..<lt]).trimmingCharacters(in: .whitespaces)
-    if name.hasPrefix("\"") && name.hasSuffix("\"") && name.count >= 2 {
-        name = String(name.dropFirst().dropLast())
+    if name.isEmpty {
+        // Bare-angle `<a@b.c>` — an addr-spec in angles; normalize.
+        return (nil, address)
     }
-    guard !name.isEmpty, !address.isEmpty else { return (nil, trimmed) }
+    let wasQuoted = name.hasPrefix("\"") && name.hasSuffix("\"") && name.count >= 2
+    if wasQuoted {
+        name = String(name.dropFirst().dropLast())
+    } else if name.contains("<") || name.contains(">") {
+        // Unquoted angles in the name = malformed (extra/unmatched pairs) —
+        // fail loudly via whole-string validation, never reinterpret.
+        return (nil, trimmed)
+    }
+    guard !name.isEmpty else { return (nil, trimmed) }
     return (name, address)
 }
 

@@ -42,6 +42,41 @@ final class RecipientDisplayNameTests: XCTestCase {
         XCTAssertEqual(r.address, "ming@example.com")
     }
 
+    func testParseRecipient_multipleAnglePairs_rejectedNotReinterpreted() {
+        // #251 verify REQUIRED (Codex HIGH + DA): "Alice <alice@e.com> <bob@e.net>"
+        // must NOT silently become a send to bob. An unquoted name containing
+        // angle brackets is malformed (RFC 5322: <> are specials, forbidden in
+        // unquoted atoms) → treat as bare so validation rejects on atCount.
+        let r = parseRecipient("Alice <alice@example.com> <bob@example.net>")
+        XCTAssertNil(r.name, "a name containing angles must not parse as a mailbox form")
+        XCTAssertEqual(r.address, "Alice <alice@example.com> <bob@example.net>")
+    }
+
+    func testParseRecipient_quotedNameWithAngles_stillAccepted() {
+        // Quoted display names may legally contain specials.
+        let r = parseRecipient("\"A <b>\" <c@d.e>")
+        XCTAssertEqual(r.name, "A <b>")
+        XCTAssertEqual(r.address, "c@d.e")
+    }
+
+    func testParseRecipient_bareAngle_normalizedToBareAddress() {
+        // #251 verify bundled: "<a@b.c>" is an addr-spec in angles — normalize
+        // to the bare address instead of passing the brackets downstream.
+        let r = parseRecipient("<a@b.c>")
+        XCTAssertNil(r.name)
+        XCTAssertEqual(r.address, "a@b.c")
+    }
+
+    func testValidation_multiAngleInput_rejectedAtBoundary() async throws {
+        defer { Task { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) } }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["Alice <alice@example.com> <bob@example.net>"], subject: "s", body: "b"))
+    }
+
     func testParseRecipient_malformedAngle_treatedAsBare() {
         // No closing bracket → not a mailbox form; pass through as-is so the
         // address validation rejects it with a clear message.
