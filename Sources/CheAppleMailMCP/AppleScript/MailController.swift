@@ -812,7 +812,7 @@ actor MailController {
             // containing a matched angle pair, `"a<b>"@x`, is not supported —
             // vanishingly rare and never seen in real addresses.)
             if parsed.name == nil, addr.contains("<"), addr.contains(">") {
-                failures.append("'\(raw)' is a malformed recipient (unbalanced angle brackets)")
+                failures.append("'\(raw)' is a malformed recipient (stray/extra angle brackets)")
                 continue
             }
             // Structural: exactly one `@`, neither at start nor end.

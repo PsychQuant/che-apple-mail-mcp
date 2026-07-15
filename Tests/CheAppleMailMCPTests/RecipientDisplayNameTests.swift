@@ -148,6 +148,22 @@ final class RecipientDisplayNameTests: XCTestCase {
         XCTAssertEqual(r.address, "q@x.co")
     }
 
+    // #266 verify (Codex/DA): lock the highest-risk point — the decoded name
+    // fed through appleScriptEscape — at the byte level, not just parseRecipient.
+    // appleScriptEscape doubles `\` FIRST then escapes `"`, so a decoded lone
+    // backslash is always re-doubled before any following quote: balanced literal.
+    func testRecipientFragment_quotedPairDecoded_escapedToBalancedLiteral() {
+        let quote = recipientFragment(["\"\\\"\" <q@x.co>"], kind: "to")
+        XCTAssertTrue(quote.contains("name:\"\\\"\""),
+                      "decoded bare quote must appear as the escaped literal name:\"\\\"\": \(quote)")
+        let backslash = recipientFragment(["\"a\\\\b\" <q@x.co>"], kind: "to")
+        XCTAssertTrue(backslash.contains("name:\"a\\\\b\""),
+                      "decoded a\\b must re-escape to name:\"a\\\\b\": \(backslash)")
+        let loneBackslash = recipientFragment(["\"\\\\\" <q@x.co>"], kind: "to")
+        XCTAssertTrue(loneBackslash.contains("name:\"\\\\\""),
+                      "decoded lone backslash must re-double to name:\"\\\\\": \(loneBackslash)")
+    }
+
     func testAnyRecipientHasDisplayName() {
         XCTAssertFalse(anyRecipientHasDisplayName(["a@b.c", "d@e.f"]))
         XCTAssertTrue(anyRecipientHasDisplayName(["a@b.c", "王 <d@e.f>"]))
