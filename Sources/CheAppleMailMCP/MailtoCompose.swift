@@ -269,13 +269,81 @@ func attachmentPathsGuiSafe(_ paths: [String]?) -> Bool {
     return paths.allSatisfy { $0.allSatisfy(\.isASCII) }
 }
 
+
+/// #251 — parse an RFC 5322 mailbox form `Name <email>` (or `"Name" <email>`)
+/// into (name, address). A bare address returns (nil, input); a bare-angle
+/// form `<email>` normalizes to the inner address (verify round). An UNQUOTED
+/// name containing `<`/`>` is malformed — RFC 5322 makes them specials,
+/// forbidden in unquoted atoms — and returns (nil, input) so the boundary
+/// validation rejects it on the whole string (verify REQUIRED: a multi-angle
+/// input like `A <a@x> <b@y>` must fail loudly, never silently reinterpret
+/// as a send to the LAST address). Quoted names may contain specials.
+/// Whitespace-tolerant.
+func parseRecipient(_ raw: String) -> (name: String?, address: String) {
+    let trimmed = raw.trimmingCharacters(in: .whitespaces)
+    guard trimmed.hasSuffix(">"), let lt = trimmed.lastIndex(of: "<") else {
+        return (nil, trimmed)
+    }
+    let addrStart = trimmed.index(after: lt)
+    let addrEnd = trimmed.index(before: trimmed.endIndex)
+    let address = String(trimmed[addrStart..<addrEnd]).trimmingCharacters(in: .whitespaces)
+    guard !address.isEmpty else { return (nil, trimmed) }
+    var name = String(trimmed[..<lt]).trimmingCharacters(in: .whitespaces)
+    if name.isEmpty {
+        // Bare-angle `<a@b.c>` — an addr-spec in angles; normalize.
+        return (nil, address)
+    }
+    let wasQuoted = name.hasPrefix("\"") && name.hasSuffix("\"") && name.count >= 2
+    if wasQuoted {
+        // #266: decode RFC 5322 quoted-pairs inside the quoted display name so
+        // the native recipient name carries the intended value (`\"` → `"`,
+        // `\\` → `\`), not the backslash-escaped source form. Any `\x` becomes
+        // `x`; an unbalanced trailing backslash is kept literally.
+        name = unescapeQuotedPairs(String(name.dropFirst().dropLast()))
+    } else if name.contains("<") || name.contains(">") {
+        // Unquoted angles in the name = malformed (extra/unmatched pairs) —
+        // fail loudly via whole-string validation, never reinterpret.
+        return (nil, trimmed)
+    }
+    guard !name.isEmpty else { return (nil, trimmed) }
+    return (name, address)
+}
+
+/// #266 — decode RFC 5322 quoted-pairs (`\x` → `x`) in a quoted-string body
+/// (outer quotes already stripped). A backslash escapes the next character; a
+/// trailing lone backslash is kept literally. Single pass.
+func unescapeQuotedPairs(_ s: String) -> String {
+    var out = ""
+    out.reserveCapacity(s.count)
+    var escaped = false
+    for ch in s {
+        if escaped {
+            out.append(ch)
+            escaped = false
+        } else if ch == "\\" {
+            escaped = true
+        } else {
+            out.append(ch)
+        }
+    }
+    if escaped { out.append("\\") }
+    return out
+}
+
+/// #251 — true iff any recipient in the given lists carries a display name.
+func anyRecipientHasDisplayName(_ recipients: [String]?) -> Bool {
+    guard let recipients else { return false }
+    return recipients.contains { parseRecipient($0).name != nil }
+}
+
 func mailtoIneligibilityReason(
     format: BodyFormat,
     accessibilityTrusted: Bool,
     disabledByEnv: Bool,
     hasCustomSender: Bool,
     hasSubject: Bool,
-    attachmentsGuiSafe: Bool = true
+    attachmentsGuiSafe: Bool = true,
+    recipientsAddrSpecOnly: Bool = true
 ) -> String? {
     if disabledByEnv {
         return "mailto compose disabled via \(mailtoComposeDisableEnvKey)"
@@ -299,6 +367,10 @@ func mailtoIneligibilityReason(
         return "attachment path contains non-ASCII characters — the GUI go-to-folder "
             + "attach flow hangs there (#220); the legacy path attaches natively instead"
     }
+    if !recipientsAddrSpecOnly {
+        return "display-name recipients (Name <email>) — the mailto URL carries "
+            + "addr-spec only (RFC 6068); the legacy path sets recipient names natively (#251)"
+    }
     return nil
 }
 
@@ -311,7 +383,7 @@ func legacyPathDisclosure(reason: String) -> String {
         + "quoted text on some mobile clients. Reason: \(reason). Wrapper-free "
         + "eligibility: plain format + non-empty subject + default sender + "
         + "Accessibility granted + \(mailtoComposeDisableEnvKey) unset + "
-        + "ASCII-only attachment paths (#220) "
+        + "ASCII-only attachment paths (#220) + bare-address recipients (#251) "
         + "(#175; custom-sender clean path pending #219)]"
 }
 
@@ -389,7 +461,7 @@ func requireWrapperFreeRefusal(reason: String) -> String {
         + "omit from_address (compose from the default account and switch sender manually in "
         + "the compose window — clean custom-sender path is pending #219); use format 'plain'; "
         + "provide a non-empty subject; grant Accessibility (check_accessibility); "
-        + "use ASCII-only attachment paths (#220); "
+        + "use ASCII-only attachment paths (#220); use bare addresses without display names (#251); "
         + "unset \(mailtoComposeDisableEnvKey). Or drop require_wrapper_free to accept the "
         + "legacy path (body wrapped in <blockquote type=\"cite\"> on some mobile clients)."
 }

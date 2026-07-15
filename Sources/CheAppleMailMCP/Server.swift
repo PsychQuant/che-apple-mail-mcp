@@ -255,11 +255,11 @@ class CheAppleMailMCPServer {
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipient email addresses")]),
+                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipient email addresses. Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); display-name recipients route via the legacy path (mailto carries addr-spec only, RFC 6068) - Mail shows the name natively but the body gets the blockquote wrap + disclosure.")]),
                         "subject": .object(["type": .string("string"), "description": .string("Email subject")]),
                         "body": .object(["type": .string("string"), "description": .string("Email body content (interpreted according to 'format')")]),
-                        "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("CC recipients (optional)")]),
-                        "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("BCC recipients (optional)")]),
+                        "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("CC recipients (optional). Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); display-name recipients route via the legacy path (mailto carries addr-spec only, RFC 6068) - Mail shows the name natively but the body gets the blockquote wrap + disclosure.")]),
+                        "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("BCC recipients (optional). Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); display-name recipients route via the legacy path (mailto carries addr-spec only, RFC 6068) - Mail shows the name natively but the body gets the blockquote wrap + disclosure.")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")]),
                         "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is and is the only format eligible for the wrapper-free clean-body path (#175); 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML — both route to the legacy path whose body Mail wraps in a quote block on some mobile clients.")]),
                         "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true AND `format` is `markdown`, link URLs whose scheme is not in {http, https, mailto, tel} are rendered as plain text (no `<a>` wrapper) — defends against `[click](javascript:...)` and `data:`/`file:`/`vbscript:` XSS injection. Default false (preserves backward compat). No effect when `format` is `plain` (no link parsing happens) or `html` (caller-trusted raw HTML — you must sanitize your own anchors). Non-absolute URLs (e.g. `[home](/relative/path)` or empty `[text]()`) also have their anchor dropped under sanitize_links=true since they lack an allowlisted scheme.")]),
@@ -281,7 +281,7 @@ class CheAppleMailMCPServer {
                         "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
                         "body": .object(["type": .string("string"), "description": .string("Reply content (interpreted according to 'format')")]),
                         "reply_all": .object(["type": .string("boolean"), "description": .string("Reply to all recipients (default: false)")]),
-                        "cc_additional": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Extra CC recipients to add on top of those derived from 'reply_all'. Email addresses (RFC 5322 addr-spec).")]),
+                        "cc_additional": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Extra CC recipients to add on top of those derived from 'reply_all'. Email addresses (RFC 5322 addr-spec). Also accepts RFC 5322 mailbox form (Name <a@b.c>, #251) - the reply paste path sets recipient names natively (no mailto involved, no path change).")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach to the reply.")]),
                         "save_as_draft": .object(["type": .string("boolean"), "description": .string("If true, save the reply as a draft instead of sending it (default: false). Use when you want a human to review before send.")]),
                         "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) prepends the user body to the original message quoted with RFC 3676 `> ` line prefix — preserves signature + rich text; 'markdown'/'html' produce rich text user body but wrap the original's plain-text (HTML-escaped) in a `<blockquote>` because AppleScript denies html-content read on current macOS — signature lost.")]),
@@ -328,8 +328,8 @@ class CheAppleMailMCPServer {
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipient email addresses")]),
-                        "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Carbon copy recipients (optional)")]),
+                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipient email addresses. Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); display-name recipients route via the legacy path (mailto carries addr-spec only, RFC 6068) - Mail shows the name natively but the body gets the blockquote wrap + disclosure.")]),
+                        "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Carbon copy recipients (optional). Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); display-name recipients route via the legacy path (mailto carries addr-spec only, RFC 6068) - Mail shows the name natively but the body gets the blockquote wrap + disclosure.")]),
                         "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Blind carbon copy recipients (optional)")]),
                         "subject": .object(["type": .string("string"), "description": .string("Email subject")]),
                         "body": .object(["type": .string("string"), "description": .string("Email body content (interpreted according to 'format')")]),
@@ -562,7 +562,7 @@ class CheAppleMailMCPServer {
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
                         "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
-                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipients to redirect to")])
+                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipients to redirect to. Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #263) - redirect is pure AppleScript (no mailto involved), so the name is set natively with no path change.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("to")])
                 ])
