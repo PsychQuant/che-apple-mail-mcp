@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `get_special_mailboxes` per-account mode now also returns a `<type>_path` field
+  for each present special mailbox — the FULL mailbox path (`drafts_path`
+  `"[Gmail]/草稿"`) matching the `mailbox` field `search_emails` returns, so a
+  consumer can compare full-path == full-path directly instead of the #109
+  leaf-suffix heuristic. Built by an AppleScript container-walk that joins parent
+  mailbox names with `/` up to the account boundary (reproducing
+  `MailboxURL.mailboxPath`); a top-level mailbox's path equals its leaf
+  (`inbox_path "收件匣"`). Purely additive — the leaf `<type>` field is unchanged,
+  and a walk failure omits only that `_path` key. The result tuple appends the 5
+  paths after the 5 leaf names, preserving the #179 fixed-tuple positions
+  (`[matchedId, matchedName, matchCount, n0…n4, p0…p4]`). (#268)
+
 ## [2.19.0] - 2026-07-15
 
 ### Added
