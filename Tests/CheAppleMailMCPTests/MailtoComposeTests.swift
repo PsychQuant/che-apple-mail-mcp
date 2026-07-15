@@ -496,15 +496,14 @@ extension MailtoComposeTests {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift")
         let source = try String(contentsOf: url, encoding: .utf8)
-        let attachCount = source.components(separatedBy: "attachments: attachments,").count - 1
-        XCTAssertEqual(attachCount, 4,
-                       "all four compose-family probe sites must thread attachments into "
-                       + "mailtoIneligibilityReasonForCall (#220); found \(attachCount)")
-        // #251: the same four sites must also thread the recipient lists so the
-        // display-name dimension is probed.
-        let recipCount = source.components(
-            separatedBy: "recipients: to + (cc ?? []) + (bcc ?? []))").count - 1
-        XCTAssertEqual(recipCount, 4,
-                       "all four probe sites must thread recipients (#251); found \(recipCount)")
+        // One needle covering both threaded dimensions: the probe's exact
+        // two-argument tail (attachments #220 + recipients #251). A bare
+        // "attachments: attachments," needle would also match the many
+        // composeViaMailto/legacy call sites.
+        let probeTail = "attachments: attachments,\n                recipients: to + (cc ?? []) + (bcc ?? []))"
+        let count = source.components(separatedBy: probeTail).count - 1
+        XCTAssertEqual(count, 4,
+                       "all four compose-family probe sites must thread attachments (#220) "
+                       + "AND recipients (#251) into mailtoIneligibilityReasonForCall; found \(count)")
     }
 }
