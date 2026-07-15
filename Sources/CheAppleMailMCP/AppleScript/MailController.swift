@@ -799,7 +799,22 @@ actor MailController {
                 failures.append("'\(raw)' contains control characters")
                 continue
             }
-            let addr = parseRecipient(raw).address
+            let parsed = parseRecipient(raw)
+            let addr = parsed.address
+            // #265: a mailbox-form-looking string that parseRecipient could NOT
+            // cleanly split (name == nil fallback) yet still carries a matched
+            // `<...>` pair is malformed — e.g. `Alice <not-an-email> <bob@x>`
+            // has a single `@` and would otherwise pass the atCount check and
+            // land whole in the script. Reject it. A clean bare addr-spec never
+            // carries a matched angle pair; bare-angle `<a@b.c>` is already
+            // normalized to its inner addr-spec (angles stripped) upstream, so
+            // it is unaffected. (The pathological quoted-local-part literally
+            // containing a matched angle pair, `"a<b>"@x`, is not supported —
+            // vanishingly rare and never seen in real addresses.)
+            if parsed.name == nil, addr.contains("<"), addr.contains(">") {
+                failures.append("'\(raw)' is a malformed recipient (stray/extra angle brackets)")
+                continue
+            }
             // Structural: exactly one `@`, neither at start nor end.
             let atCount = addr.filter { $0 == "@" }.count
             if atCount != 1 {
