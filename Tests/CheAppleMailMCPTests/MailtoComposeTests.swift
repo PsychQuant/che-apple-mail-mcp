@@ -448,3 +448,57 @@ final class MailtoComposeTests: XCTestCase {
         }
     }
 }
+
+// MARK: - #220 non-ASCII attachment paths route to the legacy (native-attach) path
+
+extension MailtoComposeTests {
+
+    func testAttachmentPathsGuiSafe() {
+        XCTAssertTrue(attachmentPathsGuiSafe(nil))
+        XCTAssertTrue(attachmentPathsGuiSafe([]))
+        XCTAssertTrue(attachmentPathsGuiSafe(["/Users/che/report.pdf", "/tmp/data.csv"]))
+        XCTAssertFalse(attachmentPathsGuiSafe(["/Users/che/「議程」.pdf"]),
+                       "fullwidth brackets hang the go-to-folder sheet (#220)")
+        XCTAssertFalse(attachmentPathsGuiSafe(["/Users/che/會議通知.pdf"]))
+        XCTAssertFalse(attachmentPathsGuiSafe(["/ok/a.pdf", "/bad/附件.pdf"]),
+                       "one unsafe path taints the batch — the GUI loop attaches all of them")
+    }
+
+    func testIneligibility_nonAsciiAttachmentPath_namedReason() {
+        let reason = mailtoIneligibilityReason(
+            format: .plain, accessibilityTrusted: true, disabledByEnv: false,
+            hasCustomSender: false, hasSubject: true,
+            attachmentsGuiSafe: false)
+        XCTAssertNotNil(reason)
+        XCTAssertTrue(reason!.contains("#220"), "reason must cite the hang issue: \(reason!)")
+        XCTAssertTrue(reason!.contains("non-ASCII"), reason!)
+    }
+
+    func testIneligibility_asciiAttachments_stillEligible() {
+        XCTAssertNil(mailtoIneligibilityReason(
+            format: .plain, accessibilityTrusted: true, disabledByEnv: false,
+            hasCustomSender: false, hasSubject: true,
+            attachmentsGuiSafe: true))
+    }
+}
+
+
+// MARK: - #220 wiring lock
+
+extension MailtoComposeTests {
+
+    func testWiring_allFourProbeSitesThreadAttachments() throws {
+        // Reverting the `attachments:` argument at any one probe site keeps
+        // the suite green otherwise (the seam override short-circuits before
+        // the real probe) — pin the wiring by source scan, the repo's
+        // idiomatic lock for behaviorally-unreachable invariants (#220).
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift")
+        let source = try String(contentsOf: url, encoding: .utf8)
+        let count = source.components(separatedBy: "attachments: attachments)").count - 1
+        XCTAssertEqual(count, 4,
+                       "all four compose-family probe sites must thread attachments into "
+                       + "mailtoIneligibilityReasonForCall (#220); found \(count)")
+    }
+}

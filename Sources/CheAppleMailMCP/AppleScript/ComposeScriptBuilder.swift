@@ -207,8 +207,11 @@ func buildMailtoComposeScript(
     """
 
     // 2. Attachments: re-raise OUR window, then one File ▸ Attach (⇧⌘A) cycle each,
-    // path pasted into the Go-to-folder (⇧⌘G) field (CJK-safe; clipboard set here,
-    // restored by the caller in Swift).
+    // path pasted into the Go-to-folder (⇧⌘G) field (clipboard set here, restored by
+    // the caller in Swift). ASCII-only paths reach this flow: the sheet hangs
+    // deterministically on CJK/fullwidth input even via paste (#220 live repro), so
+    // non-ASCII paths are routed to the legacy native-attach path upstream — do NOT
+    // remove that gate.
     if !attachments.isEmpty {
         for path in attachments {
             s += """
