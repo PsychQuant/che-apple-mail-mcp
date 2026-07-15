@@ -433,4 +433,17 @@ extension SpecialMailboxesScriptBuilderTests {
         XCTAssertGreaterThanOrEqual(tryCount, perAccountSpecialMailboxes.count * 3,
                       "each special needs container-try + child-try + walk-try; got \(tryCount):\n\(script)")
     }
+
+    /// A nameless mid-hierarchy container must ABANDON the path (reset fullPath to "")
+    /// so the walk omits `<key>_path` rather than emitting a TRUNCATED path a consumer
+    /// could trust — the "walk failure → omit, never a wrong value" discipline
+    /// (post-verify hardening: correctness + regression + Codex lenses converged on
+    /// the pre-hardening `exit repeat` leaving a partial path).
+    func testScript_namelessContainerAbandonsPathNotTruncates() {
+        let script = buildSpecialMailboxNamesScript(accountId: "UUID-A", accountName: "Google")
+        XCTAssertTrue(script.contains("if parName is missing value then"),
+                      "must special-case a nameless container; got:\n\(script)")
+        XCTAssertTrue(script.contains("set fullPath to \"\""),
+                      "nameless container must reset fullPath to empty (abandon, not truncate); got:\n\(script)")
+    }
 }

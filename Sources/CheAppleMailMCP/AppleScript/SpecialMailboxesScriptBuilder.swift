@@ -96,6 +96,10 @@ func buildSpecialMailboxNamesScript(accountId: String?, accountName: String) -> 
         // WITHOUT losing the already-read leaf name (set before the walk). The stop
         // condition is `class of par is mailbox`: a top-level mailbox's container is
         // the account (not a mailbox) → loop body never runs → path == leaf.
+        // A nameless mid-hierarchy container (name is `missing value`) ABANDONS the
+        // path (fullPath → "" → omitted key) rather than emitting a TRUNCATED path
+        // that a consumer might trust — honoring "walk failure → omit, never a wrong
+        // value" (verify convergence: correctness + regression + Codex lenses).
         blocks.append("""
             set n\(idx) to ""
             set p\(idx) to ""
@@ -111,7 +115,10 @@ func buildSpecialMailboxNamesScript(accountId: String?, accountName: String) -> 
                                     set par to container of mb
                                     repeat while (class of par) is mailbox
                                         set parName to name of par
-                                        if parName is missing value then exit repeat
+                                        if parName is missing value then
+                                            set fullPath to ""
+                                            exit repeat
+                                        end if
                                         set fullPath to (parName as string) & "/" & fullPath
                                         set par to container of par
                                     end repeat
