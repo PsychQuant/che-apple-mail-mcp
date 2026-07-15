@@ -32,3 +32,6 @@ logs/
 # MCP Registry tokens
 .mcpregistry_*
 *.code-workspace
+
+# Stray CLI/tool logs (e.g. Codex error.log) — never track
+*.log
