@@ -168,4 +168,42 @@ final class RedirectEmailScriptBuilderTests: XCTestCase {
         XCTAssertEqual(s, expected,
                        "byte-identity drift; got:\n\(s)\n\nexpected:\n\(expected)")
     }
+
+    // MARK: - #263 recipient parity with #251 (shared recipientFragment)
+
+    /// #263: a `Name <email>` recipient must become the native `{name, address}`
+    /// property pair — never the whole mailbox string as the address. Bare
+    /// addresses keep the historical single-property form (pinned byte-identical
+    /// by the #135 golden above, which must stay green untouched).
+    func testBuildRedirectEmailScript_mailboxForm_emitsNativeNameProperty() {
+        let s = buildRedirectEmailScript(
+            id: "42", mailbox: "INBOX",
+            accountId: nil, accountName: "alice@example.com",
+            to: ["王小明 <ming@example.com>", "bare@example.com"]
+        )
+        XCTAssertTrue(s.contains("name:\"王小明\""),
+                      "display name must become the recipient's native name property: \(s)")
+        XCTAssertTrue(s.contains("address:\"ming@example.com\""),
+                      "the address property must carry the BARE addr-spec: \(s)")
+        XCTAssertFalse(s.contains("address:\"王小明"),
+                       "the full mailbox string must never be passed as the address: \(s)")
+        XCTAssertTrue(s.contains("{address:\"bare@example.com\"}"),
+                      "bare recipients keep the historical single-property form: \(s)")
+    }
+
+    /// #263 regression lock: the #251 REQUIRED boundary fix (multi-angle
+    /// rejection) must protect redirect_email too — reject before any script.
+    func testRedirectEmail_multiAngleInput_rejectedAtBoundary() async throws {
+        // addTeardownBlock (awaited by XCTest) instead of defer+Task — a
+        // detached reset of the process-wide singleton could land after the
+        // next test starts (#264 verify; migrating the #251 sites is #267).
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.redirectEmail(
+                id: "42", mailbox: "INBOX", accountName: "alice@example.com",
+                to: ["Alice <alice@example.com> <bob@example.net>"]))
+    }
 }

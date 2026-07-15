@@ -790,10 +790,29 @@ actor MailController {
     func validateEmailAddresses(_ addresses: [String], field: String) throws {
         guard !addresses.isEmpty else { return }
         var failures: [String] = []
-        for addr in addresses {
-            // Reject control chars + tab + DEL (RFC 5322 forbids in addr-spec).
-            if addr.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) {
-                failures.append("'\(addr)' contains control characters")
+        for raw in addresses {
+            // #251: a `Name <email>` mailbox form is validated on its
+            // addr-spec part (the old whole-string check mis-rejected legal
+            // names containing '@'). The NAME part is checked for control
+            // chars below via the same scan (it is part of `raw`).
+            if raw.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F }) {
+                failures.append("'\(raw)' contains control characters")
+                continue
+            }
+            let parsed = parseRecipient(raw)
+            let addr = parsed.address
+            // #265: a mailbox-form-looking string that parseRecipient could NOT
+            // cleanly split (name == nil fallback) yet still carries a matched
+            // `<...>` pair is malformed — e.g. `Alice <not-an-email> <bob@x>`
+            // has a single `@` and would otherwise pass the atCount check and
+            // land whole in the script. Reject it. A clean bare addr-spec never
+            // carries a matched angle pair; bare-angle `<a@b.c>` is already
+            // normalized to its inner addr-spec (angles stripped) upstream, so
+            // it is unaffected. (The pathological quoted-local-part literally
+            // containing a matched angle pair, `"a<b>"@x`, is not supported —
+            // vanishingly rare and never seen in real addresses.)
+            if parsed.name == nil, addr.contains("<"), addr.contains(">") {
+                failures.append("'\(raw)' is a malformed recipient (stray/extra angle brackets)")
                 continue
             }
             // Structural: exactly one `@`, neither at start nor end.
@@ -957,7 +976,8 @@ actor MailController {
         if requireWrapperFree {
             if let reason = mailtoIneligibilityReasonForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
-                attachments: attachments) {
+                attachments: attachments,
+                recipients: to + (cc ?? []) + (bcc ?? [])) {
                 throw MailError.invalidParameter(requireWrapperFreeRefusal(reason: reason))
             }
             do {
@@ -978,7 +998,8 @@ actor MailController {
         return try routeWrapperFreeCompose(
             ineligibilityReason: mailtoIneligibilityReasonForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
-                attachments: attachments),
+                attachments: attachments,
+                recipients: to + (cc ?? []) + (bcc ?? [])),
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
@@ -1015,7 +1036,7 @@ actor MailController {
     /// (`fromAddress`) and an empty subject both route to the legacy path (mailto
     /// can't pick a non-default account; the GUI dispatch guard identifies the
     /// compose window by its title = subject).
-    private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil) -> String? {
+    private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, recipients: [String] = []) -> String? {
         if let override = ineligibilityOverride { return override() }
         return mailtoIneligibilityReason(
             format: format,
@@ -1023,7 +1044,8 @@ actor MailController {
             disabledByEnv: mailtoComposeDisabledByEnv(),
             hasCustomSender: (fromAddress?.isEmpty == false),
             hasSubject: !subject.isEmpty,
-            attachmentsGuiSafe: attachmentPathsGuiSafe(attachments)
+            attachmentsGuiSafe: attachmentPathsGuiSafe(attachments),
+            recipientsAddrSpecOnly: !anyRecipientHasDisplayName(recipients)
         )
     }
 
@@ -1383,7 +1405,8 @@ actor MailController {
         if requireWrapperFree {
             if let reason = mailtoIneligibilityReasonForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
-                attachments: attachments) {
+                attachments: attachments,
+                recipients: to + (cc ?? []) + (bcc ?? [])) {
                 throw MailError.invalidParameter(requireWrapperFreeRefusal(reason: reason))
             }
             return try composeViaMailto(
@@ -1399,7 +1422,8 @@ actor MailController {
         return try routeWrapperFreeCompose(
             ineligibilityReason: mailtoIneligibilityReasonForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
-                attachments: attachments),
+                attachments: attachments,
+                recipients: to + (cc ?? []) + (bcc ?? [])),
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
@@ -1497,6 +1521,87 @@ actor MailController {
             savePath: savePath
         )
         return try runScript(script)
+    }
+
+    /// Best-effort `save_attachment` for a server-side-only (`not_downloaded`)
+    /// attachment (#272, Option B): nudge Mail to fetch the message, then
+    /// re-attempt the save on a bounded poll loop until it lands or the budget
+    /// is spent.
+    ///
+    /// This is **best-effort and unverified** — see `AttachmentDownloadScriptBuilder`
+    /// for why Mail exposes no real download verb. On timeout it fails
+    /// **honestly** with the `not_downloaded` guidance (never a false "saved").
+    /// Only invoked when the caller opted in via `download_if_missing` AND local
+    /// state already proved the part is not downloaded (`shouldAttemptDownloadRetry`).
+    ///
+    /// - Note: triggering the fetch mutates local Mail state (server→local), so
+    ///   this stays on the AppleScript side — allowed by `r-must-direct-db` for
+    ///   the C/U/D (state-changing) class; detection stayed on the SQLite path.
+    func saveAttachmentRetryingForDownload(
+        id: String,
+        mailbox: String,
+        accountId: String?,
+        accountName: String,
+        attachmentName: String,
+        savePath: String,
+        policy: DownloadRetryPolicy = .default
+    ) async throws -> String {
+        // 1. Nudge Mail to materialize the message (best-effort). Errors are
+        //    non-fatal — the save-retry below is the real success test — but log
+        //    them so a no-op fetch is distinguishable from a working one (the
+        //    r-must-direct-db stderr-observability convention).
+        let trigger = buildTriggerDownloadScript(
+            id: id, mailbox: mailbox, accountId: accountId, accountName: accountName)
+        do {
+            _ = try runScript(trigger)
+        } catch {
+            FileHandle.standardError.write(Data(
+                ("download_if_missing: fetch-trigger failed for \"\(attachmentName)\": "
+                 + "\(error.localizedDescription); continuing to poll-retry the save\n").utf8))
+        }
+
+        // 2. Poll: re-attempt the save until it succeeds or the wall-clock budget
+        //    is spent. A downloaded attachment saves cleanly; a still-server-side
+        //    one raises the generic -10000 (unfetched-binary class) — keep waiting.
+        //    The loop is bounded by BOTH a real deadline (each save is itself a
+        //    ~1-2s Mail IPC that a fixed sleep-count would ignore — so the deadline
+        //    keeps real elapsed ≈ policy.timeout) AND `maxAttempts` as a hard cap
+        //    (belt-and-suspenders if the clock misbehaves; the range is always
+        //    valid since maxAttempts ≥ 1).
+        let saveScript = buildSaveAttachmentScript(
+            id: id, mailbox: mailbox, accountId: accountId, accountName: accountName,
+            attachmentName: attachmentName, savePath: savePath)
+        let intervalNanos = UInt64(min(max(0, policy.pollInterval), policy.timeout) * 1_000_000_000)
+        let deadline = Date().addingTimeInterval(max(0, policy.timeout))
+        for _ in 1...policy.maxAttempts {
+            // Wait BEFORE re-checking: the fetch is asynchronous, so even the
+            // first poll gives Mail one interval to land the download.
+            try await Task.sleep(nanoseconds: intervalNanos)
+            do {
+                let result = try runScript(saveScript)
+                // "Attachment saved to ..." = the binary is now local.
+                if result.hasPrefix("Attachment saved") { return result }
+                // A non-throwing NON-saved result ("Attachment not found") is a
+                // DEFINITIVE negative — the named part isn't on this message (a
+                // name-matching problem, not a download delay). Don't burn the
+                // budget polling it; surface it now with the honest cause.
+                throw MailError.operationFailed(
+                    "save_attachment could not find an attachment named \"\(attachmentName)\" "
+                    + "on the message (download_if_missing aborted — this is not a download problem).")
+            } catch MailError.scriptFailed(let message, let code) {
+                // -10000 = still unfetched → keep polling. A SPECIFIC code
+                // (bad account/mailbox, permissions, disk full) is terminal —
+                // retrying cannot fix it, so surface it immediately.
+                if code != -10000 {
+                    throw MailError.scriptFailed(message: message, code: code)
+                }
+            }
+            if Date() >= deadline { break }   // wall-clock budget spent
+        }
+        // Budget spent without the attachment landing — honest failure.
+        throw MailError.operationFailed(
+            "Best-effort download did not complete within \(Int(policy.timeout))s. "
+            + MailSQLiteError.attachmentNotDownloaded(name: attachmentName).localizedDescription)
     }
 
     // MARK: - VIP Operations

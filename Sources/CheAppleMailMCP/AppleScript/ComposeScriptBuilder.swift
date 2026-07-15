@@ -69,9 +69,19 @@ private func attachmentFragment(for paths: [String]) -> String {
     return pieces.joined(separator: "\n")
 }
 
-private func recipientFragment(_ addresses: [String], kind: String) -> String {
+// #251: internal (not private) so RecipientDisplayNameTests can pin the
+// name-aware output directly. A `Name <email>` recipient becomes the native
+// {name, address} property pair — Mail displays the person's name; a bare
+// address keeps the historical single-property form byte-identical.
+func recipientFragment(_ addresses: [String], kind: String) -> String {
     addresses.map { addr in
-        "    make new \(kind) recipient at end of \(kind) recipients with properties {address:\"\(appleScriptEscape(addr))\"}"
+        let parsed = parseRecipient(addr)
+        if let name = parsed.name {
+            return "    make new \(kind) recipient at end of \(kind) recipients "
+                + "with properties {name:\"\(appleScriptEscape(name))\", "
+                + "address:\"\(appleScriptEscape(parsed.address))\"}"
+        }
+        return "    make new \(kind) recipient at end of \(kind) recipients with properties {address:\"\(appleScriptEscape(parsed.address))\"}"
     }.joined(separator: "\n")
 }
 

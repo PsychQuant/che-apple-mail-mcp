@@ -31,10 +31,12 @@ func buildRedirectEmailScript(
         tell redirectMsg
     """
 
-    for recipient in to {
-        script += "\n" + """
-            make new to recipient at end of to recipients with properties {address:"\(appleScriptEscape(recipient))"}
-        """
+    // #263: delegate to the shared #251 name-aware fragment builder. Bare
+    // addresses stay byte-identical to the historical inline loop (the #135
+    // golden pins this); `Name <email>` recipients get the native
+    // {name, address} pair instead of the whole string as the address.
+    if !to.isEmpty {
+        script += "\n" + recipientFragment(to, kind: "to")
     }
 
     script += "\n" + """

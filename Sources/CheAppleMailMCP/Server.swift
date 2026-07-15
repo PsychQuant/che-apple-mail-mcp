@@ -255,11 +255,11 @@ class CheAppleMailMCPServer {
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipient email addresses")]),
+                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipient email addresses. Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); display-name recipients route via the legacy path (mailto carries addr-spec only, RFC 6068) - Mail shows the name natively but the body gets the blockquote wrap + disclosure.")]),
                         "subject": .object(["type": .string("string"), "description": .string("Email subject")]),
                         "body": .object(["type": .string("string"), "description": .string("Email body content (interpreted according to 'format')")]),
-                        "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("CC recipients (optional)")]),
-                        "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("BCC recipients (optional)")]),
+                        "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("CC recipients (optional). Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); display-name recipients route via the legacy path (mailto carries addr-spec only, RFC 6068) - Mail shows the name natively but the body gets the blockquote wrap + disclosure.")]),
+                        "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("BCC recipients (optional). Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); display-name recipients route via the legacy path (mailto carries addr-spec only, RFC 6068) - Mail shows the name natively but the body gets the blockquote wrap + disclosure.")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")]),
                         "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is and is the only format eligible for the wrapper-free clean-body path (#175); 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML — both route to the legacy path whose body Mail wraps in a quote block on some mobile clients.")]),
                         "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true AND `format` is `markdown`, link URLs whose scheme is not in {http, https, mailto, tel} are rendered as plain text (no `<a>` wrapper) — defends against `[click](javascript:...)` and `data:`/`file:`/`vbscript:` XSS injection. Default false (preserves backward compat). No effect when `format` is `plain` (no link parsing happens) or `html` (caller-trusted raw HTML — you must sanitize your own anchors). Non-absolute URLs (e.g. `[home](/relative/path)` or empty `[text]()`) also have their anchor dropped under sanitize_links=true since they lack an allowlisted scheme.")]),
@@ -281,7 +281,7 @@ class CheAppleMailMCPServer {
                         "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
                         "body": .object(["type": .string("string"), "description": .string("Reply content (interpreted according to 'format')")]),
                         "reply_all": .object(["type": .string("boolean"), "description": .string("Reply to all recipients (default: false)")]),
-                        "cc_additional": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Extra CC recipients to add on top of those derived from 'reply_all'. Email addresses (RFC 5322 addr-spec).")]),
+                        "cc_additional": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Extra CC recipients to add on top of those derived from 'reply_all'. Email addresses (RFC 5322 addr-spec). Also accepts RFC 5322 mailbox form (Name <a@b.c>, #251) - the reply paste path sets recipient names natively (no mailto involved, no path change).")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach to the reply.")]),
                         "save_as_draft": .object(["type": .string("boolean"), "description": .string("If true, save the reply as a draft instead of sending it (default: false). Use when you want a human to review before send.")]),
                         "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) prepends the user body to the original message quoted with RFC 3676 `> ` line prefix — preserves signature + rich text; 'markdown'/'html' produce rich text user body but wrap the original's plain-text (HTML-escaped) in a `<blockquote>` because AppleScript denies html-content read on current macOS — signature lost.")]),
@@ -328,8 +328,8 @@ class CheAppleMailMCPServer {
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipient email addresses")]),
-                        "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Carbon copy recipients (optional)")]),
+                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipient email addresses. Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); display-name recipients route via the legacy path (mailto carries addr-spec only, RFC 6068) - Mail shows the name natively but the body gets the blockquote wrap + disclosure.")]),
+                        "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Carbon copy recipients (optional). Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); display-name recipients route via the legacy path (mailto carries addr-spec only, RFC 6068) - Mail shows the name natively but the body gets the blockquote wrap + disclosure.")]),
                         "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Blind carbon copy recipients (optional)")]),
                         "subject": .object(["type": .string("string"), "description": .string("Email subject")]),
                         "body": .object(["type": .string("string"), "description": .string("Email body content (interpreted according to 'format')")]),
@@ -369,7 +369,8 @@ class CheAppleMailMCPServer {
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account (display_name). Required, but may be ambiguous if multiple accounts share the same display_name — prefer passing `account_id` alongside for disambiguation.")]),
                         "account_id": .object(["type": .string("string"), "description": .string("Optional: Mail.app account UUID for disambiguation. Discoverable from search_emails results (the `account_id` field) or from list_accounts (the `id` / `uuid` field). When non-empty, takes precedence over account_name in the AppleScript fallback path.")]),
                         "attachment_name": .object(["type": .string("string"), "description": .string("Name of the attachment to save")]),
-                        "save_path": .object(["type": .string("string"), "description": .string("Full path where to save the file")])
+                        "save_path": .object(["type": .string("string"), "description": .string("Full path where to save the file")]),
+                        "download_if_missing": .object(["type": .string("boolean"), "description": .string("Optional (default false). BEST-EFFORT, NOT GUARANTEED (#272): when the attachment is server-side only (savable_reason 'not_downloaded'), first nudge Mail to fetch the full message, then re-attempt the save for up to ~30s. Mail exposes no real per-attachment download command, so this relies on materializing the message to pull its content — an undocumented, version-/account-dependent side effect that may not work (notably on accounts where the save simply errors). On timeout it fails honestly with the not_downloaded guidance (never a false success); if it does not help, open the message in Mail manually. Scope: effective only for accounts with local .emlx message storage (IMAP/POP) whose not_downloaded state was detected locally — it is a silent no-op on Exchange/EWS accounts (no .emlx) and when the local index is unavailable. Leave off for normal saves.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("attachment_name"), .string("save_path")])
                 ])
@@ -561,7 +562,7 @@ class CheAppleMailMCPServer {
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
                         "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
-                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipients to redirect to")])
+                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipients to redirect to. Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #263) - redirect is pure AppleScript (no mailto involved), so the name is set natively with no path change.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("to")])
                 ])
@@ -1286,6 +1287,10 @@ class CheAppleMailMCPServer {
             // (#176: not wrapped here — save_attachment feeds resolveAccountIdForTool
             // explicitly below at the Tier 2 boundary.)
             let accountId = decodeAccountId(arguments, tool: invokedTool)
+            // #272: opt-in best-effort recovery for a server-side-only attachment
+            // (default off). Only consulted when BOTH tiers fail on the
+            // not_downloaded / -10000 path below.
+            let downloadIfMissing = arguments["download_if_missing"]?.boolValue ?? false
             // #178: ensure the save_path's parent directory exists before EITHER
             // tier. Both fail on a missing parent — Tier 1's Data.write throws
             // (AttachmentExtractor.saveAttachment requires the parent to exist),
@@ -1361,6 +1366,24 @@ class CheAppleMailMCPServer {
                     savePath: savePath
                 )
             } catch MailError.scriptFailed(let message, let code) {
+                // #272: opt-in best-effort recovery. Local state proved the part
+                // is server-side only AND both tiers failed on the generic
+                // -10000 (unfetched-binary class) AND the caller asked for it —
+                // nudge Mail to fetch, then poll-retry the save. Fails honestly
+                // (not_downloaded) on timeout, so a non-opt-in caller and a
+                // genuinely-unfetchable part behave exactly as before.
+                if shouldAttemptDownloadRetry(
+                    notDownloaded: localCopyNotDownloaded, scriptCode: code,
+                    downloadIfMissing: downloadIfMissing) {
+                    return try await mailController.saveAttachmentRetryingForDownload(
+                        id: id,
+                        mailbox: mailbox,
+                        accountId: resolvedAccountId,
+                        accountName: accountName,
+                        attachmentName: attachmentName,
+                        savePath: savePath
+                    )
+                }
                 // #238: local .emlx state proved the part is server-side only —
                 // both tiers failing on the GENERIC AppleEvent failure (-10000,
                 // the "not found"-class Mail raises for an unfetched binary)
