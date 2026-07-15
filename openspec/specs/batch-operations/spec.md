@@ -2,7 +2,7 @@
 
 ## Purpose
 
-TBD - created by archiving change 'sqlite-search-engine'. Update Purpose after archive.
+Batch and bulk email operations: multi-message reads (`get_emails_batch`, `list_attachments_batch`), the server-side markdown export (`batch_export_emails_markdown`, with `export_emails_markdown` as its deprecated alias) with its frozen frontmatter contract, write-safety (allowed-roots, leaf-path containment, race-free writes, per-output_dir concurrency lock), Message-ID-based dedup, and the batch size limit.
 
 ## Requirements
 

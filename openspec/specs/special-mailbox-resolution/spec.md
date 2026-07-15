@@ -2,13 +2,13 @@
 
 ## Purpose
 
-Resolution contract for macOS Mail special mailboxes (drafts / sent / trash / junk / outbox) in `get_special_mailboxes`: unified application-level names by default, and per-account real (localized / provider) names when an account selector is supplied — resolved via the unified special mailbox's per-account child mailboxes (AppleScript-primary by design; this metadata does not exist in the Envelope Index). Per-account `inbox` resolution is conservatively deferred pending a live multi-account check (tracked in #249; originated in #179).
+Resolution contract for macOS Mail special mailboxes (drafts / sent / trash / junk / outbox) in `get_special_mailboxes`: unified application-level names by default, and per-account real (localized / provider) names when an account selector is supplied — resolved via the unified special mailbox's per-account child mailboxes (AppleScript-primary by design; this metadata does not exist in the Envelope Index). Per-account `inbox` resolution shipped in #249 after the live multi-account check the deferral required confirmed `every mailbox of inbox` exposes per-account children (7/7 accounts, including a localized Exchange inbox name).
 
 ## Requirements
 
 ### Requirement: Per-account special-mailbox name resolution
 
-The `get_special_mailboxes` tool SHALL accept optional `account_id` and `account_name` parameters. When neither is supplied, it SHALL return the application-level unified special-mailbox names unchanged. When an account selector is supplied, it SHALL return that account's per-account special-mailbox real (localized / provider) names, resolved via the unified special mailbox's per-account child mailboxes.
+The `get_special_mailboxes` tool SHALL accept optional `account_id` and `account_name` parameters. When neither is supplied, it SHALL return the application-level unified special-mailbox names unchanged. When an account selector is supplied, it SHALL return that account's per-account special-mailbox real (localized / provider) names — inbox, drafts, sent, trash, and junk — resolved via the unified special mailbox's per-account child mailboxes (`inbox` resolution was deferred until a live multi-account check confirmed `every mailbox of inbox` exposes per-account children; the 2026-07-14 check (#249) confirmed it on 7/7 accounts, including a localized Exchange inbox name).
 
 Special-mailbox names are Mail's AppleScript-model metadata; resolution SHALL be AppleScript-based (not the SQLite Envelope Index).
 
@@ -22,18 +22,18 @@ Special-mailbox names are Mail's AppleScript-model metadata; resolution SHALL be
 - **WHEN** `get_special_mailboxes` is called with a non-empty `account_id`
 - **THEN** the result SHALL be a single object for that account containing `account_id`, `account_name`, and the real names of its `drafts`, `sent`, `trash`, and `junk`
 - **AND** each special-mailbox name SHALL be resolved by matching `id of account of mb` against the supplied UUID across the corresponding unified special mailbox's children
-- **AND** the result SHALL NOT include a per-account `inbox` — `inbox` per-account resolution is deferred (it is referenced as `inbox`, not `<X> mailbox`, with unverified per-account child semantics; see the deferred-inbox scenario below)
+- **AND** the result SHALL include a per-account `inbox` when the account has an inbox child (e.g. a localized Exchange `收件匣`), omitted otherwise (#249)
 
 ##### Example: Gmail + iCloud multi-account
 
 - **GIVEN** a Gmail account (UUID `G`, localized special names `草稿` / `已寄出` / `垃圾桶` / `垃圾郵件`) and an iCloud account (UUID `I`, names `Drafts` / `Sent` / `Trash` / `Junk`)
 - **WHEN** called with `account_id = G`
-- **THEN** the result is `{account_id: G, account_name: …, drafts: "草稿", sent: "已寄出", trash: "垃圾桶", junk: "垃圾郵件"}` — NOT the iCloud names, and with no `inbox` key
+- **THEN** the result is `{account_id: G, account_name: …, inbox: "INBOX", drafts: "草稿", sent: "已寄出", trash: "垃圾桶", junk: "垃圾郵件"}` — NOT the iCloud names (#249: the live check shows Gmail's per-account inbox child is named `INBOX`; a localized example is the Exchange `收件匣`)
 
-#### Scenario: Per-account inbox is deferred until live verification
+#### Scenario: Per-account inbox is resolved (deferral lifted by the #249 live check)
 
 - **WHEN** `get_special_mailboxes` is called with an account selector
-- **THEN** the result SHALL NOT include a per-account `inbox` key (only drafts/sent/trash/junk are resolved per-account) until a live multi-account check confirms `every mailbox of inbox` exposes per-account children; the four shipped types are the same structural kind as the drafts mailbox proven in #174
+- **THEN** the result SHALL include the account's per-account `inbox` real name when present — the live multi-account check the previous deferral required has confirmed `every mailbox of inbox` exposes per-account children (#249)
 
 #### Scenario: Email-form account_name is resolved to a UUID
 
