@@ -1499,6 +1499,68 @@ actor MailController {
         return try runScript(script)
     }
 
+    /// Best-effort `save_attachment` for a server-side-only (`not_downloaded`)
+    /// attachment (#272, Option B): nudge Mail to fetch the message, then
+    /// re-attempt the save on a bounded poll loop until it lands or the budget
+    /// is spent.
+    ///
+    /// This is **best-effort and unverified** — see `AttachmentDownloadScriptBuilder`
+    /// for why Mail exposes no real download verb. On timeout it fails
+    /// **honestly** with the `not_downloaded` guidance (never a false "saved").
+    /// Only invoked when the caller opted in via `download_if_missing` AND local
+    /// state already proved the part is not downloaded (`shouldAttemptDownloadRetry`).
+    ///
+    /// - Note: triggering the fetch mutates local Mail state (server→local), so
+    ///   this stays on the AppleScript side — allowed by `r-must-direct-db` for
+    ///   the C/U/D (state-changing) class; detection stayed on the SQLite path.
+    func saveAttachmentRetryingForDownload(
+        id: String,
+        mailbox: String,
+        accountId: String?,
+        accountName: String,
+        attachmentName: String,
+        savePath: String,
+        policy: DownloadRetryPolicy = .default
+    ) async throws -> String {
+        // 1. Nudge Mail to materialize the message (best-effort). Errors are
+        //    non-fatal — the save-retry below is the real success test, and a
+        //    transient trigger failure must not pre-empt it.
+        let trigger = buildTriggerDownloadScript(
+            id: id, mailbox: mailbox, accountId: accountId, accountName: accountName)
+        _ = try? runScript(trigger)
+
+        // 2. Poll: re-attempt the save until it succeeds or the budget is spent.
+        //    A downloaded attachment saves cleanly; a still-server-side one
+        //    raises the generic -10000 (unfetched-binary class) — keep waiting.
+        let saveScript = buildSaveAttachmentScript(
+            id: id, mailbox: mailbox, accountId: accountId, accountName: accountName,
+            attachmentName: attachmentName, savePath: savePath)
+        let intervalNanos = UInt64(max(0, policy.pollInterval) * 1_000_000_000)
+        for _ in 1...policy.maxAttempts {
+            // Wait BEFORE re-checking: the fetch is asynchronous, so even the
+            // first poll gives Mail one interval to land the download.
+            try await Task.sleep(nanoseconds: intervalNanos)
+            do {
+                let result = try runScript(saveScript)
+                // "Attachment saved to ..." = the binary is now local. Any other
+                // string ("Attachment not found") means the part hasn't landed —
+                // keep polling within budget.
+                if result.contains("saved") { return result }
+            } catch MailError.scriptFailed(let message, let code) {
+                // -10000 = still unfetched → keep polling. A SPECIFIC code
+                // (bad account/mailbox, permissions) is terminal — retrying
+                // cannot fix it, so surface it immediately.
+                if code != -10000 {
+                    throw MailError.scriptFailed(message: message, code: code)
+                }
+            }
+        }
+        // Budget spent without the attachment landing — honest failure.
+        throw MailError.operationFailed(
+            "Best-effort download did not complete within \(Int(policy.timeout))s. "
+            + MailSQLiteError.attachmentNotDownloaded(name: attachmentName).localizedDescription)
+    }
+
     // MARK: - VIP Operations
 
     /// List VIP senders

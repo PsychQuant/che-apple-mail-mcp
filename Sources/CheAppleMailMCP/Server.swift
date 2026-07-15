@@ -369,7 +369,8 @@ class CheAppleMailMCPServer {
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account (display_name). Required, but may be ambiguous if multiple accounts share the same display_name — prefer passing `account_id` alongside for disambiguation.")]),
                         "account_id": .object(["type": .string("string"), "description": .string("Optional: Mail.app account UUID for disambiguation. Discoverable from search_emails results (the `account_id` field) or from list_accounts (the `id` / `uuid` field). When non-empty, takes precedence over account_name in the AppleScript fallback path.")]),
                         "attachment_name": .object(["type": .string("string"), "description": .string("Name of the attachment to save")]),
-                        "save_path": .object(["type": .string("string"), "description": .string("Full path where to save the file")])
+                        "save_path": .object(["type": .string("string"), "description": .string("Full path where to save the file")]),
+                        "download_if_missing": .object(["type": .string("boolean"), "description": .string("Optional (default false). BEST-EFFORT, NOT GUARANTEED (#272): when the attachment is server-side only (savable_reason 'not_downloaded'), first nudge Mail to fetch the full message, then re-attempt the save for up to ~30s. Mail exposes no real per-attachment download command, so this relies on materializing the message to pull its content — an undocumented, version-/account-dependent side effect that may not work (notably on accounts where the save simply errors). On timeout it fails honestly with the not_downloaded guidance (never a false success); if it does not help, open the message in Mail manually. Leave off for normal saves.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("attachment_name"), .string("save_path")])
                 ])
@@ -1286,6 +1287,10 @@ class CheAppleMailMCPServer {
             // (#176: not wrapped here — save_attachment feeds resolveAccountIdForTool
             // explicitly below at the Tier 2 boundary.)
             let accountId = decodeAccountId(arguments, tool: invokedTool)
+            // #272: opt-in best-effort recovery for a server-side-only attachment
+            // (default off). Only consulted when BOTH tiers fail on the
+            // not_downloaded / -10000 path below.
+            let downloadIfMissing = arguments["download_if_missing"]?.boolValue ?? false
             // #178: ensure the save_path's parent directory exists before EITHER
             // tier. Both fail on a missing parent — Tier 1's Data.write throws
             // (AttachmentExtractor.saveAttachment requires the parent to exist),
@@ -1361,6 +1366,24 @@ class CheAppleMailMCPServer {
                     savePath: savePath
                 )
             } catch MailError.scriptFailed(let message, let code) {
+                // #272: opt-in best-effort recovery. Local state proved the part
+                // is server-side only AND both tiers failed on the generic
+                // -10000 (unfetched-binary class) AND the caller asked for it —
+                // nudge Mail to fetch, then poll-retry the save. Fails honestly
+                // (not_downloaded) on timeout, so a non-opt-in caller and a
+                // genuinely-unfetchable part behave exactly as before.
+                if shouldAttemptDownloadRetry(
+                    notDownloaded: localCopyNotDownloaded, scriptCode: code,
+                    downloadIfMissing: downloadIfMissing) {
+                    return try await mailController.saveAttachmentRetryingForDownload(
+                        id: id,
+                        mailbox: mailbox,
+                        accountId: resolvedAccountId,
+                        accountName: accountName,
+                        attachmentName: attachmentName,
+                        savePath: savePath
+                    )
+                }
                 // #238: local .emlx state proved the part is server-side only —
                 // both tiers failing on the GENERIC AppleEvent failure (-10000,
                 // the "not found"-class Mail raises for an unfetched binary)
