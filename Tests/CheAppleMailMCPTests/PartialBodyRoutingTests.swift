@@ -47,6 +47,35 @@ final class PartialBodyRoutingTests: XCTestCase {
             format: "source"))
     }
 
+    // MARK: - fallback annotation (#274 verify R1, Codex)
+
+    func testFallbackStillMissing_source_headerOnlyIsMissing() {
+        // A header-only source is NON-empty yet body-less — the bare isEmpty
+        // check silently skipped the annotation here (Codex R1 blocking).
+        XCTAssertTrue(CheAppleMailMCPServer.fallbackBodyStillMissing(
+            "From: a@x.co\r\nSubject: s\r\n", format: "source"))
+        // Separator present but nothing (or only whitespace) after it.
+        XCTAssertTrue(CheAppleMailMCPServer.fallbackBodyStillMissing(
+            "From: a@x.co\r\nSubject: s\r\n\r\n", format: "source"))
+        XCTAssertTrue(CheAppleMailMCPServer.fallbackBodyStillMissing(
+            "From: a@x.co\n\n   \n", format: "source"))
+        XCTAssertTrue(CheAppleMailMCPServer.fallbackBodyStillMissing("", format: "source"))
+    }
+
+    func testFallbackStillMissing_source_withBodyIsComplete() {
+        XCTAssertFalse(CheAppleMailMCPServer.fallbackBodyStillMissing(
+            "From: a@x.co\r\nSubject: s\r\n\r\nhello body", format: "source"))
+        XCTAssertFalse(CheAppleMailMCPServer.fallbackBodyStillMissing(
+            "From: a@x.co\n\nbody", format: "source"))
+    }
+
+    func testFallbackStillMissing_bodyFormats_useEmptiness() {
+        for fmt in ["text", "html"] {
+            XCTAssertTrue(CheAppleMailMCPServer.fallbackBodyStillMissing("", format: fmt))
+            XCTAssertFalse(CheAppleMailMCPServer.fallbackBodyStillMissing("x", format: fmt))
+        }
+    }
+
     func testPartial_htmlFormat_routesWhenBothBodiesAbsent() {
         XCTAssertTrue(CheAppleMailMCPServer.partialBodyNotDownloaded(
             content: content(partial: true), format: "html"))

@@ -1016,11 +1016,15 @@ class CheAppleMailMCPServer {
             }
             let accountId = decodeAccountId(arguments, tool: invokedTool)
             var email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, format: format)
-            if partialBodyFallback, ((email["content"] as? String) ?? "").isEmpty {
+            if partialBodyFallback,
+               Self.fallbackBodyStillMissing((email["content"] as? String) ?? "", format: format) {
                 // #274: the store had only a partial file AND the AppleScript
-                // read came back empty — the fetch nudge hasn't landed (yet).
-                // Give callers (archive-mail etc.) a machine-readable signal so
-                // "not downloaded" is never mistaken for "empty message".
+                // read still carries no body (format-aware: a header-only
+                // source is non-empty but body-less — verify R1, Codex). The
+                // fetch nudge hasn't landed (yet — the IMAP fetch may also be
+                // asynchronous; a later re-read can succeed). Machine-readable
+                // signal so "not downloaded" is never mistaken for "empty
+                // message".
                 email["body_downloaded"] = false
             }
             return formatJSON(email)
@@ -1887,11 +1891,12 @@ class CheAppleMailMCPServer {
                             if let html = content.htmlBody { entry["html_body"] = html }
                             if let source = content.rawSource { entry["source"] = String(data: source, encoding: .utf8) ?? "" }
                             if Self.partialBodyNotDownloaded(content: content, format: format) {
-                                // #274: batch stays on the fast path (a per-item
-                                // AppleScript fallback would be O(n) IPC against
-                                // r-must-direct-db) — annotate instead, so batch
-                                // callers can re-fetch flagged ids via the single
-                                // get_email (whose fallback nudges the download).
+                                // #274: batch stays on the direct-read fast path
+                                // (a per-item AppleScript fallback would cost one
+                                // Mail IPC round-trip per message) — annotate
+                                // instead, so batch callers can re-fetch flagged
+                                // ids via the single get_email (whose fallback
+                                // nudges the download).
                                 entry["body_downloaded"] = false
                             }
                             results.append(entry)
@@ -2068,10 +2073,6 @@ class CheAppleMailMCPServer {
         return dateFormatter.date(from: string)
     }
 
-    /// Wrap a result array in the truncation envelope (#204) so callers can
-    /// detect when more rows matched than were returned instead of silently
-    /// losing them. `truncated` is definitive on the SQLite fast path (limit+1
-    /// fetch) and best-effort (`returned == limit`) on the AppleScript fallback.
     /// #274 — true when the parsed content came from a `.partial.emlx` AND the
     /// body the caller asked for is absent: "not downloaded", not "empty
     /// message". Pure so the routing contract is unit-testable.
@@ -2092,6 +2093,33 @@ class CheAppleMailMCPServer {
         }
     }
 
+    /// #274 verify R1 (Codex) — format-aware "is the body STILL absent" check
+    /// for the AppleScript fallback result of the partial-`.emlx` route. A
+    /// bare `isEmpty` is only right for the body-only formats: a header-only
+    /// SOURCE is non-empty yet body-less, so the annotation would be silently
+    /// skipped — the exact header-only case #274 exists to surface (and the
+    /// fast path itself already judges a non-empty partial source incomplete).
+    ///
+    /// - `text` / `html`: the `content` string IS the body — empty ⇒ missing.
+    /// - `source`: complete only when an RFC 822 header/body separator exists
+    ///   AND carries non-whitespace body bytes after it.
+    static func fallbackBodyStillMissing(_ content: String, format: String) -> Bool {
+        switch format {
+        case "source":
+            guard let sep = content.range(of: "\r\n\r\n") ?? content.range(of: "\n\n") else {
+                return true
+            }
+            return content[sep.upperBound...]
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        default:
+            return content.isEmpty
+        }
+    }
+
+    /// Wrap a result array in the truncation envelope (#204) so callers can
+    /// detect when more rows matched than were returned instead of silently
+    /// losing them. `truncated` is definitive on the SQLite fast path (limit+1
+    /// fetch) and best-effort (`returned == limit`) on the AppleScript fallback.
     static func resultEnvelope(results: [[String: Any]], limit: Int, truncated: Bool) -> [String: Any] {
         [
             "results": results,
