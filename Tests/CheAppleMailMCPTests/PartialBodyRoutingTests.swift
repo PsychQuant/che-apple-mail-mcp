@@ -1,0 +1,60 @@
+import XCTest
+@testable import CheAppleMailMCP
+@testable import MailSQLite
+
+/// #274 — routing contract for the partial-`.emlx` fallback: `get_email`
+/// falls through to AppleScript (the download nudge) exactly when the fast
+/// path parsed a partial file AND the requested body is absent. The decision
+/// is a pure static helper so the contract is pinned here without live Mail.
+final class PartialBodyRoutingTests: XCTestCase {
+
+    private func content(
+        partial: Bool, text: String? = nil, html: String? = nil, source: Data? = nil
+    ) -> EmailContent {
+        EmailContent(
+            subject: "s", sender: "a@x.co", toRecipients: [], ccRecipients: [],
+            date: "", messageId: "", inReplyTo: "",
+            textBody: text, htmlBody: html, rawSource: source,
+            fromPartialEmlx: partial
+        )
+    }
+
+    func testFullFile_neverRoutesToFallback() {
+        for fmt in ["text", "html", "source"] {
+            XCTAssertFalse(
+                CheAppleMailMCPServer.partialBodyNotDownloaded(
+                    content: content(partial: false), format: fmt),
+                "a non-partial file must never trigger the #274 fallback (format \(fmt))"
+            )
+        }
+    }
+
+    func testPartial_textFormat_routesOnlyWhenTextEmpty() {
+        XCTAssertTrue(CheAppleMailMCPServer.partialBodyNotDownloaded(
+            content: content(partial: true, text: nil), format: "text"))
+        XCTAssertTrue(CheAppleMailMCPServer.partialBodyNotDownloaded(
+            content: content(partial: true, text: ""), format: "text"))
+        XCTAssertFalse(CheAppleMailMCPServer.partialBodyNotDownloaded(
+            content: content(partial: true, text: "hello"), format: "text"))
+    }
+
+    func testPartial_sourceFormat_alwaysRoutes() {
+        // A partial file's source is header-only by definition — incomplete
+        // for a caller who asked for the full RFC 822, even though the
+        // header-only rawSource is non-empty.
+        XCTAssertTrue(CheAppleMailMCPServer.partialBodyNotDownloaded(
+            content: content(partial: true, source: Data("From: a@x.co\r\n".utf8)),
+            format: "source"))
+    }
+
+    func testPartial_htmlFormat_routesWhenBothBodiesAbsent() {
+        XCTAssertTrue(CheAppleMailMCPServer.partialBodyNotDownloaded(
+            content: content(partial: true), format: "html"))
+        XCTAssertFalse(CheAppleMailMCPServer.partialBodyNotDownloaded(
+            content: content(partial: true, html: "<p>x</p>"), format: "html"))
+        // A text-only body still counts as a body for the html format (the
+        // handler returns whichever bodies parsed).
+        XCTAssertFalse(CheAppleMailMCPServer.partialBodyNotDownloaded(
+            content: content(partial: true, text: "x"), format: "html"))
+    }
+}

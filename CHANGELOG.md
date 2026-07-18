@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`get_email` no longer silently returns an empty body for a not-yet-downloaded message** ([#274](https://github.com/PsychQuant/che-apple-mail-mcp/issues/274)). Mail stores a header-synced / body-not-downloaded message as `<rowid>.partial.emlx`; `resolveEmlxPath` transparently fell back to it, `readEmail` parsed the header-only file into a "successful" empty-body result, and the handler returned it — never triggering the AppleScript fallback, so archive flows silently produced header-only archives (the issue's cache-invalidation hypothesis was refuted by code inspection: there is no content cache; the partial file just parses "successfully"). Now: `resolveEmlxPathDetailed` exposes an `isPartial` bit (the legacy `String?` API is a byte-compatible wrapper; the attachment extractor's own partial handling is untouched), `EmailContent` carries `fromPartialEmlx`, and `get_email` routes a partial-with-absent-body result to the **logged** AppleScript fallback — whose `content`/`source` read doubles as the download nudge the direct file read cannot perform. If the AppleScript read is still empty, the result carries `body_downloaded: false` so callers (archive-mail) can distinguish "not downloaded" from "empty message" instead of archiving header-only content silently. `get_emails_batch` annotates flagged items with the same key but stays on the fast path (a per-item AppleScript fallback would be O(n) IPC) — batch callers re-fetch flagged ids via single `get_email`. Live acceptance (does the nudge fetch on a real not-downloaded message; "open in Mail.app then readable" criterion) remains a documented residue pending an attended session with a real specimen.
+
 ## [2.21.0] - 2026-07-16
 
 ### Added

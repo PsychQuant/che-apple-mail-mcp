@@ -970,23 +970,36 @@ class CheAppleMailMCPServer {
             let format = arguments["format"]?.stringValue ?? "html"
             // Try SQLite/emlx first, fall back to AppleScript
 
+            // #274: set when the fast path found only a partial .emlx with no
+            // body — the AppleScript fallback below then doubles as the fetch
+            // nudge, and its result is annotated if the body is STILL absent.
+            var partialBodyFallback = false
             if let reader = indexReader, let rowId = Int(id) {
                 do {
                     if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
                         let content = try EmlxParser.readEmail(rowId: rowId, mailboxURL: mailboxUrl, format: format)
-                        var result: [String: Any] = [
-                            "id": id,
-                            "subject": content.subject,
-                            "sender": content.sender,
-                            "date": content.date,
-                            "to": content.toRecipients,
-                            "cc": content.ccRecipients,
-                            "message_id": content.messageId
-                        ]
-                        if let text = content.textBody { result["text_body"] = text }
-                        if let html = content.htmlBody { result["html_body"] = html }
-                        if let source = content.rawSource { result["source"] = String(data: source, encoding: .utf8) ?? "" }
-                        return formatJSON(result)
+                        if Self.partialBodyNotDownloaded(content: content, format: format) {
+                            // #274: a partial .emlx with an empty body means
+                            // "not downloaded", NOT "empty message" — returning
+                            // it as success was the silent header-only path.
+                            partialBodyFallback = true
+                            logFastPathFallthrough(tool: "get_email", rowId: rowId,
+                                                   reason: .partialBodyNotDownloaded)
+                        } else {
+                            var result: [String: Any] = [
+                                "id": id,
+                                "subject": content.subject,
+                                "sender": content.sender,
+                                "date": content.date,
+                                "to": content.toRecipients,
+                                "cc": content.ccRecipients,
+                                "message_id": content.messageId
+                            ]
+                            if let text = content.textBody { result["text_body"] = text }
+                            if let html = content.htmlBody { result["html_body"] = html }
+                            if let source = content.rawSource { result["source"] = String(data: source, encoding: .utf8) ?? "" }
+                            return formatJSON(result)
+                        }
                     } else {
                         // `mailboxURL` returned nil (rowId not in the Envelope
                         // Index). #69 only logged the `catch` path — this
@@ -1002,7 +1015,14 @@ class CheAppleMailMCPServer {
                 }
             }
             let accountId = decodeAccountId(arguments, tool: invokedTool)
-            let email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, format: format)
+            var email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, format: format)
+            if partialBodyFallback, ((email["content"] as? String) ?? "").isEmpty {
+                // #274: the store had only a partial file AND the AppleScript
+                // read came back empty — the fetch nudge hasn't landed (yet).
+                // Give callers (archive-mail etc.) a machine-readable signal so
+                // "not downloaded" is never mistaken for "empty message".
+                email["body_downloaded"] = false
+            }
             return formatJSON(email)
 
         case "search_emails":
@@ -1866,6 +1886,14 @@ class CheAppleMailMCPServer {
                             if let text = content.textBody { entry["text_body"] = text }
                             if let html = content.htmlBody { entry["html_body"] = html }
                             if let source = content.rawSource { entry["source"] = String(data: source, encoding: .utf8) ?? "" }
+                            if Self.partialBodyNotDownloaded(content: content, format: format) {
+                                // #274: batch stays on the fast path (a per-item
+                                // AppleScript fallback would be O(n) IPC against
+                                // r-must-direct-db) — annotate instead, so batch
+                                // callers can re-fetch flagged ids via the single
+                                // get_email (whose fallback nudges the download).
+                                entry["body_downloaded"] = false
+                            }
                             results.append(entry)
                             continue
                         } else {
@@ -2044,6 +2072,26 @@ class CheAppleMailMCPServer {
     /// detect when more rows matched than were returned instead of silently
     /// losing them. `truncated` is definitive on the SQLite fast path (limit+1
     /// fetch) and best-effort (`returned == limit`) on the AppleScript fallback.
+    /// #274 — true when the parsed content came from a `.partial.emlx` AND the
+    /// body the caller asked for is absent: "not downloaded", not "empty
+    /// message". Pure so the routing contract is unit-testable.
+    ///
+    /// - `text`: the text body is nil/empty.
+    /// - `source`: a partial file's source is header-only by definition —
+    ///   always incomplete for a caller who asked for the full RFC 822.
+    /// - `html` (default): neither an html nor a text body was parsed.
+    static func partialBodyNotDownloaded(content: EmailContent, format: String) -> Bool {
+        guard content.fromPartialEmlx else { return false }
+        switch format {
+        case "text":
+            return (content.textBody ?? "").isEmpty
+        case "source":
+            return true
+        default:
+            return (content.htmlBody ?? "").isEmpty && (content.textBody ?? "").isEmpty
+        }
+    }
+
     static func resultEnvelope(results: [[String: Any]], limit: Int, truncated: Bool) -> [String: Any] {
         [
             "results": results,
@@ -2245,6 +2293,11 @@ enum FastPathFallthrough {
     /// The Envelope Index lookup or the `.emlx` parse threw; carries the
     /// thrown error's `localizedDescription`.
     case error(String)
+    /// #274 — the store only holds a `.partial.emlx` and the requested body
+    /// is absent: Mail has not downloaded the message body yet. Not an
+    /// error — the AppleScript fallback's `content`/`source` read doubles
+    /// as the fetch nudge the direct file read cannot perform.
+    case partialBodyNotDownloaded
 }
 
 /// Build the stderr diagnostic line for a read-tool SQLite fast-path
@@ -2272,6 +2325,10 @@ func fastPathFallthroughLog(tool: String, rowId: Int, reason: FastPathFallthroug
     case .error(let detail):
         return "SQLite \(tool) fast path failed for rowId=\(rowId): "
             + "\(detail); falling through to AppleScript\(suffix)\n"
+    case .partialBodyNotDownloaded:
+        return "SQLite \(tool) fast path hit a partial .emlx for rowId=\(rowId): "
+            + "body not downloaded yet (#274); falling through to AppleScript "
+            + "to nudge Mail to fetch it\(suffix)\n"
     }
 }
 
