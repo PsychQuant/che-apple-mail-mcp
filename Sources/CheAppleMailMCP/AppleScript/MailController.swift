@@ -811,16 +811,17 @@ actor MailController {
             // passes — angles inside quoted strings are legal specials, and a
             // naive contains() gate would mis-reject them. Bare-angle `<a@b.c>`
             // is already normalized upstream (angles stripped), unaffected.
-            // Residual honesty (#270 verify DA): two malformed shapes still
-            // pass this lite gate by design — (a) when a display name DID
-            // parse (name != nil) the extracted addr-spec is not re-scanned,
-            // so a '>' embedded inside it survives (`Name <a>b@x>`); (b) an
-            // unterminated quote swallows the rest of the string, hiding any
-            // angles after it (`"<a@x`). The old→new reject/pass delta is
-            // likewise not limited to `"a<b>"@x` — ANY angles entirely inside
-            // quotes now pass (e.g. `"<a@x>"`, unmasking the pre-existing
-            // no-domain acceptance). All land as Mail-level invalid, no
-            // mis-send.
+            // Residual honesty (#270 verify DA + Codex R1): one malformed
+            // shape still passes this lite gate by design — when a display
+            // name DID parse (name != nil) the extracted addr-spec is not
+            // re-scanned, so a '>' embedded inside it survives
+            // (`Name <a>b@x>`). And the old→new reject/pass delta is not
+            // limited to `"a<b>"@x` — angles inside a CLOSED local-part
+            // quoted string always pass (e.g. the fully-quoted `"<a@x>"`,
+            // unmasking the pre-existing no-domain acceptance). Unterminated
+            // quotes and domain-position quotes get NO exemption (R1, Codex
+            // — see containsUnquotedAngle). All land as Mail-level invalid,
+            // no mis-send.
             if parsed.name == nil, containsUnquotedAngle(addr) {
                 failures.append("'\(raw)' is a malformed recipient (stray/unpaired angle brackets)")
                 continue

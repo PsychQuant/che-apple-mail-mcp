@@ -200,9 +200,40 @@ final class RecipientDisplayNameTests: XCTestCase {
         // Escaped backslash DOES close on the next quote — the angle after the
         // closing quote is unquoted.
         XCTAssertTrue(containsUnquotedAngle("\"a\\\\\"<b@x"))
-        // Unterminated quote swallows the rest — no unquoted angle.
-        XCTAssertFalse(containsUnquotedAngle("\"a<b@x"))
+        // #270 verify R1 (Codex): an unterminated quote is NOT an RFC 5322
+        // quoted-string — angles inside it get no exemption. The old
+        // assertion pinned the bypass (`"a<b@x` → false); flipped.
+        XCTAssertTrue(containsUnquotedAngle("\"a<b@x"))
+        // #265 regression case: unterminated quote + PAIRED angles — the old
+        // paired-contains guard rejected this; the R1 scan must too.
+        XCTAssertTrue(containsUnquotedAngle("\"a<b>@x"))
+        XCTAssertTrue(containsUnquotedAngle("\"<a@x"))
+        // A quoted-string cannot appear in the DOMAIN (after an unquoted @) —
+        // quotes there are literal, so their angles are unquoted.
+        XCTAssertTrue(containsUnquotedAngle("a@\"<x>\""))
+        // Unterminated quote with NO angle inside stays exempt-neutral (no
+        // angle to report; the atCount checks handle the rest).
+        XCTAssertFalse(containsUnquotedAngle("\"a@x"))
         XCTAssertFalse(containsUnquotedAngle(""))
+    }
+
+    func testValidation_untermQuotePairedAngles_rejectedAtBoundary() async throws {
+        // #270 verify R1 (Codex blocking): `"a<b>@x` — old #265 guard rejected
+        // (contains < and >); the R0 quote scan swallowed both angles into the
+        // unterminated quote and passed it. Must reject at the boundary.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["\"a<b>@example.net"], subject: "s", body: "b"))
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["\"a<b@example.net"], subject: "s", body: "b"))
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["a@\"<example.net>\""], subject: "s", body: "b"))
     }
 
     // MARK: #266 — RFC 5322 quoted-pair decoding inside quoted display names

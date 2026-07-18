@@ -330,15 +330,24 @@ func unescapeQuotedPairs(_ s: String) -> String {
     return out
 }
 
-/// #270 — true iff the string contains a `<` or `>` OUTSIDE RFC 5322 quoted
-/// strings. Quote state honors quoted-pairs (`\"` stays inside the quoted
-/// string — same escape semantics as `unescapeQuotedPairs`). Used by the
-/// boundary validator to reject stray angles whether paired (`x <a@b> <c@d>`,
-/// #265) or unpaired (`<a@x` / `a@x>`, #270) without mis-rejecting legal
-/// quoted local-parts (`"a<b"@x`). Single pass.
+/// #270 — true iff the string contains a `<` or `>` that is NOT inside a
+/// well-formed RFC 5322 quoted string in a position where one may appear.
+/// Quote state honors quoted-pairs (`\"` stays inside the quoted string —
+/// same escape semantics as `unescapeQuotedPairs`). Two verify-round (R1,
+/// Codex) tightenings keep the exemption honest:
+///   - An UNTERMINATED quote is not a quoted-string at all (RFC 5322), so
+///     angles seen inside one count as unquoted at EOF (`"a<b@x`, and the
+///     #265-regression shape `"a<b>@x`, are both rejected).
+///   - A quoted-string cannot appear in the DOMAIN — after the first
+///     unquoted `@`, a `"` is a literal, so `a@"<x>"` counts its angles.
+/// Used by the boundary validator to reject stray angles whether paired
+/// (`x <a@b> <c@d>`, #265) or unpaired (`<a@x` / `a@x>`, #270) without
+/// mis-rejecting legal quoted local-parts (`"a<b"@x`). Single pass.
 func containsUnquotedAngle(_ s: String) -> Bool {
     var inQuote = false
     var escaped = false
+    var angleInOpenQuote = false
+    var seenUnquotedAt = false
     for ch in s {
         if inQuote {
             if escaped {
@@ -347,14 +356,23 @@ func containsUnquotedAngle(_ s: String) -> Bool {
                 escaped = true
             } else if ch == "\"" {
                 inQuote = false
+                angleInOpenQuote = false
+            } else if ch == "<" || ch == ">" {
+                angleInOpenQuote = true
             }
         } else if ch == "\"" {
-            inQuote = true
+            // Quotes may only open a quoted-string in the local part; after
+            // an unquoted `@` they are literal characters.
+            if !seenUnquotedAt { inQuote = true }
+        } else if ch == "@" {
+            seenUnquotedAt = true
         } else if ch == "<" || ch == ">" {
             return true
         }
     }
-    return false
+    // EOF with an open quote: no quoted-string was formed — any angle seen
+    // inside it was never actually protected.
+    return inQuote && angleInOpenQuote
 }
 
 /// #251 — true iff any recipient in the given lists carries a display name.
