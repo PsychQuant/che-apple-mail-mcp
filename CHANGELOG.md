@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Recipient lite validator — unpaired stray angle brackets now rejected** ([#270](https://github.com/PsychQuant/che-apple-mail-mcp/issues/270), residual of [#265](https://github.com/PsychQuant/che-apple-mail-mcp/issues/265)). The #265 boundary guard required a *matched* angle pair (`contains("<") && contains(">")`), so a single stray bracket (`<a@x` / `a@x>`) bypassed it — `parseRecipient` returns such strings whole as bare addresses (brackets intact), the single-`@` count passed, and the malformed recipient landed in the AppleScript `address` as a Mail-level-invalid (no mis-send, but silently accepted). The guard now uses a quote-aware `containsUnquotedAngle` scan: any `<` / `>` **outside** RFC 5322 quoted strings is rejected when the parser could not split a display name — covering both the matched-pair (#265) and unpaired (#270) cases with one predicate. Deliberate behavior change: a quoted local-part carrying angles is now legal even with a matched pair (`"a<b>"@x`, previously documented-unsupported and rejected) — angles inside quoted strings are legal RFC 5322 specials, and the scan honors quoted-pair escapes (`\"`) consistently with `unescapeQuotedPairs` (#266). Error message updated to "stray/unpaired angle brackets".
+
 ## [2.21.0] - 2026-07-16
 
 ### Added
