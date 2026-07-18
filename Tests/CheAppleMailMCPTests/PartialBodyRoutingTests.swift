@@ -69,6 +69,18 @@ final class PartialBodyRoutingTests: XCTestCase {
             "From: a@x.co\n\nbody", format: "source"))
     }
 
+    func testFallbackStillMissing_source_mixedNewlines_usesEarliestSeparator() {
+        // #274 verify R2 (Codex): LF top-level separator + a trailing
+        // CRLF-CRLF at the END of the body — the CRLF-preferring lookup
+        // matched the late pair, saw nothing after it, and wrongly flagged a
+        // message that HAS a body. The earliest separator must win.
+        XCTAssertFalse(CheAppleMailMCPServer.fallbackBodyStillMissing(
+            "From: a@x.co\nSubject: s\n\nhello\r\n\r\n", format: "source"))
+        // Symmetric shape: CRLF headers first — earliest is the CRLF pair.
+        XCTAssertFalse(CheAppleMailMCPServer.fallbackBodyStillMissing(
+            "From: a@x.co\r\n\r\nbody\n\n", format: "source"))
+    }
+
     func testFallbackStillMissing_bodyFormats_useEmptiness() {
         for fmt in ["text", "html"] {
             XCTAssertTrue(CheAppleMailMCPServer.fallbackBodyStillMissing("", format: fmt))

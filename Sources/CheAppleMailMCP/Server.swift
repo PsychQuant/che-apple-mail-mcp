@@ -2106,7 +2106,16 @@ class CheAppleMailMCPServer {
     static func fallbackBodyStillMissing(_ content: String, format: String) -> Bool {
         switch format {
         case "source":
-            guard let sep = content.range(of: "\r\n\r\n") ?? content.range(of: "\n\n") else {
+            // Pick the EARLIEST separator, not CRLF-preferred (verify R2,
+            // Codex): a mixed-newline source (LF top headers + a trailing
+            // CRLF-CRLF later in the body) would otherwise match the LATE
+            // CRLF pair, see nothing after it, and wrongly annotate a
+            // message that HAS a body.
+            let separators = [
+                content.range(of: "\r\n\r\n"),
+                content.range(of: "\n\n"),
+            ].compactMap { $0 }
+            guard let sep = separators.min(by: { $0.lowerBound < $1.lowerBound }) else {
                 return true
             }
             return content[sep.upperBound...]
