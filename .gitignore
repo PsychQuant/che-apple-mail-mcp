@@ -26,7 +26,12 @@ openspec/.vector-search.db*
 # Local/personal files
 .remember/
 .agents/
-.claude/
+# .claude/ is local-only EXCEPT .claude/rules/ (shared agent-authoring rules — must
+# reach remote so every clone/machine inherits them, e.g. compose-wrapper-free cite-block).
+# git can't re-include a path whose parent dir is excluded, so ignore .claude/*'s
+# entries individually and carve the rules dir back in.
+.claude/*
+!.claude/rules/
 logs/
 
 # MCP Registry tokens
