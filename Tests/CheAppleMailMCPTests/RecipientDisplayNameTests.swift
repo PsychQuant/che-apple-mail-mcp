@@ -130,6 +130,81 @@ final class RecipientDisplayNameTests: XCTestCase {
         XCTAssertTrue(r2.hasPrefix("Email sent successfully"))
     }
 
+    // MARK: #270 — unpaired stray angles rejected; quoted-local-part angles legal
+
+    func testValidation_unpairedLeadingAngle_rejectedAtBoundary() async throws {
+        // #270: `<a@x` — no `>` suffix → parseRecipient returns (nil, "<a@x");
+        // the #265 guard required a MATCHED pair (contains both < and >) so a
+        // single stray `<` slipped through atCount==1 and landed in the script.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["<a@example.net"], subject: "s", body: "b"))
+    }
+
+    func testValidation_unpairedTrailingAngle_rejectedAtBoundary() async throws {
+        // #270: `a@x>` — has `>` suffix but no `<` → (nil, "a@x>") with the
+        // stray `>` kept; same single-bracket bypass as above.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["a@example.net>"], subject: "s", body: "b"))
+    }
+
+    func testValidation_quotedLocalPartAngle_stillPasses() async throws {
+        // #270 over-reject guard: `"a<b"@x` is a legal RFC 5322 quoted
+        // local-part — the angle lives INSIDE the quoted string and must not
+        // trip the unquoted-angle scan (a naive contains-OR gate would).
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
+        let r1 = try await MailController.shared.composeEmail(
+            to: ["\"a<b\"@example.net"], subject: "s", body: "b")
+        XCTAssertTrue(r1.hasPrefix("Email sent successfully"))
+        let r2 = try await MailController.shared.composeEmail(
+            to: ["\"a>b\"@example.net"], subject: "s", body: "b")
+        XCTAssertTrue(r2.hasPrefix("Email sent successfully"))
+    }
+
+    func testValidation_quotedMatchedAnglePair_nowLegal() async throws {
+        // #270 deliberate behavior change: `"a<b>"@x` (a MATCHED pair entirely
+        // inside a quoted local-part) was rejected by the #265 paired-contains
+        // guard (documented as unsupported). The quote-aware scan makes it
+        // legal again — RFC 5322 allows specials inside quoted strings.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
+        let r = try await MailController.shared.composeEmail(
+            to: ["\"a<b>\"@example.net"], subject: "s", body: "b")
+        XCTAssertTrue(r.hasPrefix("Email sent successfully"))
+    }
+
+    func testContainsUnquotedAngle_scanSemantics() {
+        // #270 helper-level coverage (implementation driven by the boundary
+        // tests above; these pin the scan semantics incl. escape edges).
+        XCTAssertTrue(containsUnquotedAngle("<a@x"))
+        XCTAssertTrue(containsUnquotedAngle("a@x>"))
+        XCTAssertTrue(containsUnquotedAngle("x <a@b> <c@d>"))
+        XCTAssertFalse(containsUnquotedAngle("plain@example.com"))
+        XCTAssertFalse(containsUnquotedAngle("\"a<b\"@x"))
+        XCTAssertFalse(containsUnquotedAngle("\"a<b>\"@x"))
+        // Quoted-pair: the escaped quote does NOT close the quoted string, so
+        // the following angle is still inside quotes.
+        XCTAssertFalse(containsUnquotedAngle("\"a\\\"<b\"@x"))
+        // Escaped backslash DOES close on the next quote — the angle after the
+        // closing quote is unquoted.
+        XCTAssertTrue(containsUnquotedAngle("\"a\\\\\"<b@x"))
+        // Unterminated quote swallows the rest — no unquoted angle.
+        XCTAssertFalse(containsUnquotedAngle("\"a<b@x"))
+        XCTAssertFalse(containsUnquotedAngle(""))
+    }
+
     // MARK: #266 — RFC 5322 quoted-pair decoding inside quoted display names
 
     func testParseRecipient_quotedPair_quoteDecoded() {

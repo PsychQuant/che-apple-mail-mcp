@@ -801,18 +801,18 @@ actor MailController {
             }
             let parsed = parseRecipient(raw)
             let addr = parsed.address
-            // #265: a mailbox-form-looking string that parseRecipient could NOT
-            // cleanly split (name == nil fallback) yet still carries a matched
-            // `<...>` pair is malformed — e.g. `Alice <not-an-email> <bob@x>`
-            // has a single `@` and would otherwise pass the atCount check and
-            // land whole in the script. Reject it. A clean bare addr-spec never
-            // carries a matched angle pair; bare-angle `<a@b.c>` is already
-            // normalized to its inner addr-spec (angles stripped) upstream, so
-            // it is unaffected. (The pathological quoted-local-part literally
-            // containing a matched angle pair, `"a<b>"@x`, is not supported —
-            // vanishingly rare and never seen in real addresses.)
-            if parsed.name == nil, addr.contains("<"), addr.contains(">") {
-                failures.append("'\(raw)' is a malformed recipient (stray/extra angle brackets)")
+            // #265 + #270: a string that parseRecipient could NOT cleanly split
+            // (name == nil fallback) yet still carries an UNQUOTED angle
+            // bracket is malformed — whether a matched pair
+            // (`Alice <not-an-email> <bob@x>`, #265) or a single stray one
+            // (`<a@x` / `a@x>`, #270; the old paired-contains gate let these
+            // through). The scan is quote-aware, so a legal RFC 5322 quoted
+            // local-part carrying angles (`"a<b"@x`, even a matched `"a<b>"@x`)
+            // passes — angles inside quoted strings are legal specials, and a
+            // naive contains() gate would mis-reject them. Bare-angle `<a@b.c>`
+            // is already normalized upstream (angles stripped), unaffected.
+            if parsed.name == nil, containsUnquotedAngle(addr) {
+                failures.append("'\(raw)' is a malformed recipient (stray/unpaired angle brackets)")
                 continue
             }
             // Structural: exactly one `@`, neither at start nor end.

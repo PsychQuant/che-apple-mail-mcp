@@ -330,6 +330,33 @@ func unescapeQuotedPairs(_ s: String) -> String {
     return out
 }
 
+/// #270 — true iff the string contains a `<` or `>` OUTSIDE RFC 5322 quoted
+/// strings. Quote state honors quoted-pairs (`\"` stays inside the quoted
+/// string — same escape semantics as `unescapeQuotedPairs`). Used by the
+/// boundary validator to reject stray angles whether paired (`x <a@b> <c@d>`,
+/// #265) or unpaired (`<a@x` / `a@x>`, #270) without mis-rejecting legal
+/// quoted local-parts (`"a<b"@x`). Single pass.
+func containsUnquotedAngle(_ s: String) -> Bool {
+    var inQuote = false
+    var escaped = false
+    for ch in s {
+        if inQuote {
+            if escaped {
+                escaped = false
+            } else if ch == "\\" {
+                escaped = true
+            } else if ch == "\"" {
+                inQuote = false
+            }
+        } else if ch == "\"" {
+            inQuote = true
+        } else if ch == "<" || ch == ">" {
+            return true
+        }
+    }
+    return false
+}
+
 /// #251 — true iff any recipient in the given lists carries a display name.
 func anyRecipientHasDisplayName(_ recipients: [String]?) -> Bool {
     guard let recipients else { return false }
