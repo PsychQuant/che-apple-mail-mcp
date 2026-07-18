@@ -351,6 +351,13 @@ func containsUnquotedAngle(_ s: String) -> Bool {
     for ch in s {
         if inQuote {
             if escaped {
+                // R2 (Codex): an escaped angle is still an angle character —
+                // record it, or an unterminated quote holding `\<` / `\>`
+                // would bypass the EOF check below (re-opening the #265
+                // paired-shape regression via `"a\<b\>@x`). A properly
+                // closed quote still resets the record, so the legal
+                // `"a\<b\>"@x` stays exempt.
+                if ch == "<" || ch == ">" { angleInOpenQuote = true }
                 escaped = false
             } else if ch == "\\" {
                 escaped = true

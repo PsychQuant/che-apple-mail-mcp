@@ -215,6 +215,27 @@ final class RecipientDisplayNameTests: XCTestCase {
         // angle to report; the atCount checks handle the rest).
         XCTAssertFalse(containsUnquotedAngle("\"a@x"))
         XCTAssertFalse(containsUnquotedAngle(""))
+        // #270 verify R2 (Codex): an ESCAPED angle inside a still-open quote
+        // must also be recorded — `\<` consumed by the escaped branch without
+        // setting the flag re-opened the unterminated-quote bypass, including
+        // the paired `"a\<b\>@x` shape the old #265 guard rejected.
+        XCTAssertTrue(containsUnquotedAngle("\"a\\<b@example.net"))
+        XCTAssertTrue(containsUnquotedAngle("\"a\\<b\\>@example.net"))
+        // Properly CLOSED quote with escaped angles stays legal (closing
+        // quote resets the record).
+        XCTAssertFalse(containsUnquotedAngle("\"a\\<b\\>\"@example.net"))
+    }
+
+    func testValidation_untermQuoteEscapedAngles_rejectedAtBoundary() async throws {
+        // #270 verify R2 (Codex): boundary-level lock for the escaped-angle
+        // unterminated-quote bypass.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["\"a\\<b\\>@example.net"], subject: "s", body: "b"))
     }
 
     func testValidation_untermQuotePairedAngles_rejectedAtBoundary() async throws {
