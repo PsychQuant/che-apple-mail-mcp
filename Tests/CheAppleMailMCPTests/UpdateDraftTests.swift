@@ -249,7 +249,7 @@ final class UpdateDraftTests: XCTestCase {
         XCTAssertTrue(order.entries.isEmpty, "create failure must NOT delete the old draft")
     }
 
-    func testUpdateDraft_deleteFails_reportsBothExist() async throws {
+    func testUpdateDraft_deleteFails_reportsBothMayExist() async throws {
         addTeardownBlock { await self.teardownSeam() }
         await installSeam(
             rowsSequence: ["101\(GS)A", "101\(GS)A", "101\(RS)999\(GS)A\(RS)s"],

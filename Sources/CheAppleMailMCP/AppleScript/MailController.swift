@@ -1394,18 +1394,20 @@ actor MailController {
     }
 
     /// #276 — `update_draft`: replace an existing draft by locate → create →
-    /// delete (create-then-delete, design D1: a mid-way failure leaves "both
-    /// drafts exist" — visible and recoverable — never "neither"). Apple Mail
-    /// drafts cannot be edited in place, so upsert is the only mechanization.
+    /// receipt → delete (create-then-delete, design D1: the failure direction
+    /// is always toward KEEPING drafts — worst case both may exist, visible
+    /// and recoverable — never "neither"). Apple Mail drafts cannot be edited
+    /// in place, so upsert is the only mechanization.
     ///
     /// Locate is read-only and runs FIRST: a zero-match refuses before
     /// anything is created (spec: update requires an existing draft); an
     /// ambiguous subject_match refuses listing the candidates. The delete
     /// step reuses the same unified-drafts child scope that located the
     /// draft (no per-account mailbox-name resolution); a delete failure
-    /// after a successful create reports `deleted_old: false` with an
-    /// explicit both-drafts-exist note instead of throwing (design D5 — the
-    /// work is half-done, a throw would misread as total failure).
+    /// after a confirmed create reports `deleted_old: false` with a note
+    /// graded to what is known — confirmed absent / state unknown / both MAY
+    /// exist — instead of throwing (design D5: the work is half-done, a
+    /// throw would misread as total failure).
     func updateDraft(
         draftId: String?, subjectMatch: String?, accountName: String?, accountId: String?,
         to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil,
