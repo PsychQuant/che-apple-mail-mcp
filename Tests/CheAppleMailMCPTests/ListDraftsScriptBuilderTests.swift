@@ -151,8 +151,8 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
         // and real delete errors propagate since nothing wraps it in a try.)
         XCTAssertTrue(script.contains("set scanClean to false"),
                       "a condition-eval error must mark the scan incomplete; got:\n\(script)")
-        XCTAssertTrue(script.contains("if scanClean then"),
-                      "9276 must be gated on a clean full scan; got:\n\(script)")
+        XCTAssertTrue(script.contains("if scanClean and not sawIdCandidate then"),
+                      "9276 must be gated on a clean full scan with zero id candidates; got:\n\(script)")
         XCTAssertTrue(script.contains("number \(updateDraftDeleteNotFoundErrorNumber)"),
                       "clean-scan not-found must raise 9276")
         XCTAssertTrue(script.contains("number \(updateDraftDeleteScanIncompleteErrorNumber)"),
