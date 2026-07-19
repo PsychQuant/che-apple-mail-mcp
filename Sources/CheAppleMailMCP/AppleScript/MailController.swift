@@ -1446,10 +1446,22 @@ actor MailController {
         } else {
             listScript = buildListAllDraftsScript()
         }
+        let scoped = (accountName?.isEmpty == false) || (accountId?.isEmpty == false)
         let rows: [(id: String, subject: String)]
         do {
             rows = try parseDraftRows(try runScript(listScript))
         } catch {
+            if !scoped {
+                // Verify R3 (DA-3): the all-accounts scan is deliberately
+                // fail-closed — give the caller an actionable next step
+                // instead of a bare script error.
+                throw MailError.operationFailed(
+                    "update_draft: the all-accounts drafts scan failed and was aborted "
+                    + "(fail-closed — a partial scan could mis-judge ambiguity). A local "
+                    + "or unreadable drafts container can cause this; retry with "
+                    + "account_id / account_name scoping. Underlying error: "
+                    + error.localizedDescription)
+            }
             throw translateListDraftsScriptError(
                 error, accountId: accountId, accountName: accountName ?? "")
         }
@@ -1475,15 +1487,44 @@ actor MailController {
 
         // 2. Create the replacement FIRST (inherits create_draft's full
         //    eligibility + disclosure — #175/#237/#239).
+        let preIds = Set(rows.map { $0.id })
         let createResult = try createDraft(
             to: to, subject: subject, body: body, cc: cc, bcc: bcc,
             attachments: attachments, accountName: nil, format: format,
             sanitizeLinks: sanitizeLinks, fromAddress: fromAddress,
             requireWrapperFree: requireWrapperFree)
 
-        // 3. Delete the old draft — best-effort (D5).
+        // 2.5 RECEIPT (verify R3, DA-2): the GUI mailto create path can
+        //     report success after firing keystrokes without the draft
+        //     actually landing (phantom success). Deleting on that word
+        //     alone could destroy the only copy. Re-list and require a NEW
+        //     id (absent from the pre-create set) before touching the old
+        //     draft; the save can land asynchronously, so poll briefly.
+        var replacementConfirmed = false
+        for attempt in 0..<3 {
+            if attempt > 0 { Thread.sleep(forTimeInterval: 0.4) }
+            if let postRows = try? parseDraftRows(try runScript(listScript)),
+               postRows.contains(where: { !preIds.contains($0.id) }) {
+                replacementConfirmed = true
+                break
+            }
+        }
+        guard replacementConfirmed else {
+            return [
+                "deleted_old": false,
+                "old_draft_id": old.id,
+                "new_draft": createResult,
+                "note": "the replacement draft was reported created but could not be "
+                    + "confirmed in the drafts mailbox (not confirmed after re-listing) — "
+                    + "the old draft was KEPT. Check Mail's drafts, then delete the old "
+                    + "draft manually or retry once the replacement is visible.",
+            ]
+        }
+
+        // 3. Delete the old draft — best-effort (D5). Predicate = id AND
+        //    exact subject (DA-1 cross-account protection).
         let deleteScript = buildDeleteDraftByIdScript(
-            draftId: old.id, accountId: accountId, accountName: accountName)
+            draftId: old.id, subject: old.subject, accountId: accountId, accountName: accountName)
         do {
             _ = try runScript(deleteScript)
             return ["deleted_old": true, "old_draft_id": old.id, "new_draft": createResult]

@@ -135,13 +135,19 @@ func buildListAllDraftsScript() -> String {
 /// finds no draft with the located id (raced away between locate and delete).
 let updateDraftDeleteNotFoundErrorNumber = 9276
 
-/// #276 — delete a draft BY ID inside the unified-drafts children. Deleting
-/// here (instead of `delete_email`) avoids resolving the per-account drafts
-/// mailbox NAME entirely — the same #174 mechanism that located the draft
-/// also scopes the deletion. The id predicate is numeric-only (#221-safe:
-/// never a content predicate); AppleScript `delete` moves to Trash
+/// #276 — delete a draft BY ID + EXACT SUBJECT inside the unified-drafts
+/// children. Deleting here (instead of `delete_email`) avoids resolving the
+/// per-account drafts mailbox NAME entirely — the same #174 mechanism that
+/// located the draft also scopes the deletion.
+///
+/// The predicate conjoins id AND exact subject (verify R3, DA-1): an
+/// unscoped bare-id sweep would bet on Mail message ids being GLOBALLY
+/// unique — with the subject conjunct, a cross-account id collision with a
+/// different subject is protected, and a same-id-same-subject collision
+/// would already have refused as ambiguous at locate time. #221-safe (id +
+/// subject equality, never content); AppleScript `delete` moves to Trash
 /// (recoverable), not a permanent expunge.
-func buildDeleteDraftByIdScript(draftId: String, accountId: String?, accountName: String?) -> String {
+func buildDeleteDraftByIdScript(draftId: String, subject: String, accountId: String?, accountName: String?) -> String {
     // Contract (verify R1, security LOW): draftId must already be validated
     // as ASCII digits by the caller — it is interpolated as an AppleScript
     // numeric literal. The assert catches contract violations in debug.
@@ -171,7 +177,7 @@ func buildDeleteDraftByIdScript(draftId: String, accountId: String?, accountName
             if matched then
                 set target to missing value
                 try
-                    set target to (first message of mb whose id is \(draftId))
+                    set target to (first message of mb whose id is \(draftId) and subject is "\(appleScriptEscape(subject))")
                 end try
                 if target is not missing value then
                     delete target

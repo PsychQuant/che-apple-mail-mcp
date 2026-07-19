@@ -103,16 +103,26 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
 
     func testDeleteDraftScript_byIdInDraftsChildren() {
         // Deletion stays inside the unified-drafts children (no per-account
-        // mailbox-name resolution needed) and matches by numeric id only
-        // (#221-safe: an id predicate, never content).
-        let script = buildDeleteDraftByIdScript(draftId: "12345", accountId: "UUID-A", accountName: "Google")
+        // mailbox-name resolution needed); the predicate is id AND exact
+        // subject (#276 verify R3, DA-1: an unscoped bare-id sweep bets on
+        // GLOBAL id uniqueness — with the subject conjunct, a cross-account
+        // id collision with a different subject is protected, and a
+        // same-id-same-subject collision would already have refused as
+        // ambiguous at locate time). #221-safe: id + subject equality, never
+        // content.
+        let script = buildDeleteDraftByIdScript(
+            draftId: "12345", subject: "Re: a, b", accountId: "UUID-A", accountName: "Google")
         XCTAssertTrue(script.contains("every mailbox of drafts mailbox"))
-        XCTAssertTrue(script.contains("whose id is 12345"))
+        XCTAssertTrue(script.contains("whose id is 12345 and subject is \"Re: a, b\""),
+                      "delete predicate must conjoin id AND exact subject; got:\n\(script)")
         XCTAssertTrue(script.contains("(id of account of mb) is \"UUID-A\""))
         XCTAssertFalse(script.contains("whose content"), "#221: never a content predicate")
-        // Unscoped variant: no account condition at all.
-        let all = buildDeleteDraftByIdScript(draftId: "12345", accountId: nil, accountName: nil)
+        // Unscoped variant: no account condition at all — the subject
+        // conjunct is what carries the cross-account protection.
+        let all = buildDeleteDraftByIdScript(
+            draftId: "12345", subject: "S", accountId: nil, accountName: nil)
         XCTAssertFalse(all.contains("account of mb"))
+        XCTAssertTrue(all.contains("and subject is \"S\""))
     }
 
     func testDeleteDraftScript_lookupSeparatedFromDelete() {
@@ -120,7 +130,7 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
         // `delete` verb — a real delete failure (permissions, Mail command
         // error) must propagate to the controller (→ deleted_old:false with
         // the real cause), not be swallowed into the 9276 "not found" error.
-        let script = buildDeleteDraftByIdScript(draftId: "12345", accountId: nil, accountName: nil)
+        let script = buildDeleteDraftByIdScript(draftId: "12345", subject: "S", accountId: nil, accountName: nil)
         XCTAssertTrue(script.contains("set target to"),
                       "lookup must bind a target inside its own try; got:\n\(script)")
         XCTAssertTrue(script.contains("if target is not missing value then"),

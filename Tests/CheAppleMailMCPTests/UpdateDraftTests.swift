@@ -9,14 +9,17 @@ final class UpdateDraftTests: XCTestCase {
 
     private let RS = "\u{001E}", GS = "\u{001D}"
 
-    /// Seam dispatcher: routes by script content — list script → `rows`,
+    /// Seam dispatcher: routes by script content — list script → next element
+    /// of `rowsSequence` (last element repeats; #276 R3: the post-create
+    /// receipt re-lists, so tests script the before/after payloads),
     /// create-draft script → success/throw, delete script → success/throw.
     private func installSeam(
-        rows: String,
+        rowsSequence: [String],
         createThrows: Bool = false,
         deleteThrows: Bool = false,
         log: (@Sendable (String) -> Void)? = nil
     ) async {
+        let counter = SeqCounter()
         await MailController.shared.setTestSeams(
             scriptRunner: { script in
                 log?(script)
@@ -30,11 +33,21 @@ final class UpdateDraftTests: XCTestCase {
                     return "Draft created successfully"
                 }
                 if script.contains("drafts mailbox") {
-                    return rows
+                    return rowsSequence[min(counter.next(), rowsSequence.count - 1)]
                 }
                 return ""
             },
             ineligibility: { "test forced legacy" })
+    }
+
+    private func installSeam(
+        rows: String,
+        createThrows: Bool = false,
+        deleteThrows: Bool = false,
+        log: (@Sendable (String) -> Void)? = nil
+    ) async {
+        await installSeam(rowsSequence: [rows], createThrows: createThrows,
+                          deleteThrows: deleteThrows, log: log)
     }
 
     private func teardownSeam() async {
@@ -59,10 +72,13 @@ final class UpdateDraftTests: XCTestCase {
     func testUpdateDraft_byId_createThenDelete() async throws {
         addTeardownBlock { await self.teardownSeam() }
         let order = OrderLog()
-        await installSeam(rows: "101\(RS)102\(GS)A\(RS)B", log: { s in
-            if s.contains("whose id is") { order.append("delete") }
-            else if s.contains("outgoing message") { order.append("create") }
-        })
+        await installSeam(
+            rowsSequence: ["101\(RS)102\(GS)A\(RS)B",
+                           "101\(RS)102\(RS)999\(GS)A\(RS)B\(RS)s"],
+            log: { s in
+                if s.contains("whose id is") { order.append("delete") }
+                else if s.contains("outgoing message") { order.append("create") }
+            })
         let result = try await MailController.shared.updateDraft(
             draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
             to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
@@ -187,6 +203,32 @@ final class UpdateDraftTests: XCTestCase {
                       "no rejected selector shape may create or delete anything")
     }
 
+    // MARK: - phantom create receipt (verify R3, DA-2)
+
+    func testUpdateDraft_createUnconfirmed_keepsOldDraft() async throws {
+        // #276 verify R3 (DA-2, HIGH): the GUI mailto create path can return
+        // success after firing keystrokes without the draft actually landing
+        // (phantom success). The delete gate is therefore a RECEIPT: re-list
+        // and require a NEW id (not in the pre-create set) before deleting
+        // the old draft. No new id after the poll budget → keep the old
+        // draft and say so.
+        addTeardownBlock { await self.teardownSeam() }
+        let order = OrderLog()
+        await installSeam(rows: "101\(GS)A", log: { s in   // list always returns the SAME rows
+            if s.contains("whose id is") { order.append("delete") }
+        })
+        let result = try await MailController.shared.updateDraft(
+            draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
+            to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
+            attachments: nil, format: .plain, sanitizeLinks: false,
+            fromAddress: nil, requireWrapperFree: false)
+        XCTAssertEqual(result["deleted_old"] as? Bool, false)
+        XCTAssertTrue(((result["note"] as? String) ?? "").contains("not confirmed"),
+                      "must disclose the unconfirmed replacement; got: \(result["note"] ?? "")")
+        XCTAssertTrue(order.entries.isEmpty,
+                      "an unconfirmed replacement must NEVER delete the old draft")
+    }
+
     // MARK: - failure semantics (spec: create fails / delete fails scenarios)
 
     func testUpdateDraft_createFails_oldDraftUntouched() async throws {
@@ -208,7 +250,9 @@ final class UpdateDraftTests: XCTestCase {
 
     func testUpdateDraft_deleteFails_reportsBothExist() async throws {
         addTeardownBlock { await self.teardownSeam() }
-        await installSeam(rows: "101\(GS)A", deleteThrows: true)
+        await installSeam(
+            rowsSequence: ["101\(GS)A", "101\(RS)999\(GS)A\(RS)s"],
+            deleteThrows: true)
         let result = try await MailController.shared.updateDraft(
             draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
             to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
@@ -221,6 +265,13 @@ final class UpdateDraftTests: XCTestCase {
         XCTAssertTrue(note.contains("both") || note.contains("並存") || note.contains("仍在"),
                       "must explicitly disclose that both drafts now exist; got: \(note)")
     }
+}
+
+/// Thread-safe monotonically-increasing counter for the sequence-aware seam.
+private final class SeqCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = -1
+    func next() -> Int { lock.lock(); defer { lock.unlock() }; n += 1; return n }
 }
 
 /// Tiny thread-safe append log for asserting call order across the seam.

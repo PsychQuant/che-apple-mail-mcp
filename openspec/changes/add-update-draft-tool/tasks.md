@@ -23,5 +23,5 @@
 
 ## 3. 收尾
 
-- [x] 3.1 全套件測試綠（940 tests 0 failures，census/disclosure guards 含）。ASSUMPTION（unattended）：live smoke（真實草稿 create→update→驗證→清理）**deferred 至 attended verify** — unattended 下開真 compose 視窗/建真草稿具侵入性；unit/seam 已覆蓋 4 條路徑與順序契約，live 部分列 verify residue
+- [x] 3.1 全套件測試綠（940 tests 0 failures，census/disclosure guards 含）。ASSUMPTION（unattended）：live smoke deferred 至 attended verify — **必測三向量（verify R3 DA 點名）**：(1) GUI mailto 路徑的 create receipt（真草稿落地確認）；(2) 跨帳號 message id 語意（delete 述詞 id+subject 的實地行為）；(3) all-accounts scan 對「On My Mac」local drafts container 的 fail-closed 行為與訊息。unit/seam 已覆蓋 5 條路徑、順序契約、receipt gate 與述詞形狀
 - [x] 3.2 CHANGELOG `[Unreleased]` entry（新 tool + list_drafts additive 欄位 + 揭露語意）；README tool 清單/計數同步（`ToolCountCensusGuardTests` 會 enforce）
