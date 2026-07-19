@@ -113,16 +113,26 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
         let script = buildDeleteDraftByIdScript(
             draftId: "12345", subject: "Re: a, b", accountId: "UUID-A", accountName: "Google")
         XCTAssertTrue(script.contains("every mailbox of drafts mailbox"))
-        XCTAssertTrue(script.contains("whose id is 12345 and subject is \"Re: a, b\""),
-                      "delete predicate must conjoin id AND exact subject; got:\n\(script)")
+        // #276 verify R5 (Codex): AppleScript string equality is
+        // case-INsensitive by default — the subject conjunct must be
+        // compared under `considering case` for Swift-== parity, so the id
+        // predicate selects candidates and the subject check runs on each.
+        XCTAssertTrue(script.contains("whose id is 12345"),
+                      "candidates must be selected by the numeric id; got:\n\(script)")
+        XCTAssertTrue(script.contains("considering case"),
+                      "subject equality must be case-sensitive; got:\n\(script)")
+        XCTAssertTrue(script.contains("is equal to \"Re: a, b\""),
+                      "subject must be compared exactly; got:\n\(script)")
         XCTAssertTrue(script.contains("(id of account of mb) is \"UUID-A\""))
         XCTAssertFalse(script.contains("whose content"), "#221: never a content predicate")
-        // Unscoped variant: no account condition at all — the subject
-        // conjunct is what carries the cross-account protection.
+        XCTAssertFalse(script.contains("and subject is"),
+                       "subject must NOT ride in the case-insensitive whose-filter")
+        // Unscoped variant: no account condition — the case-sensitive
+        // subject check carries the cross-account protection.
         let all = buildDeleteDraftByIdScript(
             draftId: "12345", subject: "S", accountId: nil, accountName: nil)
         XCTAssertFalse(all.contains("account of mb"))
-        XCTAssertTrue(all.contains("and subject is \"S\""))
+        XCTAssertTrue(all.contains("considering case"))
     }
 
     func testDeleteDraftScript_honestNotFoundClassification() {
@@ -134,8 +144,8 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
         // (scanClean); a scope-condition eval error downgrades to 9277
         // (scan incomplete — old-draft state unknown).
         let script = buildDeleteDraftByIdScript(draftId: "12345", subject: "S", accountId: "UUID-A", accountName: nil)
-        XCTAssertTrue(script.contains("count of (every message of mb whose id is 12345 and subject is \"S\")"),
-                      "lookup must be a non-throwing count over the whose-filter; got:\n\(script)")
+        XCTAssertTrue(script.contains("set candidates to (every message of mb whose id is 12345)"),
+                      "lookup must be a non-throwing every-message query by id; got:\n\(script)")
         // (`first message ...` remains ONLY as the delete target after the
         // count guard proved existence — it cannot throw not-found there,
         // and real delete errors propagate since nothing wraps it in a try.)

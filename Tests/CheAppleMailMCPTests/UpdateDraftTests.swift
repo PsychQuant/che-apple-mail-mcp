@@ -74,6 +74,7 @@ final class UpdateDraftTests: XCTestCase {
         let order = OrderLog()
         await installSeam(
             rowsSequence: ["101\(RS)102\(GS)A\(RS)B",
+                           "101\(RS)102\(GS)A\(RS)B",
                            "101\(RS)102\(RS)999\(GS)A\(RS)B\(RS)s"],
             log: { s in
                 if s.contains("whose id is") { order.append("delete") }
@@ -251,7 +252,7 @@ final class UpdateDraftTests: XCTestCase {
     func testUpdateDraft_deleteFails_reportsBothExist() async throws {
         addTeardownBlock { await self.teardownSeam() }
         await installSeam(
-            rowsSequence: ["101\(GS)A", "101\(RS)999\(GS)A\(RS)s"],
+            rowsSequence: ["101\(GS)A", "101\(GS)A", "101\(RS)999\(GS)A\(RS)s"],
             deleteError: MailError.scriptFailed(message: "delete boom", code: -1))
         let result = try await MailController.shared.updateDraft(
             draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
@@ -262,18 +263,63 @@ final class UpdateDraftTests: XCTestCase {
                        "delete failure after successful create must not throw (design D5)")
         XCTAssertTrue((result["new_draft"] as? String ?? "").contains("Draft created"))
         let note = (result["note"] as? String) ?? ""
-        XCTAssertTrue(note.contains("both") || note.contains("並存") || note.contains("仍在"),
-                      "must explicitly disclose that both drafts now exist; got: \(note)")
+        XCTAssertTrue(note.contains("MAY") || note.contains("may"),
+                      "a generic delete failure may only claim both drafts MAY exist (verify R5); got: \(note)")
+        XCTAssertFalse(note.contains("both drafts now exist"),
+                       "must not make a definite both-exist claim on an unverified failure")
     }
 }
 
 extension UpdateDraftTests {
+    // MARK: - receipt retry + causality (verify R5)
+
+    func testUpdateDraft_receiptConfirmedOnSecondPoll_thenDeletes() async throws {
+        // Delayed async save: the replacement appears only on the SECOND
+        // post-create poll — the receipt must retry, then delete.
+        addTeardownBlock { await self.teardownSeam() }
+        let order = OrderLog()
+        await installSeam(
+            rowsSequence: ["101\(GS)A",                      // locate
+                           "101\(GS)A",                      // pre-receipt baseline
+                           "101\(GS)A",                      // post poll 1 — not yet
+                           "101\(RS)999\(GS)A\(RS)s"],     // post poll 2 — landed
+            log: { s in if s.contains("whose id is") { order.append("delete") } })
+        let result = try await MailController.shared.updateDraft(
+            draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
+            to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
+            attachments: nil, format: .plain, sanitizeLinks: false,
+            fromAddress: nil, requireWrapperFree: false)
+        XCTAssertEqual(result["deleted_old"] as? Bool, true)
+        XCTAssertEqual(order.entries, ["delete"])
+    }
+
+    func testUpdateDraft_unrelatedNewDraft_isNotAReceipt() async throws {
+        // Causality: a new id whose subject differs from the replacement's
+        // (an unrelated concurrent draft) must NOT stand in as the receipt —
+        // old draft kept, zero deletes.
+        addTeardownBlock { await self.teardownSeam() }
+        let order = OrderLog()
+        await installSeam(
+            rowsSequence: ["101\(GS)A",
+                           "101\(GS)A",
+                           "101\(RS)777\(GS)A\(RS)totally-unrelated"],
+            log: { s in if s.contains("whose id is") { order.append("delete") } })
+        let result = try await MailController.shared.updateDraft(
+            draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
+            to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
+            attachments: nil, format: .plain, sanitizeLinks: false,
+            fromAddress: nil, requireWrapperFree: false)
+        XCTAssertEqual(result["deleted_old"] as? Bool, false)
+        XCTAssertTrue(((result["note"] as? String) ?? "").contains("not confirmed"))
+        XCTAssertTrue(order.entries.isEmpty)
+    }
+
     // MARK: - delete-outcome note honesty (verify R4 — Codex R3 blocking 1)
 
     func testUpdateDraft_deleteNotFound9276_confirmedAbsentNote() async throws {
         addTeardownBlock { await self.teardownSeam() }
         await installSeam(
-            rowsSequence: ["101\(GS)A", "101\(RS)999\(GS)A\(RS)s"],
+            rowsSequence: ["101\(GS)A", "101\(GS)A", "101\(RS)999\(GS)A\(RS)s"],
             deleteError: MailError.scriptFailed(message: "not found", code: updateDraftDeleteNotFoundErrorNumber))
         let result = try await MailController.shared.updateDraft(
             draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
@@ -291,7 +337,7 @@ extension UpdateDraftTests {
     func testUpdateDraft_deleteScanIncomplete9277_unknownStateNote() async throws {
         addTeardownBlock { await self.teardownSeam() }
         await installSeam(
-            rowsSequence: ["101\(GS)A", "101\(RS)999\(GS)A\(RS)s"],
+            rowsSequence: ["101\(GS)A", "101\(GS)A", "101\(RS)999\(GS)A\(RS)s"],
             deleteError: MailError.scriptFailed(message: "scan incomplete", code: updateDraftDeleteScanIncompleteErrorNumber))
         let result = try await MailController.shared.updateDraft(
             draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,

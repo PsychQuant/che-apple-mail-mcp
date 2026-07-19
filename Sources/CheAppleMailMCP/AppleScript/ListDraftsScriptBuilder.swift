@@ -168,7 +168,6 @@ func buildDeleteDraftByIdScript(draftId: String, subject: String, accountId: Str
     // literal. The assert catches contract violations in debug.
     assert(isASCIIDigits(draftId),
            "buildDeleteDraftByIdScript requires a pre-validated ASCII-numeric draftId")
-    let predicate = "id is \(draftId) and subject is \"\(appleScriptEscape(subject))\""
     let conditionLine: String
     if let aid = accountId, !aid.isEmpty {
         conditionLine = """
@@ -189,13 +188,15 @@ func buildDeleteDraftByIdScript(draftId: String, subject: String, accountId: Str
     } else {
         conditionLine = "        set matched to true"
     }
-    // Honest not-found classification (verify R4, Codex R3 blocking 1): the
-    // lookup is a COUNT over a whose-filter — it returns 0 on no-match
-    // without throwing, and there is no try around it, so a REAL query error
-    // (timeout, dead reference) propagates to the controller instead of
-    // masquerading as not-found. 9276 fires only when the whole scope
-    // scanned clean; a condition-eval error downgrades the exhausted scan to
-    // 9277 (old-draft state unknown).
+    // Honest not-found classification (verify R4) + case-sensitive subject
+    // (verify R5, Codex): AppleScript string comparison is case-INsensitive
+    // by default, so a `whose ... subject is "Report"` could match "report"
+    // in another account and delete the wrong draft — the id predicate
+    // (numeric, case-free) selects candidates, and the subject is compared
+    // under `considering case` for exact Swift-`==` parity. No try around
+    // the candidate query or the delete: real errors propagate; 9276 fires
+    // only when the whole scope scanned clean; a condition-eval error
+    // downgrades the exhausted scan to 9277 (old-draft state unknown).
     return """
     tell application "Mail"
         set scanClean to true
@@ -203,10 +204,15 @@ func buildDeleteDraftByIdScript(draftId: String, subject: String, accountId: Str
             set matched to false
     \(conditionLine)
             if matched then
-                if (count of (every message of mb whose \(predicate))) > 0 then
-                    delete (first message of mb whose \(predicate))
-                    return "Draft deleted"
-                end if
+                set candidates to (every message of mb whose id is \(draftId))
+                repeat with cand in candidates
+                    considering case
+                        if (subject of cand) is equal to "\(appleScriptEscape(subject))" then
+                            delete cand
+                            return "Draft deleted"
+                        end if
+                    end considering
+                end repeat
             end if
         end repeat
         if scanClean then

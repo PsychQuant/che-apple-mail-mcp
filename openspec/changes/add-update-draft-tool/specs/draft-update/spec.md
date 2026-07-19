@@ -9,6 +9,11 @@ The system SHALL provide an `update_draft` MCP tool that replaces an existing dr
 - **WHEN** `update_draft` is called with an `identify` selector matching exactly one existing draft and valid replacement content
 - **THEN** the system SHALL create the replacement draft first, then delete the matched old draft, and return a result reporting `deleted_old: true`, the old draft id, and the create-path result (including any legacy-path disclosure suffix inherited from the create mechanism)
 
+#### Scenario: replacement not confirmed — old draft kept
+
+- **WHEN** the replacement-draft creation reports success but re-listing the drafts (covering the replacement's possible destination accounts) does not, within a brief poll, show a NEW draft id absent from the pre-create snapshot AND carrying the replacement's exact subject
+- **THEN** the system SHALL NOT delete the old draft and SHALL return `deleted_old: false` with an explicit not-confirmed notice — a reported success without a landed draft (or an unrelated concurrent draft) is never treated as a receipt
+
 #### Scenario: create fails — old draft untouched
 
 - **WHEN** the replacement-draft creation fails for any reason

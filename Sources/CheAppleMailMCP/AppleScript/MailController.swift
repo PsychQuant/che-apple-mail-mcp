@@ -1487,7 +1487,22 @@ actor MailController {
 
         // 2. Create the replacement FIRST (inherits create_draft's full
         //    eligibility + disclosure — #175/#237/#239).
-        let preIds = Set(rows.map { $0.id })
+        //    Receipt baseline (verify R5, Codex): the replacement lands under
+        //    create_draft's account semantics (default account / from_address)
+        //    which may DIFFER from the locate scope — so the pre/post receipt
+        //    snapshots use the ALL-accounts scan, covering any destination. A
+        //    baseline failure aborts before anything is created (fail closed).
+        let receiptScript = buildListAllDraftsScript()
+        let preReceiptRows: [(id: String, subject: String)]
+        do {
+            preReceiptRows = try parseDraftRows(try runScript(receiptScript))
+        } catch {
+            throw MailError.operationFailed(
+                "update_draft: could not take the pre-create drafts snapshot needed for the "
+                + "post-create receipt (all-accounts scan failed) — aborting BEFORE creating "
+                + "anything. Underlying error: " + error.localizedDescription)
+        }
+        let preIds = Set(preReceiptRows.map { $0.id })
         let createResult = try createDraft(
             to: to, subject: subject, body: body, cc: cc, bcc: bcc,
             attachments: attachments, accountName: nil, format: format,
@@ -1500,11 +1515,15 @@ actor MailController {
         //     alone could destroy the only copy. Re-list and require a NEW
         //     id (absent from the pre-create set) before touching the old
         //     draft; the save can land asynchronously, so poll briefly.
+        // Causality (verify R5, Codex): "any new id" only proves the mailbox
+        // changed — an unrelated concurrent draft must not stand in as the
+        // receipt. The new row must also carry the replacement's EXACT
+        // subject (Swift ==).
         var replacementConfirmed = false
         for attempt in 0..<3 {
             if attempt > 0 { Thread.sleep(forTimeInterval: 0.4) }
-            if let postRows = try? parseDraftRows(try runScript(listScript)),
-               postRows.contains(where: { !preIds.contains($0.id) }) {
+            if let postRows = try? parseDraftRows(try runScript(receiptScript)),
+               postRows.contains(where: { !preIds.contains($0.id) && $0.subject == subject }) {
                 replacementConfirmed = true
                 break
             }
@@ -1561,9 +1580,10 @@ actor MailController {
                 "deleted_old": false,
                 "old_draft_id": old.id,
                 "new_draft": createResult,
-                "note": "replacement draft was created, but deleting the old draft failed "
-                    + "(\(error.localizedDescription)) — both drafts now exist in the drafts "
-                    + "mailbox; remove the old one manually or via delete_email with id \(old.id).",
+                "note": "replacement draft was created, but the old draft could not be "
+                    + "verified as deleted (\(error.localizedDescription)) — both drafts MAY "
+                    + "now exist; check the drafts mailbox and remove the old one manually or "
+                    + "via delete_email with id \(old.id) if it is still there.",
             ]
         }
     }
