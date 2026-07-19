@@ -16,7 +16,7 @@ final class UpdateDraftTests: XCTestCase {
     private func installSeam(
         rowsSequence: [String],
         createThrows: Bool = false,
-        deleteThrows: Bool = false,
+        deleteError: Error? = nil,
         log: (@Sendable (String) -> Void)? = nil
     ) async {
         let counter = SeqCounter()
@@ -24,7 +24,7 @@ final class UpdateDraftTests: XCTestCase {
             scriptRunner: { script in
                 log?(script)
                 if script.contains("whose id is") {
-                    if deleteThrows { throw MailError.scriptFailed(message: "delete boom", code: -1) }
+                    if let deleteError { throw deleteError }
                     return "Draft deleted"
                 }
                 if script.contains("make new outgoing message") || script.contains("save theMessage")
@@ -43,11 +43,11 @@ final class UpdateDraftTests: XCTestCase {
     private func installSeam(
         rows: String,
         createThrows: Bool = false,
-        deleteThrows: Bool = false,
+        deleteError: Error? = nil,
         log: (@Sendable (String) -> Void)? = nil
     ) async {
         await installSeam(rowsSequence: [rows], createThrows: createThrows,
-                          deleteThrows: deleteThrows, log: log)
+                          deleteError: deleteError, log: log)
     }
 
     private func teardownSeam() async {
@@ -252,7 +252,7 @@ final class UpdateDraftTests: XCTestCase {
         addTeardownBlock { await self.teardownSeam() }
         await installSeam(
             rowsSequence: ["101\(GS)A", "101\(RS)999\(GS)A\(RS)s"],
-            deleteThrows: true)
+            deleteError: MailError.scriptFailed(message: "delete boom", code: -1))
         let result = try await MailController.shared.updateDraft(
             draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
             to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
@@ -264,6 +264,74 @@ final class UpdateDraftTests: XCTestCase {
         let note = (result["note"] as? String) ?? ""
         XCTAssertTrue(note.contains("both") || note.contains("並存") || note.contains("仍在"),
                       "must explicitly disclose that both drafts now exist; got: \(note)")
+    }
+}
+
+extension UpdateDraftTests {
+    // MARK: - delete-outcome note honesty (verify R4 — Codex R3 blocking 1)
+
+    func testUpdateDraft_deleteNotFound9276_confirmedAbsentNote() async throws {
+        addTeardownBlock { await self.teardownSeam() }
+        await installSeam(
+            rowsSequence: ["101\(GS)A", "101\(RS)999\(GS)A\(RS)s"],
+            deleteError: MailError.scriptFailed(message: "not found", code: updateDraftDeleteNotFoundErrorNumber))
+        let result = try await MailController.shared.updateDraft(
+            draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
+            to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
+            attachments: nil, format: .plain, sanitizeLinks: false,
+            fromAddress: nil, requireWrapperFree: false)
+        XCTAssertEqual(result["deleted_old"] as? Bool, false)
+        let note = (result["note"] as? String) ?? ""
+        XCTAssertTrue(note.contains("confirmed absent") || note.contains("no longer present"),
+                      "a clean-scan 9276 may claim confirmed absence; got: \(note)")
+        XCTAssertFalse(note.contains("both drafts now exist"),
+                       "9276 must not claim both exist")
+    }
+
+    func testUpdateDraft_deleteScanIncomplete9277_unknownStateNote() async throws {
+        addTeardownBlock { await self.teardownSeam() }
+        await installSeam(
+            rowsSequence: ["101\(GS)A", "101\(RS)999\(GS)A\(RS)s"],
+            deleteError: MailError.scriptFailed(message: "scan incomplete", code: updateDraftDeleteScanIncompleteErrorNumber))
+        let result = try await MailController.shared.updateDraft(
+            draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
+            to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
+            attachments: nil, format: .plain, sanitizeLinks: false,
+            fromAddress: nil, requireWrapperFree: false)
+        XCTAssertEqual(result["deleted_old"] as? Bool, false)
+        let note = (result["note"] as? String) ?? ""
+        XCTAssertTrue(note.contains("unknown") || note.contains("could not be verified"),
+                      "an incomplete scan must report unknown old-draft state; got: \(note)")
+        XCTAssertFalse(note.contains("confirmed absent"),
+                       "9277 must never claim confirmed absence")
+    }
+
+    // MARK: - handler-boundary selector validation (verify R4 — Codex R3 blocking 2)
+
+    func testHandlerSelectorValidation_keyPresenceAndTypes() throws {
+        // Type confusion: draft_id present as an Int must be a parameter
+        // error, NEVER silently downgraded to "absent" (which would run the
+        // mutation on subject_match alone).
+        XCTAssertThrowsError(try CheAppleMailMCPServer.validateUpdateDraftSelectors(
+            ["draft_id": .int(123), "subject_match": .string("Unique")]))
+        XCTAssertThrowsError(try CheAppleMailMCPServer.validateUpdateDraftSelectors(
+            ["subject_match": .int(7)]))
+        // Empty-value dedicated errors still fire at this boundary.
+        XCTAssertThrowsError(try CheAppleMailMCPServer.validateUpdateDraftSelectors(
+            ["subject_match": .string("")]))
+        XCTAssertThrowsError(try CheAppleMailMCPServer.validateUpdateDraftSelectors(
+            ["draft_id": .string("")]))
+        XCTAssertThrowsError(try CheAppleMailMCPServer.validateUpdateDraftSelectors(
+            ["draft_id": .string("1\u{0301}")]))
+        // Both / neither.
+        XCTAssertThrowsError(try CheAppleMailMCPServer.validateUpdateDraftSelectors(
+            ["draft_id": .string("1"), "subject_match": .string("A")]))
+        XCTAssertThrowsError(try CheAppleMailMCPServer.validateUpdateDraftSelectors([:]))
+        // Happy paths.
+        let byId = try CheAppleMailMCPServer.validateUpdateDraftSelectors(["draft_id": .string("101")])
+        XCTAssertEqual(byId.draftId, "101"); XCTAssertNil(byId.subjectMatch)
+        let bySubj = try CheAppleMailMCPServer.validateUpdateDraftSelectors(["subject_match": .string("A")])
+        XCTAssertEqual(bySubj.subjectMatch, "A"); XCTAssertNil(bySubj.draftId)
     }
 }
 

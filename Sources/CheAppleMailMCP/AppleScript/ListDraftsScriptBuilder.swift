@@ -131,9 +131,24 @@ func buildListAllDraftsScript() -> String {
     """
 }
 
+/// #276 verify R4 (Codex R3) — strict byte-level ASCII digit check. A
+/// `Character` range like ("0"..."9") is a lexicographic interval over
+/// graphemes: a combining-mark digit (`"1\u{0301}"`) can fall inside it yet
+/// is NOT a valid AppleScript numeric literal. Shared by the update_draft
+/// handler, controller, row parser, and delete-builder contract.
+func isASCIIDigits(_ value: String) -> Bool {
+    !value.isEmpty && value.utf8.allSatisfy { (48...57).contains($0) }
+}
+
 /// Custom AppleScript error number raised when `update_draft`'s delete step
-/// finds no draft with the located id (raced away between locate and delete).
+/// scanned its whole scope CLEANLY and found no draft with the located
+/// id+subject — the only case that may claim "confirmed absent".
 let updateDraftDeleteNotFoundErrorNumber = 9276
+
+/// Raised when the delete scan could not be completed (a scope-condition
+/// eval error skipped a child) — the old draft's state is UNKNOWN and the
+/// caller must not claim it is gone (verify R4, Codex R3 blocking 1).
+let updateDraftDeleteScanIncompleteErrorNumber = 9277
 
 /// #276 — delete a draft BY ID + EXACT SUBJECT inside the unified-drafts
 /// children. Deleting here (instead of `delete_email`) avoids resolving the
@@ -148,44 +163,57 @@ let updateDraftDeleteNotFoundErrorNumber = 9276
 /// subject equality, never content); AppleScript `delete` moves to Trash
 /// (recoverable), not a permanent expunge.
 func buildDeleteDraftByIdScript(draftId: String, subject: String, accountId: String?, accountName: String?) -> String {
-    // Contract (verify R1, security LOW): draftId must already be validated
-    // as ASCII digits by the caller — it is interpolated as an AppleScript
-    // numeric literal. The assert catches contract violations in debug.
-    assert(!draftId.isEmpty && draftId.allSatisfy { ("0"..."9").contains($0) },
+    // Contract (verify R1/R4): draftId must already be validated as ASCII
+    // digits by the caller — it is interpolated as an AppleScript numeric
+    // literal. The assert catches contract violations in debug.
+    assert(isASCIIDigits(draftId),
            "buildDeleteDraftByIdScript requires a pre-validated ASCII-numeric draftId")
+    let predicate = "id is \(draftId) and subject is \"\(appleScriptEscape(subject))\""
     let conditionLine: String
     if let aid = accountId, !aid.isEmpty {
         conditionLine = """
                 try
                     if (id of account of mb) is "\(appleScriptEscape(aid))" then set matched to true
+                on error
+                    set scanClean to false
                 end try
         """
     } else if let an = accountName, !an.isEmpty {
         conditionLine = """
                 try
                     if (name of account of mb) is "\(appleScriptEscape(an))" then set matched to true
+                on error
+                    set scanClean to false
                 end try
         """
     } else {
         conditionLine = "        set matched to true"
     }
+    // Honest not-found classification (verify R4, Codex R3 blocking 1): the
+    // lookup is a COUNT over a whose-filter — it returns 0 on no-match
+    // without throwing, and there is no try around it, so a REAL query error
+    // (timeout, dead reference) propagates to the controller instead of
+    // masquerading as not-found. 9276 fires only when the whole scope
+    // scanned clean; a condition-eval error downgrades the exhausted scan to
+    // 9277 (old-draft state unknown).
     return """
     tell application "Mail"
+        set scanClean to true
         repeat with mb in (every mailbox of drafts mailbox)
             set matched to false
     \(conditionLine)
             if matched then
-                set target to missing value
-                try
-                    set target to (first message of mb whose id is \(draftId) and subject is "\(appleScriptEscape(subject))")
-                end try
-                if target is not missing value then
-                    delete target
+                if (count of (every message of mb whose \(predicate))) > 0 then
+                    delete (first message of mb whose \(predicate))
                     return "Draft deleted"
                 end if
             end if
         end repeat
-        error "No draft with id \(draftId) found in the drafts mailboxes" number \(updateDraftDeleteNotFoundErrorNumber)
+        if scanClean then
+            error "No draft with id \(draftId) found in the drafts mailboxes" number \(updateDraftDeleteNotFoundErrorNumber)
+        else
+            error "Delete scan incomplete — could not evaluate every drafts mailbox" number \(updateDraftDeleteScanIncompleteErrorNumber)
+        end if
     end tell
     """
 }
@@ -215,7 +243,7 @@ func parseDraftRows(_ raw: String) throws -> [(id: String, subject: String)] {
     // Verify R1 (Codex): every id must be a non-empty ASCII-numeric Mail
     // rowid — an empty or non-numeric id violates the list_drafts contract
     // and could otherwise flow into the delete script. Throw, never emit.
-    for id in ids where id.isEmpty || !(id.allSatisfy { ("0"..."9").contains($0) }) {
+    for id in ids where !isASCIIDigits(id) {
         throw MailError.operationFailed(
             "list_drafts: malformed draft id '\(id)' in script payload — refusing")
     }

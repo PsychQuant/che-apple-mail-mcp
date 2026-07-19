@@ -1228,28 +1228,10 @@ class CheAppleMailMCPServer {
                   let body = arguments["body"]?.stringValue else {
                 throw MailError.invalidParameter("to, subject, and body are required")
             }
-            let draftId = arguments["draft_id"]?.stringValue
-            let subjectMatch = arguments["subject_match"]?.stringValue
-            // Verify R2 (Codex): presence = key provided; explicitly-empty
-            // values are provided-but-invalid, never treated as absent.
-            if let sm = subjectMatch, sm.isEmpty {
-                throw MailError.invalidParameter(
-                    "subject_match must be non-empty (exact subject equality); "
-                    + "to target an empty-subject draft, use draft_id from list_drafts")
-            }
-            if let did = draftId, did.isEmpty || !(did.allSatisfy { ("0"..."9").contains($0) }) {
-                // Strict ASCII digits (verify R1, Codex) — Character.isNumber
-                // would accept Unicode digits that are not a Mail rowid.
-                throw MailError.invalidParameter(
-                    "draft_id must be a non-empty ASCII-numeric message id (from list_drafts); got '\(did)'")
-            }
-            let hasDraftId = (draftId != nil)
-            let hasSubjectMatch = (subjectMatch != nil)
-            guard hasDraftId != hasSubjectMatch else {
-                throw MailError.invalidParameter(
-                    "update_draft requires exactly one of draft_id or subject_match (got "
-                    + (hasDraftId ? "both" : "neither") + ")")
-            }
+            // Verify R4 (Codex R3): key-presence + type + value validation is
+            // a pure static helper so the handler boundary is unit-testable
+            // without spinning up the Server/transport.
+            let (draftId, subjectMatch) = try Self.validateUpdateDraftSelectors(arguments)
             let to = toArray.compactMap { $0.stringValue }
             let cc = try optionalStringArray(arguments, key: "cc")
             let bcc = try optionalStringArray(arguments, key: "bcc")
@@ -2115,6 +2097,44 @@ class CheAppleMailMCPServer {
     /// detect when more rows matched than were returned instead of silently
     /// losing them. `truncated` is definitive on the SQLite fast path (limit+1
     /// fetch) and best-effort (`returned == limit`) on the AppleScript fallback.
+    /// #276 verify R4 (Codex R3 blocking 2) — update_draft selector
+    /// validation at the HANDLER boundary, presence-first: a key that is
+    /// PRESENT with a non-string value is a parameter error, never silently
+    /// treated as absent (the MCP inputSchema is a published contract, not a
+    /// runtime enforcement — type confusion like `draft_id: 123` +
+    /// `subject_match: "X"` must not slip past the mutual-exclusion gate and
+    /// run the mutation). Order: type → value → XOR on key presence. Pure
+    /// static so it is unit-testable.
+    static func validateUpdateDraftSelectors(
+        _ arguments: [String: Value]
+    ) throws -> (draftId: String?, subjectMatch: String?) {
+        let draftIdProvided = (arguments["draft_id"] != nil)
+        let subjectMatchProvided = (arguments["subject_match"] != nil)
+        if draftIdProvided, arguments["draft_id"]?.stringValue == nil {
+            throw MailError.invalidParameter("draft_id must be a string (numeric message id)")
+        }
+        if subjectMatchProvided, arguments["subject_match"]?.stringValue == nil {
+            throw MailError.invalidParameter("subject_match must be a string (exact subject)")
+        }
+        let draftId = arguments["draft_id"]?.stringValue
+        let subjectMatch = arguments["subject_match"]?.stringValue
+        if let sm = subjectMatch, sm.isEmpty {
+            throw MailError.invalidParameter(
+                "subject_match must be non-empty (exact subject equality); "
+                + "to target an empty-subject draft, use draft_id from list_drafts")
+        }
+        if let did = draftId, !isASCIIDigits(did) {
+            throw MailError.invalidParameter(
+                "draft_id must be a non-empty ASCII-numeric message id (from list_drafts); got '\(did)'")
+        }
+        guard draftIdProvided != subjectMatchProvided else {
+            throw MailError.invalidParameter(
+                "update_draft requires exactly one of draft_id or subject_match (got "
+                + (draftIdProvided ? "both" : "neither") + ")")
+        }
+        return (draftId, subjectMatch)
+    }
+
     static func resultEnvelope(results: [[String: Any]], limit: Int, truncated: Bool) -> [String: Any] {
         [
             "results": results,

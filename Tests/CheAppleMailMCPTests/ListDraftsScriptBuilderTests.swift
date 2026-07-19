@@ -125,20 +125,49 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
         XCTAssertTrue(all.contains("and subject is \"S\""))
     }
 
-    func testDeleteDraftScript_lookupSeparatedFromDelete() {
-        // #276 verify R1 (Codex blocking 4): the lookup try must NOT wrap the
-        // `delete` verb — a real delete failure (permissions, Mail command
-        // error) must propagate to the controller (→ deleted_old:false with
-        // the real cause), not be swallowed into the 9276 "not found" error.
-        let script = buildDeleteDraftByIdScript(draftId: "12345", subject: "S", accountId: nil, accountName: nil)
-        XCTAssertTrue(script.contains("set target to"),
-                      "lookup must bind a target inside its own try; got:\n\(script)")
-        XCTAssertTrue(script.contains("if target is not missing value then"),
-                      "delete must run OUTSIDE the lookup try, gated on the bound target; got:\n\(script)")
-        XCTAssertTrue(script.contains("delete target"),
-                      "the delete verb must act on the bound target; got:\n\(script)")
+    func testDeleteDraftScript_honestNotFoundClassification() {
+        // #276 verify R4 (Codex R3 blocking 1): 9276 must PROVE "confirmed
+        // absent" — a swallowed lookup/query error must never masquerade as
+        // not-found. The lookup is a count over a whose-filter (returns 0
+        // without throwing on no-match; REAL query errors propagate — no try
+        // around it), and 9276 fires only when the whole scope scanned clean
+        // (scanClean); a scope-condition eval error downgrades to 9277
+        // (scan incomplete — old-draft state unknown).
+        let script = buildDeleteDraftByIdScript(draftId: "12345", subject: "S", accountId: "UUID-A", accountName: nil)
+        XCTAssertTrue(script.contains("count of (every message of mb whose id is 12345 and subject is \"S\")"),
+                      "lookup must be a non-throwing count over the whose-filter; got:\n\(script)")
+        // (`first message ...` remains ONLY as the delete target after the
+        // count guard proved existence — it cannot throw not-found there,
+        // and real delete errors propagate since nothing wraps it in a try.)
+        XCTAssertTrue(script.contains("set scanClean to false"),
+                      "a condition-eval error must mark the scan incomplete; got:\n\(script)")
+        XCTAssertTrue(script.contains("if scanClean then"),
+                      "9276 must be gated on a clean full scan; got:\n\(script)")
         XCTAssertTrue(script.contains("number \(updateDraftDeleteNotFoundErrorNumber)"),
-                      "exhausted lookup must still raise the recognizable 9276")
+                      "clean-scan not-found must raise 9276")
+        XCTAssertTrue(script.contains("number \(updateDraftDeleteScanIncompleteErrorNumber)"),
+                      "incomplete scan must raise 9277, never 9276; got:\n\(script)")
+        // Unscoped variant has no condition to fail — no 9277 branch needed,
+        // but real message-query errors still propagate (no try at all).
+        let all = buildDeleteDraftByIdScript(draftId: "12345", subject: "S", accountId: nil, accountName: nil)
+        XCTAssertFalse(all.contains("try"),
+                       "unscoped delete scan must not swallow anything; got:\n\(all)")
+    }
+
+    // MARK: - #276 isASCIIDigits (verify R4 — Codex R3 blocking 3)
+
+    func testIsASCIIDigits_strictByteLevel() {
+        XCTAssertTrue(isASCIIDigits("0"))
+        XCTAssertTrue(isASCIIDigits("007"))
+        XCTAssertTrue(isASCIIDigits("1234567890"))
+        XCTAssertFalse(isASCIIDigits(""))
+        XCTAssertFalse(isASCIIDigits("12a"))
+        XCTAssertFalse(isASCIIDigits("١٢٣"), "Arabic-Indic digits are not ASCII")
+        XCTAssertFalse(isASCIIDigits("1\u{0301}"),
+                       "a combining-mark digit grapheme can slip a Character range check — byte-level must reject")
+        XCTAssertFalse(isASCIIDigits("²"))
+        XCTAssertFalse(isASCIIDigits(" 1"))
+        XCTAssertFalse(isASCIIDigits("-1"))
     }
 
     // MARK: - #276 parseDraftRows

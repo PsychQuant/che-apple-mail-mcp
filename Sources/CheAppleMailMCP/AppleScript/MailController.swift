@@ -1422,11 +1422,11 @@ actor MailController {
                 "subject_match must be non-empty (exact subject equality); "
                 + "to target an empty-subject draft, use draft_id from list_drafts")
         }
-        if let did = draftId,
-           did.isEmpty || !(did.allSatisfy { ("0"..."9").contains($0) }) {
-            // Strict ASCII digits (verify R1, Codex): Character.isNumber
-            // accepts Unicode digits (١٢٣ / ²) that are NOT a valid
-            // AppleScript numeric literal — same rule as requireMessageId.
+        if let did = draftId, !isASCIIDigits(did) {
+            // Strict byte-level ASCII digits (verify R1/R4, Codex): both
+            // Character.isNumber and a Character range accept graphemes
+            // (١٢٣ / "1"+combining mark) that are NOT a valid AppleScript
+            // numeric literal.
             throw MailError.invalidParameter(
                 "draft_id must be a non-empty ASCII-numeric message id (from list_drafts); got '\(did)'")
         }
@@ -1529,18 +1529,32 @@ actor MailController {
             _ = try runScript(deleteScript)
             return ["deleted_old": true, "old_draft_id": old.id, "new_draft": createResult]
         } catch {
-            // 9276 = the old draft was no longer present at delete time
-            // (already removed / raced away) — the goal state (only the new
-            // draft) already holds; an honest note must not claim both exist.
+            // 9276 = the whole delete scope scanned CLEAN and the old draft
+            // was not there — the only case that may claim confirmed absence
+            // (verify R4: a swallowed query error must never masquerade as
+            // not-found; those now propagate as their own errors or 9277).
             if case let MailError.scriptFailed(_, code) = error,
                code == updateDraftDeleteNotFoundErrorNumber {
                 return [
                     "deleted_old": false,
                     "old_draft_id": old.id,
                     "new_draft": createResult,
-                    "note": "the old draft (id \(old.id)) was no longer present at delete "
-                        + "time (already removed — possibly deleted concurrently); only the "
-                        + "replacement draft exists.",
+                    "note": "the old draft (id \(old.id)) is confirmed absent — a complete "
+                        + "clean scan of the delete scope no longer finds it (already removed, "
+                        + "possibly concurrently); only the replacement draft exists.",
+                ]
+            }
+            // 9277 = the delete scan could not be completed — the old
+            // draft's state is UNKNOWN; do not claim it is gone.
+            if case let MailError.scriptFailed(_, code) = error,
+               code == updateDraftDeleteScanIncompleteErrorNumber {
+                return [
+                    "deleted_old": false,
+                    "old_draft_id": old.id,
+                    "new_draft": createResult,
+                    "note": "the delete scan could not be completed, so the old draft's "
+                        + "state is unknown (it could not be verified as deleted OR present) — "
+                        + "check the drafts mailbox; the replacement draft was created.",
                 ]
             }
             return [

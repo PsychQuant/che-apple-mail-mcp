@@ -17,7 +17,7 @@ The system SHALL provide an `update_draft` MCP tool that replaces an existing dr
 #### Scenario: delete fails after successful create
 
 - **WHEN** the replacement draft was created successfully but deleting the old draft fails
-- **THEN** the system SHALL NOT throw; it SHALL return `deleted_old: false` with an explicit notice that both the new and the old draft now exist in the drafts mailbox
+- **THEN** the system SHALL NOT throw; it SHALL return `deleted_old: false` with a notice matched to what is actually known: a generic delete failure SHALL state that both drafts may now exist; a clean-scan not-found (the whole delete scope was scanned successfully and the old draft was absent) MAY state the old draft is confirmed absent; an incomplete scan SHALL state the old draft's state is unknown — the system SHALL NOT claim confirmed absence on any swallowed or partial-scan error
 
 ### Requirement: identify selector semantics
 
