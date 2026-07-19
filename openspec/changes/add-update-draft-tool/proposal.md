@@ -15,7 +15,7 @@ Apple Mail 的草稿無法原地修改（scripting dictionary 無 patch/edit 草
 ## Non-Goals
 
 - 真正的 in-place 草稿編輯（平台不支援 — 本 tool 是 workaround 的固化）。
-- `create_draft` 回傳新草稿 id（既有 gap，獨立 enhancement；`update_draft` 以 status string 判定成功）。
+- `create_draft` 回傳新草稿 id（既有 gap，獨立 enhancement；`update_draft` 以 receipt gate 判定可否刪舊 — status string 僅作為 `new_draft` 結果保留。receipt 的因果限度：同 subject 的並行新草稿無 create-path id 即無法區分，屬 documented limit）。
 - `subject_match` 的模糊/子字串比對（誘發誤刪；只做完全相等）。
 - 命中 0 時的 auto-create fallback（caller 收到 refuse 自行 create_draft 即可）。
 - clean-body eligibility 的任何變更（#219/#277 的 scope）。
@@ -34,7 +34,7 @@ Apple Mail 的草稿無法原地修改（scripting dictionary 無 patch/edit 草
 
 - Affected specs: 新增 `draft-update`
 - Affected code:
-  - `Sources/CheAppleMailMCP/AppleScript/ListDraftsScriptBuilder.swift`（script 回 `{ids, subjects}` 平行 list）
+  - `Sources/CheAppleMailMCP/AppleScript/ListDraftsScriptBuilder.swift`（script per-message 同 reference 讀 id+subject）
   - `Sources/CheAppleMailMCP/AppleScript/MailController.swift`（`listDrafts` zip id、新 `updateDraft` orchestration）
   - `Sources/CheAppleMailMCP/Server.swift`（`list_drafts` result shape、新 tool schema + handler）
   - `Tests/CheAppleMailMCPTests/`（script-builder 單元測試 + seam 測試；遵守 #221 全文掃描禁令）

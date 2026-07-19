@@ -11,14 +11,14 @@
 ## 1. list_drafts id 擴充（spec Requirement: list_drafts returns draft ids；design D3）
 
 - [x] 1.1（spec: list_drafts returns draft ids — id and subject pairing）`ListDraftsScriptBuilder.buildListDraftsScript` 改回傳 id+subject rows（verify R2 定案：單一 reference snapshot 的 per-message 迴圈、RS/GS 分隔；維持 #174 unified-children 草稿匣識別與既有 no-match error 契約）。TDD：script-builder 單元測試先行（script 文字含 id 取用；既有 golden 斷言更新）
-- [x] 1.2 `MailController.listDrafts` 解析平行 list、zip 成 `[{"subject": s, "id": i}]`（`runScriptAsList` 或等價解析；兩 list 長度不一致 → throw 明確錯誤不靜默截斷）。TDD：seam 測試（scriptRunner 注入固定回傳）
+- [x] 1.2 `MailController.listDrafts` 解析 per-message rows、zip 成 `[{"subject": s, "id": i}]`（`runScriptAsList` 或等價解析；兩 list 長度不一致 → throw 明確錯誤不靜默截斷）。TDD：seam 測試（scriptRunner 注入固定回傳）
 - [x] 1.3 `Server.swift` `list_drafts` handler 與 tool description 更新（result shape 揭露 additive `id` 欄位；spec: list_drafts returns draft ids — backward compatibility scenario）
 
 ## 2. update_draft tool（spec Requirements: update_draft upsert tool + identify selector semantics；design D1/D2/D4/D5）
 
 - [x] 2.1 `Server.defineTools()` 新增 `update_draft` schema：`draft_id` | `subject_match` 二擇一必填（描述明示互斥）、`account_name` 選填、其餘沿 `create_draft` 參數（to/subject/body/cc/bcc/attachments/from_address/format/sanitize_links/require_wrapper_free）；description 明示 create-then-delete 順序（與 delete-first 的資料安全理由）、重建後新 id、legacy-path 繼承揭露
 - [x] 2.2 handler 參數驗證（spec: identify selector semantics — both/neither selector scenario；design D2）：兩 selector 都給或都缺 → invalidParameter；`draft_id` 走 `requireMessageId` 同款數字驗證。TDD：validation 測試先行
-- [x] 2.3 `MailController.updateDraft` orchestration（spec: update_draft upsert tool 全部三 scenario + identify selector semantics 的 refuse 兩態；design D1 create-then-delete / D2 refuse / D4 複用 / D5 失敗語意）：(a) 以 1.x 的 list 機制定位（`draft_id` 直接比對 id、`subject_match` 完全相等比對 subject）；命中 0 → refuse（明示 update 需既有草稿）；>1 → refuse 列候選 `{id, subject}`；(b) 呼叫既有 `createDraft`（繼承 eligibility/揭露），成功判定 = **receipt gate**（all-accounts 重列確認新 id + exact subject 落地，非 status string）；(c) receipt 確認後以 delete-by-id script 刪舊（id 選 candidates + considering case 比對 subject）；(d) delete 失敗 → 不 throw，result `deleted_old: false` + 新舊並存明示。TDD：seam 測試覆蓋 4 條路徑（成功 / create-fail 不刪 / delete-fail 揭露 / refuse 兩態）
+- [x] 2.3 `MailController.updateDraft` orchestration（spec: update_draft upsert tool 全部三 scenario + identify selector semantics 的 refuse 兩態；design D1 create-then-delete / D2 refuse / D4 複用 / D5 失敗語意）：(a) 以 1.x 的 list 機制定位（`draft_id` 直接比對 id、`subject_match` 完全相等比對 subject）；命中 0 → refuse（明示 update 需既有草稿）；>1 → refuse 列候選 `{id, subject}`；(b) 呼叫既有 `createDraft`（繼承 eligibility/揭露），成功判定 = **receipt gate**（all-accounts 重列確認新 id + exact subject 落地，非 status string）；(c) receipt 確認後以 delete-by-id script 刪舊（id 選 candidates + considering case 比對 subject）；(d) delete 失敗 → 不 throw，result `deleted_old: false` + note 依實際所知分級（confirmed absent / 未知 / 可能並存）。TDD：seam 測試覆蓋 4 條路徑（成功 / create-fail 不刪 / delete-fail 揭露 / refuse 兩態）
 - [x] 2.4 result shape：`{deleted_old, old_draft_id, new_draft: <create_draft result string 原樣（含揭露後綴）>}`
 
 ## 3. 收尾

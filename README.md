@@ -175,7 +175,7 @@ reply_email(
 |------|-------------|
 | `list_drafts` | List draft emails — each entry carries `subject` + numeric `id` ([#276](https://github.com/PsychQuant/che-apple-mail-mcp/issues/276), additive; feeds `update_draft.draft_id` / `delete_email.id`) |
 | `create_draft` | Create a draft (supports attachments; optional `from_address` for multi-account sender selection — see [#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131), ⚠ forces the wrapped legacy path until [#219](https://github.com/PsychQuant/che-apple-mail-mcp/issues/219)). Plain-text bodies use the wrapper-free native path when Accessibility is granted — see [#175](https://github.com/PsychQuant/che-apple-mail-mcp/issues/175) / `check_accessibility`; legacy-path results disclose the reason ([#237](https://github.com/PsychQuant/che-apple-mail-mcp/issues/237)) |
-| `update_draft` | Replace an existing draft (upsert, [#276](https://github.com/PsychQuant/che-apple-mail-mcp/issues/276)): locate by `draft_id` or exact `subject_match` → create replacement (inherits `create_draft` eligibility + disclosure) → delete old. Deliberately create-THEN-delete (a mid-way failure leaves both drafts, never neither); 0 or >1 matches always refuse (candidates listed). Replacement gets a NEW id |
+| `update_draft` | Replace an existing draft (upsert, [#276](https://github.com/PsychQuant/che-apple-mail-mcp/issues/276)): locate by `draft_id` or exact `subject_match` → create replacement (inherits `create_draft` eligibility + disclosure) → delete old. Deliberately create-THEN-delete with a post-create receipt (failure always leans toward keeping drafts — worst case both MAY exist, never neither); 0 or >1 matches always refuse (candidates listed). Replacement gets a NEW id |
 
 </details>
 

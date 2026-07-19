@@ -157,6 +157,15 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
                       "clean-scan not-found must raise 9276")
         XCTAssertTrue(script.contains("number \(updateDraftDeleteScanIncompleteErrorNumber)"),
                       "incomplete scan must raise 9277, never 9276; got:\n\(script)")
+        // #276 verify R6 (Codex): an id candidate whose subject no longer
+        // matches must NOT be classified as confirmed-absent — the script
+        // tracks sawIdCandidate and routes that case to the ambiguity error.
+        XCTAssertTrue(script.contains("set sawIdCandidate to false"),
+                      "must track whether any id candidate was seen; got:\n\(script)")
+        XCTAssertTrue(script.contains("if scanClean and not sawIdCandidate then"),
+                      "9276 requires clean scan AND zero id candidates; got:\n\(script)")
+        XCTAssertTrue(script.contains("else if sawIdCandidate then"),
+                      "id-candidate-with-mismatched-subject must route to ambiguity, not 9276")
         // Unscoped variant has no condition to fail — no 9277 branch needed,
         // but real message-query errors still propagate (no try at all).
         let all = buildDeleteDraftByIdScript(draftId: "12345", subject: "S", accountId: nil, accountName: nil)

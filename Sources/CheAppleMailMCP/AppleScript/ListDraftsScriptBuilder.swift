@@ -188,8 +188,12 @@ func buildDeleteDraftByIdScript(draftId: String, subject: String, accountId: Str
     } else {
         conditionLine = "        set matched to true"
     }
-    // Honest not-found classification (verify R4) + case-sensitive subject
-    // (verify R5, Codex): AppleScript string comparison is case-INsensitive
+    // Honest not-found classification (verify R4/R6) + case-sensitive
+    // subject (verify R5, Codex): 9276 "confirmed absent" fires ONLY when the
+    // whole scope scanned clean AND no draft with the numeric id existed at
+    // all — an id candidate whose subject no longer matches (renamed after
+    // locate / concurrent change) is 9277-class ambiguity, never
+    // confirmed-absent (verify R6). AppleScript string comparison is case-INsensitive
     // by default, so a `whose ... subject is "Report"` could match "report"
     // in another account and delete the wrong draft — the id predicate
     // (numeric, case-free) selects candidates, and the subject is compared
@@ -200,11 +204,13 @@ func buildDeleteDraftByIdScript(draftId: String, subject: String, accountId: Str
     return """
     tell application "Mail"
         set scanClean to true
+        set sawIdCandidate to false
         repeat with mb in (every mailbox of drafts mailbox)
             set matched to false
     \(conditionLine)
             if matched then
                 set candidates to (every message of mb whose id is \(draftId))
+                if (count of candidates) > 0 then set sawIdCandidate to true
                 repeat with cand in candidates
                     considering case
                         if (subject of cand) is equal to "\(appleScriptEscape(subject))" then
@@ -215,8 +221,10 @@ func buildDeleteDraftByIdScript(draftId: String, subject: String, accountId: Str
                 end repeat
             end if
         end repeat
-        if scanClean then
+        if scanClean and not sawIdCandidate then
             error "No draft with id \(draftId) found in the drafts mailboxes" number \(updateDraftDeleteNotFoundErrorNumber)
+        else if sawIdCandidate then
+            error "A draft with id \(draftId) exists but its subject no longer matches — old-draft state ambiguous" number \(updateDraftDeleteScanIncompleteErrorNumber)
         else
             error "Delete scan incomplete — could not evaluate every drafts mailbox" number \(updateDraftDeleteScanIncompleteErrorNumber)
         end if

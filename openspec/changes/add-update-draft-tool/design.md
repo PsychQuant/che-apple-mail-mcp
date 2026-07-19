@@ -26,7 +26,7 @@ Apple Mail 草稿無法原地修改；`update_draft` 把「找舊 → 建新 →
 
 ### D5 — 失敗語意不對稱
 
-create 失敗 → throw、不刪舊（無損 abort）。create 成功後 delete 失敗 → **不 throw**，回 `deleted_old: false` + 明示「新草稿已建、舊草稿仍在」——工作已半完成，throw 會誤導 caller 以為全失敗。
+create 失敗 → throw、不刪舊（無損 abort）。create（經 receipt 確認）後 delete 失敗 → **不 throw**，回 `deleted_old: false` + note 依實際所知分級：clean-scan 無 id candidate = confirmed absent；id 在但 subject 不符或掃描不完整 = 狀態未知；generic 失敗 = 兩者**可能**並存——工作已半完成，throw 會誤導 caller 以為全失敗。
 
 ## Risks
 

@@ -12,7 +12,7 @@ The system SHALL provide an `update_draft` MCP tool that replaces an existing dr
 #### Scenario: replacement not confirmed — old draft kept
 
 - **WHEN** the replacement-draft creation reports success but re-listing the drafts (covering the replacement's possible destination accounts) does not, within a brief poll, show a NEW draft id absent from the pre-create snapshot AND carrying the replacement's exact subject
-- **THEN** the system SHALL NOT delete the old draft and SHALL return `deleted_old: false` with an explicit not-confirmed notice — a reported success without a landed draft (or an unrelated concurrent draft) is never treated as a receipt
+- **THEN** the system SHALL NOT delete the old draft and SHALL return `deleted_old: false` with an explicit not-confirmed notice — a reported success without a landed draft is never treated as a receipt, and a concurrent draft with a DIFFERENT subject never stands in as one (a same-subject concurrent draft is indistinguishable without a create-path id — a documented limit)
 
 #### Scenario: create fails — old draft untouched
 

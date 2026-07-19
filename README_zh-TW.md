@@ -127,7 +127,7 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 |------|------|
 | `list_drafts` | 列出草稿郵件 — 每筆帶 `subject` + 數字 `id`（[#276](https://github.com/PsychQuant/che-apple-mail-mcp/issues/276)，additive；可直接餵 `update_draft.draft_id` / `delete_email.id`）|
 | `create_draft` | 建立草稿（支援附件） |
-| `update_draft` | 更新既有草稿（upsert，[#276](https://github.com/PsychQuant/che-apple-mail-mcp/issues/276)）：以 `draft_id` 或精確 `subject_match` 定位 → 先建新（繼承 create_draft 資格與揭露）→ 再刪舊。刻意 create-then-delete（中途失敗留「新舊並存」而非「兩頭空」）；0 或 >1 命中一律 refuse 列候選。重建後是新 id |
+| `update_draft` | 更新既有草稿（upsert，[#276](https://github.com/PsychQuant/che-apple-mail-mcp/issues/276)）：以 `draft_id` 或精確 `subject_match` 定位 → 先建新（繼承 create_draft 資格與揭露）→ 再刪舊。刻意 create-then-delete + post-create receipt（失敗方向恆偏向保留草稿 — 最壞「可能並存」、絕不「兩頭空」）；0 或 >1 命中一律 refuse 列候選。重建後是新 id |
 
 </details>
 

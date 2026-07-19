@@ -344,7 +344,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "update_draft",
-                description: "Replace an existing draft (upsert): locate it by draft_id (from list_drafts) or an EXACT subject_match, create the replacement via the same mechanism and eligibility rules as create_draft, then delete the old draft. Order is deliberately create-THEN-delete — a mid-way failure leaves both drafts visible (recoverable) instead of neither; this is the reverse of the naive delete-first flow, chosen for data safety. Ambiguity always refuses: 0 matches (update requires an existing draft — use create_draft for a new one) or >1 matches (candidates {id, subject} are listed; retry with draft_id). Notes: Apple Mail drafts cannot be edited in place, so the replacement is a NEW draft with a NEW id (never reuse the old id); the replacement is created under create_draft's account semantics (default account unless from_address) which may differ from the old draft's account; the body inherits create_draft's wrapper-free eligibility and disclosure (#175/#237/#239) — display-name recipients or from_address route it via the legacy path (blockquote-wrapped body, disclosed in new_draft). Deletion moves the old draft to Trash (recoverable). The delete is double-gated: (a) a post-create RECEIPT re-lists the drafts and requires a NEW id to appear before the old draft is touched (a GUI-path phantom success keeps the old draft, reported as deleted_old:false / not confirmed); (b) the delete predicate conjoins id AND exact subject, so a cross-account id collision cannot delete another account's draft. If deletion fails after a confirmed create, the result reports deleted_old:false with a note matched to what is known (confirmed absent / state unknown / both MAY exist) — nothing is silently lost or over-claimed.",
+                description: "Replace an existing draft (upsert): locate it by draft_id (from list_drafts) or an EXACT subject_match, create the replacement via the same mechanism and eligibility rules as create_draft, then delete the old draft. Order is deliberately create-THEN-delete with a post-create receipt — the failure direction is always toward keeping drafts (worst case both MAY exist, recoverable), never toward losing both; this is the reverse of the naive delete-first flow, chosen for data safety. Ambiguity always refuses: 0 matches (update requires an existing draft — use create_draft for a new one) or >1 matches (candidates {id, subject} are listed; retry with draft_id). Notes: Apple Mail drafts cannot be edited in place, so the replacement is a NEW draft with a NEW id (never reuse the old id); the replacement is created under create_draft's account semantics (default account unless from_address) which may differ from the old draft's account; the body inherits create_draft's wrapper-free eligibility and disclosure (#175/#237/#239) — display-name recipients or from_address route it via the legacy path (blockquote-wrapped body, disclosed in new_draft). Deletion moves the old draft to Trash (recoverable). The delete is double-gated: (a) a post-create RECEIPT re-lists the drafts and requires a NEW id to appear before the old draft is touched (a GUI-path phantom success keeps the old draft, reported as deleted_old:false / not confirmed); (b) the delete predicate conjoins id AND exact subject, so a cross-account id collision cannot delete another account's draft. If deletion fails after a confirmed create, the result reports deleted_old:false with a note matched to what is known (confirmed absent / state unknown / both MAY exist) — nothing is silently lost or over-claimed.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -2104,6 +2104,16 @@ class CheAppleMailMCPServer {
     static func validateUpdateDraftSelectors(
         _ arguments: [String: Value]
     ) throws -> (draftId: String?, subjectMatch: String?) {
+        // Verify R6 (Codex): account scoping fields get the same
+        // presence-first TYPE validation — `account_name: 123` silently
+        // becoming nil would EXPAND a mutation's scope to all accounts
+        // instead of erroring.
+        if arguments["account_name"] != nil, arguments["account_name"]?.stringValue == nil {
+            throw MailError.invalidParameter("account_name must be a string")
+        }
+        if arguments["account_id"] != nil, arguments["account_id"]?.stringValue == nil {
+            throw MailError.invalidParameter("account_id must be a string (Mail account UUID)")
+        }
         let draftIdProvided = (arguments["draft_id"] != nil)
         let subjectMatchProvided = (arguments["subject_match"] != nil)
         if draftIdProvided, arguments["draft_id"]?.stringValue == nil {

@@ -373,6 +373,12 @@ extension UpdateDraftTests {
         XCTAssertThrowsError(try CheAppleMailMCPServer.validateUpdateDraftSelectors(
             ["draft_id": .string("1"), "subject_match": .string("A")]))
         XCTAssertThrowsError(try CheAppleMailMCPServer.validateUpdateDraftSelectors([:]))
+        // Account scoping fields (verify R6): non-string types must error,
+        // never silently widen a mutation to all accounts.
+        XCTAssertThrowsError(try CheAppleMailMCPServer.validateUpdateDraftSelectors(
+            ["subject_match": .string("Unique"), "account_name": .int(123)]))
+        XCTAssertThrowsError(try CheAppleMailMCPServer.validateUpdateDraftSelectors(
+            ["draft_id": .string("1"), "account_id": .bool(true)]))
         // Happy paths.
         let byId = try CheAppleMailMCPServer.validateUpdateDraftSelectors(["draft_id": .string("101")])
         XCTAssertEqual(byId.draftId, "101"); XCTAssertNil(byId.subjectMatch)
