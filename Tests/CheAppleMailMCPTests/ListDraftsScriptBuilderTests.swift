@@ -47,6 +47,73 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
                       "Empty accountId must behave like nil (name mode)")
     }
 
+    // MARK: - #276 id+subject rows (draft-update spec: list_drafts returns draft ids)
+
+    func testScript_returnsIdAndSubjectGroups() {
+        // The script must emit BOTH id and subject lists from the same
+        // invocation, RS-joined within each group (comma-safe — a subject
+        // containing ", " must not shift the zip) and GS between groups.
+        let script = buildListDraftsScript(accountId: "UUID-A", accountName: "Google")
+        XCTAssertTrue(script.contains("id of messages of mb"),
+                      "script must fetch draft ids; got:\n\(script)")
+        XCTAssertTrue(script.contains("subject of messages of mb"),
+                      "script must still fetch subjects; got:\n\(script)")
+        XCTAssertTrue(script.contains("ASCII character 30"),
+                      "groups must be RS-joined (comma-safe); got:\n\(script)")
+        XCTAssertTrue(script.contains("ASCII character 29"),
+                      "id group and subject group must be GS-separated; got:\n\(script)")
+        XCTAssertTrue(script.contains("number \(listDraftsNoMatchErrorNumber)"),
+                      "the 9174 no-match contract must be preserved")
+    }
+
+    func testAllAccountsVariant_noConditionNoNoMatchError() {
+        // update_draft's account-omitted path scans every drafts child.
+        let script = buildListAllDraftsScript()
+        XCTAssertTrue(script.contains("every mailbox of drafts mailbox"))
+        XCTAssertFalse(script.contains("id of account of mb"))
+        XCTAssertFalse(script.contains("name of account of mb"))
+        XCTAssertFalse(script.contains("number \(listDraftsNoMatchErrorNumber)"),
+                       "unified scan has no per-account no-match case")
+        XCTAssertTrue(script.contains("id of messages of mb"))
+        XCTAssertTrue(script.contains("ASCII character 29"))
+    }
+
+    func testDeleteDraftScript_byIdInDraftsChildren() {
+        // Deletion stays inside the unified-drafts children (no per-account
+        // mailbox-name resolution needed) and matches by numeric id only
+        // (#221-safe: an id predicate, never content).
+        let script = buildDeleteDraftByIdScript(draftId: "12345", accountId: "UUID-A", accountName: "Google")
+        XCTAssertTrue(script.contains("every mailbox of drafts mailbox"))
+        XCTAssertTrue(script.contains("whose id is 12345"))
+        XCTAssertTrue(script.contains("(id of account of mb) is \"UUID-A\""))
+        XCTAssertFalse(script.contains("whose content"), "#221: never a content predicate")
+        // Unscoped variant: no account condition at all.
+        let all = buildDeleteDraftByIdScript(draftId: "12345", accountId: nil, accountName: nil)
+        XCTAssertFalse(all.contains("account of mb"))
+    }
+
+    // MARK: - #276 parseDraftRows
+
+    func testParseDraftRows_zipAndEdges() throws {
+        let RS = "\u{001E}", GS = "\u{001D}"
+        // Normal two rows — including a comma-containing subject.
+        let rows = try parseDraftRows("101\(RS)102\(GS)Hello\(RS)Re: a, b, c")
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[0].id, "101")
+        XCTAssertEqual(rows[1].subject, "Re: a, b, c")
+        // Zero drafts: both groups empty.
+        XCTAssertEqual(try parseDraftRows("\(GS)").count, 0)
+        // One draft with an EMPTY subject still pairs (regression: a naive
+        // per-group emptiness shortcut would mis-count this as 1 vs 0).
+        let one = try parseDraftRows("101\(GS)")
+        XCTAssertEqual(one.count, 1)
+        XCTAssertEqual(one[0].subject, "")
+        // Length mismatch → throw (never silently truncate).
+        XCTAssertThrowsError(try parseDraftRows("101\(RS)102\(GS)onlyone"))
+        // Unexpected shape (no GS) → throw.
+        XCTAssertThrowsError(try parseDraftRows("garbage-without-separator"))
+    }
+
     // MARK: - No hardcoded special-mailbox name (#174 core regression lock)
 
     func testNoHardcodedDraftsLiteral() {
@@ -62,9 +129,14 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
     // MARK: - Returns subjects + no-match error contract
 
     func testReturnsSubjectsOfMatchedMailbox() {
+        // #276: the matched child now returns the GS-joined id+subject
+        // payload (see testScript_returnsIdAndSubjectGroups) — subjects are
+        // still fetched, just alongside ids instead of as the bare return.
         let script = buildListDraftsScript(accountId: "UUID-A", accountName: "Google")
-        XCTAssertTrue(script.contains("return subject of messages of mb"),
-                      "Matched child must return its messages' subjects; got:\n\(script)")
+        XCTAssertTrue(script.contains("subject of messages of mb"),
+                      "Matched child must fetch its messages' subjects; got:\n\(script)")
+        XCTAssertTrue(script.contains("return idStr & (ASCII character 29) & subjStr"),
+                      "Matched child must return the delimited id+subject payload; got:\n\(script)")
     }
 
     func testNoMatchRaisesRecognizableErrorNumber() {

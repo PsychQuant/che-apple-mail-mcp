@@ -1373,9 +1373,13 @@ actor MailController {
     func listDrafts(accountName: String, accountId: String? = nil) throws -> [[String: Any]] {
         let script = buildListDraftsScript(accountId: accountId, accountName: accountName)
         do {
-            let subjects = try runScriptAsList(script)
-            return subjects.map { subject in
-                ["subject": subject]
+            // #276: the script now emits GS/RS-delimited id+subject groups
+            // from the same invocation; `parseDraftRows` zips them (throwing
+            // on any mismatch instead of silently truncating). The `id` field
+            // is additive — existing subject-only consumers are unchanged.
+            let rows = try parseDraftRows(try runScript(script))
+            return rows.map { row in
+                ["subject": row.subject, "id": row.id]
             }
         } catch {
             // #185: route every list_drafts script error through the pure
@@ -1386,6 +1390,98 @@ actor MailController {
             // propagation) is unit-testable without an actor runner seam. Behaviorally
             // identical to the prior selective `catch where code == 9174` (PR #181 #18).
             throw translateListDraftsScriptError(error, accountId: accountId, accountName: accountName)
+        }
+    }
+
+    /// #276 — `update_draft`: replace an existing draft by locate → create →
+    /// delete (create-then-delete, design D1: a mid-way failure leaves "both
+    /// drafts exist" — visible and recoverable — never "neither"). Apple Mail
+    /// drafts cannot be edited in place, so upsert is the only mechanization.
+    ///
+    /// Locate is read-only and runs FIRST: a zero-match refuses before
+    /// anything is created (spec: update requires an existing draft); an
+    /// ambiguous subject_match refuses listing the candidates. The delete
+    /// step reuses the same unified-drafts child scope that located the
+    /// draft (no per-account mailbox-name resolution); a delete failure
+    /// after a successful create reports `deleted_old: false` with an
+    /// explicit both-drafts-exist note instead of throwing (design D5 — the
+    /// work is half-done, a throw would misread as total failure).
+    func updateDraft(
+        draftId: String?, subjectMatch: String?, accountName: String?, accountId: String?,
+        to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil,
+        attachments: [String]? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false,
+        fromAddress: String? = nil, requireWrapperFree: Bool = false
+    ) throws -> [String: Any] {
+        let hasId = (draftId?.isEmpty == false)
+        let hasSubject = (subjectMatch?.isEmpty == false)
+        guard hasId != hasSubject else {
+            throw MailError.invalidParameter(
+                "update_draft requires exactly one of draft_id or subject_match (got "
+                + (hasId ? "both" : "neither") + ")")
+        }
+        if hasId, let did = draftId, !(did.allSatisfy { $0.isNumber }) {
+            throw MailError.invalidParameter(
+                "draft_id must be a numeric message id (from list_drafts); got '\(did)'")
+        }
+
+        // 1. Locate (read-only) — account-scoped when a selector was given,
+        //    unified all-accounts scan otherwise.
+        let listScript: String
+        if (accountName?.isEmpty == false) || (accountId?.isEmpty == false) {
+            listScript = buildListDraftsScript(accountId: accountId, accountName: accountName ?? "")
+        } else {
+            listScript = buildListAllDraftsScript()
+        }
+        let rows: [(id: String, subject: String)]
+        do {
+            rows = try parseDraftRows(try runScript(listScript))
+        } catch {
+            throw translateListDraftsScriptError(
+                error, accountId: accountId, accountName: accountName ?? "")
+        }
+        let matches = hasId
+            ? rows.filter { $0.id == draftId }
+            : rows.filter { $0.subject == subjectMatch }
+        guard !matches.isEmpty else {
+            throw MailError.operationFailed(
+                "update_draft: no existing draft matched "
+                + (hasId ? "draft_id \(draftId ?? "")" : "subject_match \"\(subjectMatch ?? "")\"")
+                + ". update requires an existing draft — use list_drafts to discover ids, "
+                + "or create_draft for a brand-new draft.")
+        }
+        guard matches.count == 1 else {
+            let candidates = matches
+                .map { "{id: \($0.id), subject: \"\($0.subject)\"}" }
+                .joined(separator: ", ")
+            throw MailError.operationFailed(
+                "update_draft: subject_match matched \(matches.count) drafts — refusing to guess. "
+                + "Retry with draft_id. Candidates: [\(candidates)]")
+        }
+        let old = matches[0]
+
+        // 2. Create the replacement FIRST (inherits create_draft's full
+        //    eligibility + disclosure — #175/#237/#239).
+        let createResult = try createDraft(
+            to: to, subject: subject, body: body, cc: cc, bcc: bcc,
+            attachments: attachments, accountName: nil, format: format,
+            sanitizeLinks: sanitizeLinks, fromAddress: fromAddress,
+            requireWrapperFree: requireWrapperFree)
+
+        // 3. Delete the old draft — best-effort (D5).
+        let deleteScript = buildDeleteDraftByIdScript(
+            draftId: old.id, accountId: accountId, accountName: accountName)
+        do {
+            _ = try runScript(deleteScript)
+            return ["deleted_old": true, "old_draft_id": old.id, "new_draft": createResult]
+        } catch {
+            return [
+                "deleted_old": false,
+                "old_draft_id": old.id,
+                "new_draft": createResult,
+                "note": "replacement draft was created, but deleting the old draft failed "
+                    + "(\(error.localizedDescription)) — both drafts now exist in the drafts "
+                    + "mailbox; remove the old one manually or via delete_email with id \(old.id).",
+            ]
         }
     }
 

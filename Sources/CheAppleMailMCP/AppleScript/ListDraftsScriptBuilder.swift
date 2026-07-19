@@ -51,19 +51,134 @@ func buildListDraftsScript(accountId: String?, accountName: String) -> String {
     // container, POP-style local storage, a disabled account) would otherwise
     // raise mid-loop and abort the whole script — breaking list_drafts for
     // unrelated, previously-working accounts depending on iteration order.
-    // The guard skips such children; a genuine no-match still reaches 9174.
+    // The guard wraps ONLY the condition eval (matched-flag form, #276): a
+    // real error while fetching the matched child's rows must propagate, not
+    // be swallowed into a misleading 9174.
+    //
+    // Row payload (#276, draft-update spec): ids and subjects are fetched as
+    // two parallel lists in this same invocation, RS-joined (ASCII 30) within
+    // each group — comma-safe, a subject containing ", " cannot shift the
+    // zip — and GS-separated (ASCII 29) between groups. Parsed by
+    // `parseDraftRows`.
     return """
     tell application "Mail"
         repeat with mb in (every mailbox of drafts mailbox)
+            set matched to false
             try
-                if \(condition) then
-                    return subject of messages of mb
-                end if
+                if \(condition) then set matched to true
             end try
+            if matched then
+                set AppleScript's text item delimiters to (ASCII character 30)
+                set idStr to (id of messages of mb) as string
+                set subjStr to (subject of messages of mb) as string
+                set AppleScript's text item delimiters to ""
+                return idStr & (ASCII character 29) & subjStr
+            end if
         end repeat
         error "No drafts mailbox matched the requested account" number \(listDraftsNoMatchErrorNumber)
     end tell
     """
+}
+
+/// #276 — unified variant for `update_draft`'s account-omitted path: scan
+/// EVERY drafts child (all accounts) and aggregate the id/subject groups.
+/// No per-account condition and no 9174 (there is no "requested account" to
+/// miss); a child that errors (unreadable container) is skipped — worst case
+/// the caller sees a no-match refusal, never a wrong deletion.
+func buildListAllDraftsScript() -> String {
+    return """
+    tell application "Mail"
+        set idStr to ""
+        set subjStr to ""
+        repeat with mb in (every mailbox of drafts mailbox)
+            try
+                set AppleScript's text item delimiters to (ASCII character 30)
+                set mbIds to (id of messages of mb) as string
+                set mbSubjs to (subject of messages of mb) as string
+                set AppleScript's text item delimiters to ""
+                if mbIds is not "" then
+                    if idStr is "" then
+                        set idStr to mbIds
+                        set subjStr to mbSubjs
+                    else
+                        set idStr to idStr & (ASCII character 30) & mbIds
+                        set subjStr to subjStr & (ASCII character 30) & mbSubjs
+                    end if
+                end if
+            end try
+        end repeat
+        return idStr & (ASCII character 29) & subjStr
+    end tell
+    """
+}
+
+/// Custom AppleScript error number raised when `update_draft`'s delete step
+/// finds no draft with the located id (raced away between locate and delete).
+let updateDraftDeleteNotFoundErrorNumber = 9276
+
+/// #276 — delete a draft BY ID inside the unified-drafts children. Deleting
+/// here (instead of `delete_email`) avoids resolving the per-account drafts
+/// mailbox NAME entirely — the same #174 mechanism that located the draft
+/// also scopes the deletion. The id predicate is numeric-only (#221-safe:
+/// never a content predicate); AppleScript `delete` moves to Trash
+/// (recoverable), not a permanent expunge.
+func buildDeleteDraftByIdScript(draftId: String, accountId: String?, accountName: String?) -> String {
+    let conditionLine: String
+    if let aid = accountId, !aid.isEmpty {
+        conditionLine = """
+                try
+                    if (id of account of mb) is "\(appleScriptEscape(aid))" then set matched to true
+                end try
+        """
+    } else if let an = accountName, !an.isEmpty {
+        conditionLine = """
+                try
+                    if (name of account of mb) is "\(appleScriptEscape(an))" then set matched to true
+                end try
+        """
+    } else {
+        conditionLine = "        set matched to true"
+    }
+    return """
+    tell application "Mail"
+        repeat with mb in (every mailbox of drafts mailbox)
+            set matched to false
+    \(conditionLine)
+            if matched then
+                try
+                    delete (first message of mb whose id is \(draftId))
+                    return "Draft deleted"
+                end try
+            end if
+        end repeat
+        error "No draft with id \(draftId) found in the drafts mailboxes" number \(updateDraftDeleteNotFoundErrorNumber)
+    end tell
+    """
+}
+
+/// #276 — parse the GS/RS-delimited id+subject payload emitted by
+/// `buildListDraftsScript` / `buildListAllDraftsScript` into paired rows.
+/// Pure + actor-free (unit-testable). A length mismatch between the two
+/// groups throws — never silently truncate a zip (a mis-paired row could
+/// direct `update_draft` at the wrong draft).
+func parseDraftRows(_ raw: String) throws -> [(id: String, subject: String)] {
+    let GS = "\u{001D}", RS = "\u{001E}"
+    let groups = raw.components(separatedBy: GS)
+    guard groups.count == 2 else {
+        throw MailError.operationFailed(
+            "list_drafts: unexpected script result shape (expected id/subject groups)")
+    }
+    // Zero drafts: both groups empty. Do NOT shortcut per-group emptiness —
+    // a single draft with an EMPTY subject yields ids=["N"], subjects=[""]
+    // and must still pair (see tests).
+    if groups[0].isEmpty && groups[1].isEmpty { return [] }
+    let ids = groups[0].components(separatedBy: RS)
+    let subjects = groups[1].components(separatedBy: RS)
+    guard ids.count == subjects.count else {
+        throw MailError.operationFailed(
+            "list_drafts: id/subject list length mismatch (\(ids.count) vs \(subjects.count)) — refusing to zip")
+    }
+    return zip(ids, subjects).map { (id: $0.0, subject: $0.1) }
 }
 
 /// Actionable hint for the `list_drafts` no-match case (AppleScript error

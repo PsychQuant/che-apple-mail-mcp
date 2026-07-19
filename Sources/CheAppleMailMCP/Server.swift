@@ -312,7 +312,7 @@ class CheAppleMailMCPServer {
             // Draft Tools
             Tool(
                 name: "list_drafts",
-                description: "List all draft emails for one account. Resolves the account's real drafts mailbox via Mail's unified drafts mailbox (works with localized/provider-specific names like Gmail's [Gmail]/草稿 — no hardcoded 'Drafts' lookup, see #174).",
+                description: "List all draft emails for one account. Each entry carries `subject` and the draft's numeric `id` (#276, additive) — the id feeds update_draft.draft_id and delete_email.id directly. Resolves the account's real drafts mailbox via Mail's unified drafts mailbox (works with localized/provider-specific names like Gmail's [Gmail]/草稿 — no hardcoded 'Drafts' lookup, see #174).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -338,6 +338,30 @@ class CheAppleMailMCPServer {
                         "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true AND `format` is `markdown`, link URLs whose scheme is not in {http, https, mailto, tel} are rendered as plain text (no `<a>` wrapper) — defends against `[click](javascript:...)` and `data:`/`file:`/`vbscript:` XSS injection. Default false (preserves backward compat). No effect when `format` is `plain` (no link parsing happens) or `html` (caller-trusted raw HTML — you must sanitize your own anchors). Non-absolute URLs (e.g. `[home](/relative/path)` or empty `[text]()`) also have their anchor dropped under sanitize_links=true since they lack an allowlisted scheme.")]),
                         "require_wrapper_free": .object(["type": .string("boolean"), "description": .string("Optional, default false. When true: if the wrapper-free mailto path is unavailable (custom from_address / non-plain format / empty subject / no Accessibility / env hatch), FAIL with the named reason and alternatives — no wrapped-body draft is created and nothing is sent; a clean-path GUI failure also propagates without legacy fallback (#239). When false/omitted: graceful fallback with disclosure, as before.")]),
                         "from_address": .object(["type": .string("string"), "description": .string("Optional — email address of the account to save the draft UNDER (sender selection). Must match one of your Mail.app accounts' addresses. Omit to use Mail.app's default account. Use list_accounts to discover available email addresses. ⚠ Setting this forces the legacy path until #219 lands: the body gets wrapped in <blockquote type=\"cite\"> and renders as quoted text on some mobile clients. For a clean body from a non-default account, omit from_address and switch the sender manually in Mail's compose window.")])
+                    ]),
+                    "required": .array([.string("to"), .string("subject"), .string("body")])
+                ])
+            ),
+            Tool(
+                name: "update_draft",
+                description: "Replace an existing draft (upsert): locate it by draft_id (from list_drafts) or an EXACT subject_match, create the replacement via the same mechanism and eligibility rules as create_draft, then delete the old draft. Order is deliberately create-THEN-delete — a mid-way failure leaves both drafts visible (recoverable) instead of neither; this is the reverse of the naive delete-first flow, chosen for data safety. Ambiguity always refuses: 0 matches (update requires an existing draft — use create_draft for a new one) or >1 matches (candidates {id, subject} are listed; retry with draft_id). Notes: Apple Mail drafts cannot be edited in place, so the replacement is a NEW draft with a NEW id (never reuse the old id); the replacement is created under create_draft's account semantics (default account unless from_address) which may differ from the old draft's account; the body inherits create_draft's wrapper-free eligibility and disclosure (#175/#237/#239) — display-name recipients or from_address route it via the legacy path (blockquote-wrapped body, disclosed in new_draft). Deletion moves the old draft to Trash (recoverable). If deletion fails after a successful create, the result reports deleted_old:false with both drafts present — nothing is silently lost.",
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "draft_id": .object(["type": .string("string"), "description": .string("Numeric id of the draft to replace (from list_drafts). Exactly one of draft_id / subject_match is required.")]),
+                        "subject_match": .object(["type": .string("string"), "description": .string("EXACT subject equality match (never substring/fuzzy — misfires would delete the wrong draft). Refuses when 0 or >1 drafts match. Exactly one of draft_id / subject_match is required.")]),
+                        "account_name": .object(["type": .string("string"), "description": .string("Optional: scope the draft search to one account (Mail's AppleScript account name, e.g. 'Google'). Omit to search all accounts' drafts (same-subject drafts across accounts then refuse as ambiguous). Prefer account_id alongside for reliable matching.")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional: Mail.app account UUID (from list_accounts). When non-empty, takes precedence over account_name for scoping.")]),
+                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Replacement draft recipients — same semantics as create_draft.to (RFC 5322 mailbox form allowed; display-name recipients route via the legacy path).")]),
+                        "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Replacement cc (optional) — same semantics as create_draft.cc.")]),
+                        "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Replacement bcc (optional).")]),
+                        "subject": .object(["type": .string("string"), "description": .string("Replacement draft subject.")]),
+                        "body": .object(["type": .string("string"), "description": .string("Replacement body content (interpreted according to 'format').")]),
+                        "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach to the replacement (optional).")]),
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format — same semantics and clean-path eligibility as create_draft.format.")]),
+                        "sanitize_links": .object(["type": .string("boolean"), "description": .string("Same semantics as create_draft.sanitize_links.")]),
+                        "require_wrapper_free": .object(["type": .string("boolean"), "description": .string("Same semantics as create_draft.require_wrapper_free — when true, an ineligible replacement FAILS with the named reason BEFORE anything is created or deleted.")]),
+                        "from_address": .object(["type": .string("string"), "description": .string("Optional — sender account for the REPLACEMENT draft. Same semantics as create_draft.from_address: ⚠ setting this forces the legacy path until #219 lands (body wrapped in <blockquote type=\"cite\">); omit for a clean body from the default account.")])
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
@@ -1195,6 +1219,44 @@ class CheAppleMailMCPServer {
             // #131: sender account selection (see compose_email).
             let fromAddress = arguments["from_address"]?.stringValue
             return try await mailController.createDraft(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, sanitizeLinks: sanitizeLinks, fromAddress: fromAddress, requireWrapperFree: try requireBool(arguments, key: "require_wrapper_free", default: false))
+
+        case "update_draft":
+            // #276 — upsert: locate existing draft → create replacement →
+            // delete old (create-then-delete; see MailController.updateDraft).
+            guard let toArray = arguments["to"]?.arrayValue,
+                  let subject = arguments["subject"]?.stringValue,
+                  let body = arguments["body"]?.stringValue else {
+                throw MailError.invalidParameter("to, subject, and body are required")
+            }
+            let draftId = arguments["draft_id"]?.stringValue
+            let subjectMatch = arguments["subject_match"]?.stringValue
+            let hasDraftId = (draftId?.isEmpty == false)
+            let hasSubjectMatch = (subjectMatch?.isEmpty == false)
+            guard hasDraftId != hasSubjectMatch else {
+                throw MailError.invalidParameter(
+                    "update_draft requires exactly one of draft_id or subject_match (got "
+                    + (hasDraftId ? "both" : "neither") + ")")
+            }
+            if hasDraftId, let did = draftId, !(did.allSatisfy { $0.isNumber }) {
+                throw MailError.invalidParameter(
+                    "draft_id must be a numeric message id (from list_drafts); got '\(did)'")
+            }
+            let to = toArray.compactMap { $0.stringValue }
+            let cc = try optionalStringArray(arguments, key: "cc")
+            let bcc = try optionalStringArray(arguments, key: "bcc")
+            let attachments = try optionalStringArray(arguments, key: "attachments")
+            let format = try parseBodyFormatArgument(arguments["format"])
+            let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
+            let fromAddress = arguments["from_address"]?.stringValue
+            let accountId = decodeAccountId(arguments, tool: invokedTool)
+            let result = try await mailController.updateDraft(
+                draftId: draftId, subjectMatch: subjectMatch,
+                accountName: arguments["account_name"]?.stringValue, accountId: accountId,
+                to: to, subject: subject, body: body, cc: cc, bcc: bcc,
+                attachments: attachments, format: format, sanitizeLinks: sanitizeLinks,
+                fromAddress: fromAddress,
+                requireWrapperFree: try requireBool(arguments, key: "require_wrapper_free", default: false))
+            return formatJSON(result)
 
         // Attachment Tools
         case "list_attachments":
