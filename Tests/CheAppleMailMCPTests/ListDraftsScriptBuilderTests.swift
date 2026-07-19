@@ -47,6 +47,178 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
                       "Empty accountId must behave like nil (name mode)")
     }
 
+    // MARK: - #276 id+subject rows (draft-update spec: list_drafts returns draft ids)
+
+    func testScript_returnsIdAndSubjectGroups() {
+        // The script must emit BOTH id and subject lists from the same
+        // invocation, RS-joined within each group (comma-safe — a subject
+        // containing ", " must not shift the zip) and GS between groups.
+        let script = buildListDraftsScript(accountId: "UUID-A", accountName: "Google")
+        // #276 verify R2 (Codex blocking): ids and subjects must be read from
+        // the SAME message reference per row — two dynamic collection queries
+        // (`id of messages of mb` + `subject of messages of mb`) can mis-pair
+        // when the mailbox mutates between them with UNCHANGED length (the
+        // only shape that escapes the parser's mismatch guard) — and a
+        // mis-paired row lets subject_match delete the wrong id.
+        XCTAssertTrue(script.contains("repeat with dm in (every message of mb)"),
+                      "rows must come from one reference snapshot, read per message; got:\n\(script)")
+        XCTAssertTrue(script.contains("(id of dm) as string"),
+                      "id must be read from the same reference as its subject; got:\n\(script)")
+        XCTAssertTrue(script.contains("(subject of dm) as string"),
+                      "subject must be read from the same reference as its id; got:\n\(script)")
+        XCTAssertFalse(script.contains("id of messages of mb"),
+                       "bulk parallel-list reads are the mis-pair vector — must be gone; got:\n\(script)")
+        XCTAssertTrue(script.contains("ASCII character 30"),
+                      "rows must be RS-joined (comma-safe); got:\n\(script)")
+        XCTAssertTrue(script.contains("ASCII character 29"),
+                      "id group and subject group must be GS-separated; got:\n\(script)")
+        XCTAssertTrue(script.contains("number \(listDraftsNoMatchErrorNumber)"),
+                      "the 9174 no-match contract must be preserved")
+    }
+
+    func testAllAccountsVariant_noConditionNoNoMatchError() {
+        // update_draft's account-omitted path scans every drafts child.
+        let script = buildListAllDraftsScript()
+        XCTAssertTrue(script.contains("every mailbox of drafts mailbox"))
+        XCTAssertFalse(script.contains("id of account of mb"))
+        XCTAssertFalse(script.contains("name of account of mb"))
+        XCTAssertFalse(script.contains("number \(listDraftsNoMatchErrorNumber)"),
+                       "unified scan has no per-account no-match case")
+        XCTAssertTrue(script.contains("repeat with dm in (every message of mb)"),
+                      "all-accounts variant must use the same per-reference paired read")
+        XCTAssertFalse(script.contains("id of messages of mb"))
+        XCTAssertTrue(script.contains("ASCII character 29"))
+    }
+
+    func testAllAccountsVariant_failClosed_noTrySwallowing() {
+        // #276 verify R1 (Codex blocking 1): in all-accounts mode EVERY child
+        // participates in the uniqueness verdict — a swallowed row-build
+        // error could hide a real cross-account ambiguity and let
+        // update_draft delete the wrong "unique" match. Errors must
+        // propagate (fail closed): the aggregate script contains NO try.
+        let script = buildListAllDraftsScript()
+        XCTAssertFalse(script.contains("try"),
+                       "all-accounts scan must fail closed — no try swallowing; got:\n\(script)")
+    }
+
+    func testDeleteDraftScript_byIdInDraftsChildren() {
+        // Deletion stays inside the unified-drafts children (no per-account
+        // mailbox-name resolution needed); the predicate is id AND exact
+        // subject (#276 verify R3, DA-1: an unscoped bare-id sweep bets on
+        // GLOBAL id uniqueness — with the subject conjunct, a cross-account
+        // id collision with a different subject is protected, and a
+        // same-id-same-subject collision would already have refused as
+        // ambiguous at locate time). #221-safe: id + subject equality, never
+        // content.
+        let script = buildDeleteDraftByIdScript(
+            draftId: "12345", subject: "Re: a, b", accountId: "UUID-A", accountName: "Google")
+        XCTAssertTrue(script.contains("every mailbox of drafts mailbox"))
+        // #276 verify R5 (Codex): AppleScript string equality is
+        // case-INsensitive by default — the subject conjunct must be
+        // compared under `considering case` for Swift-== parity, so the id
+        // predicate selects candidates and the subject check runs on each.
+        XCTAssertTrue(script.contains("whose id is 12345"),
+                      "candidates must be selected by the numeric id; got:\n\(script)")
+        XCTAssertTrue(script.contains("considering case"),
+                      "subject equality must be case-sensitive; got:\n\(script)")
+        XCTAssertTrue(script.contains("is equal to \"Re: a, b\""),
+                      "subject must be compared exactly; got:\n\(script)")
+        XCTAssertTrue(script.contains("(id of account of mb) is \"UUID-A\""))
+        XCTAssertFalse(script.contains("whose content"), "#221: never a content predicate")
+        XCTAssertFalse(script.contains("and subject is"),
+                       "subject must NOT ride in the case-insensitive whose-filter")
+        // Unscoped variant: no account condition — the case-sensitive
+        // subject check carries the cross-account protection.
+        let all = buildDeleteDraftByIdScript(
+            draftId: "12345", subject: "S", accountId: nil, accountName: nil)
+        XCTAssertFalse(all.contains("account of mb"))
+        XCTAssertTrue(all.contains("considering case"))
+    }
+
+    func testDeleteDraftScript_honestNotFoundClassification() {
+        // #276 verify R4 (Codex R3 blocking 1): 9276 must PROVE "confirmed
+        // absent" — a swallowed lookup/query error must never masquerade as
+        // not-found. The lookup is a count over a whose-filter (returns 0
+        // without throwing on no-match; REAL query errors propagate — no try
+        // around it), and 9276 fires only when the whole scope scanned clean
+        // (scanClean); a scope-condition eval error downgrades to 9277
+        // (scan incomplete — old-draft state unknown).
+        let script = buildDeleteDraftByIdScript(draftId: "12345", subject: "S", accountId: "UUID-A", accountName: nil)
+        XCTAssertTrue(script.contains("set candidates to (every message of mb whose id is 12345)"),
+                      "lookup must be a non-throwing every-message query by id; got:\n\(script)")
+        // (`first message ...` remains ONLY as the delete target after the
+        // count guard proved existence — it cannot throw not-found there,
+        // and real delete errors propagate since nothing wraps it in a try.)
+        XCTAssertTrue(script.contains("set scanClean to false"),
+                      "a condition-eval error must mark the scan incomplete; got:\n\(script)")
+        XCTAssertTrue(script.contains("if scanClean and not sawIdCandidate then"),
+                      "9276 must be gated on a clean full scan with zero id candidates; got:\n\(script)")
+        XCTAssertTrue(script.contains("number \(updateDraftDeleteNotFoundErrorNumber)"),
+                      "clean-scan not-found must raise 9276")
+        XCTAssertTrue(script.contains("number \(updateDraftDeleteScanIncompleteErrorNumber)"),
+                      "incomplete scan must raise 9277, never 9276; got:\n\(script)")
+        // #276 verify R6 (Codex): an id candidate whose subject no longer
+        // matches must NOT be classified as confirmed-absent — the script
+        // tracks sawIdCandidate and routes that case to the ambiguity error.
+        XCTAssertTrue(script.contains("set sawIdCandidate to false"),
+                      "must track whether any id candidate was seen; got:\n\(script)")
+        XCTAssertTrue(script.contains("if scanClean and not sawIdCandidate then"),
+                      "9276 requires clean scan AND zero id candidates; got:\n\(script)")
+        XCTAssertTrue(script.contains("else if sawIdCandidate then"),
+                      "id-candidate-with-mismatched-subject must route to ambiguity, not 9276")
+        // Unscoped variant has no condition to fail — no 9277 branch needed,
+        // but real message-query errors still propagate (no try at all).
+        let all = buildDeleteDraftByIdScript(draftId: "12345", subject: "S", accountId: nil, accountName: nil)
+        XCTAssertFalse(all.contains("try"),
+                       "unscoped delete scan must not swallow anything; got:\n\(all)")
+    }
+
+    // MARK: - #276 isASCIIDigits (verify R4 — Codex R3 blocking 3)
+
+    func testIsASCIIDigits_strictByteLevel() {
+        XCTAssertTrue(isASCIIDigits("0"))
+        XCTAssertTrue(isASCIIDigits("007"))
+        XCTAssertTrue(isASCIIDigits("1234567890"))
+        XCTAssertFalse(isASCIIDigits(""))
+        XCTAssertFalse(isASCIIDigits("12a"))
+        XCTAssertFalse(isASCIIDigits("١٢٣"), "Arabic-Indic digits are not ASCII")
+        XCTAssertFalse(isASCIIDigits("1\u{0301}"),
+                       "a combining-mark digit grapheme can slip a Character range check — byte-level must reject")
+        XCTAssertFalse(isASCIIDigits("²"))
+        XCTAssertFalse(isASCIIDigits(" 1"))
+        XCTAssertFalse(isASCIIDigits("-1"))
+    }
+
+    // MARK: - #276 parseDraftRows
+
+    func testParseDraftRows_zipAndEdges() throws {
+        let RS = "\u{001E}", GS = "\u{001D}"
+        // Normal two rows — including a comma-containing subject.
+        let rows = try parseDraftRows("101\(RS)102\(GS)Hello\(RS)Re: a, b, c")
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows[0].id, "101")
+        XCTAssertEqual(rows[1].subject, "Re: a, b, c")
+        // Zero drafts: both groups empty.
+        XCTAssertEqual(try parseDraftRows("\(GS)").count, 0)
+        // One draft with an EMPTY subject still pairs (regression: a naive
+        // per-group emptiness shortcut would mis-count this as 1 vs 0).
+        let one = try parseDraftRows("101\(GS)")
+        XCTAssertEqual(one.count, 1)
+        XCTAssertEqual(one[0].subject, "")
+        // Length mismatch → throw (never silently truncate).
+        XCTAssertThrowsError(try parseDraftRows("101\(RS)102\(GS)onlyone"))
+        // Unexpected shape (no GS) → throw.
+        XCTAssertThrowsError(try parseDraftRows("garbage-without-separator"))
+        // #276 verify R1 (Codex blocking 3): a row whose id is empty or
+        // non-ASCII-numeric violates the numeric-id contract and could flow
+        // into the delete script — throw, never emit.
+        XCTAssertThrowsError(try parseDraftRows("\(GS)Subject"),
+                             "empty id with non-empty subject must throw, not yield id=\"\"")
+        XCTAssertThrowsError(try parseDraftRows("12a\(GS)Subject"))
+        XCTAssertThrowsError(try parseDraftRows("١٢٣\(GS)Subject"),
+                             "non-ASCII Unicode digits are not a valid Mail rowid")
+    }
+
     // MARK: - No hardcoded special-mailbox name (#174 core regression lock)
 
     func testNoHardcodedDraftsLiteral() {
@@ -62,9 +234,14 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
     // MARK: - Returns subjects + no-match error contract
 
     func testReturnsSubjectsOfMatchedMailbox() {
+        // #276: the matched child now returns the GS-joined id+subject
+        // payload (see testScript_returnsIdAndSubjectGroups) — subjects are
+        // still fetched, just alongside ids instead of as the bare return.
         let script = buildListDraftsScript(accountId: "UUID-A", accountName: "Google")
-        XCTAssertTrue(script.contains("return subject of messages of mb"),
-                      "Matched child must return its messages' subjects; got:\n\(script)")
+        XCTAssertTrue(script.contains("(subject of dm) as string"),
+                      "Matched child must fetch its messages' subjects (per-reference, R2); got:\n\(script)")
+        XCTAssertTrue(script.contains("return idStr & (ASCII character 29) & subjStr"),
+                      "Matched child must return the delimited id+subject payload; got:\n\(script)")
     }
 
     func testNoMatchRaisesRecognizableErrorNumber() {

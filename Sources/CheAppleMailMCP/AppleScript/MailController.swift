@@ -1387,9 +1387,13 @@ actor MailController {
     func listDrafts(accountName: String, accountId: String? = nil) throws -> [[String: Any]] {
         let script = buildListDraftsScript(accountId: accountId, accountName: accountName)
         do {
-            let subjects = try runScriptAsList(script)
-            return subjects.map { subject in
-                ["subject": subject]
+            // #276: the script now emits GS/RS-delimited id+subject groups
+            // from the same invocation; `parseDraftRows` zips them (throwing
+            // on any mismatch instead of silently truncating). The `id` field
+            // is additive — existing subject-only consumers are unchanged.
+            let rows = try parseDraftRows(try runScript(script))
+            return rows.map { row in
+                ["subject": row.subject, "id": row.id]
             }
         } catch {
             // #185: route every list_drafts script error through the pure
@@ -1400,6 +1404,203 @@ actor MailController {
             // propagation) is unit-testable without an actor runner seam. Behaviorally
             // identical to the prior selective `catch where code == 9174` (PR #181 #18).
             throw translateListDraftsScriptError(error, accountId: accountId, accountName: accountName)
+        }
+    }
+
+    /// #276 — `update_draft`: replace an existing draft by locate → create →
+    /// receipt → delete (create-then-delete, design D1: the failure direction
+    /// is always toward KEEPING drafts — worst case both may exist, visible
+    /// and recoverable — never "neither"). Apple Mail drafts cannot be edited
+    /// in place, so upsert is the only mechanization.
+    ///
+    /// Locate is read-only and runs FIRST: a zero-match refuses before
+    /// anything is created (spec: update requires an existing draft); an
+    /// ambiguous subject_match refuses listing the candidates. The delete
+    /// step reuses the same unified-drafts child scope that located the
+    /// draft (no per-account mailbox-name resolution); a delete failure
+    /// after a confirmed create reports `deleted_old: false` with a note
+    /// graded to what is known — confirmed absent / state unknown / both MAY
+    /// exist — instead of throwing (design D5: the work is half-done, a
+    /// throw would misread as total failure).
+    func updateDraft(
+        draftId: String?, subjectMatch: String?, accountName: String?, accountId: String?,
+        to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil,
+        attachments: [String]? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false,
+        fromAddress: String? = nil, requireWrapperFree: Bool = false
+    ) throws -> [String: Any] {
+        // Verify R2 (Codex): presence = key PROVIDED — an explicitly-empty
+        // value is validated as a provided-but-invalid value, never silently
+        // downgraded to "absent" (that let draft_id + subject_match:"" slip
+        // past the mutual-exclusion gate). Validate provided values FIRST,
+        // then XOR on presence.
+        if let sm = subjectMatch, sm.isEmpty {
+            throw MailError.invalidParameter(
+                "subject_match must be non-empty (exact subject equality); "
+                + "to target an empty-subject draft, use draft_id from list_drafts")
+        }
+        if let did = draftId, !isASCIIDigits(did) {
+            // Strict byte-level ASCII digits (verify R1/R4, Codex): both
+            // Character.isNumber and a Character range accept graphemes
+            // (١٢٣ / "1"+combining mark) that are NOT a valid AppleScript
+            // numeric literal.
+            throw MailError.invalidParameter(
+                "draft_id must be a non-empty ASCII-numeric message id (from list_drafts); got '\(did)'")
+        }
+        let hasId = (draftId != nil)
+        let hasSubject = (subjectMatch != nil)
+        guard hasId != hasSubject else {
+            throw MailError.invalidParameter(
+                "update_draft requires exactly one of draft_id or subject_match (got "
+                + (hasId ? "both" : "neither") + ")")
+        }
+
+        // 1. Locate (read-only) — account-scoped when a selector was given,
+        //    unified all-accounts scan otherwise.
+        let listScript: String
+        if (accountName?.isEmpty == false) || (accountId?.isEmpty == false) {
+            listScript = buildListDraftsScript(accountId: accountId, accountName: accountName ?? "")
+        } else {
+            listScript = buildListAllDraftsScript()
+        }
+        let scoped = (accountName?.isEmpty == false) || (accountId?.isEmpty == false)
+        let rows: [(id: String, subject: String)]
+        do {
+            rows = try parseDraftRows(try runScript(listScript))
+        } catch {
+            if !scoped {
+                // Verify R3 (DA-3): the all-accounts scan is deliberately
+                // fail-closed — give the caller an actionable next step
+                // instead of a bare script error.
+                throw MailError.operationFailed(
+                    "update_draft: the all-accounts drafts scan failed and was aborted "
+                    + "(fail-closed — a partial scan could mis-judge ambiguity). A local "
+                    + "or unreadable drafts container can cause this; retry with "
+                    + "account_id / account_name scoping. Underlying error: "
+                    + error.localizedDescription)
+            }
+            throw translateListDraftsScriptError(
+                error, accountId: accountId, accountName: accountName ?? "")
+        }
+        let matches = hasId
+            ? rows.filter { $0.id == draftId }
+            : rows.filter { $0.subject == subjectMatch }
+        guard !matches.isEmpty else {
+            throw MailError.operationFailed(
+                "update_draft: no existing draft matched "
+                + (hasId ? "draft_id \(draftId ?? "")" : "subject_match \"\(subjectMatch ?? "")\"")
+                + ". update requires an existing draft — use list_drafts to discover ids, "
+                + "or create_draft for a brand-new draft.")
+        }
+        guard matches.count == 1 else {
+            let candidates = matches
+                .map { "{id: \($0.id), subject: \"\($0.subject)\"}" }
+                .joined(separator: ", ")
+            throw MailError.operationFailed(
+                "update_draft: the identify selector matched \(matches.count) drafts — refusing to guess. "
+                + "Retry with draft_id. Candidates: [\(candidates)]")
+        }
+        let old = matches[0]
+
+        // 2. Create the replacement FIRST (inherits create_draft's full
+        //    eligibility + disclosure — #175/#237/#239).
+        //    Receipt baseline (verify R5, Codex): the replacement lands under
+        //    create_draft's account semantics (default account / from_address)
+        //    which may DIFFER from the locate scope — so the pre/post receipt
+        //    snapshots use the ALL-accounts scan, covering any destination. A
+        //    baseline failure aborts before anything is created (fail closed).
+        let receiptScript = buildListAllDraftsScript()
+        let preReceiptRows: [(id: String, subject: String)]
+        do {
+            preReceiptRows = try parseDraftRows(try runScript(receiptScript))
+        } catch {
+            throw MailError.operationFailed(
+                "update_draft: could not take the pre-create drafts snapshot needed for the "
+                + "post-create receipt (all-accounts scan failed) — aborting BEFORE creating "
+                + "anything. Underlying error: " + error.localizedDescription)
+        }
+        let preIds = Set(preReceiptRows.map { $0.id })
+        let createResult = try createDraft(
+            to: to, subject: subject, body: body, cc: cc, bcc: bcc,
+            attachments: attachments, accountName: nil, format: format,
+            sanitizeLinks: sanitizeLinks, fromAddress: fromAddress,
+            requireWrapperFree: requireWrapperFree)
+
+        // 2.5 RECEIPT (verify R3, DA-2): the GUI mailto create path can
+        //     report success after firing keystrokes without the draft
+        //     actually landing (phantom success). Deleting on that word
+        //     alone could destroy the only copy. Re-list and require a NEW
+        //     id (absent from the pre-create set) before touching the old
+        //     draft; the save can land asynchronously, so poll briefly.
+        // Causality (verify R5, Codex): "any new id" only proves the mailbox
+        // changed — an unrelated concurrent draft must not stand in as the
+        // receipt. The new row must also carry the replacement's EXACT
+        // subject (Swift ==).
+        var replacementConfirmed = false
+        for attempt in 0..<3 {
+            if attempt > 0 { Thread.sleep(forTimeInterval: 0.4) }
+            if let postRows = try? parseDraftRows(try runScript(receiptScript)),
+               postRows.contains(where: { !preIds.contains($0.id) && $0.subject == subject }) {
+                replacementConfirmed = true
+                break
+            }
+        }
+        guard replacementConfirmed else {
+            return [
+                "deleted_old": false,
+                "old_draft_id": old.id,
+                "new_draft": createResult,
+                "note": "the replacement draft was reported created but could not be "
+                    + "confirmed in the drafts mailbox (not confirmed after re-listing) — "
+                    + "the old draft was KEPT. Check Mail's drafts, then delete the old "
+                    + "draft manually or retry once the replacement is visible.",
+            ]
+        }
+
+        // 3. Delete the old draft — best-effort (D5). Predicate = id AND
+        //    exact subject (DA-1 cross-account protection).
+        let deleteScript = buildDeleteDraftByIdScript(
+            draftId: old.id, subject: old.subject, accountId: accountId, accountName: accountName)
+        do {
+            _ = try runScript(deleteScript)
+            return ["deleted_old": true, "old_draft_id": old.id, "new_draft": createResult]
+        } catch {
+            // 9276 = the whole delete scope scanned CLEAN and the old draft
+            // was not there — the only case that may claim confirmed absence
+            // (verify R4: a swallowed query error must never masquerade as
+            // not-found; those now propagate as their own errors or 9277).
+            if case let MailError.scriptFailed(_, code) = error,
+               code == updateDraftDeleteNotFoundErrorNumber {
+                return [
+                    "deleted_old": false,
+                    "old_draft_id": old.id,
+                    "new_draft": createResult,
+                    "note": "the old draft (id \(old.id)) is confirmed absent — a complete "
+                        + "clean scan of the delete scope no longer finds it (already removed, "
+                        + "possibly concurrently); only the replacement draft exists.",
+                ]
+            }
+            // 9277 = the delete scan could not be completed — the old
+            // draft's state is UNKNOWN; do not claim it is gone.
+            if case let MailError.scriptFailed(_, code) = error,
+               code == updateDraftDeleteScanIncompleteErrorNumber {
+                return [
+                    "deleted_old": false,
+                    "old_draft_id": old.id,
+                    "new_draft": createResult,
+                    "note": "the delete scan could not be completed, so the old draft's "
+                        + "state is unknown (it could not be verified as deleted OR present) — "
+                        + "check the drafts mailbox; the replacement draft was created.",
+                ]
+            }
+            return [
+                "deleted_old": false,
+                "old_draft_id": old.id,
+                "new_draft": createResult,
+                "note": "replacement draft was created, but the old draft could not be "
+                    + "verified as deleted (\(error.localizedDescription)) — both drafts MAY "
+                    + "now exist; check the drafts mailbox and remove the old one manually or "
+                    + "via delete_email with id \(old.id) if it is still there.",
+            ]
         }
     }
 

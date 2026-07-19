@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**最完整的 Apple Mail MCP 伺服器** - 51 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
+**最完整的 Apple Mail MCP 伺服器** - 52 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +15,7 @@
 
 | 功能 | 其他 MCP | che-apple-mail-mcp |
 |------|----------|-------------------|
-| 工具總數 | ~20 | **51** |
+| 工具總數 | ~20 | **52** |
 | 開發語言 | Python | **Swift (原生)** |
 | 搜尋速度 | 秒級 (AppleScript) | **毫秒級 (SQLite)** |
 | 搜尋欄位 | 主旨/寄件人 | **主旨/寄件人/收件人/日期** |
@@ -52,7 +52,7 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 
 ---
 
-## 全部 51 個工具
+## 全部 52 個工具
 
 <details>
 <summary><b>帳戶 (2)</b></summary>
@@ -121,12 +121,13 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 </details>
 
 <details>
-<summary><b>草稿 (2)</b></summary>
+<summary><b>草稿 (3)</b></summary>
 
 | 工具 | 說明 |
 |------|------|
-| `list_drafts` | 列出草稿郵件 |
+| `list_drafts` | 列出草稿郵件 — 每筆帶 `subject` + 數字 `id`（[#276](https://github.com/PsychQuant/che-apple-mail-mcp/issues/276)，additive；可直接餵 `update_draft.draft_id` / `delete_email.id`）|
 | `create_draft` | 建立草稿（支援附件） |
+| `update_draft` | 更新既有草稿（upsert，[#276](https://github.com/PsychQuant/che-apple-mail-mcp/issues/276)）：以 `draft_id` 或精確 `subject_match` 定位 → 先建新（繼承 create_draft 資格與揭露）→ 再刪舊。刻意 create-then-delete + post-create receipt（失敗方向恆偏向保留草稿 — 最壞「可能並存」、絕不「兩頭空」）；0 或 >1 命中一律 refuse 列候選。重建後是新 id |
 
 </details>
 

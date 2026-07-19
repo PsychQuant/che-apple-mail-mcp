@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**The most comprehensive Apple Mail MCP server** - 51 tools with SQLite-powered millisecond search across 250K+ emails.
+**The most comprehensive Apple Mail MCP server** - 52 tools with SQLite-powered millisecond search across 250K+ emails.
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +15,7 @@
 
 | Feature | Other MCPs | che-apple-mail-mcp |
 |---------|------------|-------------------|
-| Total Tools | ~20 | **51** |
+| Total Tools | ~20 | **52** |
 | Language | Python | **Swift (Native)** |
 | Search Speed | Seconds (AppleScript) | **Milliseconds (SQLite)** |
 | Search Fields | Subject/Sender | **Subject/Sender/Recipient/Date** |
@@ -84,7 +84,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## All 51 Tools
+## All 52 Tools
 
 <details>
 <summary><b>Accounts (2)</b></summary>
@@ -169,12 +169,13 @@ reply_email(
 </details>
 
 <details>
-<summary><b>Drafts (2)</b></summary>
+<summary><b>Drafts (3)</b></summary>
 
 | Tool | Description |
 |------|-------------|
-| `list_drafts` | List draft emails |
+| `list_drafts` | List draft emails — each entry carries `subject` + numeric `id` ([#276](https://github.com/PsychQuant/che-apple-mail-mcp/issues/276), additive; feeds `update_draft.draft_id` / `delete_email.id`) |
 | `create_draft` | Create a draft (supports attachments; optional `from_address` for multi-account sender selection — see [#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131), ⚠ forces the wrapped legacy path until [#219](https://github.com/PsychQuant/che-apple-mail-mcp/issues/219)). Plain-text bodies use the wrapper-free native path when Accessibility is granted — see [#175](https://github.com/PsychQuant/che-apple-mail-mcp/issues/175) / `check_accessibility`; legacy-path results disclose the reason ([#237](https://github.com/PsychQuant/che-apple-mail-mcp/issues/237)) |
+| `update_draft` | Replace an existing draft (upsert, [#276](https://github.com/PsychQuant/che-apple-mail-mcp/issues/276)): locate by `draft_id` or exact `subject_match` → create replacement (inherits `create_draft` eligibility + disclosure) → delete old. Deliberately create-THEN-delete with a post-create receipt (failure always leans toward keeping drafts — worst case both MAY exist, never neither); 0 or >1 matches always refuse (candidates listed). Replacement gets a NEW id |
 
 </details>
 
