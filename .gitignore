@@ -40,3 +40,6 @@ logs/
 
 # Stray CLI/tool logs (e.g. Codex error.log) — never track
 *.log
+
+# IDD tree-lock (idd-tree-lock.sh #183) — per-machine session state, not tracked
+.claude/.idd/tree-lock
