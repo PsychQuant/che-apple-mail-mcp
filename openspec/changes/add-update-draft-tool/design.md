@@ -18,7 +18,7 @@ Apple Mail 草稿無法原地修改；`update_draft` 把「找舊 → 建新 →
 
 ### D3 — id 取得走 list_drafts 擴充（同一 AppleScript IPC）
 
-替代案「教 caller 用 search_emails scope 草稿匣」被否決：草稿匣 URL scope 有 #174 localized-name 地雷。`ListDraftsScriptBuilder` 的 unified-children 草稿匣識別（#174/#186 sanctioned AppleScript-primary）直接複用：script 一次回 `{ids, subjects}` 平行 list，zip 成 `[{id, subject}]`。`list_drafts` result shape 為 additive 變更（零破壞）。`update_draft` 內部定位同款機制。
+替代案「教 caller 用 search_emails scope 草稿匣」被否決：草稿匣 URL scope 有 #174 localized-name 地雷。`ListDraftsScriptBuilder` 的 unified-children 草稿匣識別（#174/#186 sanctioned AppleScript-primary）直接複用：script 以**單一 reference snapshot 的 per-message 迴圈**讀取每列的 id+subject（verify R2：兩次 bulk 平行查詢可在等長變動下錯位 — 唯一逃過 length guard 的形狀），zip 成 `[{id, subject}]`。`list_drafts` result shape 為 additive 變更（零破壞）。`update_draft` 內部定位同款機制。
 
 ### D4 — 複用既有語意、刪除走定位同款 scope（最小 blast radius）
 

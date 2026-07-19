@@ -1230,18 +1230,25 @@ class CheAppleMailMCPServer {
             }
             let draftId = arguments["draft_id"]?.stringValue
             let subjectMatch = arguments["subject_match"]?.stringValue
-            let hasDraftId = (draftId?.isEmpty == false)
-            let hasSubjectMatch = (subjectMatch?.isEmpty == false)
+            // Verify R2 (Codex): presence = key provided; explicitly-empty
+            // values are provided-but-invalid, never treated as absent.
+            if let sm = subjectMatch, sm.isEmpty {
+                throw MailError.invalidParameter(
+                    "subject_match must be non-empty (exact subject equality); "
+                    + "to target an empty-subject draft, use draft_id from list_drafts")
+            }
+            if let did = draftId, did.isEmpty || !(did.allSatisfy { ("0"..."9").contains($0) }) {
+                // Strict ASCII digits (verify R1, Codex) — Character.isNumber
+                // would accept Unicode digits that are not a Mail rowid.
+                throw MailError.invalidParameter(
+                    "draft_id must be a non-empty ASCII-numeric message id (from list_drafts); got '\(did)'")
+            }
+            let hasDraftId = (draftId != nil)
+            let hasSubjectMatch = (subjectMatch != nil)
             guard hasDraftId != hasSubjectMatch else {
                 throw MailError.invalidParameter(
                     "update_draft requires exactly one of draft_id or subject_match (got "
                     + (hasDraftId ? "both" : "neither") + ")")
-            }
-            if hasDraftId, let did = draftId, !(did.allSatisfy { ("0"..."9").contains($0) }) {
-                // Strict ASCII digits (verify R1, Codex) — Character.isNumber
-                // would accept Unicode digits that are not a Mail rowid.
-                throw MailError.invalidParameter(
-                    "draft_id must be an ASCII-numeric message id (from list_drafts); got '\(did)'")
             }
             let to = toArray.compactMap { $0.stringValue }
             let cc = try optionalStringArray(arguments, key: "cc")

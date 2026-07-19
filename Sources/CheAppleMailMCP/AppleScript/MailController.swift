@@ -1412,27 +1412,30 @@ actor MailController {
         attachments: [String]? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false,
         fromAddress: String? = nil, requireWrapperFree: Bool = false
     ) throws -> [String: Any] {
-        // Verify R1 (Codex): an explicitly-empty subject_match is rejected as
-        // its own error (not conflated with "absent") — empty-subject drafts
-        // are targetable via draft_id.
-        if let sm = subjectMatch, sm.isEmpty, draftId == nil {
+        // Verify R2 (Codex): presence = key PROVIDED — an explicitly-empty
+        // value is validated as a provided-but-invalid value, never silently
+        // downgraded to "absent" (that let draft_id + subject_match:"" slip
+        // past the mutual-exclusion gate). Validate provided values FIRST,
+        // then XOR on presence.
+        if let sm = subjectMatch, sm.isEmpty {
             throw MailError.invalidParameter(
                 "subject_match must be non-empty (exact subject equality); "
                 + "to target an empty-subject draft, use draft_id from list_drafts")
         }
-        let hasId = (draftId?.isEmpty == false)
-        let hasSubject = (subjectMatch?.isEmpty == false)
+        if let did = draftId,
+           did.isEmpty || !(did.allSatisfy { ("0"..."9").contains($0) }) {
+            // Strict ASCII digits (verify R1, Codex): Character.isNumber
+            // accepts Unicode digits (١٢٣ / ²) that are NOT a valid
+            // AppleScript numeric literal — same rule as requireMessageId.
+            throw MailError.invalidParameter(
+                "draft_id must be a non-empty ASCII-numeric message id (from list_drafts); got '\(did)'")
+        }
+        let hasId = (draftId != nil)
+        let hasSubject = (subjectMatch != nil)
         guard hasId != hasSubject else {
             throw MailError.invalidParameter(
                 "update_draft requires exactly one of draft_id or subject_match (got "
                 + (hasId ? "both" : "neither") + ")")
-        }
-        // Strict ASCII digits (verify R1, Codex): Character.isNumber accepts
-        // Unicode digits (١٢٣ / ²) that are NOT a valid AppleScript numeric
-        // literal — same rule as requireMessageId.
-        if hasId, let did = draftId, !(did.allSatisfy { ("0"..."9").contains($0) }) {
-            throw MailError.invalidParameter(
-                "draft_id must be an ASCII-numeric message id (from list_drafts); got '\(did)'")
         }
 
         // 1. Locate (read-only) — account-scoped when a selector was given,
@@ -1465,7 +1468,7 @@ actor MailController {
                 .map { "{id: \($0.id), subject: \"\($0.subject)\"}" }
                 .joined(separator: ", ")
             throw MailError.operationFailed(
-                "update_draft: subject_match matched \(matches.count) drafts — refusing to guess. "
+                "update_draft: the identify selector matched \(matches.count) drafts — refusing to guess. "
                 + "Retry with draft_id. Candidates: [\(candidates)]")
         }
         let old = matches[0]
@@ -1485,6 +1488,20 @@ actor MailController {
             _ = try runScript(deleteScript)
             return ["deleted_old": true, "old_draft_id": old.id, "new_draft": createResult]
         } catch {
+            // 9276 = the old draft was no longer present at delete time
+            // (already removed / raced away) — the goal state (only the new
+            // draft) already holds; an honest note must not claim both exist.
+            if case let MailError.scriptFailed(_, code) = error,
+               code == updateDraftDeleteNotFoundErrorNumber {
+                return [
+                    "deleted_old": false,
+                    "old_draft_id": old.id,
+                    "new_draft": createResult,
+                    "note": "the old draft (id \(old.id)) was no longer present at delete "
+                        + "time (already removed — possibly deleted concurrently); only the "
+                        + "replacement draft exists.",
+                ]
+            }
             return [
                 "deleted_old": false,
                 "old_draft_id": old.id,

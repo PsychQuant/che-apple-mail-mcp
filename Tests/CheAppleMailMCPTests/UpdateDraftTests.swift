@@ -145,6 +145,48 @@ final class UpdateDraftTests: XCTestCase {
                 fromAddress: nil, requireWrapperFree: false))
     }
 
+    func testUpdateDraft_emptySelectorValues_neverTreatedAsAbsent() async throws {
+        // #276 verify R2 (Codex blocking 1): presence = key provided; an
+        // explicitly EMPTY value must be rejected as its own error, never
+        // silently downgraded to "absent" (which let draft_id +
+        // subject_match:"" slip past the mutual-exclusion gate and run the
+        // mutation).
+        addTeardownBlock { await self.teardownSeam() }
+        let order = OrderLog()
+        await installSeam(rows: "101\(GS)A", log: { s in
+            if s.contains("outgoing message") { order.append("create") }
+            if s.contains("whose id is") { order.append("delete") }
+        })
+        // draft_id + empty subject_match → both selectors provided → reject
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.updateDraft(
+                draftId: "101", subjectMatch: "", accountName: nil, accountId: nil,
+                to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
+                attachments: nil, format: .plain, sanitizeLinks: false,
+                fromAddress: nil, requireWrapperFree: false))
+        // empty draft_id + valid subject_match → invalid draft_id, reject
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.updateDraft(
+                draftId: "", subjectMatch: "A", accountName: nil, accountId: nil,
+                to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
+                attachments: nil, format: .plain, sanitizeLinks: false,
+                fromAddress: nil, requireWrapperFree: false))
+        // sole empty subject_match → the DEDICATED empty-subject error
+        do {
+            _ = try await MailController.shared.updateDraft(
+                draftId: nil, subjectMatch: "", accountName: nil, accountId: nil,
+                to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
+                attachments: nil, format: .plain, sanitizeLinks: false,
+                fromAddress: nil, requireWrapperFree: false)
+            XCTFail("sole empty subject_match must throw its dedicated error")
+        } catch {
+            XCTAssertTrue("\(error)".contains("non-empty"),
+                          "must be the dedicated empty-subject_match error; got: \(error)")
+        }
+        XCTAssertTrue(order.entries.isEmpty,
+                      "no rejected selector shape may create or delete anything")
+    }
+
     // MARK: - failure semantics (spec: create fails / delete fails scenarios)
 
     func testUpdateDraft_createFails_oldDraftUntouched() async throws {

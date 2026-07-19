@@ -54,12 +54,22 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
         // invocation, RS-joined within each group (comma-safe — a subject
         // containing ", " must not shift the zip) and GS between groups.
         let script = buildListDraftsScript(accountId: "UUID-A", accountName: "Google")
-        XCTAssertTrue(script.contains("id of messages of mb"),
-                      "script must fetch draft ids; got:\n\(script)")
-        XCTAssertTrue(script.contains("subject of messages of mb"),
-                      "script must still fetch subjects; got:\n\(script)")
+        // #276 verify R2 (Codex blocking): ids and subjects must be read from
+        // the SAME message reference per row — two dynamic collection queries
+        // (`id of messages of mb` + `subject of messages of mb`) can mis-pair
+        // when the mailbox mutates between them with UNCHANGED length (the
+        // only shape that escapes the parser's mismatch guard) — and a
+        // mis-paired row lets subject_match delete the wrong id.
+        XCTAssertTrue(script.contains("repeat with dm in (every message of mb)"),
+                      "rows must come from one reference snapshot, read per message; got:\n\(script)")
+        XCTAssertTrue(script.contains("(id of dm) as string"),
+                      "id must be read from the same reference as its subject; got:\n\(script)")
+        XCTAssertTrue(script.contains("(subject of dm) as string"),
+                      "subject must be read from the same reference as its id; got:\n\(script)")
+        XCTAssertFalse(script.contains("id of messages of mb"),
+                       "bulk parallel-list reads are the mis-pair vector — must be gone; got:\n\(script)")
         XCTAssertTrue(script.contains("ASCII character 30"),
-                      "groups must be RS-joined (comma-safe); got:\n\(script)")
+                      "rows must be RS-joined (comma-safe); got:\n\(script)")
         XCTAssertTrue(script.contains("ASCII character 29"),
                       "id group and subject group must be GS-separated; got:\n\(script)")
         XCTAssertTrue(script.contains("number \(listDraftsNoMatchErrorNumber)"),
@@ -74,7 +84,9 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
         XCTAssertFalse(script.contains("name of account of mb"))
         XCTAssertFalse(script.contains("number \(listDraftsNoMatchErrorNumber)"),
                        "unified scan has no per-account no-match case")
-        XCTAssertTrue(script.contains("id of messages of mb"))
+        XCTAssertTrue(script.contains("repeat with dm in (every message of mb)"),
+                      "all-accounts variant must use the same per-reference paired read")
+        XCTAssertFalse(script.contains("id of messages of mb"))
         XCTAssertTrue(script.contains("ASCII character 29"))
     }
 
@@ -168,8 +180,8 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
         // payload (see testScript_returnsIdAndSubjectGroups) — subjects are
         // still fetched, just alongside ids instead of as the bare return.
         let script = buildListDraftsScript(accountId: "UUID-A", accountName: "Google")
-        XCTAssertTrue(script.contains("subject of messages of mb"),
-                      "Matched child must fetch its messages' subjects; got:\n\(script)")
+        XCTAssertTrue(script.contains("(subject of dm) as string"),
+                      "Matched child must fetch its messages' subjects (per-reference, R2); got:\n\(script)")
         XCTAssertTrue(script.contains("return idStr & (ASCII character 29) & subjStr"),
                       "Matched child must return the delimited id+subject payload; got:\n\(script)")
     }

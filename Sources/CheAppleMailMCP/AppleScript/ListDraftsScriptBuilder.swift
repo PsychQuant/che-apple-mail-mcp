@@ -55,10 +55,14 @@ func buildListDraftsScript(accountId: String?, accountName: String) -> String {
     // real error while fetching the matched child's rows must propagate, not
     // be swallowed into a misleading 9174.
     //
-    // Row payload (#276, draft-update spec): ids and subjects are fetched as
-    // two parallel lists in this same invocation, RS-joined (ASCII 30) within
-    // each group — comma-safe, a subject containing ", " cannot shift the
-    // zip — and GS-separated (ASCII 29) between groups. Parsed by
+    // Row payload (#276, draft-update spec; verify R2, Codex): each row's id
+    // and subject are read from the SAME message reference (one snapshot,
+    // per-message loop) — two bulk parallel-list queries could mis-pair when
+    // the mailbox mutates between them with unchanged length, the only shape
+    // the parser's mismatch guard cannot catch, and a mis-paired row would
+    // let subject_match delete the wrong id. Rows are RS-joined (ASCII 30,
+    // comma-safe) and the id/subject groups GS-separated (ASCII 29). A
+    // reference dying mid-loop aborts the script (fail closed). Parsed by
     // `parseDraftRows`.
     return """
     tell application "Mail"
@@ -68,10 +72,21 @@ func buildListDraftsScript(accountId: String?, accountName: String) -> String {
                 if \(condition) then set matched to true
             end try
             if matched then
-                set AppleScript's text item delimiters to (ASCII character 30)
-                set idStr to (id of messages of mb) as string
-                set subjStr to (subject of messages of mb) as string
-                set AppleScript's text item delimiters to ""
+                set idStr to ""
+                set subjStr to ""
+                set firstRow to true
+                repeat with dm in (every message of mb)
+                    set dmId to (id of dm) as string
+                    set dmSubj to (subject of dm) as string
+                    if firstRow then
+                        set firstRow to false
+                        set idStr to dmId
+                        set subjStr to dmSubj
+                    else
+                        set idStr to idStr & (ASCII character 30) & dmId
+                        set subjStr to subjStr & (ASCII character 30) & dmSubj
+                    end if
+                end repeat
                 return idStr & (ASCII character 29) & subjStr
             end if
         end repeat
@@ -96,20 +111,20 @@ func buildListAllDraftsScript() -> String {
     tell application "Mail"
         set idStr to ""
         set subjStr to ""
+        set firstRow to true
         repeat with mb in (every mailbox of drafts mailbox)
-            set AppleScript's text item delimiters to (ASCII character 30)
-            set mbIds to (id of messages of mb) as string
-            set mbSubjs to (subject of messages of mb) as string
-            set AppleScript's text item delimiters to ""
-            if mbIds is not "" then
-                if idStr is "" then
-                    set idStr to mbIds
-                    set subjStr to mbSubjs
+            repeat with dm in (every message of mb)
+                set dmId to (id of dm) as string
+                set dmSubj to (subject of dm) as string
+                if firstRow then
+                    set firstRow to false
+                    set idStr to dmId
+                    set subjStr to dmSubj
                 else
-                    set idStr to idStr & (ASCII character 30) & mbIds
-                    set subjStr to subjStr & (ASCII character 30) & mbSubjs
+                    set idStr to idStr & (ASCII character 30) & dmId
+                    set subjStr to subjStr & (ASCII character 30) & dmSubj
                 end if
-            end if
+            end repeat
         end repeat
         return idStr & (ASCII character 29) & subjStr
     end tell
