@@ -15,6 +15,36 @@ public struct EmailContent: Sendable {
     public let textBody: String?
     public let htmlBody: String?
     public let rawSource: Data?
+    /// #274 — true when the content was parsed from a `.partial.emlx` (Mail
+    /// has not fully downloaded the message body yet). An empty body from a
+    /// partial file means "not downloaded", NOT "empty message".
+    public let fromPartialEmlx: Bool
+
+    public init(
+        subject: String,
+        sender: String,
+        toRecipients: [String],
+        ccRecipients: [String],
+        date: String,
+        messageId: String,
+        inReplyTo: String,
+        textBody: String?,
+        htmlBody: String?,
+        rawSource: Data?,
+        fromPartialEmlx: Bool = false
+    ) {
+        self.subject = subject
+        self.sender = sender
+        self.toRecipients = toRecipients
+        self.ccRecipients = ccRecipients
+        self.date = date
+        self.messageId = messageId
+        self.inReplyTo = inReplyTo
+        self.textBody = textBody
+        self.htmlBody = htmlBody
+        self.rawSource = rawSource
+        self.fromPartialEmlx = fromPartialEmlx
+    }
 }
 
 extension EmlxParser {
@@ -32,12 +62,14 @@ extension EmlxParser {
         mailboxURL: String,
         format: String = "html"
     ) throws -> EmailContent {
-        guard let path = resolveEmlxPath(rowId: rowId, mailboxURL: mailboxURL) else {
+        guard let resolved = resolveEmlxPathDetailed(rowId: rowId, mailboxURL: mailboxURL) else {
             throw MailSQLiteError.emlxNotFound(
                 messageId: rowId,
                 path: "Could not resolve .emlx path for message \(rowId)"
             )
         }
+        let path = resolved.path
+        let isPartial = resolved.isPartial
 
         let fileData = try Data(contentsOf: URL(fileURLWithPath: path))
         let messageData = try EmlxFormat.extractMessageData(from: fileData)
@@ -55,7 +87,8 @@ extension EmlxParser {
                 inReplyTo: headers["in-reply-to"] ?? "",
                 textBody: nil,
                 htmlBody: nil,
-                rawSource: messageData
+                rawSource: messageData,
+                fromPartialEmlx: isPartial
             )
         }
 
@@ -74,7 +107,8 @@ extension EmlxParser {
                 inReplyTo: headers["in-reply-to"] ?? "",
                 textBody: nil,
                 htmlBody: nil,
-                rawSource: nil
+                rawSource: nil,
+                fromPartialEmlx: isPartial
             )
         }
 
@@ -91,7 +125,8 @@ extension EmlxParser {
             inReplyTo: headers["in-reply-to"] ?? "",
             textBody: parsed.textBody,
             htmlBody: parsed.htmlBody,
-            rawSource: nil
+            rawSource: nil,
+            fromPartialEmlx: isPartial
         )
     }
 
