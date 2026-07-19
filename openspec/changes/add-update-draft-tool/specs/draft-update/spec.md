@@ -21,7 +21,7 @@ The system SHALL provide an `update_draft` MCP tool that replaces an existing dr
 
 ### Requirement: identify selector semantics
 
-The `update_draft` tool SHALL accept an identify selector that is exactly one of `draft_id` (a numeric message id, validated by the same numeric-only rule as other id-taking tools) or `subject_match` (exact string equality against draft subjects — never substring or fuzzy matching), with an optional `account_name` to scope the search to one account's drafts.
+The `update_draft` tool SHALL accept an identify selector that is exactly one of `draft_id` (a numeric message id, validated by the same numeric-only rule as other id-taking tools) or `subject_match` (exact string equality against draft subjects — never substring or fuzzy matching), with an optional `account_name` (or `account_id` UUID, which takes precedence) to scope the search to one account's drafts. An explicitly empty `subject_match` SHALL be rejected as a parameter error (empty-subject drafts are targetable via `draft_id`).
 
 #### Scenario: ambiguous subject match refused
 

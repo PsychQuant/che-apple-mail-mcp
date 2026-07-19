@@ -349,7 +349,7 @@ class CheAppleMailMCPServer {
                     "type": .string("object"),
                     "properties": .object([
                         "draft_id": .object(["type": .string("string"), "description": .string("Numeric id of the draft to replace (from list_drafts). Exactly one of draft_id / subject_match is required.")]),
-                        "subject_match": .object(["type": .string("string"), "description": .string("EXACT subject equality match (never substring/fuzzy — misfires would delete the wrong draft). Refuses when 0 or >1 drafts match. Exactly one of draft_id / subject_match is required.")]),
+                        "subject_match": .object(["type": .string("string"), "description": .string("EXACT subject equality match (never substring/fuzzy — misfires would delete the wrong draft; must be non-empty — target an empty-subject draft via draft_id). Refuses when 0 or >1 drafts match. Exactly one of draft_id / subject_match is required.")]),
                         "account_name": .object(["type": .string("string"), "description": .string("Optional: scope the draft search to one account (Mail's AppleScript account name, e.g. 'Google'). Omit to search all accounts' drafts (same-subject drafts across accounts then refuse as ambiguous). Prefer account_id alongside for reliable matching.")]),
                         "account_id": .object(["type": .string("string"), "description": .string("Optional: Mail.app account UUID (from list_accounts). When non-empty, takes precedence over account_name for scoping.")]),
                         "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Replacement draft recipients — same semantics as create_draft.to (RFC 5322 mailbox form allowed; display-name recipients route via the legacy path).")]),
@@ -1237,9 +1237,11 @@ class CheAppleMailMCPServer {
                     "update_draft requires exactly one of draft_id or subject_match (got "
                     + (hasDraftId ? "both" : "neither") + ")")
             }
-            if hasDraftId, let did = draftId, !(did.allSatisfy { $0.isNumber }) {
+            if hasDraftId, let did = draftId, !(did.allSatisfy { ("0"..."9").contains($0) }) {
+                // Strict ASCII digits (verify R1, Codex) — Character.isNumber
+                // would accept Unicode digits that are not a Mail rowid.
                 throw MailError.invalidParameter(
-                    "draft_id must be a numeric message id (from list_drafts); got '\(did)'")
+                    "draft_id must be an ASCII-numeric message id (from list_drafts); got '\(did)'")
             }
             let to = toArray.compactMap { $0.stringValue }
             let cc = try optionalStringArray(arguments, key: "cc")

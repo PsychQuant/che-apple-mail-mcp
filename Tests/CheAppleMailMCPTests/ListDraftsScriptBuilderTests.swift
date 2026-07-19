@@ -78,6 +78,17 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
         XCTAssertTrue(script.contains("ASCII character 29"))
     }
 
+    func testAllAccountsVariant_failClosed_noTrySwallowing() {
+        // #276 verify R1 (Codex blocking 1): in all-accounts mode EVERY child
+        // participates in the uniqueness verdict — a swallowed row-build
+        // error could hide a real cross-account ambiguity and let
+        // update_draft delete the wrong "unique" match. Errors must
+        // propagate (fail closed): the aggregate script contains NO try.
+        let script = buildListAllDraftsScript()
+        XCTAssertFalse(script.contains("try"),
+                       "all-accounts scan must fail closed — no try swallowing; got:\n\(script)")
+    }
+
     func testDeleteDraftScript_byIdInDraftsChildren() {
         // Deletion stays inside the unified-drafts children (no per-account
         // mailbox-name resolution needed) and matches by numeric id only
@@ -90,6 +101,22 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
         // Unscoped variant: no account condition at all.
         let all = buildDeleteDraftByIdScript(draftId: "12345", accountId: nil, accountName: nil)
         XCTAssertFalse(all.contains("account of mb"))
+    }
+
+    func testDeleteDraftScript_lookupSeparatedFromDelete() {
+        // #276 verify R1 (Codex blocking 4): the lookup try must NOT wrap the
+        // `delete` verb — a real delete failure (permissions, Mail command
+        // error) must propagate to the controller (→ deleted_old:false with
+        // the real cause), not be swallowed into the 9276 "not found" error.
+        let script = buildDeleteDraftByIdScript(draftId: "12345", accountId: nil, accountName: nil)
+        XCTAssertTrue(script.contains("set target to"),
+                      "lookup must bind a target inside its own try; got:\n\(script)")
+        XCTAssertTrue(script.contains("if target is not missing value then"),
+                      "delete must run OUTSIDE the lookup try, gated on the bound target; got:\n\(script)")
+        XCTAssertTrue(script.contains("delete target"),
+                      "the delete verb must act on the bound target; got:\n\(script)")
+        XCTAssertTrue(script.contains("number \(updateDraftDeleteNotFoundErrorNumber)"),
+                      "exhausted lookup must still raise the recognizable 9276")
     }
 
     // MARK: - #276 parseDraftRows
@@ -112,6 +139,14 @@ final class ListDraftsScriptBuilderTests: XCTestCase {
         XCTAssertThrowsError(try parseDraftRows("101\(RS)102\(GS)onlyone"))
         // Unexpected shape (no GS) → throw.
         XCTAssertThrowsError(try parseDraftRows("garbage-without-separator"))
+        // #276 verify R1 (Codex blocking 3): a row whose id is empty or
+        // non-ASCII-numeric violates the numeric-id contract and could flow
+        // into the delete script — throw, never emit.
+        XCTAssertThrowsError(try parseDraftRows("\(GS)Subject"),
+                             "empty id with non-empty subject must throw, not yield id=\"\"")
+        XCTAssertThrowsError(try parseDraftRows("12a\(GS)Subject"))
+        XCTAssertThrowsError(try parseDraftRows("١٢٣\(GS)Subject"),
+                             "non-ASCII Unicode digits are not a valid Mail rowid")
     }
 
     // MARK: - No hardcoded special-mailbox name (#174 core regression lock)

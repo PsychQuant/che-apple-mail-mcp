@@ -20,9 +20,9 @@ Apple Mail 草稿無法原地修改；`update_draft` 把「找舊 → 建新 →
 
 替代案「教 caller 用 search_emails scope 草稿匣」被否決：草稿匣 URL scope 有 #174 localized-name 地雷。`ListDraftsScriptBuilder` 的 unified-children 草稿匣識別（#174/#186 sanctioned AppleScript-primary）直接複用：script 一次回 `{ids, subjects}` 平行 list，zip 成 `[{id, subject}]`。`list_drafts` result shape 為 additive 變更（零破壞）。`update_draft` 內部定位同款機制。
 
-### D4 — 全數複用既有機制（最小 blast radius）
+### D4 — 複用既有語意、刪除走定位同款 scope（最小 blast radius）
 
-刪除 = 既有 delete_email 機制（`requireMessageId` #50 數字驗證；AppleScript delete = 移 Trash 可救回）。重建 = 既有 `createDraft`（自動繼承 #175/#237/#239 clean-body eligibility 與三層揭露）。新 code 集中在一個 orchestrating handler + script-builder 擴充。
+刪除 = **複用 delete 語意**（ASCII-numeric id 驗證同 `requireMessageId` #50；AppleScript delete = 移 Trash 可救回），但**實作為新的 `buildDeleteDraftByIdScript`** — 在定位到草稿的同一個 #174 unified-drafts child scope 內 by-id 刪除，完全避開 per-account 草稿匣實名解析的 localized-name 地雷（比繞道 `delete_email` 的 mailbox+account 參數更穩健；verify R1 更正原「複用 delete_email 機制」的措辭）。重建 = 既有 `createDraft`（自動繼承 #175/#237/#239 clean-body eligibility 與三層揭露）。新 code 集中在一個 orchestrating handler + script-builder 擴充。
 
 ### D5 — 失敗語意不對稱
 

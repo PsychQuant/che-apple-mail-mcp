@@ -1412,6 +1412,14 @@ actor MailController {
         attachments: [String]? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false,
         fromAddress: String? = nil, requireWrapperFree: Bool = false
     ) throws -> [String: Any] {
+        // Verify R1 (Codex): an explicitly-empty subject_match is rejected as
+        // its own error (not conflated with "absent") — empty-subject drafts
+        // are targetable via draft_id.
+        if let sm = subjectMatch, sm.isEmpty, draftId == nil {
+            throw MailError.invalidParameter(
+                "subject_match must be non-empty (exact subject equality); "
+                + "to target an empty-subject draft, use draft_id from list_drafts")
+        }
         let hasId = (draftId?.isEmpty == false)
         let hasSubject = (subjectMatch?.isEmpty == false)
         guard hasId != hasSubject else {
@@ -1419,9 +1427,12 @@ actor MailController {
                 "update_draft requires exactly one of draft_id or subject_match (got "
                 + (hasId ? "both" : "neither") + ")")
         }
-        if hasId, let did = draftId, !(did.allSatisfy { $0.isNumber }) {
+        // Strict ASCII digits (verify R1, Codex): Character.isNumber accepts
+        // Unicode digits (١٢٣ / ²) that are NOT a valid AppleScript numeric
+        // literal — same rule as requireMessageId.
+        if hasId, let did = draftId, !(did.allSatisfy { ("0"..."9").contains($0) }) {
             throw MailError.invalidParameter(
-                "draft_id must be a numeric message id (from list_drafts); got '\(did)'")
+                "draft_id must be an ASCII-numeric message id (from list_drafts); got '\(did)'")
         }
 
         // 1. Locate (read-only) — account-scoped when a selector was given,

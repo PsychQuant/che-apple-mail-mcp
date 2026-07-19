@@ -83,29 +83,33 @@ func buildListDraftsScript(accountId: String?, accountName: String) -> String {
 /// #276 — unified variant for `update_draft`'s account-omitted path: scan
 /// EVERY drafts child (all accounts) and aggregate the id/subject groups.
 /// No per-account condition and no 9174 (there is no "requested account" to
-/// miss); a child that errors (unreadable container) is skipped — worst case
-/// the caller sees a no-match refusal, never a wrong deletion.
+/// miss).
+///
+/// FAIL CLOSED (verify R1, Codex): in all-accounts mode every child
+/// participates in the uniqueness verdict — a swallowed per-child error
+/// could hide a real cross-account ambiguity and let `update_draft` treat a
+/// partial view as a unique match (wrong deletion). So there is deliberately
+/// NO try here: any child error aborts the whole scan, the locate step
+/// fails, and `update_draft` refuses — never deletes on partial knowledge.
 func buildListAllDraftsScript() -> String {
     return """
     tell application "Mail"
         set idStr to ""
         set subjStr to ""
         repeat with mb in (every mailbox of drafts mailbox)
-            try
-                set AppleScript's text item delimiters to (ASCII character 30)
-                set mbIds to (id of messages of mb) as string
-                set mbSubjs to (subject of messages of mb) as string
-                set AppleScript's text item delimiters to ""
-                if mbIds is not "" then
-                    if idStr is "" then
-                        set idStr to mbIds
-                        set subjStr to mbSubjs
-                    else
-                        set idStr to idStr & (ASCII character 30) & mbIds
-                        set subjStr to subjStr & (ASCII character 30) & mbSubjs
-                    end if
+            set AppleScript's text item delimiters to (ASCII character 30)
+            set mbIds to (id of messages of mb) as string
+            set mbSubjs to (subject of messages of mb) as string
+            set AppleScript's text item delimiters to ""
+            if mbIds is not "" then
+                if idStr is "" then
+                    set idStr to mbIds
+                    set subjStr to mbSubjs
+                else
+                    set idStr to idStr & (ASCII character 30) & mbIds
+                    set subjStr to subjStr & (ASCII character 30) & mbSubjs
                 end if
-            end try
+            end if
         end repeat
         return idStr & (ASCII character 29) & subjStr
     end tell
@@ -123,6 +127,11 @@ let updateDraftDeleteNotFoundErrorNumber = 9276
 /// never a content predicate); AppleScript `delete` moves to Trash
 /// (recoverable), not a permanent expunge.
 func buildDeleteDraftByIdScript(draftId: String, accountId: String?, accountName: String?) -> String {
+    // Contract (verify R1, security LOW): draftId must already be validated
+    // as ASCII digits by the caller — it is interpolated as an AppleScript
+    // numeric literal. The assert catches contract violations in debug.
+    assert(!draftId.isEmpty && draftId.allSatisfy { ("0"..."9").contains($0) },
+           "buildDeleteDraftByIdScript requires a pre-validated ASCII-numeric draftId")
     let conditionLine: String
     if let aid = accountId, !aid.isEmpty {
         conditionLine = """
@@ -145,10 +154,14 @@ func buildDeleteDraftByIdScript(draftId: String, accountId: String?, accountName
             set matched to false
     \(conditionLine)
             if matched then
+                set target to missing value
                 try
-                    delete (first message of mb whose id is \(draftId))
-                    return "Draft deleted"
+                    set target to (first message of mb whose id is \(draftId))
                 end try
+                if target is not missing value then
+                    delete target
+                    return "Draft deleted"
+                end if
             end if
         end repeat
         error "No draft with id \(draftId) found in the drafts mailboxes" number \(updateDraftDeleteNotFoundErrorNumber)
@@ -177,6 +190,13 @@ func parseDraftRows(_ raw: String) throws -> [(id: String, subject: String)] {
     guard ids.count == subjects.count else {
         throw MailError.operationFailed(
             "list_drafts: id/subject list length mismatch (\(ids.count) vs \(subjects.count)) — refusing to zip")
+    }
+    // Verify R1 (Codex): every id must be a non-empty ASCII-numeric Mail
+    // rowid — an empty or non-numeric id violates the list_drafts contract
+    // and could otherwise flow into the delete script. Throw, never emit.
+    for id in ids where id.isEmpty || !(id.allSatisfy { ("0"..."9").contains($0) }) {
+        throw MailError.operationFailed(
+            "list_drafts: malformed draft id '\(id)' in script payload — refusing")
     }
     return zip(ids, subjects).map { (id: $0.0, subject: $0.1) }
 }

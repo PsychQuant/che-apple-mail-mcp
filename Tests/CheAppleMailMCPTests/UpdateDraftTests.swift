@@ -104,6 +104,7 @@ final class UpdateDraftTests: XCTestCase {
         let order = OrderLog()
         await installSeam(rows: "101\(GS)Other", log: { s in
             if s.contains("outgoing message") { order.append("create") }
+            if s.contains("whose id is") { order.append("delete") }
         })
         do {
             _ = try await MailController.shared.updateDraft(
@@ -114,6 +115,34 @@ final class UpdateDraftTests: XCTestCase {
             XCTFail("zero-match must refuse (update requires an existing draft)")
         } catch { }
         XCTAssertTrue(order.entries.isEmpty, "zero-match refuse must not create anything")
+    }
+
+    // MARK: - selector validation (verify R1, Codex blocking 2 + empty subject_match)
+
+    func testUpdateDraft_selectorValidation_strictAndExclusive() async throws {
+        addTeardownBlock { await self.teardownSeam() }
+        await installSeam(rows: "101\(GS)A")
+        // both selectors → invalidParameter
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.updateDraft(
+                draftId: "101", subjectMatch: "A", accountName: nil, accountId: nil,
+                to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
+                attachments: nil, format: .plain, sanitizeLinks: false,
+                fromAddress: nil, requireWrapperFree: false))
+        // neither selector → invalidParameter
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.updateDraft(
+                draftId: nil, subjectMatch: nil, accountName: nil, accountId: nil,
+                to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
+                attachments: nil, format: .plain, sanitizeLinks: false,
+                fromAddress: nil, requireWrapperFree: false))
+        // non-ASCII Unicode digits (Character.isNumber would accept ١٢٣) → reject
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.updateDraft(
+                draftId: "١٢٣", subjectMatch: nil, accountName: nil, accountId: nil,
+                to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
+                attachments: nil, format: .plain, sanitizeLinks: false,
+                fromAddress: nil, requireWrapperFree: false))
     }
 
     // MARK: - failure semantics (spec: create fails / delete fails scenarios)
