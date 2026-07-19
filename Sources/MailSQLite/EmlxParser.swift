@@ -64,6 +64,19 @@ public enum EmlxParser {
     ///   - mailboxURL: The mailbox URL string (e.g., `imap://UUID/[Gmail]/全部郵件`).
     /// - Returns: The filesystem path to the .emlx file, or `nil` if not found.
     public static func resolveEmlxPath(rowId: Int, mailboxURL: String) -> String? {
+        resolveEmlxPathDetailed(rowId: rowId, mailboxURL: mailboxURL)?.path
+    }
+
+    /// #274 — like `resolveEmlxPath`, but also reports whether the resolved
+    /// file is a `.partial.emlx`: Mail has synced the envelope/headers but
+    /// NOT (fully) downloaded the body. A partial file parses "successfully"
+    /// with an empty body, so body-reading callers need this bit to
+    /// distinguish "empty message" from "body not downloaded yet" (and to
+    /// route to the AppleScript fallback, whose `content of message` read
+    /// nudges Mail to fetch the body — something the direct file read can't).
+    public static func resolveEmlxPathDetailed(
+        rowId: Int, mailboxURL: String
+    ) -> (path: String, isPartial: Bool)? {
         guard let parsed = MailboxURL.decode(mailboxURL) else {
             return nil
         }
@@ -97,13 +110,13 @@ public enum EmlxParser {
         // Try the primary .emlx file first.
         let emlxPath = "\(messagesDir)/\(rowId).emlx"
         if fm.fileExists(atPath: emlxPath) {
-            return emlxPath
+            return (emlxPath, false)
         }
 
         // Fall back to .partial.emlx.
         let partialPath = "\(messagesDir)/\(rowId).partial.emlx"
         if fm.fileExists(atPath: partialPath) {
-            return partialPath
+            return (partialPath, true)
         }
 
         return nil
