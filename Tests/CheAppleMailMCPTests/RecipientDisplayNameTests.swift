@@ -337,6 +337,53 @@ final class RecipientDisplayNameTests: XCTestCase {
                 to: ["\"Foo\" <\"<a>\"@x.example>"], subject: "s", body: "b"))
     }
 
+    func testContainsUnquotedAngle_graphemeMaskedAngle_stillDetected() {
+        // #280 verify (Codex, cross-model): `>` followed by U+FE0F (variation
+        // selector) fuses into ONE extended grapheme cluster under Swift
+        // Character iteration — the cluster != ">" so a Character-level scan
+        // missed it (pre-existing since #270, both paths). The scan now walks
+        // unicodeScalars, where U+003E is seen on its own regardless of any
+        // combining scalar that follows.
+        XCTAssertTrue(containsUnquotedAngle("a>\u{FE0F}b@x"))
+        XCTAssertTrue(containsUnquotedAngle("<\u{FE0F}a@x"))
+        // Combining scalars elsewhere must not confuse the structural scan.
+        XCTAssertFalse(containsUnquotedAngle("cafe\u{301}@example.net"))
+        XCTAssertFalse(containsUnquotedAngle("\"a<\u{FE0F}b\"@x"),
+                       "angle inside a properly closed quote stays exempt, with or without a trailing combining scalar")
+    }
+
+    func testValidation_graphemeMaskedAngle_rejectedAtBoundary() async throws {
+        // #280 verify (Codex): boundary lock for the scalar-level scan — the
+        // masked stray '>' must reject, not land in the AppleScript address.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["Name <a>\u{FE0F}b@example.net>"], subject: "s", body: "b"))
+    }
+
+    func testValidation_cfwsCommentAngle_deliberatelyRejected() async throws {
+        // #280 verify (Codex) — DELIBERATE lite-validator boundary pin. RFC
+        // 5322 grammar permits a CFWS comment after the domain dot-atom, and
+        // ctext may contain '>' — so `Name <user@example.net(>)>` is
+        // grammar-legal. The lite validator has NEVER supported CFWS comments
+        // (a comment carrying '@' always failed atCount; the BARE form
+        // `user@example.net(>)` has been rejected by the #270 scan since it
+        // shipped). The unconditional scan makes the display-name variant
+        // consistent with that bare-path precedent instead of silently
+        // exempting it. Comment-aware scanning is full-parser territory —
+        // out of lite-validator scope (#270 diagnosis Residue).
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["Name <user@example.net(>)>"], subject: "s", body: "b"))
+    }
+
     // MARK: #266 — RFC 5322 quoted-pair decoding inside quoted display names
 
     func testParseRecipient_quotedPair_quoteDecoded() {

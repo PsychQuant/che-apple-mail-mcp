@@ -825,8 +825,12 @@ actor MailController {
             // validation is out of lite-validator scope (see #270 diagnosis
             // Residue). Unterminated quotes, escaped angles inside them, and
             // domain-position quotes get NO exemption (R1/R2, Codex — see
-            // containsUnquotedAngle). All land as Mail-level invalid, no
-            // mis-send.
+            // containsUnquotedAngle). CFWS comments are likewise unsupported
+            // (#280 verify, Codex): grammar-legal `user@example.net(>)` is
+            // rejected — consistently on BOTH paths now, matching the bare
+            // path's shipped #270 behavior (a comment carrying '@' always
+            // failed atCount; comment-aware scanning is full-parser
+            // territory). All land as Mail-level invalid, no mis-send.
             if containsUnquotedAngle(addr) {
                 failures.append("'\(raw)' is a malformed recipient (stray/unpaired angle brackets)")
                 continue

@@ -343,12 +343,19 @@ func unescapeQuotedPairs(_ s: String) -> String {
 /// Used by the boundary validator to reject stray angles whether paired
 /// (`x <a@b> <c@d>`, #265) or unpaired (`<a@x` / `a@x>`, #270) without
 /// mis-rejecting legal quoted local-parts (`"a<b"@x`). Single pass.
+///
+/// Iterates unicodeScalars, NOT Characters (#280 verify, Codex): a `>`
+/// followed by a combining scalar (e.g. U+FE0F variation selector) fuses
+/// into one extended grapheme cluster under Character iteration, so the
+/// cluster compares unequal to ">" and the stray angle slips the scan.
+/// Every structural character here (`"` `\` `@` `<` `>`) is a single ASCII
+/// scalar, so scalar-level comparison is strictly more precise.
 func containsUnquotedAngle(_ s: String) -> Bool {
     var inQuote = false
     var escaped = false
     var angleInOpenQuote = false
     var seenUnquotedAt = false
-    for ch in s {
+    for ch in s.unicodeScalars {
         if inQuote {
             if escaped {
                 // R2 (Codex): an escaped angle is still an angle character —
