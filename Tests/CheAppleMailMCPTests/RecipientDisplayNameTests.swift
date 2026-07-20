@@ -296,6 +296,47 @@ final class RecipientDisplayNameTests: XCTestCase {
         XCTAssertTrue(r.hasPrefix("Email sent successfully"))
     }
 
+    func testValidation_displayNameQuotedAngleAddr_stillPasses() async throws {
+        // #280 verify (test-adequacy lens): the quote-aware exemption reached
+        // via the name != nil / parseRecipient-extracted-address branch. With
+        // only one literal '<' in the raw string (the wrapper's own), the
+        // parser extracts name="王小明", addr=`"a>b"@example.net` — a legal
+        // quoted local-part whose '>' sits INSIDE the quotes. The unconditional
+        // scan must stay quote-aware on this branch too; without this test a
+        // refactor scoping the quote-state machine per branch could silently
+        // over-reject legitimate quoted-local-part display-name recipients.
+        // (The mirror shape `Name <"a<b"@x>` is NOT reachable here: its inner
+        // '<' becomes the lastIndex split point, collapsing to the name==nil
+        // path already covered by the #270 tests.)
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
+        let r = try await MailController.shared.composeEmail(
+            to: ["王小明 <\"a>b\"@example.net>"], subject: "s", body: "b")
+        XCTAssertTrue(r.hasPrefix("Email sent successfully"))
+    }
+
+    func testValidation_quotedNameQuotedAngleLeadingAddr_failsLoud() async throws {
+        // #280 verify (over-reject lens) — DELIBERATE behavior pin, not a bug
+        // lock. `"Foo" <"<a>"@x>` is a legal RFC 5322 mailbox, but a
+        // pre-existing parseRecipient defect (lastIndex-of-'<' split; the
+        // quoted local-part STARTS with '<' so the split lands inside it)
+        // garbles the extraction to name=`Foo" <`, addr=`a>"@x` — losing the
+        // local-part's leading `"<`. The OLD gated scan silently ACCEPTED the
+        // garbled addr and would have composed to the wrong address; the
+        // unconditional scan rejects it loudly (fail loud, no mis-send). This
+        // pins the reject until the parser split bug is fixed — at which point
+        // the addr extracts cleanly as `"<a>"@x`, the quote-aware scan exempts
+        // it, and this test should flip to a pass expectation (#286).
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["\"Foo\" <\"<a>\"@x.example>"], subject: "s", body: "b"))
+    }
+
     // MARK: #266 — RFC 5322 quoted-pair decoding inside quoted display names
 
     func testParseRecipient_quotedPair_quoteDecoded() {
