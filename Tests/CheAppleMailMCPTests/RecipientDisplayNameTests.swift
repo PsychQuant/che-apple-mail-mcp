@@ -257,6 +257,133 @@ final class RecipientDisplayNameTests: XCTestCase {
                 to: ["a@\"<example.net>\""], subject: "s", body: "b"))
     }
 
+    // MARK: #280 — name != nil path also re-scans the extracted addr-spec
+
+    func testParseRecipient_displayNameEmbeddedAngleInAddr_extractsRawAddr() {
+        // parseRecipient extracts from the LAST `<` to the trailing `>`, so the
+        // earlier `>` stays embedded in the addr-spec. The parser behavior is
+        // unchanged (#280 is a VALIDATOR gap, not a parser one) — pin the trace.
+        let r = parseRecipient("Name <a>b@x>")
+        XCTAssertEqual(r.name, "Name")
+        XCTAssertEqual(r.address, "a>b@x", "the earlier '>' survives inside the extracted addr-spec")
+    }
+
+    func testValidation_displayNameEmbeddedAngleInAddr_rejectedAtBoundary() async throws {
+        // #280 (residual of #270): `Name <a>b@x>` DID parse a display name
+        // (name != nil), so the #270 angle guard — gated on `name == nil` —
+        // never ran, and the extracted addr `a>b@x` (single `@`) slipped through
+        // atCount==1 with the stray `>` intact. The scan is now unconditional:
+        // an extracted addr-spec that carries an unquoted angle is malformed
+        // regardless of whether a display name parsed.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["Name <a>b@example.net>"], subject: "s", body: "b"))
+    }
+
+    func testValidation_displayNameCleanAddr_stillPasses() async throws {
+        // #280 over-reject guard: making the angle scan unconditional must NOT
+        // reject the legitimate mailbox form — a display name over a clean
+        // addr-spec (no unquoted angles) still passes to the legacy path.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
+        let r = try await MailController.shared.composeEmail(
+            to: ["王小明 <ming@example.com>"], subject: "s", body: "b")
+        XCTAssertTrue(r.hasPrefix("Email sent successfully"))
+    }
+
+    func testValidation_displayNameQuotedAngleAddr_stillPasses() async throws {
+        // #280 verify (test-adequacy lens): the quote-aware exemption reached
+        // via the name != nil / parseRecipient-extracted-address branch. With
+        // only one literal '<' in the raw string (the wrapper's own), the
+        // parser extracts name="王小明", addr=`"a>b"@example.net` — a legal
+        // quoted local-part whose '>' sits INSIDE the quotes. The unconditional
+        // scan must stay quote-aware on this branch too; without this test a
+        // refactor scoping the quote-state machine per branch could silently
+        // over-reject legitimate quoted-local-part display-name recipients.
+        // (The mirror shape `Name <"a<b"@x>` is NOT reachable here: its inner
+        // '<' becomes the lastIndex split point, collapsing to the name==nil
+        // path already covered by the #270 tests.)
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
+        let r = try await MailController.shared.composeEmail(
+            to: ["王小明 <\"a>b\"@example.net>"], subject: "s", body: "b")
+        XCTAssertTrue(r.hasPrefix("Email sent successfully"))
+    }
+
+    func testValidation_quotedNameQuotedAngleLeadingAddr_failsLoud() async throws {
+        // #280 verify (over-reject lens) — DELIBERATE behavior pin, not a bug
+        // lock. `"Foo" <"<a>"@x>` is a legal RFC 5322 mailbox, but a
+        // pre-existing parseRecipient defect (lastIndex-of-'<' split; the
+        // quoted local-part STARTS with '<' so the split lands inside it)
+        // garbles the extraction to name=`Foo" <`, addr=`a>"@x` — losing the
+        // local-part's leading `"<`. The OLD gated scan silently ACCEPTED the
+        // garbled addr and would have composed to the wrong address; the
+        // unconditional scan rejects it loudly (fail loud, no mis-send). This
+        // pins the reject until the parser split bug is fixed — at which point
+        // the addr extracts cleanly as `"<a>"@x`, the quote-aware scan exempts
+        // it, and this test should flip to a pass expectation (#286).
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["\"Foo\" <\"<a>\"@x.example>"], subject: "s", body: "b"))
+    }
+
+    func testContainsUnquotedAngle_graphemeMaskedAngle_stillDetected() {
+        // #280 verify (Codex, cross-model): `>` followed by U+FE0F (variation
+        // selector) fuses into ONE extended grapheme cluster under Swift
+        // Character iteration — the cluster != ">" so a Character-level scan
+        // missed it (pre-existing since #270, both paths). The scan now walks
+        // unicodeScalars, where U+003E is seen on its own regardless of any
+        // combining scalar that follows.
+        XCTAssertTrue(containsUnquotedAngle("a>\u{FE0F}b@x"))
+        XCTAssertTrue(containsUnquotedAngle("<\u{FE0F}a@x"))
+        // Combining scalars elsewhere must not confuse the structural scan.
+        XCTAssertFalse(containsUnquotedAngle("cafe\u{301}@example.net"))
+        XCTAssertFalse(containsUnquotedAngle("\"a<\u{FE0F}b\"@x"),
+                       "angle inside a properly closed quote stays exempt, with or without a trailing combining scalar")
+    }
+
+    func testValidation_graphemeMaskedAngle_rejectedAtBoundary() async throws {
+        // #280 verify (Codex): boundary lock for the scalar-level scan — the
+        // masked stray '>' must reject, not land in the AppleScript address.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["Name <a>\u{FE0F}b@example.net>"], subject: "s", body: "b"))
+    }
+
+    func testValidation_cfwsCommentAngle_deliberatelyRejected() async throws {
+        // #280 verify (Codex) — DELIBERATE lite-validator boundary pin. RFC
+        // 5322 grammar permits a CFWS comment after the domain dot-atom, and
+        // ctext may contain '>' — so `Name <user@example.net(>)>` is
+        // grammar-legal. The lite validator has NEVER supported CFWS comments
+        // (a comment carrying '@' always failed atCount; the BARE form
+        // `user@example.net(>)` has been rejected by the #270 scan since it
+        // shipped). The unconditional scan makes the display-name variant
+        // consistent with that bare-path precedent instead of silently
+        // exempting it. Comment-aware scanning is full-parser territory —
+        // out of lite-validator scope (#270 diagnosis Residue).
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["Name <user@example.net(>)>"], subject: "s", body: "b"))
+    }
+
     // MARK: #266 — RFC 5322 quoted-pair decoding inside quoted display names
 
     func testParseRecipient_quotedPair_quoteDecoded() {
