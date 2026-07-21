@@ -551,6 +551,22 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         XCTAssertEqual(byId["11"]?.status, "written")
         XCTAssertTrue(byId["11"]?.writtenPath?.hasSuffix("-1.md") == true,
                       "B takes the -1 suffix — the skipped A holds the base slot for its re-export")
+
+        // Second half of the loop (Codex R2 nit): actually re-export A after
+        // the "nudge" (body now present) and assert it lands on the BASE name
+        // — the same assignment as if both had been complete in run 1.
+        let rerun = try ExportEmailsMarkdown.run(
+            ids: ["10"], outputDir: out, direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { _ in self.makeEmail(subject: "Same", messageId: "<10@x>",
+                                         textBody: "downloaded now") },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() },
+            skipPartial: true)
+        XCTAssertEqual(rerun.items[0].status, "written")
+        XCTAssertTrue(rerun.items[0].writtenPath?.hasSuffix("_Same.md") == true,
+                      "re-export lands on the reserved base name, not a -N suffix: \(rerun.items[0].writtenPath ?? "nil")")
     }
 
     func testRun_skipPartial_dedupSkipStillWinsAndUnannotated() throws {

@@ -12,9 +12,10 @@ struct ExportManifestItem {
                                      //   | "header_only" (#283 skip_partial)
     let error: String?
     // #283 — negative-only partial-`.emlx` signal (#274 contract parity):
-    // `false` = the content came from a partial file AND the text body the
-    // export asked for is absent (header-only archive); nil = no partial-file
-    // evidence of a missing body. Never true.
+    // `false` = the content came from a partial file AND the renderer-selected
+    // body (`textBody ?? htmlBody ?? ""`) is empty — the written .md is/would
+    // be header-only; nil = no partial-file evidence of a missing body.
+    // Never true. See `partialBodyMissingForExport`.
     var bodyDownloaded: Bool? = nil
 
     var jsonObject: [String: Any] {
