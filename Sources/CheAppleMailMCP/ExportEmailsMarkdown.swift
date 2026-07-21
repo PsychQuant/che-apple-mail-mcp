@@ -149,6 +149,25 @@ enum ExportEmailsMarkdown {
         return dataExtensions.contains(ext) ? "data" : "document"
     }
 
+    /// #283 — true when the fetched content came from a `.partial.emlx` AND
+    /// the body the exported `.md` would carry is empty. RENDERER-aligned by
+    /// construction: the emptiness test mirrors `EmailMarkdownRenderer`'s body
+    /// selection (`textBody ?? htmlBody ?? ""`), so the flag means exactly
+    /// "this export writes/would write a header-only file". Deliberately NOT
+    /// the #274 `partialBodyNotDownloaded(format:)` helper with the fetch
+    /// format "text" (#283 verify, Codex): a partial file can carry a full
+    /// html-only body (Mail also uses `.partial.emlx` when attachments are
+    /// stored externally; an html-only message has no text/plain part) — a
+    /// text-only judgment would mis-flag it, and under `skip_partial` silently
+    /// omit a complete email from the corpus forever (its re-export re-judges
+    /// and re-skips). The `??`-precedence edge is intentional and pinned: a
+    /// non-nil EMPTY text body wins the renderer selection even over present
+    /// html content, so the rendered body IS empty → flagged.
+    static func partialBodyMissingForExport(_ content: EmailContent) -> Bool {
+        guard content.fromPartialEmlx else { return false }
+        return (content.textBody ?? content.htmlBody ?? "").isEmpty
+    }
+
     // MARK: - Write-safety (leaf-path containment)
     //
     // `AllowedRootsValidator` gates `output_dir`, but `URL.appendingPathComponent`
@@ -385,27 +404,16 @@ enum ExportEmailsMarkdown {
             // (EmlxParser.readEmail, format "text") already carries
             // `fromPartialEmlx`, but the export used to drop it — header-only
             // archives were written with a clean "written" status. Judged by
-            // the #274 pinned helper (format "text" mirrors the fetch wiring).
-            // Deliberately AFTER the #177 dedup skip: an already-archived
-            // duplicate stays "skipped" and unannotated (it will never be
-            // written, so a partial signal on it is noise).
-            let partialBodyMissing = CheAppleMailMCPServer.partialBodyNotDownloaded(
-                content: content, format: "text")
+            // the RENDERER-aligned predicate below, NOT the #274 helper with
+            // the fetch format "text" (#283 verify, Codex): a partial file can
+            // carry a full html-only body (Mail also uses .partial.emlx when
+            // attachments are stored externally), which a text-only judgment
+            // would mis-flag — and under skip_partial silently omit from the
+            // corpus forever. Deliberately AFTER the #177 dedup skip: an
+            // already-archived duplicate stays "skipped" and unannotated (it
+            // will never be written, so a partial signal on it is noise).
+            let partialBodyMissing = Self.partialBodyMissingForExport(content)
             let bodyDownloaded: Bool? = partialBodyMissing ? false : nil
-
-            // Opt-in `skip_partial`: keep the header-only email OUT of the
-            // corpus (no stale .md to clean up, no collision-guard -N
-            // duplicate on the re-export) — the SOP re-fetches flagged ids via
-            // get_email (whose #274 fallback doubles as the download nudge)
-            // and re-runs the export for just those ids. Default (false) stays
-            // byte-compatible: still written, but annotated.
-            if skipPartial, partialBodyMissing {
-                items.append(ExportManifestItem(
-                    id: id, messageId: content.messageId, writtenPath: nil, attachments: [],
-                    attachmentErrors: [], status: "header_only", error: nil,
-                    bodyDownloaded: false))
-                continue
-            }
 
             let threadKey = EmailMarkdownRenderer.stripReplyPrefixes(content.subject)
             let iso = EmailMarkdownRenderer.rfc822ToISO8601(content.date)
@@ -428,6 +436,27 @@ enum ExportEmailsMarkdown {
             filename = uniquify(filename, used: &usedFilenames)
             let stem = filename.hasSuffix(".md") ? String(filename.dropLast(3)) : filename
             let destURL = outputDir.appendingPathComponent(filename)
+
+            // Opt-in `skip_partial`: keep the header-only email OUT of the
+            // corpus (no stale .md to clean up, no collision-guard -N
+            // duplicate on the re-export) — the SOP re-fetches flagged ids via
+            // get_email (whose #274 fallback doubles as the download nudge)
+            // and re-runs the export for just those ids. Default (false) stays
+            // byte-compatible: still written, but annotated.
+            //
+            // Placed AFTER filename resolution + uniquify (#283 verify,
+            // Codex): the skipped email still consumes its (date,slug) slot in
+            // `seen`/`usedFilenames`, so name attribution is independent of
+            // download state — its later re-export lands on the SAME name it
+            // would have taken had it been complete in this run, and a
+            // same-slug sibling in this run takes the -N suffix either way.
+            if skipPartial, partialBodyMissing {
+                items.append(ExportManifestItem(
+                    id: id, messageId: content.messageId, writtenPath: nil, attachments: [],
+                    attachmentErrors: [], status: "header_only", error: nil,
+                    bodyDownloaded: false))
+                continue
+            }
 
             // Defence-in-depth: confirm the .md target canonicalizes back inside
             // output_dir before writing anything.

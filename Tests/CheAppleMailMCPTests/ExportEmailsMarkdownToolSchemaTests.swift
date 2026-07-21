@@ -38,6 +38,36 @@ final class ExportEmailsMarkdownToolSchemaTests: XCTestCase {
         XCTAssertNotNil(props["opts"])
     }
 
+    func testExportTool_advertisesSkipPartialOpt() throws {
+        // #283 (mirrors the #177 skip_message_ids_path precedent, one level
+        // deeper): the new opt-in flag must be advertised under
+        // opts.properties as a boolean — a schema/handler key-name typo would
+        // otherwise ship silently (the caller's opts.skip_partial would no-op
+        // back to default annotate-and-write).
+        let t = try XCTUnwrap(tool(named: "batch_export_emails_markdown"))
+        guard case .object(let schema) = t.inputSchema,
+              case .object(let props)? = schema["properties"],
+              case .object(let opts)? = props["opts"],
+              case .object(let optProps)? = opts["properties"] else {
+            return XCTFail("inputSchema must expose opts.properties")
+        }
+        guard case .object(let skipPartial)? = optProps["skip_partial"] else {
+            return XCTFail("opts.properties must advertise skip_partial (#283)")
+        }
+        XCTAssertEqual(skipPartial["type"], .string("boolean"))
+        // The description must scope the re-fetch recipe to skip_partial=true —
+        // following it under default annotate-and-write mode produces a stale
+        // header-only .md PLUS a -N-suffixed duplicate (#283 verify,
+        // consumer-lens empirical finding).
+        guard case .string(let desc)? = skipPartial["description"] else {
+            return XCTFail("skip_partial must carry a description")
+        }
+        XCTAssertTrue(desc.contains("skip_partial:true") || desc.contains("With skip_partial:true"),
+                      "the re-export recipe must be explicitly scoped to skip_partial:true")
+        XCTAssertTrue(desc.contains("written_path"),
+                      "default-mode guidance must name the stale-file cleanup via written_path")
+    }
+
     // MARK: - #233 batch_export_emails_markdown canonical name + deprecated alias
 
     func testBatchAlias_bothNamesRegistered() {
