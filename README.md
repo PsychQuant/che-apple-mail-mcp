@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**The most comprehensive Apple Mail MCP server** - 52 tools with SQLite-powered millisecond search across 250K+ emails.
+**The most comprehensive Apple Mail MCP server** - 53 tools with SQLite-powered millisecond search across 250K+ emails.
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +15,7 @@
 
 | Feature | Other MCPs | che-apple-mail-mcp |
 |---------|------------|-------------------|
-| Total Tools | ~20 | **52** |
+| Total Tools | ~20 | **53** |
 | Language | Python | **Swift (Native)** |
 | Search Speed | Seconds (AppleScript) | **Milliseconds (SQLite)** |
 | Search Fields | Subject/Sender | **Subject/Sender/Recipient/Date** |
@@ -84,7 +84,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## All 52 Tools
+## All 53 Tools
 
 <details>
 <summary><b>Accounts (2)</b></summary>
@@ -144,7 +144,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 
 | Tool | Description |
 |------|-------------|
-| `compose_email` | Send new email (supports cc/bcc/attachments; `format`: plain/markdown/html; optional `from_address` for multi-account sender selection — see [#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131), ⚠ forces the wrapped legacy path until [#219](https://github.com/PsychQuant/che-apple-mail-mcp/issues/219)). Plain-text bodies send via the wrapper-free native path when Accessibility is granted — see [#175](https://github.com/PsychQuant/che-apple-mail-mcp/issues/175) / `check_accessibility`; legacy-path results disclose the reason ([#237](https://github.com/PsychQuant/che-apple-mail-mcp/issues/237)) |
+| `compose_email` | Send new email (supports cc/bcc/attachments; `format`: plain/markdown/html; optional `from_address` for multi-account sender selection — see [#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131), clean path supported via the verified From popup, [#219](https://github.com/PsychQuant/che-apple-mail-mcp/issues/219)). Plain-text bodies send via the wrapper-free native path when Accessibility is granted — see [#175](https://github.com/PsychQuant/che-apple-mail-mcp/issues/175) / `check_accessibility`; legacy-path results disclose the reason ([#237](https://github.com/PsychQuant/che-apple-mail-mcp/issues/237)) |
 | `reply_email` | Reply to email. Optional: `cc_additional`, `attachments`, `save_as_draft`, `format` (since v2.4.0). Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0 / #43). Plain-text new body uses the wrapper-free paste path when Accessibility is granted and `CHE_MAIL_DISABLE_PASTE_REPLY` is unset ([#218](https://github.com/PsychQuant/che-apple-mail-mcp/issues/218)); legacy-path results disclose the reason ([#229](https://github.com/PsychQuant/che-apple-mail-mcp/issues/229)) |
 | `forward_email` | Forward email. Optional `body` + `format`. Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0+ / #44). Bodyless forward is always wrapper-free; with a body, same clean-path rules as `reply_email` ([#218](https://github.com/PsychQuant/che-apple-mail-mcp/issues/218) / [#229](https://github.com/PsychQuant/che-apple-mail-mcp/issues/229)) |
 | `redirect_email` | Redirect email (keeps original sender) |
@@ -174,7 +174,7 @@ reply_email(
 | Tool | Description |
 |------|-------------|
 | `list_drafts` | List draft emails — each entry carries `subject` + numeric `id` ([#276](https://github.com/PsychQuant/che-apple-mail-mcp/issues/276), additive; feeds `update_draft.draft_id` / `delete_email.id`) |
-| `create_draft` | Create a draft (supports attachments; optional `from_address` for multi-account sender selection — see [#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131), ⚠ forces the wrapped legacy path until [#219](https://github.com/PsychQuant/che-apple-mail-mcp/issues/219)). Plain-text bodies use the wrapper-free native path when Accessibility is granted — see [#175](https://github.com/PsychQuant/che-apple-mail-mcp/issues/175) / `check_accessibility`; legacy-path results disclose the reason ([#237](https://github.com/PsychQuant/che-apple-mail-mcp/issues/237)) |
+| `create_draft` | Create a draft (supports attachments; optional `from_address` for multi-account sender selection — see [#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131), clean path supported via the verified From popup, [#219](https://github.com/PsychQuant/che-apple-mail-mcp/issues/219)). Plain-text bodies use the wrapper-free native path when Accessibility is granted — see [#175](https://github.com/PsychQuant/che-apple-mail-mcp/issues/175) / `check_accessibility`; legacy-path results disclose the reason ([#237](https://github.com/PsychQuant/che-apple-mail-mcp/issues/237)) |
 | `update_draft` | Replace an existing draft (upsert, [#276](https://github.com/PsychQuant/che-apple-mail-mcp/issues/276)): locate by `draft_id` or exact `subject_match` → create replacement (inherits `create_draft` eligibility + disclosure) → delete old. Deliberately create-THEN-delete with a post-create receipt (failure always leans toward keeping drafts — worst case both MAY exist, never neither); 0 or >1 matches always refuse (candidates listed). Replacement gets a NEW id |
 
 </details>
@@ -265,12 +265,13 @@ reply_email(
 </details>
 
 <details>
-<summary><b>Diagnostics (2)</b></summary>
+<summary><b>Diagnostics (3)</b></summary>
 
 | Tool | Description |
 |------|-------------|
 | `check_fda` | Check Full Disk Access status (SQLite fast-path availability) |
 | `check_accessibility` | Check Accessibility permission (wrapper-free compose/reply GUI paths) |
+| `check_automation` | Check Automation permission (Apple Events to Mail) — non-prompting probe, four states with remediation ([#293](https://github.com/PsychQuant/che-apple-mail-mcp/issues/293)); the binary holds its OWN grant, osascript working ≠ binary authorized ([#288](https://github.com/PsychQuant/che-apple-mail-mcp/issues/288)) |
 
 </details>
 

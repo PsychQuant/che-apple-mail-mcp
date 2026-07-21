@@ -72,6 +72,11 @@ class CheAppleMailMCPServer {
                 inputSchema: .object(["type": .string("object"), "properties": .object([:])])
             ),
             Tool(
+                name: "check_automation",
+                description: "Check whether Automation (Apple Events to Mail) is granted TO THIS BINARY — the third TCC axis after check_fda and check_accessibility (#293). Non-prompting probe (AEDeterminePermissionToAutomateTarget, askUserIfNeeded=false). Four states with remediation: granted / denied (recorded -1743 — macOS never re-prompts; System Settings entry or tccutil reset, #288) / not-determined (run any Mail tool to trigger the prompt) / Mail-not-running (open Mail.app first; the probe deliberately has no side effects). Note (#288): the binary holds its OWN grant — osascript working in your shell does NOT mean this binary is authorized. Zero-TCC compose fallback: open_mailto (#287).",
+                inputSchema: .object(["type": .string("object"), "properties": .object([:])])
+            ),
+            Tool(
                 name: "get_account_info",
                 description: "Get detailed information about a specific mail account",
                 inputSchema: .object([
@@ -876,6 +881,11 @@ class CheAppleMailMCPServer {
             }
 
         // Account Tools
+        case "check_automation":
+            // #293: pure mapping unit-tested in AutomationStatusTests; the
+            // probe is the thin live layer (attended residue).
+            return AutomationStatus.report(for: AutomationStatus.probe())
+
         case "list_accounts":
             // Primary: AppleScript path — only way to resolve EWS display_name
             // (AccountsMap.plist has no email field, so SQLite/filesystem
