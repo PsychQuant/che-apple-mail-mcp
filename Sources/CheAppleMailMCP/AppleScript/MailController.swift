@@ -21,12 +21,19 @@ actor MailController {
     /// tests select the branch deterministically.
     private var ineligibilityOverride: (() -> String?)?
 
+    /// #287: when set, `openMailtoURL` calls this instead of
+    /// `NSWorkspace.shared.open` — lets tests exercise the LaunchServices
+    /// hand-off deterministically (no real compose window).
+    private var openURLOverride: ((URL) -> Bool)?
+
     func setTestSeams(
         scriptRunner: ((String) throws -> String)?,
-        ineligibility: (() -> String?)?
+        ineligibility: (() -> String?)?,
+        openURL: ((URL) -> Bool)? = nil
     ) {
         scriptRunnerOverride = scriptRunner
         ineligibilityOverride = ineligibility
+        openURLOverride = openURL
     }
 
     // MARK: - AppleScript Execution
@@ -836,12 +843,27 @@ actor MailController {
                 continue
             }
             // Structural: exactly one `@`, neither at start nor end.
-            let atCount = addr.filter { $0 == "@" }.count
+            // #289: count SCALARS, not Characters — `@` fused with a trailing
+            // combining scalar (U+FE0F) into one grapheme cluster compares
+            // unequal to "@" and slipped the Character-level count (the atCount
+            // sibling of #280's angle-scan fix; U+0040 is a single ASCII
+            // scalar, so scalar counting is strictly more precise).
+            let atCount = addr.unicodeScalars.filter { $0 == "@" }.count
             if atCount != 1 {
                 failures.append("'\(addr)' must contain exactly one '@' (got \(atCount))")
                 continue
             }
-            if addr.hasPrefix("@") || addr.hasSuffix("@") {
+            // #289 (Codex R1): boundary checks at SCALAR level too — Character-
+            // level hasPrefix/hasSuffix compares whole grapheme clusters, so a
+            // leading `@` fused with U+FE0F was invisible to hasPrefix while
+            // the scalar atCount now counts it (`@\u{FE0F}x` would have flipped
+            // from reject to accept). A trailing-side mask (`user@\u{FE0F}`)
+            // leaves the `@` scalar non-terminal — the FE0F-only domain is
+            // accepted as Mail-level-invalid garbage (benign class, same as
+            // `a@-`): the old rejection there was an accident of the very
+            // fusion bug this fix removes, and domain grammar validation is
+            // out of lite-validator scope.
+            if addr.unicodeScalars.first == "@" || addr.unicodeScalars.last == "@" {
                 failures.append("'\(addr)' must not start or end with '@'")
                 continue
             }
@@ -2276,15 +2298,35 @@ actor MailController {
         ]
     }
 
-    /// Open mailto URL
+    /// Open mailto URL — via LaunchServices, NOT AppleScript (#287).
+    ///
+    /// The old implementation drove `tell application "Mail" / mailto` — an
+    /// Apple event, so the nominally "just open a URL" tool required Automation
+    /// TCC and died with -1743 on an unauthorized machine (the exact situation
+    /// where a zero-TCC escape hatch is needed). `NSWorkspace.shared.open`
+    /// posts the URL through LaunchServices: no Apple events, no TCC, and the
+    /// mailto compose window is inherently cite-block-free (#175 — the wrapper
+    /// only afflicts AppleScript-injected bodies). Trade-offs, disclosed in
+    /// the result string: the window opens in the system DEFAULT mail client
+    /// (which may not be Mail.app), and mailto cannot carry attachments
+    /// (RFC 6068) — drag them in manually.
     func openMailtoURL(url: String) throws -> String {
-        let script = """
-        tell application "Mail"
-            mailto "\(appleScriptEscape(url))"
-            return "Opened mailto URL"
-        end tell
-        """
-        return try runScript(script)
+        guard let parsed = URL(string: url), parsed.scheme?.lowercased() == "mailto" else {
+            throw MailError.invalidParameter(
+                "open_mailto requires a valid mailto: URL (got: '\(String(url.prefix(80)))')")
+        }
+        let opened = openURLOverride?(parsed) ?? NSWorkspace.shared.open(parsed)
+        guard opened else {
+            throw MailError.operationFailed(
+                "LaunchServices could not open the mailto URL — no handler registered for "
+                + "mailto: (set a default email app in System Settings → Desktop & Dock → "
+                + "Default web browser section, or Mail.app → Settings → General).")
+        }
+        return "Handed the mailto URL to LaunchServices (zero Automation TCC — works even "
+            + "where AppleScript tools fail with -1743); the compose window should open in "
+            + "the system default mail client, which may not be Mail.app. Attachments cannot "
+            + "be carried by mailto (RFC 6068) — drag files into the window manually. Body is "
+            + "cite-block-free (mailto compose never wraps, #175)."
     }
 
     // MARK: - Import/Export Operations
@@ -2351,6 +2393,16 @@ enum MailError: LocalizedError {
         case .scriptCreationFailed:
             return "Failed to create AppleScript"
         case .scriptFailed(let message, let code):
+            // #288: -1743 (errAEEventNotPermitted, Automation TCC not granted)
+            // used to pass through raw — every session re-diagnosed the same
+            // wall from one bare line. Rendered HERE (the single sink every
+            // scriptFailed throw site funnels through) so ALL AppleScript-
+            // backed tools carry the remediation, mirroring the
+            // FullDiskAccessHelp precedent. Matched on the CODE, never the
+            // message text (locale-dependent).
+            if code == -1743 {
+                return "AppleScript error (\(code)): \(message)\n" + AutomationHelp.guidance
+            }
             return "AppleScript error (\(code)): \(message)"
         case .invalidParameter(let message):
             return "Invalid parameter: \(message)"
@@ -2358,4 +2410,32 @@ enum MailError: LocalizedError {
             return message
         }
     }
+}
+
+/// #288 — actionable guidance for Automation-TCC denial (-1743), the
+/// Automation-axis sibling of `FullDiskAccessHelp`. Centralized so the text
+/// cannot drift between tools.
+///
+/// Attribution model (empirically corrected 2026-07-21, see #288): the signed
+/// MCP binary holds its OWN Automation grant — its TCC identity is keyed to
+/// the binary's signing identity (the #211 FDA lesson, Automation axis), NOT
+/// to the terminal app that spawned it. On the incident machine, shell
+/// `osascript` controlled Mail fine (the terminal's grant) while this binary
+/// still got -1743 — two separate TCC subjects.
+enum AutomationHelp {
+    static let guidance = """
+        Mail Automation permission is not granted TO THIS BINARY. Note: the MCP \
+        binary holds its OWN Automation grant, separate from your terminal's — \
+        `osascript` working in your shell does NOT mean this binary is \
+        authorized. To fix: System Settings → Privacy & Security → Automation → \
+        find the entry for this binary / its host (Claude Desktop extension: \
+        under Claude.app) and enable Mail. If NO entry exists, a previous \
+        denial is being remembered and macOS will not re-prompt — run \
+        `tccutil reset AppleEvents` in Terminal, then retry any Mail tool to \
+        retrigger the permission prompt. Grants are per-install and a binary \
+        update can invalidate the entry (#211). Zero-TCC fallback available \
+        NOW: the open_mailto tool opens a cite-block-free compose window via \
+        LaunchServices (no Apple events; attachments must be dragged in \
+        manually).
+        """
 }

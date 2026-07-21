@@ -61,6 +61,26 @@ ASCII 路徑可正常帶 `attachments`。
 目前結構上不可能 wrapper-free（mailto 只載 plain）。二選一並明說：
 (a) 降級 plain 走乾淨路徑；(b) 接受 wrapped body 換 rich text。
 
+## TCC fallback ladder（#287 — Automation 未授權時怎麼辦）
+
+cite-block 迴避有三階，依 TCC 授權狀態選：
+
+| 階 | 路徑 | TCC 需求 | 附件 | body |
+|----|------|----------|------|------|
+| (a) | `create_draft` / `compose_email` wrapper-free clean path | Automation + Accessibility | ✅（GUI ⇧⌘A） | 乾淨 |
+| (b) | **`open_mailto`（LaunchServices，#287）** | **零** | ❌（RFC 6068；手動拖入） | 乾淨（mailto compose 天生無 wrapper） |
+| (c) | legacy AppleScript 注入 | Automation | ✅ | **被 `<blockquote type="cite">` 包 — 正式信件不可用** |
+
+**鐵律：AppleScript 工具回 `-1743`（Not authorized to send Apple events）時，(b) 是正解，絕不落到 (c)。**
+
+-1743 的授權路徑（**實證修正 2026-07-21，#288**）：signed MCP binary **自持 Automation 授權**——TCC identity 綁 binary 簽章身分（#211 FDA 教訓的 Automation 軸），**與終端機 app 分開**。實測：shell `osascript` 能控制 Mail（Terminal 的授權）而 binary 仍 -1743 —— 兩個獨立 TCC 主體，**osascript 可用 ≠ binary 已授權**。處置：
+
+- 系統設定 → 隱私權與安全性 → 自動化 → 找 **binary / 其 host** 的 entry（Claude Desktop extension → Claude.app 底下）勾選 Mail
+- **找不到 entry** = 先前的 Deny 被記住、macOS 不會重新跳 prompt → `tccutil reset AppleEvents` 後重觸發任一 Mail 工具
+- 授權 per-install；binary 更新可能使 entry 失效（同 #211）
+
+(b) 的已知限制：視窗開在**系統預設**郵件 app（未必是 Mail.app）、附件帶不了。
+
 ## 違反偵測
 
 - Result string 出現 `[legacy path — …]` 卻沒有向使用者揭露/確認 → 違反本規則

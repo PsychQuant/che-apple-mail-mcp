@@ -281,7 +281,46 @@ func attachmentPathsGuiSafe(_ paths: [String]?) -> Bool {
 /// Whitespace-tolerant.
 func parseRecipient(_ raw: String) -> (name: String?, address: String) {
     let trimmed = raw.trimmingCharacters(in: .whitespaces)
-    guard trimmed.hasSuffix(">"), let lt = trimmed.lastIndex(of: "<") else {
+    // #286: the display-name / addr-spec split point is the LAST '<' that is
+    // NOT inside an RFC 5322 quoted string — a bare lastIndex(of: "<") landed
+    // inside a quoted local-part that STARTS with '<' (`"Foo" <"<a>"@x>`) and
+    // garbled the extraction (name=`Foo" <`, addr=`a>"@x`). Quote state honors
+    // quoted-pairs (`\"` stays inside), same escape semantics as
+    // `unescapeQuotedPairs` / `containsUnquotedAngle`. Two deliberate edges:
+    //   - An UNTERMINATED quote never yields an unquoted '<' — the string
+    //     stays bare and the validator rejects it (fail-loud; the old split
+    //     silently accepted an unbalanced-quote display name).
+    //   - The scan walks Characters, not scalars: a grapheme-masked '<'
+    //     (fused with U+FE0F) is literal text here — no split — and the
+    //     validator's SCALAR-level scan (#280) rejects it downstream.
+    //     Splitting at a scalar index could land mid-grapheme and trap on
+    //     String slicing, so fail-safe beats scalar precision at this layer.
+    // Split-happened invariant: an unquoted '<' requires every quote before
+    // it to have closed, so the extracted name always carries balanced quote
+    // state — the `wasQuoted` prefix/suffix heuristic below can no longer
+    // pair quotes from two different sources (#286's second defect).
+    var lastUnquotedLT: String.Index? = nil
+    var inQuote = false
+    var escaped = false
+    var idx = trimmed.startIndex
+    while idx < trimmed.endIndex {
+        let ch = trimmed[idx]
+        if inQuote {
+            if escaped {
+                escaped = false
+            } else if ch == "\\" {
+                escaped = true
+            } else if ch == "\"" {
+                inQuote = false
+            }
+        } else if ch == "\"" {
+            inQuote = true
+        } else if ch == "<" {
+            lastUnquotedLT = idx
+        }
+        idx = trimmed.index(after: idx)
+    }
+    guard trimmed.hasSuffix(">"), let lt = lastUnquotedLT else {
         return (nil, trimmed)
     }
     let addrStart = trimmed.index(after: lt)
