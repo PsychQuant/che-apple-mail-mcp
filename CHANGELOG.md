@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`batch_export_emails_markdown` now consumes `fromPartialEmlx` — bulk archives are never silently header-only** ([#283](https://github.com/PsychQuant/che-apple-mail-mcp/issues/283), closes the [#274](https://github.com/PsychQuant/che-apple-mail-mcp/issues/274) gap on archive-mail's primary Step 5.0 path). The export fetch closure (`EmlxParser.readEmail`, format "text") already carried the #274 partial-`.emlx` bit, but `ExportEmailsMarkdown.run` dropped it: a header-synced / body-not-downloaded message rendered into a header-only `.md` with a clean `"written"` status. Now the run judges each fetched email with the #274 pinned helper (`partialBodyNotDownloaded`, format-aware, "text" mirroring the fetch wiring) — deliberately AFTER the #177 dedup skip (an already-archived duplicate stays `"skipped"`, unannotated). Default behavior is byte-compatible **annotate-and-write**: the manifest item gains negative-only `body_downloaded: false` (#274 contract parity — false or absent, never true; threaded through written/escape-error/write-error items) and the summary gains a `body_not_downloaded` count for an O(1) SOP check. New opt-in `opts.skip_partial` keeps the header-only email OUT of the corpus instead: status `"header_only"`, nothing written — so the SOP's clean loop is "re-fetch flagged ids via single `get_email` (whose #274 fallback doubles as the download nudge), re-run export for just those ids", with no stale-file cleanup and no collision-guard `-N` duplicates. Fetch-error items stay unannotated (no content to judge — documented). SOP-side consumption (plugins-repo `archive-mail.md` reading the new signal) is cross-repo and tracked on the issue. 973→977 tests.
+
 ## [2.22.0] - 2026-07-20
 
 ### Added

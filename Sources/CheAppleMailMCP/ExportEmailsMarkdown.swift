@@ -9,7 +9,13 @@ struct ExportManifestItem {
     let attachments: [String]        // paths of saved attachments (relative to output_dir)
     let attachmentErrors: [String]   // per-attachment failures (never silently dropped)
     let status: String               // "written" | "error" | "skipped" (#177 dedup)
+                                     //   | "header_only" (#283 skip_partial)
     let error: String?
+    // #283 — negative-only partial-`.emlx` signal (#274 contract parity):
+    // `false` = the content came from a partial file AND the text body the
+    // export asked for is absent (header-only archive); nil = no partial-file
+    // evidence of a missing body. Never true.
+    var bodyDownloaded: Bool? = nil
 
     var jsonObject: [String: Any] {
         var o: [String: Any] = ["id": id, "status": status, "attachments": attachments]
@@ -17,6 +23,7 @@ struct ExportManifestItem {
         if let p = writtenPath { o["written_path"] = p }
         if !attachmentErrors.isEmpty { o["attachment_errors"] = attachmentErrors }
         if let e = error { o["error"] = e }
+        if bodyDownloaded == false { o["body_downloaded"] = false }
         return o
     }
 }
@@ -104,6 +111,10 @@ struct ExportManifest {
     var errors: Int { items.filter { $0.status == "error" }.count }
     /// #177: dedup-skipped (already-archived Message-ID) count.
     var skipped: Int { items.filter { $0.status == "skipped" }.count }
+    /// #283: items whose content came from a partial `.emlx` with the body
+    /// absent (`body_downloaded: false`) — written-but-header-only by default,
+    /// or status "header_only" under `skip_partial`. O(1) SOP check.
+    var bodyNotDownloaded: Int { items.filter { $0.bodyDownloaded == false }.count }
 
     var jsonObject: [String: Any] {
         [
@@ -111,6 +122,7 @@ struct ExportManifest {
             "written": written,
             "errors": errors,
             "skipped": skipped,
+            "body_not_downloaded": bodyNotDownloaded,
             "items": items.map { $0.jsonObject },
         ]
     }
@@ -293,6 +305,7 @@ enum ExportEmailsMarkdown {
         attachmentNamesFor: (String) throws -> [String],
         attachmentData: (String, String) throws -> Data,
         skipMessageIds: Set<String> = [],
+        skipPartial: Bool = false,
         fileManager: FileManager = .default
     ) throws -> ExportManifest {
         try? fileManager.createDirectory(at: outputDir, withIntermediateDirectories: true)
@@ -368,6 +381,32 @@ enum ExportEmailsMarkdown {
                 continue
             }
 
+            // #283 — closes the #274 gap on the bulk path: the fetch closure
+            // (EmlxParser.readEmail, format "text") already carries
+            // `fromPartialEmlx`, but the export used to drop it — header-only
+            // archives were written with a clean "written" status. Judged by
+            // the #274 pinned helper (format "text" mirrors the fetch wiring).
+            // Deliberately AFTER the #177 dedup skip: an already-archived
+            // duplicate stays "skipped" and unannotated (it will never be
+            // written, so a partial signal on it is noise).
+            let partialBodyMissing = CheAppleMailMCPServer.partialBodyNotDownloaded(
+                content: content, format: "text")
+            let bodyDownloaded: Bool? = partialBodyMissing ? false : nil
+
+            // Opt-in `skip_partial`: keep the header-only email OUT of the
+            // corpus (no stale .md to clean up, no collision-guard -N
+            // duplicate on the re-export) — the SOP re-fetches flagged ids via
+            // get_email (whose #274 fallback doubles as the download nudge)
+            // and re-runs the export for just those ids. Default (false) stays
+            // byte-compatible: still written, but annotated.
+            if skipPartial, partialBodyMissing {
+                items.append(ExportManifestItem(
+                    id: id, messageId: content.messageId, writtenPath: nil, attachments: [],
+                    attachmentErrors: [], status: "header_only", error: nil,
+                    bodyDownloaded: false))
+                continue
+            }
+
             let threadKey = EmailMarkdownRenderer.stripReplyPrefixes(content.subject)
             let iso = EmailMarkdownRenderer.rfc822ToISO8601(content.date)
             let localDate = Self.filenameDatePart(fromISO: iso)
@@ -396,7 +435,8 @@ enum ExportEmailsMarkdown {
                 items.append(ExportManifestItem(
                     id: id, messageId: content.messageId, writtenPath: nil, attachments: [],
                     attachmentErrors: [], status: "error",
-                    error: "filename escapes output_dir: \(filename)"))
+                    error: "filename escapes output_dir: \(filename)",
+                    bodyDownloaded: bodyDownloaded))
                 continue
             }
 
@@ -486,7 +526,8 @@ enum ExportEmailsMarkdown {
                 items.append(ExportManifestItem(
                     id: id, messageId: content.messageId, writtenPath: destURL.path,
                     attachments: savedAttachments, attachmentErrors: attachmentErrors,
-                    status: "written", error: nil))
+                    status: "written", error: nil,
+                    bodyDownloaded: bodyDownloaded))
             } catch {
                 // The .md failed — remove attachments already written so a failed
                 // item leaves no orphan files behind.
@@ -494,7 +535,8 @@ enum ExportEmailsMarkdown {
                 items.append(ExportManifestItem(
                     id: id, messageId: content.messageId, writtenPath: nil,
                     attachments: [], attachmentErrors: attachmentErrors,
-                    status: "error", error: "write: \(error.localizedDescription)"))
+                    status: "error", error: "write: \(error.localizedDescription)",
+                    bodyDownloaded: bodyDownloaded))
             }
         }
 
