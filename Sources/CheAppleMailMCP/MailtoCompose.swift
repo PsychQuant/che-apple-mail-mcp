@@ -441,15 +441,18 @@ func mailtoIneligibilityReason(
     hasCustomSender: Bool,
     hasSubject: Bool,
     attachmentsGuiSafe: Bool = true,
-    recipientsAddrSpecOnly: Bool = true
+    recipientsAddrSpecOnly: Bool = true,
+    displayNameFillViable: Bool = false
 ) -> String? {
     if disabledByEnv {
         return "mailto compose disabled via \(mailtoComposeDisableEnvKey)"
     }
-    if hasCustomSender {
-        return "custom from_address — mailto: composes from the default account only; "
-            + "a verified sender-popup is pending #219"
-    }
+    // #219: a custom from_address no longer disqualifies the clean path — the
+    // GUI drives the compose window's From popup with mandatory READ-BACK
+    // verification (SENDERPOPUP sentinel → legacy fallback on any mismatch,
+    // never a send from the wrong account). The popup needs GUI scripting, so
+    // the Accessibility gate below still routes unauthorized machines to
+    // legacy (`set sender` there picks the right account, body wrapped).
     if !hasSubject {
         return "empty subject — the GUI dispatch guard identifies our compose window "
             + "by its title (= subject)"
@@ -458,6 +461,11 @@ func mailtoIneligibilityReason(
         return "format '\(format.rawValue)' — the mailto: URL carries plain text only"
     }
     if !accessibilityTrusted {
+        if hasCustomSender {
+            return "custom from_address needs the verified sender-popup (#219), which "
+                + "needs Accessibility (AXIsProcessTrusted) — not granted; the legacy "
+                + "path selects the sender natively instead"
+        }
         return "Accessibility (AXIsProcessTrusted) not granted — GUI keystrokes for "
             + "save/send/attach would silently fail"
     }
@@ -465,9 +473,14 @@ func mailtoIneligibilityReason(
         return "attachment path contains non-ASCII characters — the GUI go-to-folder "
             + "attach flow hangs there (#220); the legacy path attaches natively instead"
     }
-    if !recipientsAddrSpecOnly {
+    // #277: display-name recipients can ride the clean path via GUI clipboard
+    // fill — but DRAFT-ONLY (a failed fill on a send would fire with missing
+    // recipients) and only when the caller marked the fill viable (draft mode,
+    // no display-name bcc — the Bcc field isn't reliably visible to fill).
+    if !recipientsAddrSpecOnly && !displayNameFillViable {
         return "display-name recipients (Name <email>) — the mailto URL carries "
-            + "addr-spec only (RFC 6068); the legacy path sets recipient names natively (#251)"
+            + "addr-spec only (RFC 6068); GUI fill is draft-only with no display-name "
+            + "bcc (#277); the legacy path sets recipient names natively (#251)"
     }
     return nil
 }

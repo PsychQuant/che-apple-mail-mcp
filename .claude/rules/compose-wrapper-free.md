@@ -25,8 +25,8 @@ editor（mailto: hand-off + 鍵盤快捷鍵），即 #175 的 wrapper-free path�
 |------|----------|
 | `format` = `plain`（或省略） | markdown/html → legacy → wrapped |
 | subject 非空 | 空 subject → legacy（GUI 視窗識別靠 title）|
-| **不帶 `from_address`** | 自訂寄件人 → legacy → wrapped（**#237 實證的日常 trigger**；乾淨化根治 = #219）|
-| **收件人用 bare address（不帶 display name）** | 帶 `Name <addr>`（含中文人名）→ legacy → wrapped（mailto RFC 6068 只載 addr-spec、載不了人名，是**與 `from_address` 獨立的第二個 trigger**；乾淨化根治 = #277）|
+| ~~不帶 `from_address`~~ **#219 已根治**：自訂寄件人走 clean path（GUI 驅動 From popup + read-back 驗證；mismatch → legacy fallback，寄件帳號保證正確、body wrapped + 揭露）| Accessibility 未授權 → legacy（popup 需 GUI scripting）|
+| ~~收件人用 bare address~~ **#277 部分根治（draft-only）**：`create_draft` 的 display-name To/Cc 走 clean path（視窗開啟後 GUI clipboard 填入、Mail 原生 tokenize；bcc 必須 bare）；`compose_email`（send）帶人名仍 → legacy（fill 失敗會缺收件人寄出，故 send 不冒此險）| send 帶人名 / bcc 帶人名 / Accessibility 未授權 → legacy |
 | Accessibility 已授權（`check_accessibility`）| 未授權 → legacy |
 | env `CHE_MAIL_DISABLE_MAILTO_COMPOSE` 未設 | 設了 → legacy |
 
@@ -35,20 +35,22 @@ editor（mailto: hand-off + 鍵盤快捷鍵），即 #175 的 wrapper-free path�
 
 ## 常見情境 recipe
 
-### 要從非預設帳號寄（最常見，#237 的 trigger）
+### 要從非預設帳號寄（#219 已根治 — 直接帶 `from_address`）
 
-**不要**直接帶 `from_address`。改用兩段式：
+**#219 之後**：直接帶 `from_address` 即可——clean path 以 GUI 驅動 From popup 選帳號並 **read-back 驗證**（popup 顯示值必含該 address），任何 mismatch 自動 fallback legacy（`set sender` 帳號正確 + wrapped body + 揭露），**絕不從錯帳號寄出**。以下兩段式手動流程保留為 Accessibility 未授權機器的 workaround：
+
+#### （僅 Accessibility 未授權時）舊兩段式 workaround
+
+（此機器 Accessibility 未授權時，帶 `from_address` 會直接走 legacy → wrapped。要乾淨 body 只能兩段式：）
 
 1. `create_draft(...)` **省略 `from_address`**（其餘 eligibility 滿足）→ 乾淨草稿落在預設帳號
 2. 請使用者在 Mail 撰寫視窗**手動點寄件人下拉選單**切換帳號 — 原生 GUI 動作，不觸發 wrapper
 
-> ⚠️ **手動切帳號本身是 footgun**：若使用者忘記切，這封信就從**錯的預設帳號**寄出（本機預設帳號未必是預期的寄件身分，屬不可逆的誤寄）。所以第 2 步務必**明確提醒使用者切換並在寄出前確認寄件人**。此 footgun 的乾淨化根治 = #219（verified sender-popup + 讀回驗證，自動選帳號、不再靠手動）。
+> ⚠️ **手動切帳號是 footgun**：忘記切 = 從錯的預設帳號寄出（不可逆誤寄）。第 2 步務必**明確提醒切換並在寄出前確認寄件人**。根治路徑是開啟 Accessibility 讓 #219 popup 生效。
 
-只有在「使用者明確接受 wrapped body 換自動選帳號」時才帶 `from_address`（result 會有揭露後綴）。
+### 要顯示收件人人名（`Name <addr>`）— #277 draft-only 根治
 
-### 要顯示收件人人名（`Name <addr>`）
-
-帶 display name 的收件人**獨立觸發** legacy → wrapped（見 eligibility 表）。目前「乾淨 body」與「顯示人名」**二選一**：走乾淨路徑就得用 bare address（Mail 通常會自動從 Contacts 補顯示名）。**若同時又要非預設帳號**，三者（乾淨 body + 人名 + 指定帳號）目前無法並存——這正是逼出上面手動 footgun 的根源。乾淨化根治 = #277（+ #219）。在兩者都修好前，若使用者堅持要顯示人名，依頂部 CRITICAL：**明說這封會被 wrap、由使用者拍板**，不可靜默送出。
+**`create_draft`（草稿）**：直接帶 `Name <addr>` — clean path 在視窗開啟後以 clipboard 填 To/Cc（Mail 原生 tokenize；CJK 人名走 paste 避開 IME，#220 教訓）。限制：bcc 必須 bare address；**存檔後在草稿裡確認 To/Cc**（GUI fill 的 read-back 有限，live 驗證為 #277 residue）。三合一（乾淨 body + 人名 + 指定帳號）在 draft 上已可並存（#219 + #277）。**`compose_email`（直接寄送）**：帶人名仍走 legacy（fill 失敗會缺收件人寄出——send 不冒此險）；要 send 且要人名，依頂部 CRITICAL 明說 wrap、由使用者拍板。
 
 ### 要附件
 

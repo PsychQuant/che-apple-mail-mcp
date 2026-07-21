@@ -137,7 +137,10 @@ func buildMailtoComposeScript(
     url: String,
     subject: String,
     attachments: [String],
-    send: Bool
+    send: Bool,
+    fromAddress: String? = nil,
+    fillToRecipients: [String] = [],
+    fillCcRecipients: [String] = []
 ) -> String {
     let windowDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_WINDOW_DELAY", fallback: 1.8)
     let stepDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_STEP_DELAY", fallback: 0.7)
@@ -215,6 +218,99 @@ func buildMailtoComposeScript(
             end tell
         end tell
     """
+
+    // 1.5 (#277): display-name recipient fill via clipboard paste. The mailto
+    // URL deliberately carries NO To/Cc when this phase is active (a name can't
+    // ride RFC 6068; pasting `Name <addr>` lets Mail tokenize natively). A
+    // fresh compose window focuses the To field, so the fill exploits the
+    // default focus order To → (tab) → Cc. Paste, not keystroke: CJK names
+    // via keystroke hit IME nondeterminism (#220 lesson); the Swift caller
+    // wraps the run in withClipboardPreserved. Any window-identity failure
+    // errors out pre-dispatch → cleanup closes OUR new window → legacy
+    // fallback (names shown natively there, body wrapped + disclosed).
+    // Draft-only by design (#277): send:true never reaches this phase — a
+    // failed fill on a send would fire the message with missing recipients.
+    if !fillToRecipients.isEmpty || !fillCcRecipients.isEmpty {
+        let toLine = fillToRecipients.joined(separator: ", ")
+        let ccLine = fillCcRecipients.joined(separator: ", ")
+        s += """
+
+        set the clipboard to "\(appleScriptEscape(toLine))"
+        tell application "System Events"
+            tell process "Mail"
+                set frontmost to true
+                \(raiseOnly)
+                keystroke "v" using command down
+                delay \(stepDelay)
+                keystroke tab
+            end tell
+        end tell
+        delay \(stepDelay)
+        """
+        if !ccLine.isEmpty {
+            s += """
+
+        set the clipboard to "\(appleScriptEscape(ccLine))"
+        tell application "System Events"
+            tell process "Mail"
+                set frontmost to true
+                \(raiseOnly)
+                keystroke "v" using command down
+                delay \(stepDelay)
+                keystroke tab
+            end tell
+        end tell
+        delay \(stepDelay)
+        """
+        }
+    }
+
+    // 1.7 (#219): verified sender popup. mailto always composes from the
+    // DEFAULT account; a custom from_address is selected here by driving the
+    // compose window's From popup — identified as the pop up button whose
+    // CURRENT VALUE carries an '@' (the From popup shows an email; the
+    // signature popup does not). HARD REQUIREMENT (issue #219): after
+    // selecting, the popup value is READ BACK and must contain the requested
+    // address — any mismatch/absence errors out with a SENDERPOPUP sentinel,
+    // which is pre-dispatch: the on-error handler closes OUR window
+    // (saving no) and the Swift router falls back to the legacy path whose
+    // `set sender` picks the right account (correct sender beats clean body,
+    // same conservative ordering as #175). Case-insensitive containment via
+    // AppleScript's default text comparison.
+    if let from = fromAddress, !from.isEmpty {
+        let fromEsc = appleScriptEscape(from)
+        s += """
+
+        tell application "System Events"
+            tell process "Mail"
+                set frontmost to true
+                \(raiseOnly)
+                set _fromPopup to missing value
+                repeat with _pb in (pop up buttons of _w)
+                    try
+                        if (value of _pb as text) contains "@" then
+                            set _fromPopup to _pb
+                            exit repeat
+                        end if
+                    end try
+                end repeat
+                if _fromPopup is missing value then error "SENDERPOPUP: From popup not found on the compose window"
+                click _fromPopup
+                delay \(stepDelay)
+                try
+                    click (first menu item of menu 1 of _fromPopup whose name contains "\(fromEsc)")
+                on error
+                    key code 53
+                    error "SENDERPOPUP: no From menu item contains \\"\(fromEsc)\\""
+                end try
+                delay \(stepDelay)
+                set _senderReadback to (value of _fromPopup as text)
+                if _senderReadback does not contain "\(fromEsc)" then error "SENDERPOPUP: read-back mismatch — popup shows \\"" & _senderReadback & "\\""
+            end tell
+        end tell
+        delay \(stepDelay)
+        """
+    }
 
     // 2. Attachments: re-raise OUR window, then one File ▸ Attach (⇧⌘A) cycle each,
     // path pasted into the Go-to-folder (⇧⌘G) field (clipboard set here, restored by

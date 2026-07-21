@@ -1025,7 +1025,7 @@ actor MailController {
             do {
                 return try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
-                    attachments: attachments, send: true)
+                    attachments: attachments, send: true, fromAddress: fromAddress)
             } catch where isPostDispatchError(error) {
                 // #239 verify REQUIRED: same friendly guardrail as the default
                 // path — a raw POSTDISPATCH token invites an auto-retrying
@@ -1045,7 +1045,7 @@ actor MailController {
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
-                    attachments: attachments, send: true)
+                    attachments: attachments, send: true, fromAddress: fromAddress)
             },
             legacyPath: {
                 let script = try buildComposeEmailScript(
@@ -1078,7 +1078,7 @@ actor MailController {
     /// (`fromAddress`) and an empty subject both route to the legacy path (mailto
     /// can't pick a non-default account; the GUI dispatch guard identifies the
     /// compose window by its title = subject).
-    private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, recipients: [String] = []) -> String? {
+    private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, recipients: [String] = [], draftMode: Bool = false, bcc: [String] = []) -> String? {
         if let override = ineligibilityOverride { return override() }
         return mailtoIneligibilityReason(
             format: format,
@@ -1087,7 +1087,12 @@ actor MailController {
             hasCustomSender: (fromAddress?.isEmpty == false),
             hasSubject: !subject.isEmpty,
             attachmentsGuiSafe: attachmentPathsGuiSafe(attachments),
-            recipientsAddrSpecOnly: !anyRecipientHasDisplayName(recipients)
+            recipientsAddrSpecOnly: !anyRecipientHasDisplayName(recipients),
+            // #277: GUI clipboard fill for display-name To/Cc is DRAFT-only
+            // (a failed fill on a send would fire with missing recipients)
+            // and requires a display-name-free bcc (the Bcc field is not
+            // reliably visible/fillable).
+            displayNameFillViable: draftMode && !anyRecipientHasDisplayName(bcc)
         )
     }
 
@@ -1111,20 +1116,41 @@ actor MailController {
     /// clipboard per-attachment for the Go-to-folder paste).
     private func composeViaMailto(
         to: [String], subject: String, body: String,
-        cc: [String]?, bcc: [String]?, attachments: [String]?, send: Bool
+        cc: [String]?, bcc: [String]?, attachments: [String]?, send: Bool,
+        fromAddress: String? = nil
     ) throws -> String {
-        let url = buildMailtoURL(to: to, subject: subject, body: body, cc: cc, bcc: bcc)
+        // #277: display-name To/Cc can't ride the mailto URL (RFC 6068). When a
+        // list carries ANY display name, the WHOLE list goes through the GUI
+        // clipboard-fill phase (order preserved) and the URL omits it.
+        // Eligibility guarantees this only happens on the draft path with a
+        // display-name-free bcc.
+        let fillTo = anyRecipientHasDisplayName(to) ? to : []
+        let fillCc = anyRecipientHasDisplayName(cc) ? (cc ?? []) : []
+        let urlTo = fillTo.isEmpty ? to : []
+        let urlCc = fillCc.isEmpty ? cc : nil
+        let url = buildMailtoURL(to: urlTo, subject: subject, body: body, cc: urlCc, bcc: bcc)
         guard url.count <= maxMailtoURLLength else {
             throw MailError.scriptFailed(
                 message: "mailto URL too long (\(url.count) > \(maxMailtoURLLength) chars)",
                 code: -1)
         }
         let script = buildMailtoComposeScript(
-            url: url, subject: subject, attachments: attachments ?? [], send: send)
-        if attachments?.isEmpty == false {
-            return try withClipboardPreserved { try runScript(script) }
+            url: url, subject: subject, attachments: attachments ?? [], send: send,
+            fromAddress: fromAddress, fillToRecipients: fillTo, fillCcRecipients: fillCc)
+        let needsClipboard = attachments?.isEmpty == false || !fillTo.isEmpty || !fillCc.isEmpty
+        var result = needsClipboard
+            ? try withClipboardPreserved({ try runScript(script) })
+            : try runScript(script)
+        // #219/#277: disclose what the GUI verified/filled so the caller can
+        // see the clean path handled the extras (parity with the legacy
+        // disclosure discipline, #237).
+        if let from = fromAddress, !from.isEmpty {
+            result += " [sender verified via From popup: \(from)]"
         }
-        return try runScript(script)
+        if !fillTo.isEmpty || !fillCc.isEmpty {
+            result += " [display-name recipients GUI-filled (draft-only, #277) — verify To/Cc in the draft]"
+        }
+        return result
     }
 
     /// #175 — preserve the user's clipboard (all flavors) across a closure that
@@ -1649,12 +1675,13 @@ actor MailController {
             if let reason = mailtoIneligibilityReasonForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
                 attachments: attachments,
-                recipients: to + (cc ?? []) + (bcc ?? [])) {
+                recipients: to + (cc ?? []) + (bcc ?? []),
+                draftMode: true, bcc: bcc ?? []) {
                 throw MailError.invalidParameter(requireWrapperFreeRefusal(reason: reason))
             }
             return try composeViaMailto(
                 to: to, subject: subject, body: body, cc: cc, bcc: bcc,
-                attachments: attachments, send: false)
+                attachments: attachments, send: false, fromAddress: fromAddress)
         }
 
         // #175: prefer the wrapper-free mailto path (save draft via ⌘S);
@@ -1666,11 +1693,12 @@ actor MailController {
             ineligibilityReason: mailtoIneligibilityReasonForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
                 attachments: attachments,
-                recipients: to + (cc ?? []) + (bcc ?? [])),
+                recipients: to + (cc ?? []) + (bcc ?? []),
+                draftMode: true, bcc: bcc ?? []),
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
-                    attachments: attachments, send: false)
+                    attachments: attachments, send: false, fromAddress: fromAddress)
             },
             legacyPath: {
                 let script = try buildCreateDraftScript(
