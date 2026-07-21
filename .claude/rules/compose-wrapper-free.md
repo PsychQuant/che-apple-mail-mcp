@@ -61,6 +61,24 @@ ASCII 路徑可正常帶 `attachments`。
 目前結構上不可能 wrapper-free（mailto 只載 plain）。二選一並明說：
 (a) 降級 plain 走乾淨路徑；(b) 接受 wrapped body 換 rich text。
 
+## TCC fallback ladder（#287 — Automation 未授權時怎麼辦）
+
+cite-block 迴避有三階，依 TCC 授權狀態選：
+
+| 階 | 路徑 | TCC 需求 | 附件 | body |
+|----|------|----------|------|------|
+| (a) | `create_draft` / `compose_email` wrapper-free clean path | Automation + Accessibility | ✅（GUI ⇧⌘A） | 乾淨 |
+| (b) | **`open_mailto`（LaunchServices，#287）** | **零** | ❌（RFC 6068；手動拖入） | 乾淨（mailto compose 天生無 wrapper） |
+| (c) | legacy AppleScript 注入 | Automation | ✅ | **被 `<blockquote type="cite">` 包 — 正式信件不可用** |
+
+**鐵律：AppleScript 工具回 `-1743`（Not authorized to send Apple events）時，(b) 是正解，絕不落到 (c)。**
+
+-1743 的授權路徑（responsible-process 隨 install 而異）：系統設定 → 隱私權與安全性 → 自動化 →
+- Claude Code CLI 安裝 → 勾選**終端機 app**（Terminal / iTerm 等）底下的 Mail
+- Claude Desktop extension → 勾選 **Claude.app** 底下的 Mail
+
+兩個 install **各自獨立授權**；binary 更新可能使 TCC entry 失效（同 #211 的 FDA 教訓）。(b) 的已知限制：視窗開在**系統預設**郵件 app（未必是 Mail.app）、附件帶不了。
+
 ## 違反偵測
 
 - Result string 出現 `[legacy path — …]` 卻沒有向使用者揭露/確認 → 違反本規則

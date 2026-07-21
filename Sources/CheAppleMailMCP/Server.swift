@@ -676,7 +676,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "open_mailto",
-                description: "Open a mailto URL to compose an email",
+                description: "Open a mailto URL in the system default mail client via LaunchServices — ZERO Automation TCC required (#287), so it works even when AppleScript tools fail with -1743 (Not authorized to send Apple events). The mailto compose window is inherently cite-block-free (#175). Cite-block-avoidance ladder: (a) create_draft clean path — needs Automation + Accessibility TCC, carries attachments; (b) THIS TOOL — zero TCC, no attachments (RFC 6068; drag files in manually), window opens in the default mail app which may not be Mail.app; (c) legacy AppleScript injection — body wrapped in blockquote type=cite, unacceptable for formal mail. When TCC is not granted (-1743), (b) is the correct path — never fall to (c).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([

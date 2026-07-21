@@ -21,12 +21,19 @@ actor MailController {
     /// tests select the branch deterministically.
     private var ineligibilityOverride: (() -> String?)?
 
+    /// #287: when set, `openMailtoURL` calls this instead of
+    /// `NSWorkspace.shared.open` — lets tests exercise the LaunchServices
+    /// hand-off deterministically (no real compose window).
+    private var openURLOverride: ((URL) -> Bool)?
+
     func setTestSeams(
         scriptRunner: ((String) throws -> String)?,
-        ineligibility: (() -> String?)?
+        ineligibility: (() -> String?)?,
+        openURL: ((URL) -> Bool)? = nil
     ) {
         scriptRunnerOverride = scriptRunner
         ineligibilityOverride = ineligibility
+        openURLOverride = openURL
     }
 
     // MARK: - AppleScript Execution
@@ -2276,15 +2283,35 @@ actor MailController {
         ]
     }
 
-    /// Open mailto URL
+    /// Open mailto URL — via LaunchServices, NOT AppleScript (#287).
+    ///
+    /// The old implementation drove `tell application "Mail" / mailto` — an
+    /// Apple event, so the nominally "just open a URL" tool required Automation
+    /// TCC and died with -1743 on an unauthorized machine (the exact situation
+    /// where a zero-TCC escape hatch is needed). `NSWorkspace.shared.open`
+    /// posts the URL through LaunchServices: no Apple events, no TCC, and the
+    /// mailto compose window is inherently cite-block-free (#175 — the wrapper
+    /// only afflicts AppleScript-injected bodies). Trade-offs, disclosed in
+    /// the result string: the window opens in the system DEFAULT mail client
+    /// (which may not be Mail.app), and mailto cannot carry attachments
+    /// (RFC 6068) — drag them in manually.
     func openMailtoURL(url: String) throws -> String {
-        let script = """
-        tell application "Mail"
-            mailto "\(appleScriptEscape(url))"
-            return "Opened mailto URL"
-        end tell
-        """
-        return try runScript(script)
+        guard let parsed = URL(string: url), parsed.scheme?.lowercased() == "mailto" else {
+            throw MailError.invalidParameter(
+                "open_mailto requires a valid mailto: URL (got: '\(String(url.prefix(80)))')")
+        }
+        let opened = openURLOverride?(parsed) ?? NSWorkspace.shared.open(parsed)
+        guard opened else {
+            throw MailError.operationFailed(
+                "LaunchServices could not open the mailto URL — no handler registered for "
+                + "mailto: (set a default email app in System Settings → Desktop & Dock → "
+                + "Default web browser section, or Mail.app → Settings → General).")
+        }
+        return "Opened mailto compose window via LaunchServices (zero Automation TCC — works "
+            + "even where AppleScript tools fail with -1743). Window opens in the system "
+            + "default mail client, which may not be Mail.app; attachments cannot be carried "
+            + "by mailto (RFC 6068) — drag files into the window manually. Body is "
+            + "cite-block-free (mailto compose never wraps, #175)."
     }
 
     // MARK: - Import/Export Operations

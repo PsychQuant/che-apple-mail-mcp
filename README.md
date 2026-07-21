@@ -359,6 +359,19 @@ None of these can remove the single manual toggle (Apple puts FDA in the manual-
 
 **Accessibility (clean compose, #175)** — a *separate, optional* grant from Full Disk Access. Mail.app wraps any AppleScript-injected outgoing-message body in `<blockquote type="cite">`, which some mobile clients render as a quotation of your own text. To avoid this, `compose_email` / `create_draft` route plain-text mail through Mail's **native compose pipeline** (a `mailto:` hand-off), then drive save/send and attachments with keyboard shortcuts — which needs **Accessibility** (System Settings → Privacy & Security → Accessibility), granted to the same responsible process as FDA (your terminal / Claude Desktop). The **`check_accessibility` MCP tool** and the `--setup` window's **Accessibility** row report the status. Without it, compose still works but falls back to the wrapped legacy path (with a stderr warning). markdown/html bodies and a custom `from_address` always use the legacy path. To force the legacy path even when Accessibility is granted, set `CHE_MAIL_DISABLE_MAILTO_COMPOSE=1`. Since [#237](https://github.com/PsychQuant/che-apple-mail-mcp/issues/237) the legacy path is never silent: the tool result carries a `[legacy path — …]` suffix naming the reason (and stderr gets a matching warning), so a calling agent can decide before the mail goes out. For a clean body from a **non-default account**, omit `from_address` and switch the sender manually in Mail's compose window (the native popup doesn't wrap; automated sender selection is [#219](https://github.com/PsychQuant/che-apple-mail-mcp/issues/219)).
 
+### Automation TCC (-1743) and the zero-TCC escape hatch
+
+If AppleScript-backed tools fail with `AppleScript error (-1743): Not authorized to send
+Apple events to Mail`, the Automation permission is missing. Grant it under **System
+Settings → Privacy & Security → Automation** — the responsible process depends on the
+install: Claude Code CLI → your **terminal app** (Terminal / iTerm); Claude Desktop
+extension → **Claude.app**. The two installs hold independent grants, and a binary
+update can invalidate the entry (same lesson as FDA, #211).
+
+Until the grant is in place, `open_mailto` still works: it goes through LaunchServices
+(zero TCC, #287) and opens a cite-block-free compose window in the system default mail
+client. mailto cannot carry attachments (RFC 6068) — drag files in manually.
+
 ### Step 4: Restart Claude
 
 ```bash
