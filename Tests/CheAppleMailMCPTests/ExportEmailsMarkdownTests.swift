@@ -11,12 +11,14 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         messageId: String = "<m@x>",
         inReplyTo: String = "",
         textBody: String? = "body",
-        htmlBody: String? = nil
+        htmlBody: String? = nil,
+        fromPartialEmlx: Bool = false
     ) -> EmailContent {
         EmailContent(
             subject: subject, sender: sender, toRecipients: ["a@x.com"], ccRecipients: [],
             date: date, messageId: messageId, inReplyTo: inReplyTo,
-            textBody: textBody, htmlBody: htmlBody, rawSource: nil)
+            textBody: textBody, htmlBody: htmlBody, rawSource: nil,
+            fromPartialEmlx: fromPartialEmlx)
     }
 
     private func tempDir() -> URL {
@@ -386,6 +388,206 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         XCTAssertEqual(manifest.items[0].status, "written")
         // written items carry message_id (already present; pinned here for #177)
         XCTAssertEqual(manifest.items[0].messageId, "<10@x>")
+    }
+
+    // MARK: - #283 partial-.emlx visibility (closes the #274 gap on the bulk path)
+
+    func testRun_partialBodyMissing_annotatedAndStillWritten() throws {
+        // #283 default behavior: a partial-.emlx email whose body is absent is
+        // STILL written (byte-compatible with pre-#283 runs) but the manifest
+        // item carries `body_downloaded: false` — the bulk path stops being
+        // silent about header-only archives. Negative-only key (#274 parity):
+        // false or absent, never true.
+        let out = tempDir()
+        let manifest = try ExportEmailsMarkdown.run(
+            ids: ["10", "11"], outputDir: out, direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { id in
+                id == "10"
+                    ? self.makeEmail(subject: "P", messageId: "<10@x>",
+                                     textBody: nil, fromPartialEmlx: true)
+                    : self.makeEmail(subject: "N", messageId: "<11@x>")
+            },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() })
+
+        let byId = Dictionary(uniqueKeysWithValues: manifest.items.map { ($0.id, $0) })
+        XCTAssertEqual(byId["10"]?.status, "written",
+                       "default (skip_partial off) still writes — annotation, not omission")
+        XCTAssertEqual(byId["10"]?.bodyDownloaded, false)
+        XCTAssertEqual(byId["10"]?.jsonObject["body_downloaded"] as? Bool, false)
+        XCTAssertNil(byId["11"]?.bodyDownloaded)
+        XCTAssertNil(byId["11"]?.jsonObject["body_downloaded"],
+                     "non-partial items must not carry the key (negative-only contract)")
+        XCTAssertEqual(manifest.bodyNotDownloaded, 1)
+        XCTAssertEqual(manifest.jsonObject["body_not_downloaded"] as? Int, 1)
+    }
+
+    func testRun_partialBodyMissing_skipPartial_headerOnlyNotWritten() throws {
+        // #283 opt-in: skip_partial=true → the header-only email is NOT written
+        // (status "header_only", no path, no file) so the corpus never gets a
+        // header-only .md; the SOP re-fetches flagged ids (get_email nudges the
+        // download) and re-runs export for just those ids — no stale-file
+        // cleanup, no collision-guard -N duplicates.
+        let out = tempDir()
+        let manifest = try ExportEmailsMarkdown.run(
+            ids: ["10", "11"], outputDir: out, direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { id in
+                id == "10"
+                    ? self.makeEmail(subject: "P", messageId: "<10@x>",
+                                     textBody: nil, fromPartialEmlx: true)
+                    : self.makeEmail(subject: "N", messageId: "<11@x>")
+            },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() },
+            skipPartial: true)
+
+        let byId = Dictionary(uniqueKeysWithValues: manifest.items.map { ($0.id, $0) })
+        XCTAssertEqual(byId["10"]?.status, "header_only")
+        XCTAssertNil(byId["10"]?.writtenPath)
+        XCTAssertEqual(byId["10"]?.bodyDownloaded, false)
+        XCTAssertEqual(byId["11"]?.status, "written")
+        XCTAssertEqual(manifest.bodyNotDownloaded, 1)
+        XCTAssertEqual(manifest.written, 1)
+        // Nothing on disk for the header-only item.
+        let mds = try FileManager.default.contentsOfDirectory(at: out, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "md" }
+        XCTAssertEqual(mds.count, 1, "only the complete email lands in the corpus")
+    }
+
+    func testRun_partialWithBody_noAnnotation() throws {
+        // A partial file that DOES carry the text body the export asked for is
+        // not "not downloaded" — no key, normal write (the #274 helper is
+        // format-aware; export fetches format "text").
+        let out = tempDir()
+        let manifest = try ExportEmailsMarkdown.run(
+            ids: ["10"], outputDir: out, direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { _ in self.makeEmail(messageId: "<10@x>",
+                                         textBody: "real body", fromPartialEmlx: true) },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() })
+        XCTAssertEqual(manifest.items[0].status, "written")
+        XCTAssertNil(manifest.items[0].bodyDownloaded)
+        XCTAssertNil(manifest.items[0].jsonObject["body_downloaded"])
+        XCTAssertEqual(manifest.bodyNotDownloaded, 0)
+    }
+
+    func testRun_htmlOnlyPartial_notFlaggedNotSkipped() throws {
+        // #283 verify (Codex, cross-model): a `.partial.emlx` can carry a FULL
+        // html-only body (Mail also uses partial files when attachments are
+        // stored externally; an html-only message has no text/plain part).
+        // Judging with the fetch format ("text") mis-flagged it — and under
+        // skip_partial the complete email would be silently omitted from the
+        // corpus forever (the re-fetch loop re-judges and re-skips). The
+        // judgment now mirrors the RENDERER's body selection
+        // (textBody ?? htmlBody): a body the .md will actually carry is not
+        // "missing".
+        let out = tempDir()
+        let manifest = try ExportEmailsMarkdown.run(
+            ids: ["10"], outputDir: out, direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { _ in self.makeEmail(messageId: "<10@x>",
+                                         textBody: nil, htmlBody: "<p>full body</p>",
+                                         fromPartialEmlx: true) },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() },
+            skipPartial: true)
+        XCTAssertEqual(manifest.items[0].status, "written",
+                       "a partial whose html body IS present must not be skipped")
+        XCTAssertNil(manifest.items[0].bodyDownloaded)
+        XCTAssertEqual(manifest.bodyNotDownloaded, 0)
+    }
+
+    func testPartialBodyMissingForExport_rendererAligned() {
+        // Pure-judgment pins: the flag means "the .md body would be empty AND
+        // the file was partial" — exactly the renderer's textBody ?? htmlBody
+        // selection, including the textBody=="" precedence edge (a non-nil
+        // empty text body wins the selection, so the rendered body IS empty
+        // even when html content exists).
+        XCTAssertTrue(ExportEmailsMarkdown.partialBodyMissingForExport(
+            makeEmail(textBody: nil, htmlBody: nil, fromPartialEmlx: true)))
+        XCTAssertFalse(ExportEmailsMarkdown.partialBodyMissingForExport(
+            makeEmail(textBody: "body", htmlBody: nil, fromPartialEmlx: true)))
+        XCTAssertFalse(ExportEmailsMarkdown.partialBodyMissingForExport(
+            makeEmail(textBody: nil, htmlBody: "<p>x</p>", fromPartialEmlx: true)))
+        XCTAssertTrue(ExportEmailsMarkdown.partialBodyMissingForExport(
+            makeEmail(textBody: "", htmlBody: "<p>x</p>", fromPartialEmlx: true)),
+            "empty-string textBody wins the renderer selection — the rendered body is empty")
+        XCTAssertFalse(ExportEmailsMarkdown.partialBodyMissingForExport(
+            makeEmail(textBody: nil, htmlBody: nil, fromPartialEmlx: false)),
+            "never flag a non-partial file")
+    }
+
+    func testRun_skipPartial_reservesFilenameSlot() throws {
+        // #283 verify (Codex): a header_only skip must still consume its
+        // filename slot so name attribution is INDEPENDENT of download state.
+        // A (partial, skipped) and B (complete) share (date, slug): B must get
+        // the -1 suffix (A's base name reserved), so A's later re-export lands
+        // on the base name — the same assignment as if both had been complete
+        // in one run. Without reservation the attribution flips with timing.
+        let out = tempDir()
+        let manifest = try ExportEmailsMarkdown.run(
+            ids: ["10", "11"], outputDir: out, direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { id in
+                id == "10"
+                    ? self.makeEmail(subject: "Same", messageId: "<10@x>",
+                                     textBody: nil, fromPartialEmlx: true)
+                    : self.makeEmail(subject: "Same", messageId: "<11@x>")
+            },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() },
+            skipPartial: true)
+        let byId = Dictionary(uniqueKeysWithValues: manifest.items.map { ($0.id, $0) })
+        XCTAssertEqual(byId["10"]?.status, "header_only")
+        XCTAssertNil(byId["10"]?.writtenPath)
+        XCTAssertEqual(byId["11"]?.status, "written")
+        XCTAssertTrue(byId["11"]?.writtenPath?.hasSuffix("-1.md") == true,
+                      "B takes the -1 suffix — the skipped A holds the base slot for its re-export")
+
+        // Second half of the loop (Codex R2 nit): actually re-export A after
+        // the "nudge" (body now present) and assert it lands on the BASE name
+        // — the same assignment as if both had been complete in run 1.
+        let rerun = try ExportEmailsMarkdown.run(
+            ids: ["10"], outputDir: out, direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { _ in self.makeEmail(subject: "Same", messageId: "<10@x>",
+                                         textBody: "downloaded now") },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() },
+            skipPartial: true)
+        XCTAssertEqual(rerun.items[0].status, "written")
+        XCTAssertTrue(rerun.items[0].writtenPath?.hasSuffix("_Same.md") == true,
+                      "re-export lands on the reserved base name, not a -N suffix: \(rerun.items[0].writtenPath ?? "nil")")
+    }
+
+    func testRun_skipPartial_dedupSkipStillWinsAndUnannotated() throws {
+        // Ordering pin: the #177 dedup skip fires BEFORE the partial check — an
+        // already-archived email stays status "skipped" (not "header_only")
+        // and carries no body_downloaded key even when its fetch result is
+        // partial (annotation on a not-to-be-written duplicate is noise).
+        let out = tempDir()
+        let manifest = try ExportEmailsMarkdown.run(
+            ids: ["10"], outputDir: out, direction: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { _ in self.makeEmail(messageId: "<10@x>",
+                                         textBody: nil, fromPartialEmlx: true) },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() },
+            skipMessageIds: ["<10@x>"],
+            skipPartial: true)
+        XCTAssertEqual(manifest.items[0].status, "skipped")
+        XCTAssertNil(manifest.items[0].bodyDownloaded)
+        XCTAssertEqual(manifest.bodyNotDownloaded, 0)
     }
 
     // MARK: - #236 ExportDirLock (concurrent-run serialization)

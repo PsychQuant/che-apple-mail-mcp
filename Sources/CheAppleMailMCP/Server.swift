@@ -786,6 +786,7 @@ class CheAppleMailMCPServer {
                 "description": .string("Optional export options"),
                 "properties": .object([
                     "include_attachments": .object(["type": .string("boolean"), "description": .string("Also export each email's attachments (data extensions → output_dir/data/, others → output_dir/attachments/<stem>/)")]),
+                    "skip_partial": .object(["type": .string("boolean"), "description": .string("Opt-in (#283): when an email's on-disk .emlx is a partial (Mail stores it as <rowid>.partial.emlx) AND the body the .md would carry is empty, do NOT write a header-only .md; record it as status 'header_only' with body_downloaded:false instead. Default false = still written but annotated (manifest item gets body_downloaded:false, summary gets body_not_downloaded count) so bulk archives are never silently header-only. With skip_partial:true the clean re-export loop is: re-fetch flagged ids via single get_email (its fallback nudges Mail to download the body), then re-run export for just those ids — nothing stale is on disk and the skipped email's filename slot is reserved, so the re-export lands on its original name. Under the DEFAULT mode that loop is NOT safe as-is: the header-only .md was really written, so a re-export collides into a -N-suffixed duplicate next to the stale file — delete each flagged item's written_path first (or use skip_partial:true from the start).")]),
                     "filename_template": .object(["type": .string("string"), "description": .string("Override filename with placeholders {date}/{subject}/{sender}/{message_id}")]),
                     "filenames": .object(["type": .string("object"), "description": .string("Per-id filename override map { id: name }")]),
                     "extra_frontmatter": .object(["type": .string("object"), "description": .string("Static key/value pairs appended to every file's frontmatter after the six core fields")])
@@ -1815,6 +1816,10 @@ class CheAppleMailMCPServer {
                 || exportMailbox.contains("寄件")) ? "sent" : "received"
             let exportOpts = arguments["opts"]?.objectValue ?? [:]
             let includeAttachments = exportOpts["include_attachments"]?.boolValue ?? false
+            // #283: opt-in — keep header-only (partial-.emlx, body absent)
+            // emails OUT of the corpus (status "header_only", not written)
+            // instead of the default annotate-and-write.
+            let skipPartial = exportOpts["skip_partial"]?.boolValue ?? false
             let filenameTemplate = exportOpts["filename_template"]?.stringValue
             var filenameOverrides: [String: String] = [:]
             if let fmap = exportOpts["filenames"]?.objectValue {
@@ -1898,7 +1903,8 @@ class CheAppleMailMCPServer {
                     // race-free write via RaceFreeFileWriter.
                     return try EmlxParser.attachmentData(rowId: rowId, mailboxURL: mailboxUrl, attachmentName: name)
                 },
-                skipMessageIds: skipMessageIds)
+                skipMessageIds: skipMessageIds,
+                skipPartial: skipPartial)
             return formatJSON(exportManifest.jsonObject)
 
         case "get_emails_batch":
