@@ -801,31 +801,37 @@ actor MailController {
             }
             let parsed = parseRecipient(raw)
             let addr = parsed.address
-            // #265 + #270: a string that parseRecipient could NOT cleanly split
-            // (name == nil fallback) yet still carries an UNQUOTED angle
-            // bracket is malformed — whether a matched pair
-            // (`Alice <not-an-email> <bob@x>`, #265) or a single stray one
+            // #265 + #270 + #280: an extracted addr-spec carrying an UNQUOTED
+            // angle bracket is malformed — whether a matched pair
+            // (`Alice <not-an-email> <bob@x>`, #265), a single stray one
             // (`<a@x` / `a@x>`, #270; the old paired-contains gate let these
-            // through). The scan is quote-aware, so a legal RFC 5322 quoted
-            // local-part carrying angles (`"a<b"@x`, even a matched `"a<b>"@x`)
-            // passes — angles inside quoted strings are legal specials, and a
-            // naive contains() gate would mis-reject them. Bare-angle `<a@b.c>`
-            // is already normalized upstream (angles stripped), unaffected.
-            // Residual honesty (#270 verify DA + Codex R1/R2): shapes that
-            // still pass this lite gate by design — (a) when a display name
-            // DID parse (name != nil) the extracted addr-spec is not
-            // re-scanned, so a '>' embedded inside it survives
-            // (`Name <a>b@x>`, tracked #280); (b) the scan validates quote
-            // CLOSURE and position-before-@, not local-part grammar — any
-            // properly closed quote segment before the first unquoted `@`
-            // exempts its angles even where the local-part is malformed
-            // (`"<a@x>"` fully-quoted, `a"<>"b@x` mid-atom, adjacent
-            // `"<a>""<b>"@x`). Full RFC 5322 local-part validation is out of
-            // lite-validator scope (see #270 diagnosis Residue). Unterminated
-            // quotes, escaped angles inside them, and domain-position quotes
-            // get NO exemption (R1/R2, Codex — see containsUnquotedAngle).
-            // All land as Mail-level invalid, no mis-send.
-            if parsed.name == nil, containsUnquotedAngle(addr) {
+            // through), or one embedded in the addr of a mailbox form that DID
+            // parse a display name (`Name <a>b@x>` → addr `a>b@x`, #280 — the
+            // scan used to be gated on `name == nil` and skipped this exact
+            // shape). The scan now runs UNCONDITIONALLY on the parser-extracted
+            // addr-spec: in the name==nil fallback `addr` is the whole string,
+            // in the name!=nil case it is the bare addr-spec — neither may
+            // legally hold an unquoted angle. It stays quote-aware, so a legal
+            // RFC 5322 quoted local-part carrying angles (`"a<b"@x`, even a
+            // matched `"a<b>"@x`) passes — angles inside quoted strings are
+            // legal specials, and a naive contains() gate would mis-reject
+            // them. Bare-angle `<a@b.c>` is already normalized upstream (angles
+            // stripped), unaffected. Residual honesty (#270 verify DA + Codex
+            // R1/R2): the scan validates quote CLOSURE and position-before-@,
+            // not local-part grammar — any properly closed quote segment before
+            // the first unquoted `@` exempts its angles even where the
+            // local-part is malformed (`"<a@x>"` fully-quoted, `a"<>"b@x`
+            // mid-atom, adjacent `"<a>""<b>"@x`). Full RFC 5322 local-part
+            // validation is out of lite-validator scope (see #270 diagnosis
+            // Residue). Unterminated quotes, escaped angles inside them, and
+            // domain-position quotes get NO exemption (R1/R2, Codex — see
+            // containsUnquotedAngle). CFWS comments are likewise unsupported
+            // (#280 verify, Codex): grammar-legal `user@example.net(>)` is
+            // rejected — consistently on BOTH paths now, matching the bare
+            // path's shipped #270 behavior (a comment carrying '@' always
+            // failed atCount; comment-aware scanning is full-parser
+            // territory). All land as Mail-level invalid, no mis-send.
+            if containsUnquotedAngle(addr) {
                 failures.append("'\(raw)' is a malformed recipient (stray/unpaired angle brackets)")
                 continue
             }
