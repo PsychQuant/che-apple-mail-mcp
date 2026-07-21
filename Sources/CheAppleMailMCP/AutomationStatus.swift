@@ -75,7 +75,9 @@ enum AutomationStatus {
                 + AutomationHelp.guidance
         case .notDetermined:
             return "❓ Automation permission NOT DETERMINED — no decision recorded yet. "
-                + "Run any Mail tool (e.g. get_mail_app_info) and macOS will show the "
+                + "Run any AppleScript-backed Mail tool (e.g. get_mail_app_info — NOT "
+                + "open_mailto, which uses LaunchServices and sends no Apple Events) and "
+                + "macOS will show the "
                 + "authorization prompt; click OK there. Note: the prompt names THIS "
                 + "binary / its host, not your terminal (#288 — the binary holds its "
                 + "own grant)."

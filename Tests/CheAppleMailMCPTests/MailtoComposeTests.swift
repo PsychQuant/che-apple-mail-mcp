@@ -547,7 +547,7 @@ extension MailtoComposeTests {
         // "attachments: attachments," needle would also match the many
         // composeViaMailto/legacy call sites.
         let sendTail = "attachments: attachments,\n                recipients: to + (cc ?? []) + (bcc ?? []))"
-        let draftTail = "attachments: attachments,\n                recipients: to + (cc ?? []) + (bcc ?? []),\n                draftMode: true, bcc: bcc ?? [])"
+        let draftTail = "attachments: attachments,\n                recipients: to + (cc ?? []) + (bcc ?? []),\n                draftMode: true, cc: cc ?? [], bcc: bcc ?? [])"
         // #277: the two createDraft probe sites now carry the draftMode+bcc
         // tail (display-name fill viability); the two composeEmail sites keep
         // the send-path tail. 2 + 2 = 4 total, both dimensions still threaded.
@@ -565,22 +565,38 @@ extension MailtoComposeTests {
 
     // MARK: #219/#277 — sender-popup + display-name-fill script phases
 
-    func testMailtoScript_senderPopup_sentinelsAndOrdering() {
-        // #219: with a fromAddress the script must carry the popup phase —
-        // '@'-valued popup discovery, menu-item click, and the MANDATORY
-        // read-back — all sentinel-marked SENDERPOPUP so any failure is
-        // pre-dispatch (cleanup closes our window, Swift falls back to legacy
-        // with the correct sender). The popup phase must run BEFORE dispatch.
+    func testMailtoScript_senderPopup_exactMatchSentinelsAndOrdering() {
+        // #219 (+ verify, Codex): the popup phase must use EXACT addr-spec
+        // equality (my emailOf) for BOTH selection and read-back — NOT
+        // substring contains (which would verify a superstring account like
+        // notme@corp.example). All failures are SENDERPOPUP sentinels (pre-
+        // dispatch → legacy fallback). The `emailOf` handler must be present,
+        // and the phase must run BEFORE dispatch.
         let script = buildMailtoComposeScript(
             url: "mailto:a@x?subject=S", subject: "S", attachments: [],
             send: false, fromAddress: "me@corp.example")
-        XCTAssertTrue(script.contains("SENDERPOPUP: From popup not found"))
-        XCTAssertTrue(script.contains("SENDERPOPUP: no From menu item contains"))
+        XCTAssertTrue(script.contains("on emailOf(_s)"), "exact-match needs the emailOf handler")
+        XCTAssertTrue(script.contains("my emailOf(name of _mi as text) is \"me@corp.example\""),
+                      "menu selection must be EXACT addr equality, not contains")
+        XCTAssertTrue(script.contains("my emailOf(_senderReadback) is not \"me@corp.example\""),
+                      "read-back must be EXACT addr equality, not contains")
+        XCTAssertFalse(script.contains("whose name contains"),
+                       "no substring matching allowed in the popup phase (#219 verify)")
         XCTAssertTrue(script.contains("SENDERPOPUP: read-back mismatch"))
-        XCTAssertTrue(script.contains("me@corp.example"))
         let popupIdx = script.range(of: "SENDERPOPUP")!.lowerBound
         let dispatchIdx = script.range(of: "keystroke \"s\" using command down")!.lowerBound
         XCTAssertTrue(popupIdx < dispatchIdx, "popup verification must precede the dispatch keystroke")
+    }
+
+    func testMailtoScript_preExistingSameTitleWindow_guarded() {
+        // #219/#277 verify (Codex): title (=subject) is the only System-Events
+        // window bridge, so a pre-existing same-subject window makes identity
+        // ambiguous — the script must refuse (pre-dispatch → legacy fallback).
+        let script = buildMailtoComposeScript(
+            url: "mailto:a@x?subject=S", subject: "S", attachments: [], send: false)
+        XCTAssertTrue(script.contains("set _beforeTitles to (name of every window)"))
+        XCTAssertTrue(script.contains("if _beforeTitles contains \"S\" then error"),
+                      "must refuse the clean path when a same-titled window already exists")
     }
 
     func testMailtoScript_noFromAddress_noPopupPhase() {
@@ -590,16 +606,15 @@ extension MailtoComposeTests {
                        "no popup phase without a custom sender — byte-stable default path")
     }
 
-    func testMailtoScript_fillRecipients_orderingAndEscaping() {
-        // #277: fill phase pastes To (then Cc) via clipboard and must run
-        // BEFORE the popup phase (fill exploits the fresh window's default To
-        // focus) and before dispatch. Quotes in display names are escaped for
-        // the AppleScript string literal.
+    func testMailtoScript_fillTo_orderingAndEscaping() {
+        // #277 (+ verify, Codex): fill is TO-ONLY (Cc removed — a hidden Cc
+        // field would silently drop names). The To fill runs BEFORE the popup
+        // phase (fresh window's default To focus) and before dispatch. Quotes
+        // in display names are AppleScript-escaped.
         let script = buildMailtoComposeScript(
             url: "mailto:?subject=S", subject: "S", attachments: [],
             send: false, fromAddress: "me@corp.example",
-            fillToRecipients: ["\"Wang, X\" <w@x.example>"],
-            fillCcRecipients: ["B <b@y.example>"])
+            fillToRecipients: ["\"Wang, X\" <w@x.example>"])
         XCTAssertTrue(script.contains("keystroke tab"))
         XCTAssertTrue(script.contains("\\\"Wang, X\\\" <w@x.example>"),
                       "display-name quotes must be AppleScript-escaped in the clipboard literal")

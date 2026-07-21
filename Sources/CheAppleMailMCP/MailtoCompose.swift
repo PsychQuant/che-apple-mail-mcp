@@ -99,12 +99,11 @@ func mailtoComposeDisabledByEnv(
 /// Attachments do NOT disqualify the mailto path — they are handled by GUI
 /// automation (File ▸ Attach, driven by the locale-independent ⇧⌘A shortcut).
 ///
-/// A custom `from_address` (#131) DOES disqualify it: `mailto:` always composes
-/// from the default account, and selecting a different account would require
-/// driving the sender popup — which can't be safely verified yet and a wrong
-/// pick would send from the wrong account. Until a verified sender-popup lands
-/// (follow-up issue), custom-sender compose falls back to the legacy `set sender`
-/// path (correct sender, but the body gets wrapped).
+/// A custom `from_address` (#131) rides the clean path via a verified From
+/// popup (#219): the GUI selects the account and READS BACK the selection with
+/// EXACT addr-spec equality — any mismatch falls back to the legacy `set sender`
+/// path (correct sender, wrapped body). It still needs Accessibility (the popup
+/// is GUI scripting), so a custom sender without Accessibility routes to legacy.
 ///
 /// An EMPTY subject also disqualifies it (#175 verify): the GUI dispatch guard
 /// identifies the compose window by its title (= subject) to guarantee ⌘S/⇧⌘D
@@ -490,12 +489,10 @@ func mailtoIneligibilityReason(
 /// clients. Append-only: the historical `Draft created successfully` /
 /// `Email sent successfully` prefixes stay intact for prefix-parsing callers.
 func legacyPathDisclosure(reason: String) -> String {
-    return " [legacy path — body wrapped in <blockquote type=\"cite\">, renders as "
-        + "quoted text on some mobile clients. Reason: \(reason). Wrapper-free "
-        + "eligibility: plain format + non-empty subject + default sender + "
-        + "Accessibility granted + \(mailtoComposeDisableEnvKey) unset + "
-        + "ASCII-only attachment paths (#220) + bare-address recipients (#251) "
-        + "(#175; custom-sender clean path pending #219)]"
+    return " [legacy path — body wrapped in <blockquote type=\"cite\"> (quoted on some "
+        + "mobile clients). Reason: \(reason). Wrapper-free eligibility: plain + subject + "
+        + "Accessibility + \(mailtoComposeDisableEnvKey) unset + ASCII attachments (#220); "
+        + "custom sender (#219) and draft display-name To (#277) also need Accessibility.]"
 }
 
 /// #241 — the #237/#229 clean-path-or-disclosed-legacy control flow, extracted
@@ -569,10 +566,11 @@ func routeWrapperFreeCompose(
 func requireWrapperFreeRefusal(reason: String) -> String {
     return "require_wrapper_free is set but the wrapper-free mailto path is not available — "
         + "reason: \(reason). No draft was created and nothing was sent. Alternatives: "
-        + "omit from_address (compose from the default account and switch sender manually in "
-        + "the compose window — clean custom-sender path is pending #219); use format 'plain'; "
-        + "provide a non-empty subject; grant Accessibility (check_accessibility); "
-        + "use ASCII-only attachment paths (#220); use bare addresses without display names (#251); "
+        + "grant Accessibility (check_accessibility) — it now also enables a custom "
+        + "from_address (verified From popup, #219) and a draft's display-name To fill (#277); "
+        + "use format 'plain'; provide a non-empty subject; "
+        + "use ASCII-only attachment paths (#220); for a SEND (not a draft) use bare-address "
+        + "recipients (display names ride the clean path on drafts only, #277); "
         + "unset \(mailtoComposeDisableEnvKey). Or drop require_wrapper_free to accept the "
         + "legacy path (body wrapped in <blockquote type=\"cite\"> on some mobile clients)."
 }

@@ -1078,7 +1078,7 @@ actor MailController {
     /// (`fromAddress`) and an empty subject both route to the legacy path (mailto
     /// can't pick a non-default account; the GUI dispatch guard identifies the
     /// compose window by its title = subject).
-    private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, recipients: [String] = [], draftMode: Bool = false, bcc: [String] = []) -> String? {
+    private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, recipients: [String] = [], draftMode: Bool = false, cc: [String] = [], bcc: [String] = []) -> String? {
         if let override = ineligibilityOverride { return override() }
         return mailtoIneligibilityReason(
             format: format,
@@ -1088,11 +1088,14 @@ actor MailController {
             hasSubject: !subject.isEmpty,
             attachmentsGuiSafe: attachmentPathsGuiSafe(attachments),
             recipientsAddrSpecOnly: !anyRecipientHasDisplayName(recipients),
-            // #277: GUI clipboard fill for display-name To/Cc is DRAFT-only
-            // (a failed fill on a send would fire with missing recipients)
-            // and requires a display-name-free bcc (the Bcc field is not
-            // reliably visible/fillable).
-            displayNameFillViable: draftMode && !anyRecipientHasDisplayName(bcc)
+            // #277: GUI clipboard fill is DRAFT-only (a failed fill on a send
+            // would fire with missing recipients) and TO-ONLY — the To field
+            // is always visible + default-focused; Cc/Bcc can be hidden via
+            // Header Fields (#277 verify, Codex: a hidden Cc would silently
+            // drop names), so display-name cc/bcc keep the legacy path.
+            displayNameFillViable: draftMode
+                && !anyRecipientHasDisplayName(cc)
+                && !anyRecipientHasDisplayName(bcc)
         )
     }
 
@@ -1119,36 +1122,50 @@ actor MailController {
         cc: [String]?, bcc: [String]?, attachments: [String]?, send: Bool,
         fromAddress: String? = nil
     ) throws -> String {
-        // #277: display-name To/Cc can't ride the mailto URL (RFC 6068). When a
-        // list carries ANY display name, the WHOLE list goes through the GUI
-        // clipboard-fill phase (order preserved) and the URL omits it.
-        // Eligibility guarantees this only happens on the draft path with a
-        // display-name-free bcc.
+        // #277: display-name To can't ride the mailto URL (RFC 6068). When the
+        // To list carries ANY display name, the WHOLE To list goes through the
+        // GUI clipboard-fill phase (order preserved; bare + named tokenize
+        // alike) and the URL omits To. Cc is NEVER GUI-filled (#277 verify,
+        // Codex: a hidden Cc field would silently drop names), so eligibility
+        // guarantees cc here has no display names and cc always rides the URL.
         let fillTo = anyRecipientHasDisplayName(to) ? to : []
-        let fillCc = anyRecipientHasDisplayName(cc) ? (cc ?? []) : []
+        // #277 defense-in-depth (verify DA): display-name fill is DRAFT-ONLY.
+        // Eligibility already routes a send with any display-name recipient to
+        // the legacy path, so `send && !fillTo.isEmpty` should be unreachable —
+        // but a future routing bug must fail LOUD here, never silently GUI-fill
+        // then SEND (which could fire with wrong/missing recipients).
+        if send, !fillTo.isEmpty {
+            throw MailError.invalidParameter(
+                "internal: display-name recipient fill attempted on a send — refusing "
+                + "(display-name recipients are draft-only on the clean path, #277)")
+        }
         let urlTo = fillTo.isEmpty ? to : []
-        let urlCc = fillCc.isEmpty ? cc : nil
-        let url = buildMailtoURL(to: urlTo, subject: subject, body: body, cc: urlCc, bcc: bcc)
+        let url = buildMailtoURL(to: urlTo, subject: subject, body: body, cc: cc, bcc: bcc)
         guard url.count <= maxMailtoURLLength else {
             throw MailError.scriptFailed(
                 message: "mailto URL too long (\(url.count) > \(maxMailtoURLLength) chars)",
                 code: -1)
         }
+        // #219 verify (Codex): the popup match is EXACT addr-spec equality, so
+        // pass the bare addr-spec (a `Name <addr>` from_address is normalized
+        // to `addr`) — the GUI-side `emailOf()` extracts the same from the
+        // menu labels / popup value.
+        let popupAddress = fromAddress.map { parseRecipient($0).address }
         let script = buildMailtoComposeScript(
             url: url, subject: subject, attachments: attachments ?? [], send: send,
-            fromAddress: fromAddress, fillToRecipients: fillTo, fillCcRecipients: fillCc)
-        let needsClipboard = attachments?.isEmpty == false || !fillTo.isEmpty || !fillCc.isEmpty
+            fromAddress: popupAddress, fillToRecipients: fillTo)
+        let needsClipboard = attachments?.isEmpty == false || !fillTo.isEmpty
         var result = needsClipboard
             ? try withClipboardPreserved({ try runScript(script) })
             : try runScript(script)
         // #219/#277: disclose what the GUI verified/filled so the caller can
         // see the clean path handled the extras (parity with the legacy
         // disclosure discipline, #237).
-        if let from = fromAddress, !from.isEmpty {
-            result += " [sender verified via From popup: \(from)]"
+        if let addr = popupAddress, !addr.isEmpty {
+            result += " [sender verified via From popup: \(addr)]"
         }
-        if !fillTo.isEmpty || !fillCc.isEmpty {
-            result += " [display-name recipients GUI-filled (draft-only, #277) — verify To/Cc in the draft]"
+        if !fillTo.isEmpty {
+            result += " [display-name To recipients GUI-filled (draft-only, #277) — verify To in the draft]"
         }
         return result
     }
@@ -1676,7 +1693,7 @@ actor MailController {
                 format: format, fromAddress: fromAddress, subject: subject,
                 attachments: attachments,
                 recipients: to + (cc ?? []) + (bcc ?? []),
-                draftMode: true, bcc: bcc ?? []) {
+                draftMode: true, cc: cc ?? [], bcc: bcc ?? []) {
                 throw MailError.invalidParameter(requireWrapperFreeRefusal(reason: reason))
             }
             return try composeViaMailto(
@@ -1694,7 +1711,7 @@ actor MailController {
                 format: format, fromAddress: fromAddress, subject: subject,
                 attachments: attachments,
                 recipients: to + (cc ?? []) + (bcc ?? []),
-                draftMode: true, bcc: bcc ?? []),
+                draftMode: true, cc: cc ?? [], bcc: bcc ?? []),
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
