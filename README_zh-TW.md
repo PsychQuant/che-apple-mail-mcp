@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**最完整的 Apple Mail MCP 伺服器** - 52 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
+**最完整的 Apple Mail MCP 伺服器** - 53 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +15,7 @@
 
 | 功能 | 其他 MCP | che-apple-mail-mcp |
 |------|----------|-------------------|
-| 工具總數 | ~20 | **52** |
+| 工具總數 | ~20 | **53** |
 | 開發語言 | Python | **Swift (原生)** |
 | 搜尋速度 | 秒級 (AppleScript) | **毫秒級 (SQLite)** |
 | 搜尋欄位 | 主旨/寄件人 | **主旨/寄件人/收件人/日期** |
@@ -52,7 +52,7 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 
 ---
 
-## 全部 52 個工具
+## 全部 53 個工具
 
 <details>
 <summary><b>帳戶 (2)</b></summary>
@@ -217,12 +217,13 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 </details>
 
 <details>
-<summary><b>診斷 (2)</b></summary>
+<summary><b>診斷 (3)</b></summary>
 
 | 工具 | 說明 |
 |------|------|
 | `check_fda` | 檢查「完整磁碟取用權限」狀態（SQLite 快速路徑可用性） |
 | `check_accessibility` | 檢查「輔助使用」權限（wrapper-free 撰寫／回覆 GUI 路徑） |
+| `check_automation` | 檢查「自動化」權限（對 Mail 的 Apple Events）— 非觸發式 probe、四態各配補救指引（#293）；binary 自持授權、osascript 可用 ≠ binary 已授權（#288） |
 
 </details>
 

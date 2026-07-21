@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.PsychQuant/che-apple-mail-mcp",
-  "description": "Apple Mail MCP \u2014 52 tools, SQLite millisecond search, .emlx parser, batch ops",
+  "description": "Apple Mail MCP \u2014 53 tools, SQLite millisecond search, .emlx parser, batch ops",
   "version": "2.17.0",
   "repository": {
     "url": "https://github.com/PsychQuant/che-apple-mail-mcp",

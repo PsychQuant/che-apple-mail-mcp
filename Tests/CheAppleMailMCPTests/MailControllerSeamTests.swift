@@ -15,7 +15,7 @@ final class MailControllerSeamTests: XCTestCase {
     }
 
     /// Marker unique to the COMPOSE-family disclosure (`legacyPathDisclosure`).
-    private let composeFamilyMarker = "plain format + non-empty subject + default sender"
+    private let composeFamilyMarker = "custom sender (#219) and draft display-name To (#277)"
     /// Marker unique to the REPLY-family disclosure (`legacyReplyPathDisclosure`).
     private let replyFamilyMarker = "the quoted original's cite block is normal"
 

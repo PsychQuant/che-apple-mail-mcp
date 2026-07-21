@@ -137,7 +137,9 @@ func buildMailtoComposeScript(
     url: String,
     subject: String,
     attachments: [String],
-    send: Bool
+    send: Bool,
+    fromAddress: String? = nil,
+    fillToRecipients: [String] = []
 ) -> String {
     let windowDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_WINDOW_DELAY", fallback: 1.8)
     let stepDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_STEP_DELAY", fallback: 0.7)
@@ -159,13 +161,15 @@ func buildMailtoComposeScript(
     let raiseOnly = """
                 set _t to "\(subjEsc)"
                 set _w to missing value
+                set _wMatches to 0
                 repeat with _cand in windows
                     if title of _cand is _t then
                         set _w to _cand
-                        exit repeat
+                        set _wMatches to _wMatches + 1
                     end if
                 end repeat
                 if _w is missing value then error "mailto compose window not found (title)"
+                if _wMatches > 1 then error "AMBIGUOUS: more than one window is titled the subject — cannot safely target our compose window for the next keystroke (safe fallback)"
                 try
                     perform action "AXRaise" of _w
                 end try
@@ -185,27 +189,62 @@ func buildMailtoComposeScript(
     // reference it.
     let flagInit = send ? "set _dispatched to false\n    " : ""
 
-    // 1. Capture Mail window ids BEFORE the mailto, hand it off, then compute the
-    // NEW window id(s). On-error cleanup closes ONLY a newly-appeared window whose
-    // name matches our subject — never a pre-existing same-titled draft the user
-    // had open (that `saving no` discard would be data loss — #175 verify round 2,
-    // Codex BLOCKING). `id of window` is stable + unique.
-    var s = """
+    // 1. Capture Mail window ids BEFORE the mailto, hand it off, then identify
+    // OUR compose window as the NEW window (id unseen before) whose title is our
+    // subject — captured as `_ourId`. On-error cleanup closes ONLY `_ourId`, by
+    // id-iteration — never by a title guess, so it can never discard a user's
+    // same-titled draft (`saving no` on the wrong window would be data loss —
+    // #175 verify R2 + #219/#277 verify R2, Codex BLOCKING). `id of window` is
+    // stable + unique. We do NOT assume exactly one new window: launching Mail
+    // from closed opens the viewer too, so we pick the new window by subject
+    // rather than a count==1 assertion (which would over-reject to legacy
+    // whenever Mail wasn't already running).
+    // #219/#277 verify (Codex BLOCKING): System Events (where raiseOnly runs)
+    // cannot read Mail's window `id`, so the KEYSTROKE-targeting bridge is the
+    // title (= subject). Two guards make that bridge sound: (i) refuse the clean
+    // path if our subject already titled a window BEFORE the mailto (below), and
+    // (ii) raiseOnly asserts EXACTLY ONE window carries our title before each
+    // keystroke phase — a same-title window opening concurrently (after the
+    // snapshot) makes raiseOnly error pre-dispatch → cleanup closes only `_ourId`
+    // → legacy fallback, so a race can neither keystroke/dispatch the wrong
+    // window nor lose the user's window. The `my senderMatches` handler (exact
+    // addr-spec suffix match, never extraction) is prepended only when a sender
+    // popup is driven — see below.
+    let senderMatchHandler = (fromAddress?.isEmpty == false) ? """
+    on senderMatches(_label, _addr)
+        set _label to _label as text
+        -- exact match: the bare addr, or a label ending in the literal <addr>.
+        -- never extract between < and > (a quoted local-part could spoof it).
+        if _label is _addr then return true
+        if _label ends with ("<" & _addr & ">") then return true
+        return false
+    end senderMatches
+
+    """ : ""
+    var s = senderMatchHandler + """
     tell application "Mail"
         set _wc to (count of windows)
         set _beforeIds to (id of every window)
+        set _beforeTitles to (name of every window)
         activate
         mailto "\(appleScriptEscape(url))"
     end tell
     delay \(windowDelay)
     tell application "Mail"
         if (count of windows) <= _wc then error "mailto did not open a compose window"
-        set _afterIds to (id of every window)
-        set _newIds to {}
-        repeat with _k from 1 to (count of _afterIds)
-            set _thisId to item _k of _afterIds
-            if _beforeIds does not contain _thisId then set end of _newIds to _thisId
+        if _beforeTitles contains "\(subjEsc)" then error "a window titled \\"\(subjEsc)\\" already existed before this compose — cannot safely disambiguate the new window (safe fallback)"
+        set _ourId to missing value
+        set _ourMatches to 0
+        repeat with _cw in windows
+            try
+                if (_beforeIds does not contain (id of _cw)) and ((name of _cw) is "\(subjEsc)") then
+                    set _ourId to (id of _cw)
+                    set _ourMatches to _ourMatches + 1
+                end if
+            end try
         end repeat
+        if _ourMatches is 0 then error "could not identify our new compose window by subject after mailto (safe fallback)"
+        if _ourMatches > 1 then error "more than one new window is titled the subject — cannot safely identify our compose window (safe fallback)"
     end tell
     \(flagInit)try
         tell application "System Events"
@@ -215,6 +254,111 @@ func buildMailtoComposeScript(
             end tell
         end tell
     """
+
+    // 1.5 (#277): display-name recipient fill via clipboard paste — TO ONLY.
+    // The mailto URL omits any display-name-carrying To list (a name can't ride
+    // RFC 6068; pasting `Name <addr>` lets Mail tokenize natively). A fresh
+    // compose window focuses the To field by default, so the fill pastes into
+    // it and tabs to tokenize. Paste, not keystroke: CJK names via keystroke
+    // hit IME nondeterminism (#220 lesson); the Swift caller wraps the run in
+    // withClipboardPreserved.
+    //
+    // Cc is DELIBERATELY not filled here (#277 verify, Codex BLOCKING): Mail's
+    // Cc field can be hidden via Header Fields, so a Tab-to-Cc + paste would
+    // silently land in Subject/elsewhere and the draft would save with NO Cc
+    // (silent recipient loss). To is always visible + default-focused; Cc is
+    // not reliably targetable. So display-name Cc keeps the LEGACY path (which
+    // sets Cc names natively) — enforced by eligibility (displayNameFillViable
+    // requires a display-name-free cc). Any window-identity failure errors out
+    // pre-dispatch → cleanup closes OUR new window → legacy fallback.
+    // Draft-only by design (#277): send:true never reaches this phase — a
+    // failed fill on a send would fire with missing recipients.
+    if !fillToRecipients.isEmpty {
+        let toLine = fillToRecipients.joined(separator: ", ")
+        s += """
+
+        set the clipboard to "\(appleScriptEscape(toLine))"
+        tell application "System Events"
+            tell process "Mail"
+                set frontmost to true
+                \(raiseOnly)
+                keystroke "v" using command down
+                delay \(stepDelay)
+                keystroke tab
+            end tell
+        end tell
+        delay \(stepDelay)
+        """
+    }
+
+    // 1.7 (#219): verified sender popup. mailto always composes from the
+    // DEFAULT account; a custom from_address is selected here by driving the
+    // compose window's From popup. HARD REQUIREMENT (issue #219): selection
+    // AND read-back use EXACT addr-spec equality, NOT substring containment
+    // (#219 verify, Codex BLOCKING: `contains "user@x"` would match — and
+    // wrongly VERIFY — a `notuser@x` account, sending from the wrong address).
+    // `my senderMatches()` compares a `Name <addr>` menu label / popup value to
+    // the requested account by EXACT-suffix (`is _addr` OR `ends with <addr>`),
+    // never by extraction (a quoted local-part could otherwise spoof the addr —
+    // #219 verify R2, Codex BLOCKING). The caller passes `fromAddress` already
+    // normalized to a bare addr-spec (a non-simple addr-spec is gated to legacy
+    // upstream by `isSimpleAddrSpec`, #219 verify R2). Popup discovery is now
+    // two-layered against grabbing the WRONG popup (e.g. a signature named like
+    // an email): the '@'-value scan requires EXACTLY ONE address-like popup
+    // (a rogue @-valued signature popup makes it ≥2 → SENDERPOPUP → legacy,
+    // #219 verify R4, Codex), and even then `senderMatches` exact-suffix must
+    // pass on both selection and read-back. Any SENDERPOPUP error is
+    // pre-dispatch: the on-error handler closes OUR window (saving no) and the
+    // Swift router falls back to the legacy `set sender` path (correct sender
+    // beats clean body, same conservative ordering as #175).
+    if let from = fromAddress, !from.isEmpty {
+        let fromEsc = appleScriptEscape(from)
+        s += """
+
+        tell application "System Events"
+            tell process "Mail"
+                set frontmost to true
+                \(raiseOnly)
+                set _fromPopup to missing value
+                set _fromPopupCount to 0
+                repeat with _pb in (pop up buttons of _w)
+                    try
+                        if (value of _pb as text) contains "@" then
+                            set _fromPopup to _pb
+                            set _fromPopupCount to _fromPopupCount + 1
+                        end if
+                    end try
+                end repeat
+                if _fromPopup is missing value then error "SENDERPOPUP: From popup not found on the compose window"
+                if _fromPopupCount > 1 then error "SENDERPOPUP: more than one address-like popup on the compose window — cannot unambiguously identify the From popup (e.g. a signature named like an email); safe fallback"
+                click _fromPopup
+                delay \(stepDelay)
+                set _pickedItem to missing value
+                ignoring case
+                    repeat with _mi in (menu items of menu 1 of _fromPopup)
+                        try
+                            if my senderMatches(name of _mi as text, "\(fromEsc)") then
+                                set _pickedItem to _mi
+                                exit repeat
+                            end if
+                        end try
+                    end repeat
+                end ignoring
+                if _pickedItem is missing value then
+                    key code 53
+                    error "SENDERPOPUP: no From account exactly matches \\"\(fromEsc)\\""
+                end if
+                click _pickedItem
+                delay \(stepDelay)
+                set _senderReadback to (value of _fromPopup as text)
+                ignoring case
+                    if not (my senderMatches(_senderReadback, "\(fromEsc)")) then error "SENDERPOPUP: read-back mismatch — popup shows \\"" & _senderReadback & "\\""
+                end ignoring
+            end tell
+        end tell
+        delay \(stepDelay)
+        """
+    }
 
     // 2. Attachments: re-raise OUR window, then one File ▸ Attach (⇧⌘A) cycle each,
     // path pasted into the Go-to-folder (⇧⌘G) field (clipboard set here, restored by
@@ -282,11 +426,9 @@ func buildMailtoComposeScript(
     // ignores — verify #242, regression lens).
     let cleanupBody = """
             tell application "Mail"
-                repeat with _k from 1 to (count of _newIds)
-                    set _nid to item _k of _newIds
+                repeat with _cw in windows
                     try
-                        set _cw to (first window whose id is _nid)
-                        if (name of _cw) is "\(subjEsc)" then close _cw saving no
+                        if (id of _cw) is _ourId then close _cw saving no
                     end try
                 end repeat
             end tell

@@ -1008,8 +1008,10 @@ actor MailController {
         // #175: prefer the wrapper-free mailto path (native compose pipeline →
         // no Apple-Mail-URLShare/blockquote-cite wrapper). Falls back to the
         // legacy AppleScript injection (which wraps the body) on any failure,
-        // for markdown/html, for a custom sender, without Accessibility, or
-        // when disabled via env. See MailtoCompose.swift.
+        // for markdown/html, without Accessibility, for a NON-simple custom
+        // sender (quoted local-part, #219 verify R2), or when disabled via env.
+        // A simple custom from_address now RIDES the clean path via the verified
+        // From popup (#219). See MailtoCompose.swift.
         // #237: the fallback is no longer silent — the named reason goes to
         // stderr AND onto the returned result string.
         // #239: strict mode — a caller that requires a wrapper-free body gets a
@@ -1025,7 +1027,7 @@ actor MailController {
             do {
                 return try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
-                    attachments: attachments, send: true)
+                    attachments: attachments, send: true, fromAddress: fromAddress)
             } catch where isPostDispatchError(error) {
                 // #239 verify REQUIRED: same friendly guardrail as the default
                 // path — a raw POSTDISPATCH token invites an auto-retrying
@@ -1045,7 +1047,7 @@ actor MailController {
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
-                    attachments: attachments, send: true)
+                    attachments: attachments, send: true, fromAddress: fromAddress)
             },
             legacyPath: {
                 let script = try buildComposeEmailScript(
@@ -1072,13 +1074,14 @@ actor MailController {
             mapNoFallbackError: { unknownSendStateError($0) })
     }
 
-    /// #175/#237 — nil iff this compose call should use the wrapper-free mailto
-    /// path; otherwise the named reason for routing to the legacy path. Probes
-    /// Accessibility + the env escape hatch at call time; custom sender
-    /// (`fromAddress`) and an empty subject both route to the legacy path (mailto
-    /// can't pick a non-default account; the GUI dispatch guard identifies the
-    /// compose window by its title = subject).
-    private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, recipients: [String] = []) -> String? {
+    /// #175/#237/#219 — nil iff this compose call should use the wrapper-free
+    /// mailto path; otherwise the named reason for routing to the legacy path.
+    /// Probes Accessibility + the env escape hatch at call time. A custom sender
+    /// (`fromAddress`) now RIDES the clean path via the verified From-popup
+    /// (#219) when Accessibility is granted — it forces legacy only WITHOUT
+    /// Accessibility. An empty subject still forces legacy (the GUI dispatch
+    /// guard identifies our compose window by its title = subject).
+    private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, recipients: [String] = [], draftMode: Bool = false, cc: [String] = [], bcc: [String] = []) -> String? {
         if let override = ineligibilityOverride { return override() }
         return mailtoIneligibilityReason(
             format: format,
@@ -1087,16 +1090,31 @@ actor MailController {
             hasCustomSender: (fromAddress?.isEmpty == false),
             hasSubject: !subject.isEmpty,
             attachmentsGuiSafe: attachmentPathsGuiSafe(attachments),
-            recipientsAddrSpecOnly: !anyRecipientHasDisplayName(recipients)
+            recipientsAddrSpecOnly: !anyRecipientHasDisplayName(recipients),
+            // #277: GUI clipboard fill is DRAFT-only (a failed fill on a send
+            // would fire with missing recipients) and TO-ONLY — the To field
+            // is always visible + default-focused; Cc/Bcc can be hidden via
+            // Header Fields (#277 verify, Codex: a hidden Cc would silently
+            // drop names), so display-name cc/bcc keep the legacy path.
+            displayNameFillViable: draftMode
+                && !anyRecipientHasDisplayName(cc)
+                && !anyRecipientHasDisplayName(bcc),
+            // #219 verify R2 (Codex): only a simple addr-spec is safe to drive
+            // the exact From-popup match; an exotic quoted local-part routes to
+            // legacy. Check the popup address (the same value the GUI matches).
+            customSenderIsSimple: fromAddress.map {
+                isSimpleAddrSpec(parseRecipient($0).address)
+            } ?? true
         )
     }
 
     /// #237 — surface (never swallow) that a compose call never even attempted
     /// the wrapper-free mailto path. Sibling of `warnMailtoFallback`: that one
     /// fires when mailto was TRIED and failed; this one fires when the call was
-    /// ineligible from the start (custom sender / format / no subject / no
-    /// Accessibility / env hatch). The 2026-07-09 #237 regression report came
-    /// from exactly this silent branch.
+    /// ineligible from the start (non-simple custom sender / format / no subject
+    /// / no Accessibility / env hatch — a simple custom sender rides the clean
+    /// path, #219). The 2026-07-09 #237 regression report came from exactly this
+    /// silent branch.
     private func warnMailtoIneligible(_ reason: String) {
         let msg = "mailto clean-compose path skipped (#237): \(reason); "
             + "using legacy AppleScript injection — body will be wrapped in "
@@ -1111,20 +1129,60 @@ actor MailController {
     /// clipboard per-attachment for the Go-to-folder paste).
     private func composeViaMailto(
         to: [String], subject: String, body: String,
-        cc: [String]?, bcc: [String]?, attachments: [String]?, send: Bool
+        cc: [String]?, bcc: [String]?, attachments: [String]?, send: Bool,
+        fromAddress: String? = nil
     ) throws -> String {
-        let url = buildMailtoURL(to: to, subject: subject, body: body, cc: cc, bcc: bcc)
+        // #277: display-name To can't ride the mailto URL (RFC 6068). When the
+        // To list carries ANY display name, the WHOLE To list goes through the
+        // GUI clipboard-fill phase (order preserved; bare + named tokenize
+        // alike) and the URL omits To. Cc is NEVER GUI-filled (#277 verify,
+        // Codex: a hidden Cc field would silently drop names), so eligibility
+        // guarantees cc here has no display names and cc always rides the URL.
+        let fillTo = anyRecipientHasDisplayName(to) ? to : []
+        // #277 defense-in-depth (verify R1 + R2, Codex): display-name fill is
+        // DRAFT-ONLY. Eligibility already routes a send with ANY display-name
+        // recipient (To/Cc/Bcc) to the legacy path, so this is unreachable — but
+        // a future routing bug must fail LOUD, never silently clean-send with a
+        // display name the mailto URL can't carry (wrong/missing recipient). The
+        // guard covers all three lists, not just `fillTo` (#219/#277 verify R2,
+        // Codex: a fillTo-only check would miss a stray display-name Cc/Bcc).
+        if send, anyRecipientHasDisplayName(to)
+            || anyRecipientHasDisplayName(cc ?? [])
+            || anyRecipientHasDisplayName(bcc ?? []) {
+            throw MailError.invalidParameter(
+                "internal: display-name recipient on a send reached the clean path — refusing "
+                + "(display-name recipients are draft-only on the clean path, #277)")
+        }
+        let urlTo = fillTo.isEmpty ? to : []
+        let url = buildMailtoURL(to: urlTo, subject: subject, body: body, cc: cc, bcc: bcc)
         guard url.count <= maxMailtoURLLength else {
             throw MailError.scriptFailed(
                 message: "mailto URL too long (\(url.count) > \(maxMailtoURLLength) chars)",
                 code: -1)
         }
+        // #219 verify (Codex R1/R2): the popup match is EXACT addr-spec, so
+        // pass the bare addr-spec (a `Name <addr>` from_address is normalized
+        // to `addr`) — the GUI-side `senderMatches()` suffix-matches the same
+        // against the menu labels / popup value (exact `<addr>` suffix, never
+        // an extraction a quoted local-part could spoof).
+        let popupAddress = fromAddress.map { parseRecipient($0).address }
         let script = buildMailtoComposeScript(
-            url: url, subject: subject, attachments: attachments ?? [], send: send)
-        if attachments?.isEmpty == false {
-            return try withClipboardPreserved { try runScript(script) }
+            url: url, subject: subject, attachments: attachments ?? [], send: send,
+            fromAddress: popupAddress, fillToRecipients: fillTo)
+        let needsClipboard = attachments?.isEmpty == false || !fillTo.isEmpty
+        var result = needsClipboard
+            ? try withClipboardPreserved({ try runScript(script) })
+            : try runScript(script)
+        // #219/#277: disclose what the GUI verified/filled so the caller can
+        // see the clean path handled the extras (parity with the legacy
+        // disclosure discipline, #237).
+        if let addr = popupAddress, !addr.isEmpty {
+            result += " [sender verified via From popup: \(addr)]"
         }
-        return try runScript(script)
+        if !fillTo.isEmpty {
+            result += " [display-name To recipients GUI-filled (draft-only, #277) — verify To in the draft]"
+        }
+        return result
     }
 
     /// #175 — preserve the user's clipboard (all flavors) across a closure that
@@ -1649,12 +1707,13 @@ actor MailController {
             if let reason = mailtoIneligibilityReasonForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
                 attachments: attachments,
-                recipients: to + (cc ?? []) + (bcc ?? [])) {
+                recipients: to + (cc ?? []) + (bcc ?? []),
+                draftMode: true, cc: cc ?? [], bcc: bcc ?? []) {
                 throw MailError.invalidParameter(requireWrapperFreeRefusal(reason: reason))
             }
             return try composeViaMailto(
                 to: to, subject: subject, body: body, cc: cc, bcc: bcc,
-                attachments: attachments, send: false)
+                attachments: attachments, send: false, fromAddress: fromAddress)
         }
 
         // #175: prefer the wrapper-free mailto path (save draft via ⌘S);
@@ -1666,11 +1725,12 @@ actor MailController {
             ineligibilityReason: mailtoIneligibilityReasonForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
                 attachments: attachments,
-                recipients: to + (cc ?? []) + (bcc ?? [])),
+                recipients: to + (cc ?? []) + (bcc ?? []),
+                draftMode: true, cc: cc ?? [], bcc: bcc ?? []),
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
-                    attachments: attachments, send: false)
+                    attachments: attachments, send: false, fromAddress: fromAddress)
             },
             legacyPath: {
                 let script = try buildCreateDraftScript(

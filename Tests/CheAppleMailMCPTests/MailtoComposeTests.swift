@@ -96,10 +96,22 @@ final class MailtoComposeTests: XCTestCase {
                                               hasSubject: true))
     }
 
-    func testShouldUseMailto_customSender_false() {
-        // mailto can't pick a non-default account → legacy path handles sender.
+    func testShouldUseMailto_customSender_eligibleViaPopup() {
+        // #219 flip: a custom sender no longer disqualifies — the GUI drives
+        // the From popup with mandatory read-back (SENDERPOPUP sentinel →
+        // legacy fallback on any mismatch). Needs Accessibility (next test).
+        XCTAssertTrue(shouldUseMailtoCompose(format: .plain,
+                                             accessibilityTrusted: true,
+                                             disabledByEnv: false,
+                                             hasCustomSender: true,
+                                             hasSubject: true))
+    }
+
+    func testShouldUseMailto_customSenderNoAccessibility_false() {
+        // #219: the popup is GUI scripting — without Accessibility the legacy
+        // path selects the sender natively instead.
         XCTAssertFalse(shouldUseMailtoCompose(format: .plain,
-                                              accessibilityTrusted: true,
+                                              accessibilityTrusted: false,
                                               disabledByEnv: false,
                                               hasCustomSender: true,
                                               hasSubject: true))
@@ -144,14 +156,18 @@ final class MailtoComposeTests: XCTestCase {
                       "must raise OUR compose window before dispatch (wrong-window mitigation)")
         XCTAssertTrue(s.contains("count of sheets of _w) is not 0"),
                       "must refuse dispatch while an open panel/sheet is up on the target window")
-        // stage-aware fallback with NO data loss: on error, close ONLY a window
-        // we created (new id captured before mailto) AND matching subject —
-        // never a pre-existing same-titled user draft (#175 verify round 2).
+        // stage-aware fallback with NO data loss: on error, close ONLY the
+        // window we created — its exact id (_ourId = the new window whose title
+        // is the subject), by id-iteration. Never a title guess, so a user's
+        // same-titled draft can't be discarded (#175 verify R2 + #219/#277
+        // verify R2, Codex BLOCKING).
         XCTAssertTrue(s.contains("on error _mErr"))
         XCTAssertTrue(s.contains("set _beforeIds to (id of every window)"),
                       "must snapshot window ids before mailto for safe cleanup")
-        XCTAssertTrue(s.contains("if (name of _cw) is \"S\" then close _cw saving no"),
-                      "cleanup must close only our new + same-subject window, not every same-titled window")
+        XCTAssertTrue(s.contains("set _ourId to (id of _cw)"),
+                      "must capture our compose window's exact id (new window whose title = subject)")
+        XCTAssertTrue(s.contains("if (id of _cw) is _ourId then close _cw saving no"),
+                      "cleanup must close only OUR window by exact id, not a title guess")
         XCTAssertFalse(s.contains("close (every window whose name"),
                        "must NOT batch-close by subject (data-loss bug)")
     }
@@ -264,17 +280,96 @@ final class MailtoComposeTests: XCTestCase {
                       "env reason must name the escape-hatch key: \(reason ?? "nil")")
     }
 
-    func testIneligibilityReason_customSender_namesFromAddressAnd219() {
+    func testIneligibilityReason_customSender_eligibleWhenAccessible() {
+        // #219 flip: with Accessibility granted, a SIMPLE custom sender rides the
+        // clean path (verified From popup) — no ineligibility reason.
+        XCTAssertNil(mailtoIneligibilityReason(format: .plain,
+                                               accessibilityTrusted: true,
+                                               disabledByEnv: false,
+                                               hasCustomSender: true,
+                                               hasSubject: true))
+    }
+
+    func testIneligibilityReason_nonSimpleCustomSender_routesToLegacy() {
+        // #219 verify R2 (Codex): a custom sender that is NOT a simple addr-spec
+        // (a quoted local-part) must route to legacy — the From-popup exact-suffix
+        // match is spoof-proof only for simple addresses.
         let reason = mailtoIneligibilityReason(format: .plain,
                                                accessibilityTrusted: true,
+                                               disabledByEnv: false,
+                                               hasCustomSender: true,
+                                               hasSubject: true,
+                                               customSenderIsSimple: false)
+        XCTAssertNotNil(reason, "a non-simple custom sender must be ineligible for the clean popup")
+        XCTAssertTrue(reason?.contains("simple addr-spec") == true,
+                      "reason must name why (not a simple addr-spec): \(reason ?? "nil")")
+    }
+
+    // MARK: - #219 verify R2 — isSimpleAddrSpec (From-popup spoof gate)
+
+    func testIsSimpleAddrSpec_plainAddress_true() {
+        XCTAssertTrue(isSimpleAddrSpec("me@corp.example"))
+        XCTAssertTrue(isSimpleAddrSpec("first.last+tag@sub.corp.example"))
+    }
+
+    func testIsSimpleAddrSpec_quotedLocalPart_false() {
+        // The exact Codex R2 spoof payload: a quoted local-part with embedded
+        // angle brackets could suffix-match a crafted evil account label.
+        XCTAssertFalse(isSimpleAddrSpec("\"prefix<foo\"@evil.example"))
+        XCTAssertFalse(isSimpleAddrSpec("foo\"@evil.example"))
+    }
+
+    func testIsSimpleAddrSpec_angleBracketsOrWhitespaceOrMultiAt_false() {
+        XCTAssertFalse(isSimpleAddrSpec("a<b@c.example"))
+        XCTAssertFalse(isSimpleAddrSpec("a b@c.example"))
+        XCTAssertFalse(isSimpleAddrSpec("a@b@c.example"))
+        XCTAssertFalse(isSimpleAddrSpec("noatsign.example"))
+        XCTAssertFalse(isSimpleAddrSpec(""))
+    }
+
+    func testIsSimpleAddrSpec_unicodeWhitespace_false() {
+        // #219 verify R4 (Codex): reject any Unicode whitespace, not just ASCII
+        // space/tab — an embedded NBSP (U+00A0) or ideographic space must not
+        // slip a non-simple sender past the popup gate.
+        XCTAssertFalse(isSimpleAddrSpec("a\u{00A0}b@c.example"), "NBSP must be rejected")
+        XCTAssertFalse(isSimpleAddrSpec("a\u{3000}b@c.example"), "ideographic space must be rejected")
+    }
+
+    func testIneligibilityReason_customSenderNoAccessibility_namesPopupAnd219() {
+        // #219: without Accessibility the reason names BOTH the parameter and
+        // the popup mechanism it needs, so the disclosure stays actionable.
+        let reason = mailtoIneligibilityReason(format: .plain,
+                                               accessibilityTrusted: false,
                                                disabledByEnv: false,
                                                hasCustomSender: true,
                                                hasSubject: true)
         XCTAssertNotNil(reason)
         XCTAssertTrue(reason?.contains("from_address") == true,
-                      "custom-sender reason must name the parameter: \(reason ?? "nil")")
+                      "reason must name the parameter: \(reason ?? "nil")")
         XCTAssertTrue(reason?.contains("#219") == true,
-                      "custom-sender reason must point at the sender-popup follow-up: \(reason ?? "nil")")
+                      "reason must cite the sender-popup mechanism: \(reason ?? "nil")")
+    }
+
+    func testIneligibilityReason_displayNames_draftFillViable() {
+        // #277: display-name recipients are clean-path-eligible when the
+        // caller marks the GUI fill viable (draft mode, bcc clean)...
+        XCTAssertNil(mailtoIneligibilityReason(format: .plain,
+                                               accessibilityTrusted: true,
+                                               disabledByEnv: false,
+                                               hasCustomSender: false,
+                                               hasSubject: true,
+                                               recipientsAddrSpecOnly: false,
+                                               displayNameFillViable: true))
+        // ...and stay legacy-routed when not viable (send mode / bcc names).
+        let reason = mailtoIneligibilityReason(format: .plain,
+                                               accessibilityTrusted: true,
+                                               disabledByEnv: false,
+                                               hasCustomSender: false,
+                                               hasSubject: true,
+                                               recipientsAddrSpecOnly: false,
+                                               displayNameFillViable: false)
+        XCTAssertTrue(reason?.contains("#277") == true,
+                      "non-viable display-name reason must cite the draft-only boundary: \(reason ?? "nil")")
     }
 
     func testIneligibilityReason_emptySubject_namesSubject() {
@@ -500,10 +595,130 @@ extension MailtoComposeTests {
         // two-argument tail (attachments #220 + recipients #251). A bare
         // "attachments: attachments," needle would also match the many
         // composeViaMailto/legacy call sites.
-        let probeTail = "attachments: attachments,\n                recipients: to + (cc ?? []) + (bcc ?? []))"
-        let count = source.components(separatedBy: probeTail).count - 1
+        let sendTail = "attachments: attachments,\n                recipients: to + (cc ?? []) + (bcc ?? []))"
+        let draftTail = "attachments: attachments,\n                recipients: to + (cc ?? []) + (bcc ?? []),\n                draftMode: true, cc: cc ?? [], bcc: bcc ?? [])"
+        // #277: the two createDraft probe sites now carry the draftMode+bcc
+        // tail (display-name fill viability); the two composeEmail sites keep
+        // the send-path tail. 2 + 2 = 4 total, both dimensions still threaded.
+        let draftCount = source.components(separatedBy: draftTail).count - 1
+        // The draft tail ends "]]," so it can never match the send tail's
+        // "]))" — the two counts are disjoint, no double-count subtraction.
+        let sendCount = source.components(separatedBy: sendTail).count - 1
+        XCTAssertEqual(draftCount, 2,
+                       "both createDraft probe sites must thread draftMode+bcc (#277); found \(draftCount)")
+        let count = sendCount + draftCount
         XCTAssertEqual(count, 4,
                        "all four compose-family probe sites must thread attachments (#220) "
                        + "AND recipients (#251) into mailtoIneligibilityReasonForCall; found \(count)")
+    }
+
+    // MARK: #219/#277 — sender-popup + display-name-fill script phases
+
+    func testMailtoScript_senderPopup_exactMatchSentinelsAndOrdering() {
+        // #219 (+ verify R1/R2, Codex): the popup phase matches the account by
+        // EXACT addr-spec — an exact-SUFFIX predicate (senderMatches), never
+        // substring `contains` (which would verify a superstring account like
+        // notme@corp.example) and never EXTRACTION of the text between < and >
+        // (a quoted local-part like "x<me@x>y"@evil.example would otherwise be
+        // parsed to me@x and SPOOF the match — Codex R2 BLOCKING). Both the menu
+        // selection and the read-back use senderMatches; all failures are
+        // SENDERPOPUP sentinels (pre-dispatch → legacy fallback), before dispatch.
+        let script = buildMailtoComposeScript(
+            url: "mailto:a@x?subject=S", subject: "S", attachments: [],
+            send: false, fromAddress: "me@corp.example")
+        XCTAssertTrue(script.contains("on senderMatches(_label, _addr)"),
+                      "exact-match needs the senderMatches handler")
+        // the handler must be an exact-suffix match, NOT an addr extraction
+        XCTAssertTrue(script.contains("ends with (\"<\" & _addr & \">\")"),
+                      "senderMatches must match by the exact <addr> suffix (anti-spoof)")
+        XCTAssertFalse(script.contains("text item -1 of _s"),
+                       "must NOT extract the addr between < and > — a quoted local-part could spoof it (Codex R2)")
+        XCTAssertTrue(script.contains("my senderMatches(name of _mi as text, \"me@corp.example\")"),
+                      "menu selection must call senderMatches with the requested addr, not contains")
+        XCTAssertTrue(script.contains("not (my senderMatches(_senderReadback, \"me@corp.example\"))"),
+                      "read-back must call senderMatches (exact), not contains")
+        XCTAssertFalse(script.contains("whose name contains"),
+                       "no substring matching allowed in the popup phase (#219 verify)")
+        // #219 verify R4 (Codex): the From popup must be UNAMBIGUOUS — a rogue
+        // @-valued signature popup (a signature named like an email) makes ≥2
+        // address-like popups → fail closed, else the wrong control could be
+        // "verified" while the real From stays on the default account.
+        XCTAssertTrue(script.contains("if _fromPopupCount > 1 then error"),
+                      "must require exactly one address-like popup (signature-popup spoof gate)")
+        XCTAssertTrue(script.contains("SENDERPOPUP: read-back mismatch"))
+        let popupIdx = script.range(of: "SENDERPOPUP")!.lowerBound
+        let dispatchIdx = script.range(of: "keystroke \"s\" using command down")!.lowerBound
+        XCTAssertTrue(popupIdx < dispatchIdx, "popup verification must precede the dispatch keystroke")
+    }
+
+    func testMailtoScript_windowIdentity_subjectNewWindowAndUniqueTitle() {
+        // #219/#277 verify R2 (Codex BLOCKING): the title is the only
+        // System-Events keystroke bridge, so the path must fail closed on any
+        // same-title ambiguity rather than keystroke/dispatch the wrong window.
+        // Identity: the NEW window (id unseen before the mailto) whose title is
+        // our subject, captured as _ourId — NOT a count==1 assertion (Mail
+        // launched from closed opens the viewer too, which would over-reject).
+        // raiseOnly asserts exactly ONE window carries our title before each
+        // keystroke phase. Cleanup closes ONLY _ourId, by id-iteration (never a
+        // title guess → can't discard a user's same-title draft with `saving no`).
+        let script = buildMailtoComposeScript(
+            url: "mailto:a@x?subject=S", subject: "S", attachments: [],
+            send: false, fromAddress: "me@corp.example")
+        XCTAssertTrue(script.contains("(_beforeIds does not contain (id of _cw)) and ((name of _cw) is \"S\")"),
+                      "must identify our window as the NEW window whose title is the subject")
+        XCTAssertTrue(script.contains("set _ourId to (id of _cw)"),
+                      "must capture our compose window's id by subject match, not a count assertion")
+        XCTAssertTrue(script.contains("if _ourMatches > 1 then error"),
+                      "must fail closed when >1 NEW window carries our subject (concurrent same-subject window)")
+        XCTAssertFalse(script.contains("if (count of _newIds) is not 1 then error"),
+                       "must NOT force legacy when Mail opens a second (viewer) window on launch — count all windows, only subject-matching new ones")
+        XCTAssertTrue(script.contains("if _wMatches > 1 then error"),
+                      "raiseOnly must fail closed when more than one window carries our title")
+        XCTAssertTrue(script.contains("if (id of _cw) is _ourId then close _cw saving no"),
+                      "cleanup must close ONLY our window by id-iteration, never a title guess")
+        XCTAssertFalse(script.contains("first window whose id is _ourId"),
+                       "must NOT use `whose id is` on a compose window (silently fails — reply-path lesson)")
+    }
+
+    func testMailtoScript_preExistingSameTitleWindow_guarded() {
+        // #219/#277 verify (Codex): title (=subject) is the only System-Events
+        // window bridge, so a pre-existing same-subject window makes identity
+        // ambiguous — the script must refuse (pre-dispatch → legacy fallback).
+        let script = buildMailtoComposeScript(
+            url: "mailto:a@x?subject=S", subject: "S", attachments: [], send: false)
+        XCTAssertTrue(script.contains("set _beforeTitles to (name of every window)"))
+        XCTAssertTrue(script.contains("if _beforeTitles contains \"S\" then error"),
+                      "must refuse the clean path when a same-titled window already exists")
+    }
+
+    func testMailtoScript_noFromAddress_noPopupPhase() {
+        let script = buildMailtoComposeScript(
+            url: "mailto:a@x?subject=S", subject: "S", attachments: [], send: false)
+        XCTAssertFalse(script.contains("SENDERPOPUP"),
+                       "no popup phase without a custom sender — byte-stable default path")
+    }
+
+    func testMailtoScript_fillTo_orderingAndEscaping() {
+        // #277 (+ verify, Codex): fill is TO-ONLY (Cc removed — a hidden Cc
+        // field would silently drop names). The To fill runs BEFORE the popup
+        // phase (fresh window's default To focus) and before dispatch. Quotes
+        // in display names are AppleScript-escaped.
+        let script = buildMailtoComposeScript(
+            url: "mailto:?subject=S", subject: "S", attachments: [],
+            send: false, fromAddress: "me@corp.example",
+            fillToRecipients: ["\"Wang, X\" <w@x.example>"])
+        XCTAssertTrue(script.contains("keystroke tab"))
+        XCTAssertTrue(script.contains("\\\"Wang, X\\\" <w@x.example>"),
+                      "display-name quotes must be AppleScript-escaped in the clipboard literal")
+        let fillIdx = script.range(of: "keystroke \"v\" using command down")!.lowerBound
+        let popupIdx = script.range(of: "SENDERPOPUP")!.lowerBound
+        XCTAssertTrue(fillIdx < popupIdx, "recipient fill must precede the sender popup phase")
+    }
+
+    func testMailtoScript_noFillRecipients_noFillPhase() {
+        let script = buildMailtoComposeScript(
+            url: "mailto:a@x?subject=S", subject: "S", attachments: [], send: false)
+        XCTAssertFalse(script.contains("keystroke tab"),
+                       "no fill phase without display-name recipients — byte-stable default path")
     }
 }
