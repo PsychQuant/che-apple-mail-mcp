@@ -432,6 +432,33 @@ final class RecipientDisplayNameTests: XCTestCase {
                 to: ["Name <user@example.net(>)>"], subject: "s", body: "b"))
     }
 
+    // MARK: #289 — atCount counts scalars, not grapheme clusters
+
+    func testValidation_graphemeMaskedAt_rejectedAtBoundary() async throws {
+        // #289 (sibling of #280's angle fix): `@` fused with U+FE0F is one
+        // grapheme cluster != "@" under Character counting — `a@\u{FE0F}b@c`
+        // counted atCount==1 and passed with the masked `@` intact. Scalar
+        // counting sees both U+0040 scalars → atCount==2 → reject.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["a@\u{FE0F}b@example.net"], subject: "s", body: "b"))
+    }
+
+    func testValidation_combiningScalarsElsewhere_stillPass() async throws {
+        // Over-reject guard: combining scalars NOT adjacent to '@' must not
+        // perturb the count — café (e + U+0301) has exactly one @ scalar.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
+        let r = try await MailController.shared.composeEmail(
+            to: ["cafe\u{301}@example.net"], subject: "s", body: "b")
+        XCTAssertTrue(r.hasPrefix("Email sent successfully"))
+    }
+
     // MARK: #266 — RFC 5322 quoted-pair decoding inside quoted display names
 
     func testParseRecipient_quotedPair_quoteDecoded() {

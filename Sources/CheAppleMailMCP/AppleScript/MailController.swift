@@ -843,7 +843,12 @@ actor MailController {
                 continue
             }
             // Structural: exactly one `@`, neither at start nor end.
-            let atCount = addr.filter { $0 == "@" }.count
+            // #289: count SCALARS, not Characters — `@` fused with a trailing
+            // combining scalar (U+FE0F) into one grapheme cluster compares
+            // unequal to "@" and slipped the Character-level count (the atCount
+            // sibling of #280's angle-scan fix; U+0040 is a single ASCII
+            // scalar, so scalar counting is strictly more precise).
+            let atCount = addr.unicodeScalars.filter { $0 == "@" }.count
             if atCount != 1 {
                 failures.append("'\(addr)' must contain exactly one '@' (got \(atCount))")
                 continue
