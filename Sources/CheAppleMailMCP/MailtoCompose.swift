@@ -445,10 +445,12 @@ func anyRecipientHasDisplayName(_ recipients: [String]?) -> Bool {
 /// non-simple custom sender is routed to legacy (native `set sender`, correct
 /// account, body wrapped) instead of the clean popup.
 func isSimpleAddrSpec(_ addr: String) -> Bool {
-    let a = addr.trimmingCharacters(in: .whitespaces)
+    let a = addr.trimmingCharacters(in: .whitespacesAndNewlines)
     if a.isEmpty { return false }
     if a.contains("\"") || a.contains("<") || a.contains(">") { return false }
-    if a.contains(where: { $0 == " " || $0 == "\t" }) { return false }
+    // any Unicode whitespace, not just ASCII space/tab — an embedded NBSP or
+    // other Unicode space could otherwise slip through (#219 verify R4, Codex).
+    if a.contains(where: { $0.isWhitespace }) { return false }
     return a.filter { $0 == "@" }.count == 1
 }
 

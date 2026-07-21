@@ -327,6 +327,14 @@ final class MailtoComposeTests: XCTestCase {
         XCTAssertFalse(isSimpleAddrSpec(""))
     }
 
+    func testIsSimpleAddrSpec_unicodeWhitespace_false() {
+        // #219 verify R4 (Codex): reject any Unicode whitespace, not just ASCII
+        // space/tab — an embedded NBSP (U+00A0) or ideographic space must not
+        // slip a non-simple sender past the popup gate.
+        XCTAssertFalse(isSimpleAddrSpec("a\u{00A0}b@c.example"), "NBSP must be rejected")
+        XCTAssertFalse(isSimpleAddrSpec("a\u{3000}b@c.example"), "ideographic space must be rejected")
+    }
+
     func testIneligibilityReason_customSenderNoAccessibility_namesPopupAnd219() {
         // #219: without Accessibility the reason names BOTH the parameter and
         // the popup mechanism it needs, so the disclosure stays actionable.
@@ -631,6 +639,12 @@ extension MailtoComposeTests {
                       "read-back must call senderMatches (exact), not contains")
         XCTAssertFalse(script.contains("whose name contains"),
                        "no substring matching allowed in the popup phase (#219 verify)")
+        // #219 verify R4 (Codex): the From popup must be UNAMBIGUOUS — a rogue
+        // @-valued signature popup (a signature named like an email) makes ≥2
+        // address-like popups → fail closed, else the wrong control could be
+        // "verified" while the real From stays on the default account.
+        XCTAssertTrue(script.contains("if _fromPopupCount > 1 then error"),
+                      "must require exactly one address-like popup (signature-popup spoof gate)")
         XCTAssertTrue(script.contains("SENDERPOPUP: read-back mismatch"))
         let popupIdx = script.range(of: "SENDERPOPUP")!.lowerBound
         let dispatchIdx = script.range(of: "keystroke \"s\" using command down")!.lowerBound

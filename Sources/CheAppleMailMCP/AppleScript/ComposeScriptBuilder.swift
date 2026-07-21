@@ -301,10 +301,13 @@ func buildMailtoComposeScript(
     // the requested account by EXACT-suffix (`is _addr` OR `ends with <addr>`),
     // never by extraction (a quoted local-part could otherwise spoof the addr —
     // #219 verify R2, Codex BLOCKING). The caller passes `fromAddress` already
-    // normalized to a bare addr-spec. This also fail-closes the popup-discovery
-    // heuristic: even if the '@'-value scan grabbed the wrong popup (e.g. a
-    // signature named like an email), no menu item will suffix-match the
-    // requested account → SENDERPOPUP error → legacy fallback. Any SENDERPOPUP error is
+    // normalized to a bare addr-spec (a non-simple addr-spec is gated to legacy
+    // upstream by `isSimpleAddrSpec`, #219 verify R2). Popup discovery is now
+    // two-layered against grabbing the WRONG popup (e.g. a signature named like
+    // an email): the '@'-value scan requires EXACTLY ONE address-like popup
+    // (a rogue @-valued signature popup makes it ≥2 → SENDERPOPUP → legacy,
+    // #219 verify R4, Codex), and even then `senderMatches` exact-suffix must
+    // pass on both selection and read-back. Any SENDERPOPUP error is
     // pre-dispatch: the on-error handler closes OUR window (saving no) and the
     // Swift router falls back to the legacy `set sender` path (correct sender
     // beats clean body, same conservative ordering as #175).
@@ -317,15 +320,17 @@ func buildMailtoComposeScript(
                 set frontmost to true
                 \(raiseOnly)
                 set _fromPopup to missing value
+                set _fromPopupCount to 0
                 repeat with _pb in (pop up buttons of _w)
                     try
                         if (value of _pb as text) contains "@" then
                             set _fromPopup to _pb
-                            exit repeat
+                            set _fromPopupCount to _fromPopupCount + 1
                         end if
                     end try
                 end repeat
                 if _fromPopup is missing value then error "SENDERPOPUP: From popup not found on the compose window"
+                if _fromPopupCount > 1 then error "SENDERPOPUP: more than one address-like popup on the compose window — cannot unambiguously identify the From popup (e.g. a signature named like an email); safe fallback"
                 click _fromPopup
                 delay \(stepDelay)
                 set _pickedItem to missing value
