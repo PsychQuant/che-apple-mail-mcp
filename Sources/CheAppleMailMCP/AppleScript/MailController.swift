@@ -2378,6 +2378,16 @@ enum MailError: LocalizedError {
         case .scriptCreationFailed:
             return "Failed to create AppleScript"
         case .scriptFailed(let message, let code):
+            // #288: -1743 (errAEEventNotPermitted, Automation TCC not granted)
+            // used to pass through raw — every session re-diagnosed the same
+            // wall from one bare line. Rendered HERE (the single sink every
+            // scriptFailed throw site funnels through) so ALL AppleScript-
+            // backed tools carry the remediation, mirroring the
+            // FullDiskAccessHelp precedent. Matched on the CODE, never the
+            // message text (locale-dependent).
+            if code == -1743 {
+                return "AppleScript error (\(code)): \(message)\n" + AutomationHelp.guidance
+            }
             return "AppleScript error (\(code)): \(message)"
         case .invalidParameter(let message):
             return "Invalid parameter: \(message)"
@@ -2385,4 +2395,20 @@ enum MailError: LocalizedError {
             return message
         }
     }
+}
+
+/// #288 — actionable guidance for Automation-TCC denial (-1743), the
+/// Automation-axis sibling of `FullDiskAccessHelp`. Centralized so the text
+/// cannot drift between tools.
+enum AutomationHelp {
+    static let guidance = """
+        Mail Automation permission is not granted. To fix: System Settings → \
+        Privacy & Security → Automation → enable Mail under the RESPONSIBLE host — \
+        Claude Code CLI install: your terminal app (Terminal / iTerm / the claude \
+        host); Claude Desktop extension: Claude.app. The two installs hold \
+        independent grants, and a binary update can invalidate the entry (#211). \
+        Zero-TCC fallback available NOW: the open_mailto tool opens a \
+        cite-block-free compose window via LaunchServices (no Apple events; \
+        attachments must be dragged in manually).
+        """
 }
