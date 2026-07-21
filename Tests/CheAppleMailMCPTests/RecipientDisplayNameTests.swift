@@ -374,6 +374,27 @@ final class RecipientDisplayNameTests: XCTestCase {
                 to: ["\"Foo <a@x.example>"], subject: "s", body: "b"))
     }
 
+    func testParseRecipient_unbalancedQuoteInComment_treatedAsBare_deliberate() {
+        // #286 verify (Codex) — DELIBERATE boundary pin, not a fix. RFC 5322
+        // permits `"` as ctext inside a CFWS comment, so `Name (") <a@x>` is
+        // grammar-legal and the OLD split happened to accept it (the comment
+        // passed through as literal display-name text). The lite parser does
+        // NOT understand comments (#280 pinned that boundary for angles-in-
+        // comments); a quote inside one reads as a quoted-string opener, and
+        // an ODD number of quotes before '<' is exactly the unterminated-
+        // quote class this issue already pins as bare→reject (fail-loud, no
+        // mis-send). Comment-aware scanning stays full-parser territory. An
+        // EVEN number of quotes inside comments still splits fine
+        // (`Acme ("The Best") <s@a.com>` below).
+        let r = parseRecipient("Name (\") <a@x.example>")
+        XCTAssertNil(r.name)
+        XCTAssertEqual(r.address, "Name (\") <a@x.example>")
+        // Balanced quotes inside a comment stay unaffected.
+        let ok = parseRecipient("Acme (\"The Best\") <sales@acme.example>")
+        XCTAssertEqual(ok.name, "Acme (\"The Best\")")
+        XCTAssertEqual(ok.address, "sales@acme.example")
+    }
+
     func testParseRecipient_graphemeMaskedAngleOpener_treatedAsBare() {
         // '<' fused with U+FE0F is one grapheme cluster != "<" — the
         // Character-level split treats it as literal text (no split), and the
@@ -446,6 +467,36 @@ final class RecipientDisplayNameTests: XCTestCase {
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.composeEmail(
                 to: ["a@\u{FE0F}b@example.net"], subject: "s", body: "b"))
+    }
+
+    func testValidation_graphemeMaskedLeadingAt_rejectedAtBoundary() async throws {
+        // #289 verify (Codex): `@\u{FE0F}example.net` — the sole `@` is FIRST
+        // and fused with U+FE0F. Old Character atCount rejected it by accident
+        // (fusion → count 0); scalar atCount counts it (1), so the boundary
+        // check must ALSO be scalar-level or the shape flips to accept with an
+        // empty local part.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
+            ineligibility: nil)
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["@\u{FE0F}example.net"], subject: "s", body: "b"))
+    }
+
+    func testValidation_trailingMaskDomain_acceptedAsMailLevelGarbage() async throws {
+        // #289 documented residual: `user@\u{FE0F}` — the `@` scalar is non-
+        // terminal (FE0F follows), so the FE0F-only domain passes the lite
+        // boundary checks and lands as Mail-level-invalid garbage (benign, no
+        // mis-send — same class as `a@-`). The OLD rejection here was an
+        // accident of the grapheme-fusion bug itself; domain grammar
+        // validation is out of lite-validator scope. Pinned deliberately.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
+        let r = try await MailController.shared.composeEmail(
+            to: ["user@\u{FE0F}"], subject: "s", body: "b")
+        XCTAssertTrue(r.hasPrefix("Email sent successfully"))
     }
 
     func testValidation_combiningScalarsElsewhere_stillPass() async throws {

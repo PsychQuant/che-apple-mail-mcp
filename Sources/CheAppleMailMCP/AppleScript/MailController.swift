@@ -853,7 +853,17 @@ actor MailController {
                 failures.append("'\(addr)' must contain exactly one '@' (got \(atCount))")
                 continue
             }
-            if addr.hasPrefix("@") || addr.hasSuffix("@") {
+            // #289 (Codex R1): boundary checks at SCALAR level too — Character-
+            // level hasPrefix/hasSuffix compares whole grapheme clusters, so a
+            // leading `@` fused with U+FE0F was invisible to hasPrefix while
+            // the scalar atCount now counts it (`@\u{FE0F}x` would have flipped
+            // from reject to accept). A trailing-side mask (`user@\u{FE0F}`)
+            // leaves the `@` scalar non-terminal — the FE0F-only domain is
+            // accepted as Mail-level-invalid garbage (benign class, same as
+            // `a@-`): the old rejection there was an accident of the very
+            // fusion bug this fix removes, and domain grammar validation is
+            // out of lite-validator scope.
+            if addr.unicodeScalars.first == "@" || addr.unicodeScalars.last == "@" {
                 failures.append("'\(addr)' must not start or end with '@'")
                 continue
             }
