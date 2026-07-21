@@ -1008,8 +1008,10 @@ actor MailController {
         // #175: prefer the wrapper-free mailto path (native compose pipeline →
         // no Apple-Mail-URLShare/blockquote-cite wrapper). Falls back to the
         // legacy AppleScript injection (which wraps the body) on any failure,
-        // for markdown/html, for a custom sender, without Accessibility, or
-        // when disabled via env. See MailtoCompose.swift.
+        // for markdown/html, without Accessibility, for a NON-simple custom
+        // sender (quoted local-part, #219 verify R2), or when disabled via env.
+        // A simple custom from_address now RIDES the clean path via the verified
+        // From popup (#219). See MailtoCompose.swift.
         // #237: the fallback is no longer silent — the named reason goes to
         // stderr AND onto the returned result string.
         // #239: strict mode — a caller that requires a wrapper-free body gets a
@@ -1072,12 +1074,13 @@ actor MailController {
             mapNoFallbackError: { unknownSendStateError($0) })
     }
 
-    /// #175/#237 — nil iff this compose call should use the wrapper-free mailto
-    /// path; otherwise the named reason for routing to the legacy path. Probes
-    /// Accessibility + the env escape hatch at call time; custom sender
-    /// (`fromAddress`) and an empty subject both route to the legacy path (mailto
-    /// can't pick a non-default account; the GUI dispatch guard identifies the
-    /// compose window by its title = subject).
+    /// #175/#237/#219 — nil iff this compose call should use the wrapper-free
+    /// mailto path; otherwise the named reason for routing to the legacy path.
+    /// Probes Accessibility + the env escape hatch at call time. A custom sender
+    /// (`fromAddress`) now RIDES the clean path via the verified From-popup
+    /// (#219) when Accessibility is granted — it forces legacy only WITHOUT
+    /// Accessibility. An empty subject still forces legacy (the GUI dispatch
+    /// guard identifies our compose window by its title = subject).
     private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, recipients: [String] = [], draftMode: Bool = false, cc: [String] = [], bcc: [String] = []) -> String? {
         if let override = ineligibilityOverride { return override() }
         return mailtoIneligibilityReason(
@@ -1095,16 +1098,23 @@ actor MailController {
             // drop names), so display-name cc/bcc keep the legacy path.
             displayNameFillViable: draftMode
                 && !anyRecipientHasDisplayName(cc)
-                && !anyRecipientHasDisplayName(bcc)
+                && !anyRecipientHasDisplayName(bcc),
+            // #219 verify R2 (Codex): only a simple addr-spec is safe to drive
+            // the exact From-popup match; an exotic quoted local-part routes to
+            // legacy. Check the popup address (the same value the GUI matches).
+            customSenderIsSimple: fromAddress.map {
+                isSimpleAddrSpec(parseRecipient($0).address)
+            } ?? true
         )
     }
 
     /// #237 — surface (never swallow) that a compose call never even attempted
     /// the wrapper-free mailto path. Sibling of `warnMailtoFallback`: that one
     /// fires when mailto was TRIED and failed; this one fires when the call was
-    /// ineligible from the start (custom sender / format / no subject / no
-    /// Accessibility / env hatch). The 2026-07-09 #237 regression report came
-    /// from exactly this silent branch.
+    /// ineligible from the start (non-simple custom sender / format / no subject
+    /// / no Accessibility / env hatch — a simple custom sender rides the clean
+    /// path, #219). The 2026-07-09 #237 regression report came from exactly this
+    /// silent branch.
     private func warnMailtoIneligible(_ reason: String) {
         let msg = "mailto clean-compose path skipped (#237): \(reason); "
             + "using legacy AppleScript injection — body will be wrapped in "
@@ -1129,14 +1139,18 @@ actor MailController {
         // Codex: a hidden Cc field would silently drop names), so eligibility
         // guarantees cc here has no display names and cc always rides the URL.
         let fillTo = anyRecipientHasDisplayName(to) ? to : []
-        // #277 defense-in-depth (verify DA): display-name fill is DRAFT-ONLY.
-        // Eligibility already routes a send with any display-name recipient to
-        // the legacy path, so `send && !fillTo.isEmpty` should be unreachable —
-        // but a future routing bug must fail LOUD here, never silently GUI-fill
-        // then SEND (which could fire with wrong/missing recipients).
-        if send, !fillTo.isEmpty {
+        // #277 defense-in-depth (verify R1 + R2, Codex): display-name fill is
+        // DRAFT-ONLY. Eligibility already routes a send with ANY display-name
+        // recipient (To/Cc/Bcc) to the legacy path, so this is unreachable — but
+        // a future routing bug must fail LOUD, never silently clean-send with a
+        // display name the mailto URL can't carry (wrong/missing recipient). The
+        // guard covers all three lists, not just `fillTo` (#219/#277 verify R2,
+        // Codex: a fillTo-only check would miss a stray display-name Cc/Bcc).
+        if send, anyRecipientHasDisplayName(to)
+            || anyRecipientHasDisplayName(cc ?? [])
+            || anyRecipientHasDisplayName(bcc ?? []) {
             throw MailError.invalidParameter(
-                "internal: display-name recipient fill attempted on a send — refusing "
+                "internal: display-name recipient on a send reached the clean path — refusing "
                 + "(display-name recipients are draft-only on the clean path, #277)")
         }
         let urlTo = fillTo.isEmpty ? to : []
@@ -1146,10 +1160,11 @@ actor MailController {
                 message: "mailto URL too long (\(url.count) > \(maxMailtoURLLength) chars)",
                 code: -1)
         }
-        // #219 verify (Codex): the popup match is EXACT addr-spec equality, so
+        // #219 verify (Codex R1/R2): the popup match is EXACT addr-spec, so
         // pass the bare addr-spec (a `Name <addr>` from_address is normalized
-        // to `addr`) — the GUI-side `emailOf()` extracts the same from the
-        // menu labels / popup value.
+        // to `addr`) — the GUI-side `senderMatches()` suffix-matches the same
+        // against the menu labels / popup value (exact `<addr>` suffix, never
+        // an extraction a quoted local-part could spoof).
         let popupAddress = fromAddress.map { parseRecipient($0).address }
         let script = buildMailtoComposeScript(
             url: url, subject: subject, attachments: attachments ?? [], send: send,

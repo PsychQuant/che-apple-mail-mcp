@@ -252,11 +252,14 @@ func legacyReplyPathDisclosure(reason: String) -> String {
 /// `consistentWithShouldUseMailtoCompose` matrix test).
 ///
 /// Motivation (#237 RCA): every 2026-07-09 `create_draft` carried a custom
-/// `from_address`, silently routing to the legacy injection path whose body
-/// Mail wraps in `<blockquote type="cite">` at MIME-serialization time. The
-/// ineligibility itself is by design (#131/#175) — the bug was that nothing
-/// disclosed it. This function names the reason so the result string, the
-/// stderr warn, and the tool description can all surface the same fact.
+/// `from_address`, which at the time silently routed to the legacy injection
+/// path whose body Mail wraps in `<blockquote type="cite">` at MIME
+/// serialization. #219 later let a custom sender RIDE the clean path (verified
+/// From popup with read-back), so from_address is no longer an ineligibility
+/// reason on its own — but the lesson stands: whenever a call DOES fall to
+/// legacy, this function names the reason so the result string, the stderr
+/// warn, and the tool description all surface the same fact rather than
+/// silently wrapping the body.
 /// #220 — true iff every attachment path is pure ASCII. The mailto path
 /// attaches via the GUI go-to-folder sheet (⇧⌘G + paste), which hangs
 /// deterministically on CJK/fullwidth paths (live repro, v2.17.0) — the
@@ -433,6 +436,22 @@ func anyRecipientHasDisplayName(_ recipients: [String]?) -> Bool {
     return recipients.contains { parseRecipient($0).name != nil }
 }
 
+/// #219 verify R2 (Codex) — true iff `addr` is a plain addr-spec safe for the
+/// exact From-popup suffix match (`senderMatches`). That match is spoof-proof
+/// ONLY for a simple address: a quote / angle bracket / whitespace in the addr
+/// (an exotic quoted local-part such as `"prefix<foo"@evil.example`) could let a
+/// crafted account label end in the literal `<addr>` and suffix-match the WRONG
+/// account. Requires exactly one '@' and none of `" < > ` or whitespace, so a
+/// non-simple custom sender is routed to legacy (native `set sender`, correct
+/// account, body wrapped) instead of the clean popup.
+func isSimpleAddrSpec(_ addr: String) -> Bool {
+    let a = addr.trimmingCharacters(in: .whitespaces)
+    if a.isEmpty { return false }
+    if a.contains("\"") || a.contains("<") || a.contains(">") { return false }
+    if a.contains(where: { $0 == " " || $0 == "\t" }) { return false }
+    return a.filter { $0 == "@" }.count == 1
+}
+
 func mailtoIneligibilityReason(
     format: BodyFormat,
     accessibilityTrusted: Bool,
@@ -441,7 +460,8 @@ func mailtoIneligibilityReason(
     hasSubject: Bool,
     attachmentsGuiSafe: Bool = true,
     recipientsAddrSpecOnly: Bool = true,
-    displayNameFillViable: Bool = false
+    displayNameFillViable: Bool = false,
+    customSenderIsSimple: Bool = true
 ) -> String? {
     if disabledByEnv {
         return "mailto compose disabled via \(mailtoComposeDisableEnvKey)"
@@ -468,18 +488,31 @@ func mailtoIneligibilityReason(
         return "Accessibility (AXIsProcessTrusted) not granted — GUI keystrokes for "
             + "save/send/attach would silently fail"
     }
+    // #219 verify R2 (Codex): the From-popup match (senderMatches) exact-matches
+    // by addr-spec suffix — spoof-proof only for a SIMPLE address. A custom
+    // from_address carrying a quote / angle bracket / whitespace (exotic quoted
+    // local-part) could let a crafted account label suffix-match the wrong
+    // account, so it is routed to legacy (native set sender, correct account).
+    if hasCustomSender && !customSenderIsSimple {
+        return "custom from_address is not a simple addr-spec (contains a quote, "
+            + "angle bracket, or whitespace) — the verified sender-popup only "
+            + "exact-matches simple addresses safely (#219 verify); the legacy path "
+            + "sets the sender natively (correct account, body wrapped)"
+    }
     if !attachmentsGuiSafe {
         return "attachment path contains non-ASCII characters — the GUI go-to-folder "
             + "attach flow hangs there (#220); the legacy path attaches natively instead"
     }
     // #277: display-name recipients can ride the clean path via GUI clipboard
     // fill — but DRAFT-ONLY (a failed fill on a send would fire with missing
-    // recipients) and only when the caller marked the fill viable (draft mode,
-    // no display-name bcc — the Bcc field isn't reliably visible to fill).
+    // recipients), TO-ONLY, and only when the caller marked the fill viable
+    // (draft mode + no display-name cc/bcc — the Cc/Bcc fields aren't reliably
+    // visible to fill, so a blind paste could silently drop them).
     if !recipientsAddrSpecOnly && !displayNameFillViable {
         return "display-name recipients (Name <email>) — the mailto URL carries "
-            + "addr-spec only (RFC 6068); GUI fill is draft-only with no display-name "
-            + "bcc (#277); the legacy path sets recipient names natively (#251)"
+            + "addr-spec only (RFC 6068); GUI fill is draft-only + To-only with no "
+            + "display-name cc/bcc (#277); the legacy path sets recipient names "
+            + "natively (#251)"
     }
     return nil
 }

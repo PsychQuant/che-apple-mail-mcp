@@ -156,14 +156,18 @@ final class MailtoComposeTests: XCTestCase {
                       "must raise OUR compose window before dispatch (wrong-window mitigation)")
         XCTAssertTrue(s.contains("count of sheets of _w) is not 0"),
                       "must refuse dispatch while an open panel/sheet is up on the target window")
-        // stage-aware fallback with NO data loss: on error, close ONLY a window
-        // we created (new id captured before mailto) AND matching subject —
-        // never a pre-existing same-titled user draft (#175 verify round 2).
+        // stage-aware fallback with NO data loss: on error, close ONLY the
+        // window we created — its exact id (_ourId = the new window whose title
+        // is the subject), by id-iteration. Never a title guess, so a user's
+        // same-titled draft can't be discarded (#175 verify R2 + #219/#277
+        // verify R2, Codex BLOCKING).
         XCTAssertTrue(s.contains("on error _mErr"))
         XCTAssertTrue(s.contains("set _beforeIds to (id of every window)"),
                       "must snapshot window ids before mailto for safe cleanup")
-        XCTAssertTrue(s.contains("if (name of _cw) is \"S\" then close _cw saving no"),
-                      "cleanup must close only our new + same-subject window, not every same-titled window")
+        XCTAssertTrue(s.contains("set _ourId to (id of _cw)"),
+                      "must capture our compose window's exact id (new window whose title = subject)")
+        XCTAssertTrue(s.contains("if (id of _cw) is _ourId then close _cw saving no"),
+                      "cleanup must close only OUR window by exact id, not a title guess")
         XCTAssertFalse(s.contains("close (every window whose name"),
                        "must NOT batch-close by subject (data-loss bug)")
     }
@@ -277,13 +281,50 @@ final class MailtoComposeTests: XCTestCase {
     }
 
     func testIneligibilityReason_customSender_eligibleWhenAccessible() {
-        // #219 flip: with Accessibility granted, a custom sender rides the
+        // #219 flip: with Accessibility granted, a SIMPLE custom sender rides the
         // clean path (verified From popup) — no ineligibility reason.
         XCTAssertNil(mailtoIneligibilityReason(format: .plain,
                                                accessibilityTrusted: true,
                                                disabledByEnv: false,
                                                hasCustomSender: true,
                                                hasSubject: true))
+    }
+
+    func testIneligibilityReason_nonSimpleCustomSender_routesToLegacy() {
+        // #219 verify R2 (Codex): a custom sender that is NOT a simple addr-spec
+        // (a quoted local-part) must route to legacy — the From-popup exact-suffix
+        // match is spoof-proof only for simple addresses.
+        let reason = mailtoIneligibilityReason(format: .plain,
+                                               accessibilityTrusted: true,
+                                               disabledByEnv: false,
+                                               hasCustomSender: true,
+                                               hasSubject: true,
+                                               customSenderIsSimple: false)
+        XCTAssertNotNil(reason, "a non-simple custom sender must be ineligible for the clean popup")
+        XCTAssertTrue(reason?.contains("simple addr-spec") == true,
+                      "reason must name why (not a simple addr-spec): \(reason ?? "nil")")
+    }
+
+    // MARK: - #219 verify R2 — isSimpleAddrSpec (From-popup spoof gate)
+
+    func testIsSimpleAddrSpec_plainAddress_true() {
+        XCTAssertTrue(isSimpleAddrSpec("me@corp.example"))
+        XCTAssertTrue(isSimpleAddrSpec("first.last+tag@sub.corp.example"))
+    }
+
+    func testIsSimpleAddrSpec_quotedLocalPart_false() {
+        // The exact Codex R2 spoof payload: a quoted local-part with embedded
+        // angle brackets could suffix-match a crafted evil account label.
+        XCTAssertFalse(isSimpleAddrSpec("\"prefix<foo\"@evil.example"))
+        XCTAssertFalse(isSimpleAddrSpec("foo\"@evil.example"))
+    }
+
+    func testIsSimpleAddrSpec_angleBracketsOrWhitespaceOrMultiAt_false() {
+        XCTAssertFalse(isSimpleAddrSpec("a<b@c.example"))
+        XCTAssertFalse(isSimpleAddrSpec("a b@c.example"))
+        XCTAssertFalse(isSimpleAddrSpec("a@b@c.example"))
+        XCTAssertFalse(isSimpleAddrSpec("noatsign.example"))
+        XCTAssertFalse(isSimpleAddrSpec(""))
     }
 
     func testIneligibilityReason_customSenderNoAccessibility_namesPopupAnd219() {
@@ -566,26 +607,63 @@ extension MailtoComposeTests {
     // MARK: #219/#277 — sender-popup + display-name-fill script phases
 
     func testMailtoScript_senderPopup_exactMatchSentinelsAndOrdering() {
-        // #219 (+ verify, Codex): the popup phase must use EXACT addr-spec
-        // equality (my emailOf) for BOTH selection and read-back — NOT
-        // substring contains (which would verify a superstring account like
-        // notme@corp.example). All failures are SENDERPOPUP sentinels (pre-
-        // dispatch → legacy fallback). The `emailOf` handler must be present,
-        // and the phase must run BEFORE dispatch.
+        // #219 (+ verify R1/R2, Codex): the popup phase matches the account by
+        // EXACT addr-spec — an exact-SUFFIX predicate (senderMatches), never
+        // substring `contains` (which would verify a superstring account like
+        // notme@corp.example) and never EXTRACTION of the text between < and >
+        // (a quoted local-part like "x<me@x>y"@evil.example would otherwise be
+        // parsed to me@x and SPOOF the match — Codex R2 BLOCKING). Both the menu
+        // selection and the read-back use senderMatches; all failures are
+        // SENDERPOPUP sentinels (pre-dispatch → legacy fallback), before dispatch.
         let script = buildMailtoComposeScript(
             url: "mailto:a@x?subject=S", subject: "S", attachments: [],
             send: false, fromAddress: "me@corp.example")
-        XCTAssertTrue(script.contains("on emailOf(_s)"), "exact-match needs the emailOf handler")
-        XCTAssertTrue(script.contains("my emailOf(name of _mi as text) is \"me@corp.example\""),
-                      "menu selection must be EXACT addr equality, not contains")
-        XCTAssertTrue(script.contains("my emailOf(_senderReadback) is not \"me@corp.example\""),
-                      "read-back must be EXACT addr equality, not contains")
+        XCTAssertTrue(script.contains("on senderMatches(_label, _addr)"),
+                      "exact-match needs the senderMatches handler")
+        // the handler must be an exact-suffix match, NOT an addr extraction
+        XCTAssertTrue(script.contains("ends with (\"<\" & _addr & \">\")"),
+                      "senderMatches must match by the exact <addr> suffix (anti-spoof)")
+        XCTAssertFalse(script.contains("text item -1 of _s"),
+                       "must NOT extract the addr between < and > — a quoted local-part could spoof it (Codex R2)")
+        XCTAssertTrue(script.contains("my senderMatches(name of _mi as text, \"me@corp.example\")"),
+                      "menu selection must call senderMatches with the requested addr, not contains")
+        XCTAssertTrue(script.contains("not (my senderMatches(_senderReadback, \"me@corp.example\"))"),
+                      "read-back must call senderMatches (exact), not contains")
         XCTAssertFalse(script.contains("whose name contains"),
                        "no substring matching allowed in the popup phase (#219 verify)")
         XCTAssertTrue(script.contains("SENDERPOPUP: read-back mismatch"))
         let popupIdx = script.range(of: "SENDERPOPUP")!.lowerBound
         let dispatchIdx = script.range(of: "keystroke \"s\" using command down")!.lowerBound
         XCTAssertTrue(popupIdx < dispatchIdx, "popup verification must precede the dispatch keystroke")
+    }
+
+    func testMailtoScript_windowIdentity_subjectNewWindowAndUniqueTitle() {
+        // #219/#277 verify R2 (Codex BLOCKING): the title is the only
+        // System-Events keystroke bridge, so the path must fail closed on any
+        // same-title ambiguity rather than keystroke/dispatch the wrong window.
+        // Identity: the NEW window (id unseen before the mailto) whose title is
+        // our subject, captured as _ourId — NOT a count==1 assertion (Mail
+        // launched from closed opens the viewer too, which would over-reject).
+        // raiseOnly asserts exactly ONE window carries our title before each
+        // keystroke phase. Cleanup closes ONLY _ourId, by id-iteration (never a
+        // title guess → can't discard a user's same-title draft with `saving no`).
+        let script = buildMailtoComposeScript(
+            url: "mailto:a@x?subject=S", subject: "S", attachments: [],
+            send: false, fromAddress: "me@corp.example")
+        XCTAssertTrue(script.contains("(_beforeIds does not contain (id of _cw)) and ((name of _cw) is \"S\")"),
+                      "must identify our window as the NEW window whose title is the subject")
+        XCTAssertTrue(script.contains("set _ourId to (id of _cw)"),
+                      "must capture our compose window's id by subject match, not a count assertion")
+        XCTAssertTrue(script.contains("if _ourMatches > 1 then error"),
+                      "must fail closed when >1 NEW window carries our subject (concurrent same-subject window)")
+        XCTAssertFalse(script.contains("if (count of _newIds) is not 1 then error"),
+                       "must NOT force legacy when Mail opens a second (viewer) window on launch — count all windows, only subject-matching new ones")
+        XCTAssertTrue(script.contains("if _wMatches > 1 then error"),
+                      "raiseOnly must fail closed when more than one window carries our title")
+        XCTAssertTrue(script.contains("if (id of _cw) is _ourId then close _cw saving no"),
+                      "cleanup must close ONLY our window by id-iteration, never a title guess")
+        XCTAssertFalse(script.contains("first window whose id is _ourId"),
+                       "must NOT use `whose id is` on a compose window (silently fails — reply-path lesson)")
     }
 
     func testMailtoScript_preExistingSameTitleWindow_guarded() {

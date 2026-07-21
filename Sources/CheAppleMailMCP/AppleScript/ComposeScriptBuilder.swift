@@ -161,13 +161,15 @@ func buildMailtoComposeScript(
     let raiseOnly = """
                 set _t to "\(subjEsc)"
                 set _w to missing value
+                set _wMatches to 0
                 repeat with _cand in windows
                     if title of _cand is _t then
                         set _w to _cand
-                        exit repeat
+                        set _wMatches to _wMatches + 1
                     end if
                 end repeat
                 if _w is missing value then error "mailto compose window not found (title)"
+                if _wMatches > 1 then error "AMBIGUOUS: more than one window is titled the subject — cannot safely target our compose window for the next keystroke (safe fallback)"
                 try
                     perform action "AXRaise" of _w
                 end try
@@ -187,38 +189,39 @@ func buildMailtoComposeScript(
     // reference it.
     let flagInit = send ? "set _dispatched to false\n    " : ""
 
-    // 1. Capture Mail window ids BEFORE the mailto, hand it off, then compute the
-    // NEW window id(s). On-error cleanup closes ONLY a newly-appeared window whose
-    // name matches our subject — never a pre-existing same-titled draft the user
-    // had open (that `saving no` discard would be data loss — #175 verify round 2,
-    // Codex BLOCKING). `id of window` is stable + unique.
+    // 1. Capture Mail window ids BEFORE the mailto, hand it off, then identify
+    // OUR compose window as the NEW window (id unseen before) whose title is our
+    // subject — captured as `_ourId`. On-error cleanup closes ONLY `_ourId`, by
+    // id-iteration — never by a title guess, so it can never discard a user's
+    // same-titled draft (`saving no` on the wrong window would be data loss —
+    // #175 verify R2 + #219/#277 verify R2, Codex BLOCKING). `id of window` is
+    // stable + unique. We do NOT assume exactly one new window: launching Mail
+    // from closed opens the viewer too, so we pick the new window by subject
+    // rather than a count==1 assertion (which would over-reject to legacy
+    // whenever Mail wasn't already running).
     // #219/#277 verify (Codex BLOCKING): System Events (where raiseOnly runs)
-    // cannot read Mail's window `id`, so the ONLY cross-bridge window identity
-    // is the title (= subject). That bridge is ambiguous iff a pre-existing
-    // window already carries our subject — then raiseOnly could raise/keystroke
-    // the WRONG window (sender read-back on it, or dispatch it). We capture the
-    // BEFORE titles and refuse the clean path if our subject already exists:
-    // the error is unmarked (pre-dispatch) → cleanup closes only OUR new window
-    // → legacy fallback. After this guard passes, the title uniquely identifies
-    // our window, making the title-based raiseOnly sound. The `my emailOf`
-    // handler (exact addr-spec extraction) is prepended only when a sender
+    // cannot read Mail's window `id`, so the KEYSTROKE-targeting bridge is the
+    // title (= subject). Two guards make that bridge sound: (i) refuse the clean
+    // path if our subject already titled a window BEFORE the mailto (below), and
+    // (ii) raiseOnly asserts EXACTLY ONE window carries our title before each
+    // keystroke phase — a same-title window opening concurrently (after the
+    // snapshot) makes raiseOnly error pre-dispatch → cleanup closes only `_ourId`
+    // → legacy fallback, so a race can neither keystroke/dispatch the wrong
+    // window nor lose the user's window. The `my senderMatches` handler (exact
+    // addr-spec suffix match, never extraction) is prepended only when a sender
     // popup is driven — see below.
-    let emailOfHandler = (fromAddress?.isEmpty == false) ? """
-    on emailOf(_s)
-        set _s to _s as text
-        if _s contains "<" and _s contains ">" then
-            set _tid to AppleScript's text item delimiters
-            set AppleScript's text item delimiters to "<"
-            set _s to text item -1 of _s
-            set AppleScript's text item delimiters to ">"
-            set _s to text item 1 of _s
-            set AppleScript's text item delimiters to _tid
-        end if
-        return _s
-    end emailOf
+    let senderMatchHandler = (fromAddress?.isEmpty == false) ? """
+    on senderMatches(_label, _addr)
+        set _label to _label as text
+        -- exact match: the bare addr, or a label ending in the literal <addr>.
+        -- never extract between < and > (a quoted local-part could spoof it).
+        if _label is _addr then return true
+        if _label ends with ("<" & _addr & ">") then return true
+        return false
+    end senderMatches
 
     """ : ""
-    var s = emailOfHandler + """
+    var s = senderMatchHandler + """
     tell application "Mail"
         set _wc to (count of windows)
         set _beforeIds to (id of every window)
@@ -230,12 +233,18 @@ func buildMailtoComposeScript(
     tell application "Mail"
         if (count of windows) <= _wc then error "mailto did not open a compose window"
         if _beforeTitles contains "\(subjEsc)" then error "a window titled \\"\(subjEsc)\\" already existed before this compose — cannot safely disambiguate the new window (safe fallback)"
-        set _afterIds to (id of every window)
-        set _newIds to {}
-        repeat with _k from 1 to (count of _afterIds)
-            set _thisId to item _k of _afterIds
-            if _beforeIds does not contain _thisId then set end of _newIds to _thisId
+        set _ourId to missing value
+        set _ourMatches to 0
+        repeat with _cw in windows
+            try
+                if (_beforeIds does not contain (id of _cw)) and ((name of _cw) is "\(subjEsc)") then
+                    set _ourId to (id of _cw)
+                    set _ourMatches to _ourMatches + 1
+                end if
+            end try
         end repeat
+        if _ourMatches is 0 then error "could not identify our new compose window by subject after mailto (safe fallback)"
+        if _ourMatches > 1 then error "more than one new window is titled the subject — cannot safely identify our compose window (safe fallback)"
     end tell
     \(flagInit)try
         tell application "System Events"
@@ -288,13 +297,14 @@ func buildMailtoComposeScript(
     // AND read-back use EXACT addr-spec equality, NOT substring containment
     // (#219 verify, Codex BLOCKING: `contains "user@x"` would match — and
     // wrongly VERIFY — a `notuser@x` account, sending from the wrong address).
-    // `my emailOf()` extracts the addr-spec from a `Name <addr>` menu label /
-    // popup value; the caller passes `fromAddress` already normalized to a bare
-    // addr-spec, so `is` (case-insensitive) is an exact account match. This
-    // also fail-closes the popup-discovery heuristic: even if the '@'-value
-    // scan grabbed the wrong popup (e.g. a signature named like an email), no
-    // menu item's extracted email will exactly equal the requested account →
-    // SENDERPOPUP error → legacy fallback. Any SENDERPOPUP error is
+    // `my senderMatches()` compares a `Name <addr>` menu label / popup value to
+    // the requested account by EXACT-suffix (`is _addr` OR `ends with <addr>`),
+    // never by extraction (a quoted local-part could otherwise spoof the addr —
+    // #219 verify R2, Codex BLOCKING). The caller passes `fromAddress` already
+    // normalized to a bare addr-spec. This also fail-closes the popup-discovery
+    // heuristic: even if the '@'-value scan grabbed the wrong popup (e.g. a
+    // signature named like an email), no menu item will suffix-match the
+    // requested account → SENDERPOPUP error → legacy fallback. Any SENDERPOPUP error is
     // pre-dispatch: the on-error handler closes OUR window (saving no) and the
     // Swift router falls back to the legacy `set sender` path (correct sender
     // beats clean body, same conservative ordering as #175).
@@ -322,7 +332,7 @@ func buildMailtoComposeScript(
                 ignoring case
                     repeat with _mi in (menu items of menu 1 of _fromPopup)
                         try
-                            if my emailOf(name of _mi as text) is "\(fromEsc)" then
+                            if my senderMatches(name of _mi as text, "\(fromEsc)") then
                                 set _pickedItem to _mi
                                 exit repeat
                             end if
@@ -337,7 +347,7 @@ func buildMailtoComposeScript(
                 delay \(stepDelay)
                 set _senderReadback to (value of _fromPopup as text)
                 ignoring case
-                    if my emailOf(_senderReadback) is not "\(fromEsc)" then error "SENDERPOPUP: read-back mismatch — popup shows \\"" & _senderReadback & "\\""
+                    if not (my senderMatches(_senderReadback, "\(fromEsc)")) then error "SENDERPOPUP: read-back mismatch — popup shows \\"" & _senderReadback & "\\""
                 end ignoring
             end tell
         end tell
@@ -411,11 +421,9 @@ func buildMailtoComposeScript(
     // ignores — verify #242, regression lens).
     let cleanupBody = """
             tell application "Mail"
-                repeat with _k from 1 to (count of _newIds)
-                    set _nid to item _k of _newIds
+                repeat with _cw in windows
                     try
-                        set _cw to (first window whose id is _nid)
-                        if (name of _cw) is "\(subjEsc)" then close _cw saving no
+                        if (id of _cw) is _ourId then close _cw saving no
                     end try
                 end repeat
             end tell
