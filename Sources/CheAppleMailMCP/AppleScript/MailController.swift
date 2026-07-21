@@ -2322,10 +2322,10 @@ actor MailController {
                 + "mailto: (set a default email app in System Settings → Desktop & Dock → "
                 + "Default web browser section, or Mail.app → Settings → General).")
         }
-        return "Opened mailto compose window via LaunchServices (zero Automation TCC — works "
-            + "even where AppleScript tools fail with -1743). Window opens in the system "
-            + "default mail client, which may not be Mail.app; attachments cannot be carried "
-            + "by mailto (RFC 6068) — drag files into the window manually. Body is "
+        return "Handed the mailto URL to LaunchServices (zero Automation TCC — works even "
+            + "where AppleScript tools fail with -1743); the compose window should open in "
+            + "the system default mail client, which may not be Mail.app. Attachments cannot "
+            + "be carried by mailto (RFC 6068) — drag files into the window manually. Body is "
             + "cite-block-free (mailto compose never wraps, #175)."
     }
 
@@ -2415,15 +2415,27 @@ enum MailError: LocalizedError {
 /// #288 — actionable guidance for Automation-TCC denial (-1743), the
 /// Automation-axis sibling of `FullDiskAccessHelp`. Centralized so the text
 /// cannot drift between tools.
+///
+/// Attribution model (empirically corrected 2026-07-21, see #288): the signed
+/// MCP binary holds its OWN Automation grant — its TCC identity is keyed to
+/// the binary's signing identity (the #211 FDA lesson, Automation axis), NOT
+/// to the terminal app that spawned it. On the incident machine, shell
+/// `osascript` controlled Mail fine (the terminal's grant) while this binary
+/// still got -1743 — two separate TCC subjects.
 enum AutomationHelp {
     static let guidance = """
-        Mail Automation permission is not granted. To fix: System Settings → \
-        Privacy & Security → Automation → enable Mail under the RESPONSIBLE host — \
-        Claude Code CLI install: your terminal app (Terminal / iTerm / the claude \
-        host); Claude Desktop extension: Claude.app. The two installs hold \
-        independent grants, and a binary update can invalidate the entry (#211). \
-        Zero-TCC fallback available NOW: the open_mailto tool opens a \
-        cite-block-free compose window via LaunchServices (no Apple events; \
-        attachments must be dragged in manually).
+        Mail Automation permission is not granted TO THIS BINARY. Note: the MCP \
+        binary holds its OWN Automation grant, separate from your terminal's — \
+        `osascript` working in your shell does NOT mean this binary is \
+        authorized. To fix: System Settings → Privacy & Security → Automation → \
+        find the entry for this binary / its host (Claude Desktop extension: \
+        under Claude.app) and enable Mail. If NO entry exists, a previous \
+        denial is being remembered and macOS will not re-prompt — run \
+        `tccutil reset AppleEvents` in Terminal, then retry any Mail tool to \
+        retrigger the permission prompt. Grants are per-install and a binary \
+        update can invalidate the entry (#211). Zero-TCC fallback available \
+        NOW: the open_mailto tool opens a cite-block-free compose window via \
+        LaunchServices (no Apple events; attachments must be dragged in \
+        manually).
         """
 }

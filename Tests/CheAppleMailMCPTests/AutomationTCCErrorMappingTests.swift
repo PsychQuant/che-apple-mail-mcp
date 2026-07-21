@@ -14,10 +14,17 @@ final class AutomationTCCErrorMappingTests: XCTestCase {
                       "raw error stays first — guidance appends, never replaces")
         XCTAssertTrue(desc.contains("Privacy & Security → Automation"),
                       "must name the exact System Settings path")
-        XCTAssertTrue(desc.contains("terminal app") && desc.contains("Claude.app"),
-                      "must cover BOTH installs' responsible hosts")
-        XCTAssertTrue(desc.contains("independent grants"),
-                      "must warn the two installs are separately granted")
+        // Empirically corrected model (#288 evidence 2026-07-21): the signed
+        // binary is its OWN TCC subject — osascript working in the shell does
+        // not imply the binary is authorized.
+        XCTAssertTrue(desc.contains("OWN Automation grant"),
+                      "must state the binary holds its own grant, separate from the terminal")
+        XCTAssertTrue(desc.contains("does NOT mean this binary is"),
+                      "must pre-empt the osascript-works-so-TCC-is-fine misdiagnosis")
+        XCTAssertTrue(desc.contains("tccutil reset AppleEvents"),
+                      "must give the remembered-denial escape hatch (no re-prompt without reset)")
+        XCTAssertTrue(desc.contains("Claude.app"),
+                      "must still name the Desktop-extension entry location")
         XCTAssertTrue(desc.contains("open_mailto"),
                       "must point at the zero-TCC fallback (#287)")
     }

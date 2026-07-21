@@ -362,11 +362,16 @@ None of these can remove the single manual toggle (Apple puts FDA in the manual-
 ### Automation TCC (-1743) and the zero-TCC escape hatch
 
 If AppleScript-backed tools fail with `AppleScript error (-1743): Not authorized to send
-Apple events to Mail`, the Automation permission is missing. Grant it under **System
-Settings → Privacy & Security → Automation** — the responsible process depends on the
-install: Claude Code CLI → your **terminal app** (Terminal / iTerm); Claude Desktop
-extension → **Claude.app**. The two installs hold independent grants, and a binary
-update can invalidate the entry (same lesson as FDA, #211).
+Apple events to Mail`, the Automation permission is missing **for this binary**. The
+signed MCP binary holds its OWN Automation grant — its TCC identity is keyed to the
+binary's signing identity (the #211 FDA lesson, Automation axis), separate from your
+terminal's. Empirically verified: `osascript` controlling Mail from your shell does NOT
+mean the binary is authorized. Grant it under **System Settings → Privacy & Security →
+Automation** — find the entry for the binary / its host (Claude Desktop extension:
+under **Claude.app**) and enable Mail. If no entry exists, a previous denial is being
+remembered and macOS will not re-prompt: run `tccutil reset AppleEvents`, then retry a
+Mail tool to retrigger the prompt. Grants are per-install, and a binary update can
+invalidate the entry (#211).
 
 Until the grant is in place, `open_mailto` still works: it goes through LaunchServices
 (zero TCC, #287) and opens a cite-block-free compose window in the system default mail

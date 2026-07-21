@@ -73,11 +73,13 @@ cite-block 迴避有三階，依 TCC 授權狀態選：
 
 **鐵律：AppleScript 工具回 `-1743`（Not authorized to send Apple events）時，(b) 是正解，絕不落到 (c)。**
 
--1743 的授權路徑（responsible-process 隨 install 而異）：系統設定 → 隱私權與安全性 → 自動化 →
-- Claude Code CLI 安裝 → 勾選**終端機 app**（Terminal / iTerm 等）底下的 Mail
-- Claude Desktop extension → 勾選 **Claude.app** 底下的 Mail
+-1743 的授權路徑（**實證修正 2026-07-21，#288**）：signed MCP binary **自持 Automation 授權**——TCC identity 綁 binary 簽章身分（#211 FDA 教訓的 Automation 軸），**與終端機 app 分開**。實測：shell `osascript` 能控制 Mail（Terminal 的授權）而 binary 仍 -1743 —— 兩個獨立 TCC 主體，**osascript 可用 ≠ binary 已授權**。處置：
 
-兩個 install **各自獨立授權**；binary 更新可能使 TCC entry 失效（同 #211 的 FDA 教訓）。(b) 的已知限制：視窗開在**系統預設**郵件 app（未必是 Mail.app）、附件帶不了。
+- 系統設定 → 隱私權與安全性 → 自動化 → 找 **binary / 其 host** 的 entry（Claude Desktop extension → Claude.app 底下）勾選 Mail
+- **找不到 entry** = 先前的 Deny 被記住、macOS 不會重新跳 prompt → `tccutil reset AppleEvents` 後重觸發任一 Mail 工具
+- 授權 per-install；binary 更新可能使 entry 失效（同 #211）
+
+(b) 的已知限制：視窗開在**系統預設**郵件 app（未必是 Mail.app）、附件帶不了。
 
 ## 違反偵測
 
