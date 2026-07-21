@@ -645,6 +645,15 @@ extension MailtoComposeTests {
         // "verified" while the real From stays on the default account.
         XCTAssertTrue(script.contains("if _fromPopupCount > 1 then error"),
                       "must require exactly one address-like popup (signature-popup spoof gate)")
+        // #295: the popup scan must snapshot the count and fetch each popup by
+        // INDEX inside the try — never the bare `repeat … in (pop up buttons of
+        // _w)` whose own item-fetch can leak a raw -2700 on an unstable AX tree.
+        XCTAssertTrue(script.contains("count of pop up buttons of _w"),
+                      "must snapshot the popup count once (#295)")
+        XCTAssertTrue(script.contains("pop up button _pbi of _w"),
+                      "must fetch each popup by guarded index, not an unguarded collection iteration (#295)")
+        XCTAssertFalse(script.contains("repeat with _pb in (pop up buttons of _w)"),
+                       "the unguarded collection loop leaks -2700 on a settling AX tree (#295)")
         XCTAssertTrue(script.contains("SENDERPOPUP: read-back mismatch"))
         let popupIdx = script.range(of: "SENDERPOPUP")!.lowerBound
         let dispatchIdx = script.range(of: "keystroke \"s\" using command down")!.lowerBound

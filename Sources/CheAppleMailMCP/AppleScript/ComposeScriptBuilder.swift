@@ -321,8 +321,17 @@ func buildMailtoComposeScript(
                 \(raiseOnly)
                 set _fromPopup to missing value
                 set _fromPopupCount to 0
-                repeat with _pb in (pop up buttons of _w)
+                -- #295: snapshot the count once, fetch each popup by index inside
+                -- the try (a for-in over the popup collection re-fetches item N
+                -- each pass; a settling AX tree throws -2700 from that fetch,
+                -- outside the guard). Indexed + guarded access fails closed.
+                set _pbTotal to 0
+                try
+                    set _pbTotal to (count of pop up buttons of _w)
+                end try
+                repeat with _pbi from 1 to _pbTotal
                     try
+                        set _pb to pop up button _pbi of _w
                         if (value of _pb as text) contains "@" then
                             set _fromPopup to _pb
                             set _fromPopupCount to _fromPopupCount + 1

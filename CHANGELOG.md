@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **From-popup scan no longer leaks a raw -2700 on a settling AX tree** ([#295](https://github.com/PsychQuant/che-apple-mail-mcp/issues/295), regression from the #219-verify-R4 exactly-one-popup change). A **live smoke** of v2.23.0's verified sender-popup (driving the notarized binary against a real Mail.app) caught it: `create_draft` with a custom `from_address` fell to legacy with `AppleScript error (-2700): … Can't get item 2 of every pop up button … Invalid index.` — the popup scan's `repeat … in (pop up buttons of _w)` re-fetches `item N` each pass, and a compose window whose AX tree is still settling (or a degraded/slow Mail) throws from that item-fetch OUTSIDE the inner `try`, crashing the whole clean path (the invariant still held — draft created under the correct account, wrapped body + disclosed — but #219's clean body wasn't delivered). The R4 change had removed the original `exit repeat` (which stopped at item 1, never reaching item 2), exposing this. Fix: snapshot the popup count once (`count of pop up buttons of _w`) and fetch each by guarded index (`pop up button _pbi of _w` inside the `try`), so an unstable/vanished index is skipped → the scan fails closed to a clean `SENDERPOPUP` → legacy, never a leaked -2700. Static + unit locked (the generated script must use the indexed guarded form, not the bare collection loop). **Live re-smoke required when Mail is healthy** — the AX-instability path is GUI-timing, not unit-coverable.
+
 ## [2.23.0] - 2026-07-22
 
 ### Added
