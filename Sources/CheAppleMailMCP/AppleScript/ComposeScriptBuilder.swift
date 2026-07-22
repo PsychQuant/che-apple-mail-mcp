@@ -207,16 +207,32 @@ func buildMailtoComposeScript(
     // keystroke phase — a same-title window opening concurrently (after the
     // snapshot) makes raiseOnly error pre-dispatch → cleanup closes only `_ourId`
     // → legacy fallback, so a race can neither keystroke/dispatch the wrong
-    // window nor lose the user's window. The `my senderMatches` handler (exact
-    // addr-spec suffix match, never extraction) is prepended only when a sender
-    // popup is driven — see below.
+    // window nor lose the user's window. The `my senderMatches` handler is
+    // prepended only when a sender popup is driven — see below. It matches the
+    // requested addr against a popup label by (a) exact bare addr, (b) the
+    // literal `<addr>` angle-addr suffix, or (c) the LAST space-delimited token
+    // equalling the addr. #219 live-smoke R6 (Codex/Claude verify all assumed a
+    // `Name <addr>` format) found Mail's From popup actually renders
+    // `Display Name – addr` with a SPACE + EN DASH (U+2013) + SPACE separator —
+    // no angle brackets — so (a)/(b) never matched and the clean path always
+    // fell to legacy. Branch (c) is separator-agnostic (en-dash / hyphen / any)
+    // and anti-spoof-safe: `isSimpleAddrSpec` gates the addr to no-whitespace
+    // upstream, so a simple addr is always the final space-delimited token, and
+    // the compare is exact `is` (a `… – notche@x` label's last token is
+    // `notche@x` ≠ `che@x`), never a substring. Never extracts between < and >
+    // (a quoted local-part could spoof that).
     let senderMatchHandler = (fromAddress?.isEmpty == false) ? """
     on senderMatches(_label, _addr)
         set _label to _label as text
-        -- exact match: the bare addr, or a label ending in the literal <addr>.
-        -- never extract between < and > (a quoted local-part could spoof it).
         if _label is _addr then return true
         if _label ends with ("<" & _addr & ">") then return true
+        set _tid to AppleScript's text item delimiters
+        set AppleScript's text item delimiters to space
+        set _parts to text items of _label
+        set AppleScript's text item delimiters to _tid
+        if (count of _parts) is greater than 0 then
+            if (item -1 of _parts) is _addr then return true
+        end if
         return false
     end senderMatches
 
@@ -321,31 +337,64 @@ func buildMailtoComposeScript(
                 \(raiseOnly)
                 set _fromPopup to missing value
                 set _fromPopupCount to 0
-                -- #295: snapshot the count once, fetch each popup by index inside
-                -- the try (a for-in over the popup collection re-fetches item N
-                -- each pass; a settling AX tree throws -2700 from that fetch,
-                -- outside the guard). Indexed + guarded access fails closed.
-                set _pbTotal to 0
-                try
-                    set _pbTotal to (count of pop up buttons of _w)
-                end try
-                repeat with _pbi from 1 to _pbTotal
+                -- #295: indexed guarded fetch (a for-in re-fetches item N each
+                -- pass; a settling AX tree throws -2700 outside the guard).
+                -- #219 live-fix: the From popup value is empty for a beat after
+                -- the window opens, so poll (bounded) until an @-value appears.
+                repeat 12 times
+                    set _fromPopup to missing value
+                    set _fromPopupCount to 0
+                    set _pbTotal to 0
                     try
-                        set _pb to pop up button _pbi of _w
-                        if (value of _pb as text) contains "@" then
-                            set _fromPopup to _pb
-                            set _fromPopupCount to _fromPopupCount + 1
-                        end if
+                        set _pbTotal to (count of pop up buttons of _w)
                     end try
+                    repeat with _pbi from 1 to _pbTotal
+                        try
+                            set _pb to pop up button _pbi of _w
+                            if (value of _pb as text) contains "@" then
+                                set _fromPopup to _pb
+                                set _fromPopupCount to _fromPopupCount + 1
+                            end if
+                        end try
+                    end repeat
+                    if _fromPopupCount is not 0 then exit repeat
+                    delay 0.3
                 end repeat
                 if _fromPopup is missing value then error "SENDERPOPUP: From popup not found on the compose window"
                 if _fromPopupCount > 1 then error "SENDERPOPUP: more than one address-like popup on the compose window — cannot unambiguously identify the From popup (e.g. a signature named like an email); safe fallback"
                 click _fromPopup
                 delay \(stepDelay)
+                -- #296: in-process NSAppleScript can evaluate the menu before it
+                -- has opened/populated (settling-AX sibling of #295, menu layer —
+                -- empirically: the identical matcher passes under osascript and
+                -- gets ZERO items in-process). Poll for a populated menu; if
+                -- still empty, re-click ONCE and poll again. Total failure falls
+                -- to the existing sentinel (fail-closed unchanged). Enumeration
+                -- is indexed + guarded, same as the #295 popup scan.
+                set _miTotal to 0
+                repeat 12 times
+                    try
+                        set _miTotal to (count of menu items of menu 1 of _fromPopup)
+                    end try
+                    if _miTotal > 0 then exit repeat
+                    delay 0.3
+                end repeat
+                if _miTotal is 0 then
+                    click _fromPopup
+                    delay \(stepDelay)
+                    repeat 12 times
+                        try
+                            set _miTotal to (count of menu items of menu 1 of _fromPopup)
+                        end try
+                        if _miTotal > 0 then exit repeat
+                        delay 0.3
+                    end repeat
+                end if
                 set _pickedItem to missing value
                 ignoring case
-                    repeat with _mi in (menu items of menu 1 of _fromPopup)
+                    repeat with _mii from 1 to _miTotal
                         try
+                            set _mi to menu item _mii of menu 1 of _fromPopup
                             if my senderMatches(name of _mi as text, "\(fromEsc)") then
                                 set _pickedItem to _mi
                                 exit repeat
@@ -355,7 +404,7 @@ func buildMailtoComposeScript(
                 end ignoring
                 if _pickedItem is missing value then
                     key code 53
-                    error "SENDERPOPUP: no From account exactly matches \\"\(fromEsc)\\""
+                    error "SENDERPOPUP: no From account exactly matches \\"\(fromEsc)\\" (menu items seen: " & _miTotal & ")"
                 end if
                 click _pickedItem
                 delay \(stepDelay)

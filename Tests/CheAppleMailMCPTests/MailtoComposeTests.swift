@@ -654,6 +654,19 @@ extension MailtoComposeTests {
                       "must fetch each popup by guarded index, not an unguarded collection iteration (#295)")
         XCTAssertFalse(script.contains("repeat with _pb in (pop up buttons of _w)"),
                        "the unguarded collection loop leaks -2700 on a settling AX tree (#295)")
+        // #219 live-fix R6: (1) the popup value is empty for a beat after the
+        // window opens — poll (bounded) until an @-value appears; (2) Mail's
+        // From popup renders `Name – addr` (space EN DASH space), no angle
+        // brackets — senderMatches must accept the last space-delimited token as
+        // the addr, else the clean path always falls to legacy.
+        XCTAssertTrue(script.contains("repeat 12 times"),
+                      "must bounded-poll for the From popup value to populate (#219 live-fix)")
+        XCTAssertTrue(script.contains("if _fromPopupCount is not 0 then exit repeat"),
+                      "must stop polling once an address-like popup is found (#219 live-fix)")
+        XCTAssertTrue(script.contains("text items of _label"),
+                      "senderMatches must handle the `Name – addr` popup format via last-token match (#219 live-fix)")
+        XCTAssertTrue(script.contains("if (item -1 of _parts) is _addr then return true"),
+                      "last space-delimited token must exact-match the addr (separator-agnostic, anti-spoof)")
         XCTAssertTrue(script.contains("SENDERPOPUP: read-back mismatch"))
         let popupIdx = script.range(of: "SENDERPOPUP")!.lowerBound
         let dispatchIdx = script.range(of: "keystroke \"s\" using command down")!.lowerBound
