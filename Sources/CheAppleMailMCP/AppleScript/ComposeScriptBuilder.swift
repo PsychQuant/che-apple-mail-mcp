@@ -336,14 +336,19 @@ func buildMailtoComposeScript(
                 set frontmost to true
                 \(raiseOnly)
                 set _fromPopup to missing value
-                set _fromPopupCount to 0
-                -- #295: indexed guarded fetch (a for-in re-fetches item N each
-                -- pass; a settling AX tree throws -2700 outside the guard).
-                -- #219 live-fix: the From popup value is empty for a beat after
-                -- the window opens, so poll (bounded) until an @-value appears.
+                -- #219 verify (Codex BLOCKING): identify the From popup by its
+                -- stable, locale-independent AXIdentifier "popup_from" (live AX
+                -- dump: priority=popup_priority, From=popup_from, signature=
+                -- popup_signature), NEVER a "value contains @" scan — a signature
+                -- popup whose value happens to hold an email (a user-named
+                -- signature) could otherwise be picked as From and pass a
+                -- self-consistent select + read-back on the WRONG control while
+                -- the real From stays on the default account. #295: indexed +
+                -- guarded fetch (a for-in item-fetch throws -2700 on an unstable
+                -- AX tree). #219 live-fix: poll until the From popup's value is
+                -- populated (empty for a beat after the window opens).
                 repeat 12 times
                     set _fromPopup to missing value
-                    set _fromPopupCount to 0
                     set _pbTotal to 0
                     try
                         set _pbTotal to (count of pop up buttons of _w)
@@ -351,17 +356,22 @@ func buildMailtoComposeScript(
                     repeat with _pbi from 1 to _pbTotal
                         try
                             set _pb to pop up button _pbi of _w
-                            if (value of _pb as text) contains "@" then
+                            if (value of attribute "AXIdentifier" of _pb) is "popup_from" then
                                 set _fromPopup to _pb
-                                set _fromPopupCount to _fromPopupCount + 1
+                                exit repeat
                             end if
                         end try
                     end repeat
-                    if _fromPopupCount is not 0 then exit repeat
+                    if _fromPopup is not missing value then
+                        set _fromValNow to ""
+                        try
+                            set _fromValNow to (value of _fromPopup as text)
+                        end try
+                        if _fromValNow contains "@" then exit repeat
+                    end if
                     delay 0.3
                 end repeat
-                if _fromPopup is missing value then error "SENDERPOPUP: From popup not found on the compose window"
-                if _fromPopupCount > 1 then error "SENDERPOPUP: more than one address-like popup on the compose window — cannot unambiguously identify the From popup (e.g. a signature named like an email); safe fallback"
+                if _fromPopup is missing value then error "SENDERPOPUP: From popup (AXIdentifier popup_from) not found on the compose window"
                 click _fromPopup
                 delay \(stepDelay)
                 -- #296: in-process NSAppleScript can evaluate the menu before it

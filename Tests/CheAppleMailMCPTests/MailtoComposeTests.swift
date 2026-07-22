@@ -641,10 +641,7 @@ extension MailtoComposeTests {
                        "no substring matching allowed in the popup phase (#219 verify)")
         // #219 verify R4 (Codex): the From popup must be UNAMBIGUOUS — a rogue
         // @-valued signature popup (a signature named like an email) makes ≥2
-        // address-like popups → fail closed, else the wrong control could be
-        // "verified" while the real From stays on the default account.
-        XCTAssertTrue(script.contains("if _fromPopupCount > 1 then error"),
-                      "must require exactly one address-like popup (signature-popup spoof gate)")
+        // AXIdentifier-identified From popup (see the dedicated assertions below).
         // #295: the popup scan must snapshot the count and fetch each popup by
         // INDEX inside the try — never the bare `repeat … in (pop up buttons of
         // _w)` whose own item-fetch can leak a raw -2700 on an unstable AX tree.
@@ -654,15 +651,21 @@ extension MailtoComposeTests {
                       "must fetch each popup by guarded index, not an unguarded collection iteration (#295)")
         XCTAssertFalse(script.contains("repeat with _pb in (pop up buttons of _w)"),
                        "the unguarded collection loop leaks -2700 on a settling AX tree (#295)")
-        // #219 live-fix R6: (1) the popup value is empty for a beat after the
-        // window opens — poll (bounded) until an @-value appears; (2) Mail's
-        // From popup renders `Name – addr` (space EN DASH space), no angle
-        // brackets — senderMatches must accept the last space-delimited token as
-        // the addr, else the clean path always falls to legacy.
+        // #219 verify (Codex BLOCKING): the From popup is identified by its
+        // stable locale-independent AXIdentifier "popup_from", NOT a value-
+        // contains-@ scan (a signature popup named like an email could otherwise
+        // be picked as From and self-consistently pass select+read-back on the
+        // WRONG control). No `_fromPopupCount` heuristic remains.
+        XCTAssertTrue(script.contains("(value of attribute \"AXIdentifier\" of _pb) is \"popup_from\""),
+                      "From popup must be identified by AXIdentifier popup_from, not a value-@ scan (Codex BLOCKING)")
+        XCTAssertFalse(script.contains("_fromPopupCount"),
+                       "the value-@ popup-count heuristic must be gone — replaced by AXIdentifier (Codex BLOCKING)")
+        // #219 live-fix: (1) poll until the From popup value populates (empty for
+        // a beat after open); (2) Mail's From popup renders `Name – addr` (space
+        // EN DASH space), no angle brackets — senderMatches must accept the last
+        // space-delimited token as the addr, else the clean path always legacys.
         XCTAssertTrue(script.contains("repeat 12 times"),
                       "must bounded-poll for the From popup value to populate (#219 live-fix)")
-        XCTAssertTrue(script.contains("if _fromPopupCount is not 0 then exit repeat"),
-                      "must stop polling once an address-like popup is found (#219 live-fix)")
         XCTAssertTrue(script.contains("text items of _label"),
                       "senderMatches must handle the `Name – addr` popup format via last-token match (#219 live-fix)")
         XCTAssertTrue(script.contains("if (item -1 of _parts) is _addr then return true"),
