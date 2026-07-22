@@ -313,20 +313,18 @@ func buildMailtoComposeScript(
     // AND read-back use EXACT addr-spec equality, NOT substring containment
     // (#219 verify, Codex BLOCKING: `contains "user@x"` would match — and
     // wrongly VERIFY — a `notuser@x` account, sending from the wrong address).
-    // `my senderMatches()` compares a `Name <addr>` menu label / popup value to
-    // the requested account by EXACT-suffix (`is _addr` OR `ends with <addr>`),
-    // never by extraction (a quoted local-part could otherwise spoof the addr —
-    // #219 verify R2, Codex BLOCKING). The caller passes `fromAddress` already
-    // normalized to a bare addr-spec (a non-simple addr-spec is gated to legacy
-    // upstream by `isSimpleAddrSpec`, #219 verify R2). Popup discovery is now
-    // two-layered against grabbing the WRONG popup (e.g. a signature named like
-    // an email): the '@'-value scan requires EXACTLY ONE address-like popup
-    // (a rogue @-valued signature popup makes it ≥2 → SENDERPOPUP → legacy,
-    // #219 verify R4, Codex), and even then `senderMatches` exact-suffix must
-    // pass on both selection and read-back. Any SENDERPOPUP error is
-    // pre-dispatch: the on-error handler closes OUR window (saving no) and the
-    // Swift router falls back to the legacy `set sender` path (correct sender
-    // beats clean body, same conservative ordering as #175).
+    // `my senderMatches()` compares a menu label / popup value to the requested
+    // account by EXACT match — bare `is _addr`, the `<addr>` angle-suffix, OR
+    // the last space-delimited token (Mail's real `Name – addr` en-dash format,
+    // #219 live-fix) — never by extraction (a quoted local-part could spoof
+    // that; the caller normalizes `fromAddress` to a bare addr-spec and a
+    // non-simple one is gated to legacy upstream by `isSimpleAddrSpec`). The
+    // From popup is identified by its stable, locale-independent AXIdentifier
+    // "popup_from" (#219 verify, Codex BLOCKING) — NOT a "value contains @"
+    // scan, which a signature popup named like an email could satisfy and be
+    // driven as the WRONG control. Any SENDERPOPUP error is pre-dispatch: the
+    // on-error handler closes OUR window (saving no) and the Swift router falls
+    // back to legacy `set sender` (correct sender beats clean body, #175).
     if let from = fromAddress, !from.isEmpty {
         let fromEsc = appleScriptEscape(from)
         s += """
