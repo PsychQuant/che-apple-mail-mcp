@@ -26,65 +26,132 @@ actor MailController {
     /// hand-off deterministically (no real compose window).
     private var openURLOverride: ((URL) -> Bool)?
 
+    /// #297: when set, overrides the AppleScript execution timeout so tests can
+    /// exercise the hang guard with a sub-second deadline instead of the
+    /// production default (`defaultScriptTimeout`).
+    private var scriptTimeoutOverride: TimeInterval?
+
     func setTestSeams(
         scriptRunner: ((String) throws -> String)?,
         ineligibility: (() -> String?)?,
-        openURL: ((URL) -> Bool)? = nil
+        openURL: ((URL) -> Bool)? = nil,
+        scriptTimeout: TimeInterval? = nil
     ) {
         scriptRunnerOverride = scriptRunner
         ineligibilityOverride = ineligibility
         openURLOverride = openURL
+        scriptTimeoutOverride = scriptTimeout
     }
 
     // MARK: - AppleScript Execution
 
+    /// #297: default wall-clock ceiling for a single NSAppleScript execution.
+    /// Well under the MCP client's ~120s idle timeout (so a stuck call returns
+    /// an actionable error rather than silently dropping the whole server
+    /// connection) and well over normal ~1-2s Mail IPC. Tunable via the
+    /// `scriptTimeout` test seam.
+    private static let defaultScriptTimeout: TimeInterval = 45
+
     /// Execute AppleScript and return result
     func runScript(_ source: String) throws -> String {
         if let override = scriptRunnerOverride {
-            return try override(source)
+            // Route the fake runner through the same guard so tests can drive
+            // the timeout path with a hanging runner (no live NSAppleScript).
+            return try runGuarded { try override(source) }
         }
-        var error: NSDictionary?
-        guard let script = NSAppleScript(source: source) else {
-            throw MailError.scriptCreationFailed
+        try preflightAutomation()
+        return try runGuarded {
+            var error: NSDictionary?
+            guard let script = NSAppleScript(source: source) else {
+                throw MailError.scriptCreationFailed
+            }
+            let result = script.executeAndReturnError(&error)
+            if let error = error {
+                let message = error["NSAppleScriptErrorMessage"] as? String ?? "Unknown AppleScript error"
+                let code = error["NSAppleScriptErrorNumber"] as? Int ?? -1
+                throw MailError.scriptFailed(message: message, code: code)
+            }
+            return result.stringValue ?? ""
         }
-
-        let result = script.executeAndReturnError(&error)
-
-        if let error = error {
-            let message = error["NSAppleScriptErrorMessage"] as? String ?? "Unknown AppleScript error"
-            let code = error["NSAppleScriptErrorNumber"] as? Int ?? -1
-            throw MailError.scriptFailed(message: message, code: code)
-        }
-
-        return result.stringValue ?? ""
     }
 
     /// Execute AppleScript and return result as list
     func runScriptAsList(_ source: String) throws -> [String] {
-        var error: NSDictionary?
-        guard let script = NSAppleScript(source: source) else {
-            throw MailError.scriptCreationFailed
-        }
-
-        let result = script.executeAndReturnError(&error)
-
-        if let error = error {
-            let message = error["NSAppleScriptErrorMessage"] as? String ?? "Unknown AppleScript error"
-            let code = error["NSAppleScriptErrorNumber"] as? Int ?? -1
-            throw MailError.scriptFailed(message: message, code: code)
-        }
-
-        // Parse list result
-        var items: [String] = []
-        let count = result.numberOfItems
-        if count > 0 {
-            for i in 1...count {
-                if let item = result.atIndex(i)?.stringValue {
-                    items.append(item)
+        try preflightAutomation()
+        return try runGuarded {
+            var error: NSDictionary?
+            guard let script = NSAppleScript(source: source) else {
+                throw MailError.scriptCreationFailed
+            }
+            let result = script.executeAndReturnError(&error)
+            if let error = error {
+                let message = error["NSAppleScriptErrorMessage"] as? String ?? "Unknown AppleScript error"
+                let code = error["NSAppleScriptErrorNumber"] as? Int ?? -1
+                throw MailError.scriptFailed(message: message, code: code)
+            }
+            var items: [String] = []
+            let count = result.numberOfItems
+            if count > 0 {
+                for i in 1...count {
+                    if let item = result.atIndex(i)?.stringValue {
+                        items.append(item)
+                    }
                 }
             }
+            return items
         }
-        return items
+    }
+
+    // MARK: - #297 AppleScript hang guard
+
+    /// Run `body` (a real NSAppleScript execution, or a test override) on a
+    /// detached thread and wait at most `scriptTimeoutOverride ??
+    /// defaultScriptTimeout` seconds. On timeout, throw
+    /// `MailError.scriptTimedOut` instead of blocking forever.
+    ///
+    /// Root cause of #297: `NSAppleScript.executeAndReturnError` blocks
+    /// *indefinitely* (rather than returning -1743) when Automation TCC is
+    /// pending/not-determined or Mail is unresponsive, wedging the server's
+    /// request thread until the MCP client's ~120s idle timeout dropped the
+    /// whole connection. NSAppleScript is a blocking, uncancellable C API, so a
+    /// timed-out call's thread is simply abandoned (it resolves once TCC is
+    /// answered or the process restarts) — this bounds the block to `timeout`.
+    private func runGuarded<T>(_ body: @escaping () throws -> T) throws -> T {
+        let timeout = scriptTimeoutOverride ?? Self.defaultScriptTimeout
+        let sem = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var outcome: Result<T, Error>?
+        Thread.detachNewThread {
+            let r: Result<T, Error>
+            do { r = .success(try body()) } catch { r = .failure(error) }
+            lock.lock(); outcome = r; lock.unlock()
+            sem.signal()
+        }
+        if sem.wait(timeout: .now() + timeout) == .timedOut {
+            throw MailError.scriptTimedOut(seconds: Int(timeout))
+        }
+        lock.lock(); defer { lock.unlock() }
+        return try outcome!.get()
+    }
+
+    /// #297: fail fast — with an actionable error — instead of attempting a
+    /// blocking NSAppleScript that would hang, when Automation TCC is clearly
+    /// unusable. Reuses the existing non-prompting `AutomationStatus.probe()`.
+    /// `.denied` reuses the #288 -1743 remediation text; `.targetNotRunning`
+    /// tells the caller to open Mail. `.notDetermined` / `.granted` / `.unknown`
+    /// proceed under the timeout guard — never false-fast a pending first-run
+    /// prompt (that is exactly the state the guard exists to bound).
+    private func preflightAutomation() throws {
+        switch AutomationStatus.probe() {
+        case .denied:
+            throw MailError.scriptFailed(
+                message: "Automation permission is not granted to this binary (pre-flight probe).",
+                code: -1743)
+        case .targetNotRunning:
+            throw MailError.operationFailed(AutomationStatus.report(for: .targetNotRunning))
+        case .granted, .notDetermined, .unknown:
+            return
+        }
     }
 
     // MARK: - Account Operations
@@ -2447,6 +2514,11 @@ enum MailError: LocalizedError {
     /// — used when a raw AppleScript error (e.g. `-10000`) has been re-wrapped
     /// with an actionable, recovery-oriented explanation for the caller (#103).
     case operationFailed(String)
+    /// #297: an AppleScript execution did not return within the wall-clock
+    /// budget and was abandoned to keep the MCP server responsive. Distinct
+    /// from `.scriptFailed(code: -1743)` (a *returned* denial): this is the
+    /// *never-returns* mode (TCC prompt pending/not-determined, or Mail stuck).
+    case scriptTimedOut(seconds: Int)
 
     var errorDescription: String? {
         switch self {
@@ -2468,6 +2540,16 @@ enum MailError: LocalizedError {
             return "Invalid parameter: \(message)"
         case .operationFailed(let message):
             return message
+        case .scriptTimedOut(let seconds):
+            // #297: the never-returns mode. Named distinctly from the -1743
+            // recorded-Deny path so a stuck call surfaces an actionable error
+            // within the budget instead of hanging until the MCP client drops
+            // the whole server connection.
+            return "AppleScript call did not return within \(seconds)s and was "
+                + "abandoned to keep the MCP server responsive (#297). This usually "
+                + "means Automation permission is pending / not-determined (an "
+                + "authorization prompt may be waiting but cannot be answered in this "
+                + "headless context) or Mail is unresponsive.\n" + AutomationHelp.guidance
         }
     }
 }
