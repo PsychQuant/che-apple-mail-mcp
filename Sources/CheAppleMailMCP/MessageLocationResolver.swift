@@ -42,14 +42,47 @@ struct ResolvedMessageLocation: Equatable {
 /// Derive the addressing pair from a raw Envelope Index mailbox URL
 /// (`ews://<uuid>/<percent-encoded path>`).
 ///
-/// - Returns: nil when the URL cannot yield BOTH a non-empty account UUID and a
-///   non-empty mailbox path. Returning nil (rather than a half-filled value) is
-///   load-bearing: an empty `accountId` would make `resolveAccountRef` silently
-///   fall back to a display-name selector — exactly the ambiguity this bypasses.
+/// Declines (returns nil) rather than emitting an addressing that could resolve
+/// to the WRONG object. Every rejection below leaves the caller on the explicit
+/// `mailbox` + `account_name` path, which is exactly the pre-#299 behavior:
+///
+/// - **Non-UUID authority.** The value is emitted as `account id "…"`. Mail's
+///   Envelope Index uses account UUIDs (`ews://ABCE3A85-…/`), but a URL shaped
+///   `imap://user@host/INBOX` would produce a selector that can never resolve —
+///   fail fast instead of dead-ending at -1728 (verify Lens A/B).
+/// - **`%2F` in the encoded path.** `mailboxPath` is percent-DECODED and
+///   `resolveMailboxRef` then splits it on "/" to build the container chain
+///   (#174). An encoded `%2F` is a slash *inside a single mailbox name*, which
+///   that split would silently reinterpret as hierarchy — addressing a different
+///   mailbox. The ambiguity is unresolvable without a components-based API, so
+///   we decline to derive (verify Lens A/B; the caller can still pass the name
+///   explicitly, where the ambiguity is theirs and pre-existing).
+/// - **Empty path segments** (leading "/", "//", trailing "/") would emit
+///   `mailbox ""` into the chain — a degenerate selector.
 func resolveMessageLocation(fromMailboxURL urlString: String) -> ResolvedMessageLocation? {
+    // Checked on the RAW string: decoding is what erases the distinction.
+    guard urlString.range(of: "%2F", options: .caseInsensitive) == nil else { return nil }
     guard let parsed = MailboxURL.decode(urlString) else { return nil }
-    guard !parsed.accountUUID.isEmpty, !parsed.mailboxPath.isEmpty else { return nil }
-    return ResolvedMessageLocation(accountId: parsed.accountUUID, mailboxPath: parsed.mailboxPath)
+    guard isAccountUUID(parsed.accountUUID) else { return nil }
+    let path = parsed.mailboxPath
+    guard !path.isEmpty else { return nil }
+    // Every segment must be a usable AppleScript mailbox name.
+    let segments = path.components(separatedBy: "/")
+    guard !segments.contains(where: { $0.isEmpty }) else { return nil }
+    guard !segments.contains(where: { seg in
+        seg.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7f }
+    }) else { return nil }
+    return ResolvedMessageLocation(accountId: parsed.accountUUID, mailboxPath: path)
+}
+
+/// Mail account identifiers in the Envelope Index are UUIDs (8-4-4-4-12 hex).
+/// Anything else is not an `account id` selector.
+func isAccountUUID(_ s: String) -> Bool {
+    let parts = s.components(separatedBy: "-")
+    guard parts.count == 5,
+          parts[0].count == 8, parts[1].count == 4, parts[2].count == 4,
+          parts[3].count == 4, parts[4].count == 12 else { return false }
+    return parts.allSatisfy { $0.allSatisfy(\.isHexDigit) }
 }
 
 /// Should a failed AppleScript read be retried with the derived addressing?
@@ -81,14 +114,30 @@ extension CheAppleMailMCPServer {
 
     /// Combine caller-supplied selectors with the derived pair.
     ///
-    /// **Explicit values always win** — a caller who passes `mailbox` +
-    /// `account_name` gets pre-#299 behavior byte-for-byte; derivation only
-    /// fills what is absent. Empty strings count as absent (an empty mailbox
-    /// name can never resolve, and treating it as a real selector would mask
-    /// the derivable answer).
+    /// **The pair is ATOMIC.** A mailbox name is only meaningful *within* an
+    /// account, so the two halves are never taken from different sources. An
+    /// earlier per-field precedence (mailbox from one source, account from the
+    /// other) was rejected in verify: with two accounts that both contain e.g.
+    /// `Archive` or `[Gmail]/…`, grafting a derived mailbox path onto a
+    /// caller-named account produces a specifier that RESOLVES — against the
+    /// wrong account — which is the #101 hazard this file otherwise avoids.
     ///
-    /// - Returns: nil when the message is unaddressable — no mailbox, or no
-    ///   account selector at all. The caller then throws the actionable error
+    /// So there are exactly two outcomes:
+    /// - the caller supplied a **complete** pair (mailbox + an account selector)
+    ///   → use it verbatim, `usedDerived == false` (pre-#299 byte-for-byte);
+    /// - otherwise → use the **whole** derived pair, `usedDerived == true`.
+    ///
+    /// A partial supply is therefore *ignored*, not merged. That is deliberate:
+    /// the rowId's own index entry is authoritative for where the message
+    /// actually lives, and a half-supplied selector is a guess (the caller who
+    /// has a `mailbox` but no account got it from a `summary` projection — the
+    /// exact population #299 exists to serve). The handler discloses the
+    /// substitution in the result so the choice is never invisible.
+    ///
+    /// Empty strings count as absent (an empty selector can never resolve).
+    ///
+    /// - Returns: nil when the message is unaddressable — an incomplete supply
+    ///   with nothing derivable. The caller then throws the actionable error
     ///   instead of sending Mail a half-empty selector.
     static func resolveFallbackAddressing(
         suppliedMailbox: String?,
@@ -101,29 +150,30 @@ extension CheAppleMailMCPServer {
         let accountIdIn = suppliedAccountId.flatMap { $0.isEmpty ? nil : $0 }
         let accountNameIn = suppliedAccountName.flatMap { $0.isEmpty ? nil : $0 }
 
-        guard let mailbox = mailboxIn ?? derived?.mailboxPath else { return nil }
-
-        // Account selector: explicit UUID > explicit display name > derived UUID.
-        // The display name is honored before deriving so an explicit
-        // `account_name`-only call keeps its exact pre-#299 selector.
-        let accountId: String?
-        let accountName: String
-        if let aid = accountIdIn {
-            accountId = aid
-            accountName = accountNameIn ?? ""
-        } else if let an = accountNameIn {
-            accountId = nil
-            accountName = an
-        } else if let d = derived {
-            accountId = d.accountId
-            accountName = ""
-        } else {
-            return nil   // no account selector obtainable
+        // Complete caller-supplied pair → verbatim. `accountName` is zeroed when
+        // a UUID is present (resolveMailboxRef ignores it there), so two
+        // addressings that select the same target compare equal — the retry gate
+        // depends on that.
+        if let mailbox = mailboxIn, accountIdIn != nil || accountNameIn != nil {
+            return EmailFallbackAddressing(
+                mailbox: mailbox,
+                accountId: accountIdIn,
+                accountName: accountIdIn != nil ? "" : (accountNameIn ?? ""),
+                usedDerived: false)
         }
 
-        let usedDerived = (mailboxIn == nil) || (accountIdIn == nil && accountNameIn == nil)
+        // Anything less → the whole derived pair, or nothing.
+        guard let d = derived else { return nil }
         return EmailFallbackAddressing(
-            mailbox: mailbox, accountId: accountId,
-            accountName: accountName, usedDerived: usedDerived)
+            mailbox: d.mailboxPath, accountId: d.accountId,
+            accountName: "", usedDerived: true)
+    }
+
+    /// Do two addressings select the same target? Compares the selector triple
+    /// only — `usedDerived` records provenance, not destination. Used to gate
+    /// the retry so it never re-runs the call that just failed.
+    static func addressesSameTarget(_ a: EmailFallbackAddressing,
+                                    _ b: EmailFallbackAddressing) -> Bool {
+        return a.mailbox == b.mailbox && a.accountId == b.accountId && a.accountName == b.accountName
     }
 }

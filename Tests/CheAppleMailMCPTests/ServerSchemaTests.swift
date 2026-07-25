@@ -1278,21 +1278,32 @@ final class ServerSchemaTests: XCTestCase {
                 // #299: extract the WHOLE call (paren-balanced) rather than to
                 // end-of-line — a wrapped multi-line call would otherwise yield
                 // just `mailController.getEmail(` and fail spuriously.
-                let (call, callEnd) = Self.balancedCall(in: source, openParenAfter: r)
-                // The invariant this guard protects is "the AppleScript fallback
-                // never drops the account selector". Pre-#299 that was spelled
-                // literally `accountId: accountId`; `get_email` now passes the
-                // #299-resolved selector (explicit account_id > account_name >
-                // rowId-derived UUID), so the assertion accepts any accountId
-                // argument — but still REJECTS `accountId: nil`, which is the
-                // actual regression (silently un-disambiguated fallback, #101/#180).
-                XCTAssertTrue(call.contains("accountId:"),
-                              "\(label): mailController.\(needle) fallback must thread an accountId; got:\n\(call)")
-                XCTAssertFalse(call.contains("accountId: nil"),
-                               "\(label): mailController.\(needle) must not hard-code accountId: nil — "
-                               + "that drops #101 disambiguation; got:\n\(call)")
+                let (call, _) = Self.balancedCall(in: source, openParenAfter: r)
+                // The invariant: the AppleScript fallback never drops the account
+                // selector. Pre-#299 this was pinned as the literal
+                // `accountId: accountId`. #299 introduced two more legitimate
+                // spellings (the resolved selector), so the check became an
+                // ALLOW-LIST rather than a substring relaxation — verify (Lens C)
+                // showed that `contains("accountId:")` + not-nil would have let
+                // `accountId: accountName` through, which is the #101/#180 bug
+                // this guard exists to catch, verbatim. A novel spelling must
+                // fail loudly and force a human decision.
+                let permitted = [
+                    "accountId: accountId",             // every pre-#299 call site
+                    "accountId: addressing.accountId",  // #299 get_email primary
+                    "accountId: retry.accountId",       // #299 get_email derived retry
+                ]
+                XCTAssertTrue(permitted.contains(where: { call.contains($0) }),
+                              "\(label): mailController.\(needle) must thread a resolved accountId "
+                              + "(one of \(permitted)). A new spelling needs review — do NOT relax "
+                              + "this to a bare `accountId:` check; got:\n\(call)")
                 found += 1
-                searchRange = callEnd..<source.endIndex
+                // Advance minimally (verify Lens C): jumping past the whole call
+                // could skip a subsequent site if `balancedCall` over-ran on a
+                // paren inside a string literal or comment — silently shrinking
+                // coverage while still satisfying a `> 0` floor. Re-examining a
+                // self-nested same-needle call twice is harmless.
+                searchRange = r.upperBound..<source.endIndex
             }
             XCTAssertGreaterThan(found, 0, "\(label): expected ≥1 \(needle) call site")
         }
