@@ -1275,15 +1275,50 @@ final class ServerSchemaTests: XCTestCase {
             var searchRange = source.startIndex..<source.endIndex
             var found = 0
             while let r = source.range(of: needle, range: searchRange) {
-                let lineEnd = source[r.upperBound...].firstIndex(of: "\n") ?? source.endIndex
-                let call = String(source[r.lowerBound..<lineEnd])
-                XCTAssertTrue(call.contains("accountId: accountId"),
-                              "\(label): mailController.\(needle) fallback must thread accountId; got:\n\(call)")
+                // #299: extract the WHOLE call (paren-balanced) rather than to
+                // end-of-line — a wrapped multi-line call would otherwise yield
+                // just `mailController.getEmail(` and fail spuriously.
+                let (call, callEnd) = Self.balancedCall(in: source, openParenAfter: r)
+                // The invariant this guard protects is "the AppleScript fallback
+                // never drops the account selector". Pre-#299 that was spelled
+                // literally `accountId: accountId`; `get_email` now passes the
+                // #299-resolved selector (explicit account_id > account_name >
+                // rowId-derived UUID), so the assertion accepts any accountId
+                // argument — but still REJECTS `accountId: nil`, which is the
+                // actual regression (silently un-disambiguated fallback, #101/#180).
+                XCTAssertTrue(call.contains("accountId:"),
+                              "\(label): mailController.\(needle) fallback must thread an accountId; got:\n\(call)")
+                XCTAssertFalse(call.contains("accountId: nil"),
+                               "\(label): mailController.\(needle) must not hard-code accountId: nil — "
+                               + "that drops #101 disambiguation; got:\n\(call)")
                 found += 1
-                searchRange = lineEnd..<source.endIndex
+                searchRange = callEnd..<source.endIndex
             }
             XCTAssertGreaterThan(found, 0, "\(label): expected ≥1 \(needle) call site")
         }
+    }
+
+    /// Extract a paren-balanced call expression starting at the `(` that ends
+    /// `range` (the matched `…foo(` needle). Returns the call text and the index
+    /// just past its closing paren. Falls back to end-of-line if unbalanced.
+    private static func balancedCall(in source: String,
+                                     openParenAfter range: Range<String.Index>) -> (String, String.Index) {
+        var depth = 0
+        var i = source.index(before: range.upperBound)   // the '(' itself
+        while i < source.endIndex {
+            let c = source[i]
+            if c == "(" { depth += 1 }
+            if c == ")" {
+                depth -= 1
+                if depth == 0 {
+                    let end = source.index(after: i)
+                    return (String(source[range.lowerBound..<end]), end)
+                }
+            }
+            i = source.index(after: i)
+        }
+        let lineEnd = source[range.upperBound...].firstIndex(of: "\n") ?? source.endIndex
+        return (String(source[range.lowerBound..<lineEnd]), lineEnd)
     }
 
     /// Brace-balanced extraction of a Swift method body from source text,

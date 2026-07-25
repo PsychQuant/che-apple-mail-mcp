@@ -149,13 +149,13 @@ class CheAppleMailMCPServer {
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "id": .object(["type": .string("string"), "description": .string("The email ID")]),
-                        "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
-                        "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
-                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID (from search_emails / list_accounts) to disambiguate accounts that share a display_name (#101). Used only by the AppleScript fallback path; the SQLite fast path is account-agnostic (#180).")]),
+                        "id": .object(["type": .string("string"), "description": .string("The email ID (numeric rowId). A rowId present in the Envelope Index is self-addressing — mailbox/account_name are then optional (#299).")]),
+                        "mailbox": .object(["type": .string("string"), "description": .string("Optional since #299: mailbox name. Omit it for a numeric rowId — the Envelope Index resolves the account's REAL (localized, possibly nested) mailbox path itself, which is what lets the body-materialization nudge be reached from an id alone (export manifests and search summary/ids projections return no account). Supplying it keeps the pre-#299 selector verbatim; if a supplied pair fails AppleScript resolution the call retries once with the derived pair and logs the substitution to stderr.")]),
+                        "account_name": .object(["type": .string("string"), "description": .string("Optional since #299: the mail account (display_name). Omit for a numeric rowId — the Envelope Index yields the account UUID, a strictly better selector (globally unique, so immune to the same-display_name collision of #101).")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID (from search_emails / list_accounts) to disambiguate accounts that share a display_name (#101). Used only by the AppleScript fallback path; the SQLite fast path is account-agnostic (#180). Takes precedence over both account_name and the #299 derived UUID.")]),
                         "format": .object(["type": .string("string"), "description": .string("Content format: 'html' (default, preserves links), 'text' (plain text), 'source' (full MIME)")])
                     ]),
-                    "required": .array([.string("id"), .string("mailbox"), .string("account_name")])
+                    "required": .array([.string("id")])
                 ])
             ),
             Tool(
@@ -999,10 +999,20 @@ class CheAppleMailMCPServer {
 
         case "get_email":
             let id = try requireMessageId(arguments)
-            guard let mailbox = arguments["mailbox"]?.stringValue,
-                  let accountName = arguments["account_name"]?.stringValue else {
-                throw MailError.invalidParameter("mailbox, and account_name are required")
-            }
+            // #299: `mailbox` / `account_name` are OPTIONAL. A numeric rowId is
+            // self-addressing — the Envelope Index maps it to the account UUID
+            // and the account's real mailbox path, which is a STRICTLY better
+            // selector than a caller-supplied display name (globally unique, so
+            // immune to the #101/#176 collision class). This is what makes the
+            // materialization nudge below reachable at all for callers who only
+            // ever received an id: an export manifest item carries no account,
+            // and `search_emails`' summary/ids projections omit it too, so the
+            // documented re-fetch loop used to demand a value the pipeline never
+            // handed out — a wrong guess failed resolution (-1719) and the nudge
+            // was never delivered (#299). Supplying the pair explicitly keeps
+            // the exact pre-#299 selector.
+            let suppliedMailbox = arguments["mailbox"]?.stringValue
+            let suppliedAccountName = arguments["account_name"]?.stringValue
             let format = arguments["format"]?.stringValue ?? "html"
             // Try SQLite/emlx first, fall back to AppleScript
 
@@ -1010,9 +1020,16 @@ class CheAppleMailMCPServer {
             // body — the AppleScript fallback below then doubles as the fetch
             // nudge, and its result is annotated if the body is STILL absent.
             var partialBodyFallback = false
+            // #299: the rowId-derived addressing pair, captured from the same
+            // index lookup the fast path already performs (no extra query).
+            var derivedLocation: ResolvedMessageLocation?
             if let reader = indexReader, let rowId = Int(id) {
                 do {
                     if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
+                        // #299: capture BEFORE the content read — the addressing
+                        // is needed precisely on the path where that read
+                        // succeeds-but-empty (the nudge case).
+                        derivedLocation = resolveMessageLocation(fromMailboxURL: mailboxUrl)
                         let content = try EmlxParser.readEmail(rowId: rowId, mailboxURL: mailboxUrl, format: format)
                         if Self.partialBodyNotDownloaded(content: content, format: format) {
                             // #274: a partial .emlx with an empty body means
@@ -1051,7 +1068,44 @@ class CheAppleMailMCPServer {
                 }
             }
             let accountId = decodeAccountId(arguments, tool: invokedTool)
-            var email = try await mailController.getEmail(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId, format: format)
+            // #299: decide what the AppleScript fallback addresses with. Explicit
+            // selectors win; absent ones fall back to the rowId-derived pair.
+            guard let addressing = Self.resolveFallbackAddressing(
+                    suppliedMailbox: suppliedMailbox, suppliedAccountId: accountId,
+                    suppliedAccountName: suppliedAccountName, derived: derivedLocation) else {
+                throw MailError.invalidParameter(
+                    "Cannot address message \(id): supply `mailbox` plus `account_name` "
+                    + "(or `account_id`). Both are optional ONLY when `id` is a numeric rowId "
+                    + "present in the Envelope Index, which resolves them automatically (#299).")
+            }
+            var email: [String: Any]
+            do {
+                email = try await mailController.getEmail(
+                    id: id, mailbox: addressing.mailbox, accountName: addressing.accountName,
+                    accountId: addressing.accountId, format: format)
+            } catch MailError.scriptFailed(let message, let code)
+                        where shouldRetryWithDerivedLocation(code: code)
+                            && !addressing.usedDerived && derivedLocation != nil {
+                // #299: the CALLER-supplied selector matched nothing (-1719 /
+                // -1728) while the index can address this rowId — retry once
+                // with the derived pair instead of surfacing an addressing
+                // error the caller has no way to fix (they were never given the
+                // account). Gated on `!usedDerived` so a derived attempt never
+                // retries itself, and logged so the substitution is never silent
+                // (the r-must-direct-db observability convention).
+                guard let retry = Self.resolveFallbackAddressing(
+                        suppliedMailbox: nil, suppliedAccountId: nil,
+                        suppliedAccountName: nil, derived: derivedLocation) else {
+                    throw MailError.scriptFailed(message: message, code: code)
+                }
+                FileHandle.standardError.write(Data((
+                    "get_email: supplied mailbox/account failed AppleScript resolution "
+                    + "(code \(code)) for rowId \(id); retrying with the pair derived from "
+                    + "the Envelope Index (#299)\n").utf8))
+                email = try await mailController.getEmail(
+                    id: id, mailbox: retry.mailbox, accountName: retry.accountName,
+                    accountId: retry.accountId, format: format)
+            }
             if partialBodyFallback,
                Self.fallbackBodyStillMissing((email["content"] as? String) ?? "", format: format) {
                 // #274: the store had only a partial file AND the AppleScript
