@@ -49,18 +49,38 @@ actor MailController {
     /// Well under the MCP client's ~120s idle timeout (so a stuck call returns
     /// an actionable error rather than silently dropping the whole server
     /// connection) and well over normal ~1-2s Mail IPC. Tunable via the
-    /// `scriptTimeout` test seam.
-    private static let defaultScriptTimeout: TimeInterval = 45
+    /// `scriptTimeout` test seam. Internal (not private) so the #301 deadline
+    /// contract is pinned by tests.
+    static let defaultScriptTimeout: TimeInterval = 45
 
-    /// Execute AppleScript and return result
-    func runScript(_ source: String) throws -> String {
+    /// #301: deadline for the GUI-DRIVING scripts (clean-path compose, reply /
+    /// forward paste). These are a different duty class from every other
+    /// script: one runScript spans the whole keystroke flow — open window,
+    /// drive the From popup, clipboard-fill recipients, paste the body, attach
+    /// via ⇧⌘G, dispatch — with deliberate `delay`s at each phase, and on a
+    /// large mailbox Mail's UI answers slowly. Live evidence (#301): a HEALTHY
+    /// sender-popup `create_draft` runs past 45s, so the #297 default killed it
+    /// mid-flight — the abandoned (uncancellable) script kept typing into Mail
+    /// while the legacy fallback ran, the reply arrived at ~78s with a WRAPPED
+    /// body, and the caller experienced a hang. 120s keeps the guard a guard
+    /// (still bounded) while clearing the legitimate ceiling.
+    static let guiScriptTimeout: TimeInterval = 120
+
+    /// Execute AppleScript and return result.
+    ///
+    /// - Parameter timeout: optional per-call deadline (#301). nil → the #297
+    ///   default. The `scriptTimeout` test seam still beats BOTH, so tests can
+    ///   compress any call site's deadline.
+    func runScript(_ source: String, timeout: TimeInterval? = nil) throws -> String {
         if let override = scriptRunnerOverride {
             // Route the fake runner through the same guard so tests can drive
             // the timeout path with a hanging runner (no live NSAppleScript).
-            return try runGuarded { try override(source) }
+            // No preflight ran on this path — assume granted so the timeout
+            // message never sends a TEST at the TCC dead end (#301).
+            return try runGuarded(timeout: timeout, automationGranted: true) { try override(source) }
         }
-        try preflightAutomation()
-        return try runGuarded {
+        let granted = try preflightAutomation()
+        return try runGuarded(timeout: timeout, automationGranted: granted) {
             var error: NSDictionary?
             guard let script = NSAppleScript(source: source) else {
                 throw MailError.scriptCreationFailed
@@ -76,9 +96,9 @@ actor MailController {
     }
 
     /// Execute AppleScript and return result as list
-    func runScriptAsList(_ source: String) throws -> [String] {
-        try preflightAutomation()
-        return try runGuarded {
+    func runScriptAsList(_ source: String, timeout: TimeInterval? = nil) throws -> [String] {
+        let granted = try preflightAutomation()
+        return try runGuarded(timeout: timeout, automationGranted: granted) {
             var error: NSDictionary?
             guard let script = NSAppleScript(source: source) else {
                 throw MailError.scriptCreationFailed
@@ -105,9 +125,11 @@ actor MailController {
     // MARK: - #297 AppleScript hang guard
 
     /// Run `body` (a real NSAppleScript execution, or a test override) on a
-    /// detached thread and wait at most `scriptTimeoutOverride ??
-    /// defaultScriptTimeout` seconds. On timeout, throw
-    /// `MailError.scriptTimedOut` instead of blocking forever.
+    /// detached thread and wait at most the resolved deadline:
+    /// `scriptTimeoutOverride ?? timeout ?? defaultScriptTimeout` — the test
+    /// seam beats a per-call value beats the default (#301), so tests can
+    /// compress any call site while the GUI sites raise theirs in production.
+    /// On timeout, throw `MailError.scriptTimedOut` instead of blocking forever.
     ///
     /// Root cause of #297: `NSAppleScript.executeAndReturnError` blocks
     /// *indefinitely* (rather than returning -1743) when Automation TCC is
@@ -116,8 +138,21 @@ actor MailController {
     /// whole connection. NSAppleScript is a blocking, uncancellable C API, so a
     /// timed-out call's thread is simply abandoned (it resolves once TCC is
     /// answered or the process restarts) — this bounds the block to `timeout`.
-    private func runGuarded<T>(_ body: @escaping () throws -> T) throws -> T {
-        let timeout = scriptTimeoutOverride ?? Self.defaultScriptTimeout
+    ///
+    /// #301: `automationGranted` (the preflight probe's verdict, reused — no
+    /// extra probe) threads into the thrown error so the timeout message can be
+    /// honest: a GRANTED timeout is a long-flow/unresponsive-Mail situation,
+    /// NOT a TCC problem, and must not send the user down the tccutil dead end.
+    /// Note the residual race the deadline itself cannot fix: an abandoned GUI
+    /// script keeps driving Mail (keystrokes and all) until it finishes on its
+    /// own — raising the GUI deadline so healthy flows are never killed is the
+    /// primary mitigation; the message warns about the residue.
+    private func runGuarded<T>(
+        timeout: TimeInterval? = nil,
+        automationGranted: Bool = true,
+        _ body: @escaping () throws -> T
+    ) throws -> T {
+        let deadline = scriptTimeoutOverride ?? timeout ?? Self.defaultScriptTimeout
         let sem = DispatchSemaphore(value: 0)
         let lock = NSLock()
         var outcome: Result<T, Error>?
@@ -127,11 +162,119 @@ actor MailController {
             lock.lock(); outcome = r; lock.unlock()
             sem.signal()
         }
-        if sem.wait(timeout: .now() + timeout) == .timedOut {
-            throw MailError.scriptTimedOut(seconds: Int(timeout))
+        if sem.wait(timeout: .now() + deadline) == .timedOut {
+            throw MailError.scriptTimedOut(seconds: Int(deadline), automationGranted: automationGranted)
         }
         lock.lock(); defer { lock.unlock() }
         return try outcome!.get()
+    }
+
+    // MARK: - #301 GUI-script execution (osascript subprocess)
+
+    /// Execute a GUI-DRIVING AppleScript via an `/usr/bin/osascript` subprocess
+    /// instead of in-process NSAppleScript (#301).
+    ///
+    /// ## Why a subprocess for exactly this script class
+    ///
+    /// Live evidence (#301): the identical sender-popup flow completes in ~6s
+    /// under `osascript` but does NOT finish within 120s under in-process
+    /// NSAppleScript on a detached thread — every System Events round-trip is
+    /// massively degraded in-process, and the popup/paste flows (poll loops =
+    /// many events) multiply that into an effective hang. This is the deeper
+    /// layer of the already-documented in-process AX instability family
+    /// (#295: unstable AX tree, #296: identical matcher passes under osascript
+    /// and gets ZERO menu items in-process).
+    ///
+    /// The subprocess also fixes the guard's worst residue: `Process.terminate`
+    /// actually CANCELS a timed-out script, so an abandoned GUI flow no longer
+    /// keeps typing into Mail while the legacy fallback runs (in-process
+    /// NSAppleScript is uncancellable — #297 could only abandon the thread).
+    ///
+    /// TCC: the subprocess's Apple Events are attributed to its RESPONSIBLE
+    /// process (this binary), so the existing Automation grant covers it —
+    /// verified live in the #301 gate. The preflight probe still runs first.
+    ///
+    /// Short query/action scripts stay on in-process `runScript` — they are
+    /// single-digit-event payloads where in-process latency is fine and the
+    /// #297 abandon semantics are acceptable.
+    func runGuiScript(_ source: String, timeout: TimeInterval? = nil) throws -> String {
+        if let override = scriptRunnerOverride {
+            // Same seam as runScript: tests drive GUI flows with a fake runner.
+            return try runGuarded(timeout: timeout, automationGranted: true) { try override(source) }
+        }
+        let granted = try preflightAutomation()
+        let deadline = scriptTimeoutOverride ?? timeout ?? Self.guiScriptTimeout
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        // Script via stdin ("-"), not -e: no argv length limit, no quoting hazard.
+        process.arguments = ["-"]
+        let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
+        process.standardInput = stdin
+        process.standardOutput = stdout
+        process.standardError = stderr
+        try process.run()
+        stdin.fileHandleForWriting.write(Data(source.utf8))
+        stdin.fileHandleForWriting.closeFile()
+
+        // Drain stdout/stderr CONCURRENTLY with the wait — a large output would
+        // otherwise fill the pipe and deadlock the child against our wait.
+        let outBox = PipeDrainBox(), errBox = PipeDrainBox()
+        let outThread = Thread { outBox.data = stdout.fileHandleForReading.readDataToEndOfFile() }
+        let errThread = Thread { errBox.data = stderr.fileHandleForReading.readDataToEndOfFile() }
+        outThread.start(); errThread.start()
+
+        let waitSem = DispatchSemaphore(value: 0)
+        Thread.detachNewThread {
+            process.waitUntilExit()
+            waitSem.signal()
+        }
+        if waitSem.wait(timeout: .now() + deadline) == .timedOut {
+            // REAL cancellation (the #297 in-process guard could only abandon):
+            // SIGTERM, brief grace, then SIGKILL — the GUI flow stops driving
+            // Mail the moment the interpreter dies.
+            process.terminate()
+            if waitSem.wait(timeout: .now() + 2) == .timedOut {
+                kill(process.processIdentifier, SIGKILL)
+                _ = waitSem.wait(timeout: .now() + 2)
+            }
+            throw MailError.scriptTimedOut(seconds: Int(deadline), automationGranted: granted)
+        }
+        // Bounded join: the child exited, so EOF is imminent; never wait forever.
+        let joinDeadline = Date().addingTimeInterval(5)
+        while (!outThread.isFinished || !errThread.isFinished) && Date() < joinDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+
+        let errText = String(data: errBox.data, encoding: .utf8) ?? ""
+        if process.terminationStatus != 0 {
+            // osascript reports script failures as `<file>: execution error:
+            // <message> (<code>)` on stderr — map onto the same MailError the
+            // in-process path throws so every caller/fallback behaves identically.
+            let (message, code) = Self.parseOsascriptError(errText)
+            throw MailError.scriptFailed(message: message, code: code)
+        }
+        // osascript prints the script's return value to stdout with a trailing \n.
+        let out = String(data: outBox.data, encoding: .utf8) ?? ""
+        return out.hasSuffix("\n") ? String(out.dropLast()) : out
+    }
+
+    /// Parse `osascript` stderr into (message, code) — the shape is
+    /// `path: execution error: <message> (<code>)`. Falls back to the raw text
+    /// with code -1 when the shape doesn't match (never loses the message).
+    static func parseOsascriptError(_ stderr: String) -> (String, Int) {
+        let text = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Trailing `(<code>)` — the code is signed.
+        if let open = text.range(of: "(", options: .backwards),
+           text.hasSuffix(")"),
+           let code = Int(text[open.upperBound..<text.index(before: text.endIndex)]) {
+            var message = String(text[..<open.lowerBound]).trimmingCharacters(in: .whitespaces)
+            if let r = message.range(of: "execution error: ") {
+                message = String(message[r.upperBound...])
+            }
+            return (message.isEmpty ? text : message, code)
+        }
+        return (text.isEmpty ? "osascript failed with no error output" : text, -1)
     }
 
     /// #297: fail fast — with an actionable error — instead of attempting a
@@ -141,7 +284,11 @@ actor MailController {
     /// tells the caller to open Mail. `.notDetermined` / `.granted` / `.unknown`
     /// proceed under the timeout guard — never false-fast a pending first-run
     /// prompt (that is exactly the state the guard exists to bound).
-    private func preflightAutomation() throws {
+    ///
+    /// - Returns: whether the probe verified `.granted` (#301) — reused by the
+    ///   timeout message so it never blames TCC when TCC was verified fine.
+    @discardableResult
+    private func preflightAutomation() throws -> Bool {
         switch AutomationStatus.probe() {
         case .denied:
             throw MailError.scriptFailed(
@@ -149,8 +296,10 @@ actor MailController {
                 code: -1743)
         case .targetNotRunning:
             throw MailError.operationFailed(AutomationStatus.report(for: .targetNotRunning))
-        case .granted, .notDetermined, .unknown:
-            return
+        case .granted:
+            return true
+        case .notDetermined, .unknown:
+            return false
         }
     }
 
@@ -1237,9 +1386,13 @@ actor MailController {
             url: url, subject: subject, attachments: attachments ?? [], send: send,
             fromAddress: popupAddress, fillToRecipients: fillTo)
         let needsClipboard = attachments?.isEmpty == false || !fillTo.isEmpty
+        // #301: the whole keystroke flow is ONE script with deliberate per-phase
+        // delays — on a large mailbox a HEALTHY run crosses the 45s default, so
+        // it gets the GUI deadline (the default killed it mid-flight and the
+        // caller saw a hang + a wrapped-body legacy fallback).
         var result = needsClipboard
-            ? try withClipboardPreserved({ try runScript(script) })
-            : try runScript(script)
+            ? try withClipboardPreserved({ try runGuiScript(script, timeout: Self.guiScriptTimeout) })
+            : try runGuiScript(script, timeout: Self.guiScriptTimeout)
         // #219/#277: disclose what the GUI verified/filled so the caller can
         // see the clean path handled the extras (parity with the legacy
         // disclosure discipline, #237).
@@ -1410,7 +1563,7 @@ actor MailController {
                 )
                 // Always preserve the user's clipboard — the paste path sets it to
                 // the new body for the ⌘V (full-fidelity restore, like #175 attach).
-                return try withClipboardPreserved { try runScript(pasteScript) }
+                return try withClipboardPreserved { try runGuiScript(pasteScript, timeout: Self.guiScriptTimeout) }
             },
             legacyPath: { try runLegacyReply() },
             disclosure: { legacyReplyPathDisclosure(reason: $0) },
@@ -1505,7 +1658,7 @@ actor MailController {
                 cleanPath: {
                     let pasteScript = buildForwardEmailPasteScript(
                         messageRef: ref, to: to, newBody: newBody)
-                    return try withClipboardPreserved { try runScript(pasteScript) }
+                    return try withClipboardPreserved { try runGuiScript(pasteScript, timeout: Self.guiScriptTimeout) }
                 },
                 legacyPath: { try runLegacyForward() },
                 disclosure: { legacyReplyPathDisclosure(reason: $0) },
@@ -2518,7 +2671,7 @@ enum MailError: LocalizedError {
     /// budget and was abandoned to keep the MCP server responsive. Distinct
     /// from `.scriptFailed(code: -1743)` (a *returned* denial): this is the
     /// *never-returns* mode (TCC prompt pending/not-determined, or Mail stuck).
-    case scriptTimedOut(seconds: Int)
+    case scriptTimedOut(seconds: Int, automationGranted: Bool)
 
     var errorDescription: String? {
         switch self {
@@ -2540,11 +2693,28 @@ enum MailError: LocalizedError {
             return "Invalid parameter: \(message)"
         case .operationFailed(let message):
             return message
-        case .scriptTimedOut(let seconds):
+        case .scriptTimedOut(let seconds, let automationGranted):
             // #297: the never-returns mode. Named distinctly from the -1743
             // recorded-Deny path so a stuck call surfaces an actionable error
             // within the budget instead of hanging until the MCP client drops
             // the whole server connection.
+            //
+            // #301: two-branch diagnosis. The old single message blamed TCC
+            // ("usually means Automation permission is pending") even when the
+            // preflight probe had VERIFIED granted — sending the user down the
+            // tccutil dead end while the real cause (a long GUI flow crossing
+            // the deadline, or Mail momentarily unresponsive) went unnamed.
+            if automationGranted {
+                return "AppleScript call did not return within \(seconds)s and was "
+                    + "abandoned to keep the MCP server responsive (#297). Automation "
+                    + "permission was verified GRANTED before the call, so this is NOT "
+                    + "a TCC problem. Likely causes: a long GUI flow (sender popup / "
+                    + "display-name fill / attachments on a large mailbox) legitimately "
+                    + "needs longer, or Mail is momentarily unresponsive. Note the "
+                    + "abandoned script cannot be cancelled and may still be running in "
+                    + "Mail — check for a leftover compose window (Mail window) before "
+                    + "retrying."
+            }
             return "AppleScript call did not return within \(seconds)s and was "
                 + "abandoned to keep the MCP server responsive (#297). This usually "
                 + "means Automation permission is pending / not-determined (an "
@@ -2552,6 +2722,12 @@ enum MailError: LocalizedError {
                 + "headless context) or Mail is unresponsive.\n" + AutomationHelp.guidance
         }
     }
+}
+
+/// #301 — tiny reference box so the pipe-drain threads can hand their data
+/// back without capture-semantics friction.
+final class PipeDrainBox: @unchecked Sendable {
+    var data = Data()
 }
 
 /// #288 — actionable guidance for Automation-TCC denial (-1743), the
