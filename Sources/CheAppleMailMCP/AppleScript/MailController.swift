@@ -62,9 +62,20 @@ actor MailController {
     /// sender-popup `create_draft` runs past 45s, so the #297 default killed it
     /// mid-flight — the abandoned (uncancellable) script kept typing into Mail
     /// while the legacy fallback ran, the reply arrived at ~78s with a WRAPPED
-    /// body, and the caller experienced a hang. 120s keeps the guard a guard
-    /// (still bounded) while clearing the legitimate ceiling.
-    static let guiScriptTimeout: TimeInterval = 120
+    /// body, and the caller experienced a hang. On the osascript subprocess
+    /// path the measured happy path is ~6s (script) / ~33s (worst live E2E with
+    /// popup + save), so 90s clears the legitimate ceiling with margin while
+    /// staying comfortably under the MCP client's ~120s idle timeout — a
+    /// deadline the CLIENT can still observe is the only kind that helps
+    /// (verify #301, Lens A P1-4).
+    static let guiScriptTimeout: TimeInterval = 90
+
+    /// #301 — refuse new GUI flows past this many unreaped (SIGKILL-resistant)
+    /// osascript children: bounds thread/zombie growth AND the re-opened
+    /// clipboard window a still-alive paster would have (verify Lens B P1-3).
+    static let maxUnreapedGuiChildren = 3
+    /// Shared accounting (reference type — detached waiter threads decrement).
+    private let guiChildAccounting = GuiChildAccounting()
 
     /// Execute AppleScript and return result.
     ///
@@ -200,33 +211,93 @@ actor MailController {
     func runGuiScript(_ source: String, timeout: TimeInterval? = nil) throws -> String {
         if let override = scriptRunnerOverride {
             // Same seam as runScript: tests drive GUI flows with a fake runner.
-            return try runGuarded(timeout: timeout, automationGranted: true) { try override(source) }
+            // The fallback deadline matches the production one (guiScriptTimeout,
+            // NOT the 45s default) so a test asserting the scriptTimedOut payload
+            // sees the same number production would emit (verify #301, Lens A P2-2).
+            return try runGuarded(timeout: timeout ?? Self.guiScriptTimeout,
+                                  automationGranted: true) { try override(source) }
         }
         let granted = try preflightAutomation()
+        // #301 verify (Lens B P1): a child SIGKILL cannot reach (uninterruptible
+        // kernel wait against a wedged Mail/WindowServer) leaves a permanently
+        // blocked waiter thread AND a live paster that could outrun the clipboard
+        // restore. Bound the damage: refuse new GUI flows while several children
+        // remain unreaped — an honest "wedged" error beats compounding the pile.
+        guard guiChildAccounting.current() < Self.maxUnreapedGuiChildren else {
+            throw MailError.operationFailed(
+                "GUI scripting subsystem appears wedged: \(Self.maxUnreapedGuiChildren) "
+                + "terminated osascript children have not exited (Mail or WindowServer "
+                + "may be hung). Not starting another GUI flow. Restart this MCP server "
+                + "(and check Mail) — or use open_mailto (zero-TCC, no GUI scripting) "
+                + "as the clean-compose fallback.")
+        }
         let deadline = scriptTimeoutOverride ?? timeout ?? Self.guiScriptTimeout
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        // Script via stdin ("-"), not -e: no argv length limit, no quoting hazard.
+        // Script via stdin ("-"), not -e: no argv length limit, and the script
+        // text (which embeds email bodies/recipients) never appears in the
+        // process table for same-uid observers. Do not "simplify" this to -e.
         process.arguments = ["-"]
-        let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
-        process.standardInput = stdin
-        process.standardOutput = stdout
-        process.standardError = stderr
-        try process.run()
-        stdin.fileHandleForWriting.write(Data(source.utf8))
-        stdin.fileHandleForWriting.closeFile()
+        // Copy-then-override env (never a fresh dictionary — that would strip
+        // HOME/TMPDIR): pin a UTF-8 locale so osascript's error text (which
+        // embeds CJK mailbox names/subjects) decodes losslessly (Lens A P2-7).
+        var env = ProcessInfo.processInfo.environment
+        env["LANG"] = "en_US.UTF-8"
+        process.environment = env
+        let stdinPipe = Pipe(), stdoutPipe = Pipe(), stderrPipe = Pipe()
+        process.standardInput = stdinPipe
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+        do {
+            try process.run()
+        } catch {
+            // Map the POSIX NSError onto the same MailError family every other
+            // failure uses, so the wrapper-free → legacy fallback ladder still
+            // catches it (verify #301, Lens A P1-3).
+            throw MailError.scriptFailed(
+                message: "could not launch /usr/bin/osascript: \(error.localizedDescription)",
+                code: -1)
+        }
 
-        // Drain stdout/stderr CONCURRENTLY with the wait — a large output would
-        // otherwise fill the pipe and deadlock the child against our wait.
+        // Drain stdout/stderr CONCURRENTLY, and START the drains BEFORE feeding
+        // stdin — osascript happens to read the whole program before emitting
+        // anything, but ordering the drains first removes that load-bearing
+        // assumption entirely (Lens A P2-4). DispatchGroup.wait provides the
+        // happens-before edge for reading the boxes (Lens A P1-1); on a drain
+        // timeout the boxes are NEVER read (no torn/partial data).
         let outBox = PipeDrainBox(), errBox = PipeDrainBox()
-        let outThread = Thread { outBox.data = stdout.fileHandleForReading.readDataToEndOfFile() }
-        let errThread = Thread { errBox.data = stderr.fileHandleForReading.readDataToEndOfFile() }
-        outThread.start(); errThread.start()
+        let drainGroup = DispatchGroup()
+        drainGroup.enter()
+        Thread.detachNewThread {
+            outBox.set((try? stdoutPipe.fileHandleForReading.readToEnd()) ?? Data())
+            drainGroup.leave()
+        }
+        drainGroup.enter()
+        Thread.detachNewThread {
+            errBox.set((try? stderrPipe.fileHandleForReading.readToEnd()) ?? Data())
+            drainGroup.leave()
+        }
+
+        // Feed the script. THROWING variants: the non-throwing FileHandle
+        // write/closeFile raise an uncatchable ObjC exception on a broken pipe
+        // and would abort the whole MCP server (Lens A P1-2).
+        do {
+            try stdinPipe.fileHandleForWriting.write(contentsOf: Data(source.utf8))
+            try stdinPipe.fileHandleForWriting.close()
+        } catch {
+            process.terminate()
+            throw MailError.scriptFailed(
+                message: "could not feed the script to osascript: \(error.localizedDescription)",
+                code: -1)
+        }
 
         let waitSem = DispatchSemaphore(value: 0)
+        let wedgeFlag = PipeDrainBox()   // reused as a lock-protected flag box
+        let accounting = guiChildAccounting
         Thread.detachNewThread {
             process.waitUntilExit()
+            if !wedgeFlag.get().isEmpty { accounting.decrement() }
             waitSem.signal()
         }
         if waitSem.wait(timeout: .now() + deadline) == .timedOut {
@@ -235,28 +306,62 @@ actor MailController {
             // Mail the moment the interpreter dies.
             process.terminate()
             if waitSem.wait(timeout: .now() + 2) == .timedOut {
-                kill(process.processIdentifier, SIGKILL)
-                _ = waitSem.wait(timeout: .now() + 2)
+                // Guard the raw kill: the waiter may have reaped the child in
+                // the gap, freeing the pid for reuse — and a pathological pid 0
+                // would signal our own process group (verify Lens A P2-1 /
+                // Lens B P1-2). isRunning is false once reaped.
+                let pid = process.processIdentifier
+                if pid > 0, process.isRunning { kill(pid, SIGKILL) }
+                if waitSem.wait(timeout: .now() + 2) == .timedOut {
+                    // Even SIGKILL did not take (uninterruptible kernel wait):
+                    // count the un-reaped child; the waiter decrements when it
+                    // finally exits (Lens B P1-3).
+                    wedgeFlag.set(Data([1]))
+                    accounting.increment()
+                }
             }
+            // Best-effort: a killed popup flow can leave an OPEN MENU that
+            // swallows every subsequent keystroke, making the next attempt fail
+            // confusingly — send one Escape to dismiss it (Lens B P2).
+            Self.dismissLingeringGuiMenu()
             throw MailError.scriptTimedOut(seconds: Int(deadline), automationGranted: granted)
         }
-        // Bounded join: the child exited, so EOF is imminent; never wait forever.
-        let joinDeadline = Date().addingTimeInterval(5)
-        while (!outThread.isFinished || !errThread.isFinished) && Date() < joinDeadline {
-            Thread.sleep(forTimeInterval: 0.01)
+        // Join the drains with a REAL barrier. On timeout, throw — never return
+        // a truncated stdout as the script result (a grandchild inheriting the
+        // pipe's write end can hold EOF open past osascript's exit).
+        if drainGroup.wait(timeout: .now() + 5) == .timedOut {
+            throw MailError.scriptFailed(
+                message: "osascript exited but its output pipes did not close within 5s "
+                    + "(a grandchild may be holding them) — refusing to return partial output",
+                code: -1)
         }
 
-        let errText = String(data: errBox.data, encoding: .utf8) ?? ""
+        // Lossy decode (never nil): stderr embeds CJK mailbox names/subjects,
+        // and a decode failure must not erase the diagnostic (Lens A P2-7).
+        let errText = String(decoding: errBox.get(), as: UTF8.self)
         if process.terminationStatus != 0 {
-            // osascript reports script failures as `<file>: execution error:
-            // <message> (<code>)` on stderr — map onto the same MailError the
-            // in-process path throws so every caller/fallback behaves identically.
             let (message, code) = Self.parseOsascriptError(errText)
             throw MailError.scriptFailed(message: message, code: code)
         }
-        // osascript prints the script's return value to stdout with a trailing \n.
-        let out = String(data: outBox.data, encoding: .utf8) ?? ""
-        return out.hasSuffix("\n") ? String(out.dropLast()) : out
+        // osascript appends one LF to the script's return value — strip it at
+        // the BYTE level so a CR-terminated AppleScript result doesn't fuse
+        // into a "\r\n" grapheme and survive (Lens A P2-5).
+        var outData = outBox.get()
+        if outData.last == 0x0A { outData.removeLast() }
+        return String(decoding: outData, as: UTF8.self)
+    }
+
+    /// #301 — best-effort Escape after a timed-out GUI flow: an open From-popup
+    /// menu left behind by the killed interpreter swallows subsequent
+    /// keystrokes. Fire-and-forget, tightly bounded, never throws.
+    private static func dismissLingeringGuiMenu() {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        p.arguments = ["-e", "tell application \"System Events\" to key code 53"]
+        guard (try? p.run()) != nil else { return }
+        let sem = DispatchSemaphore(value: 0)
+        Thread.detachNewThread { p.waitUntilExit(); sem.signal() }
+        if sem.wait(timeout: .now() + 3) == .timedOut { p.terminate() }
     }
 
     /// Parse `osascript` stderr into (message, code) — the shape is
@@ -264,17 +369,33 @@ actor MailController {
     /// with code -1 when the shape doesn't match (never loses the message).
     static func parseOsascriptError(_ stderr: String) -> (String, Int) {
         let text = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        // #301 verify (Lens A P2-6): AppleScript `log` output ALSO lands on
+        // osascript's stderr, so the blob can carry noise lines before (or
+        // after) the real error. Scan for the LAST line carrying the
+        // "execution error: " marker and parse THAT line; only fall back to
+        // whole-blob parsing when no line carries the marker.
+        let marker = "execution error: "
+        let lines = text.components(separatedBy: "\n")
+        let candidate = lines.last(where: { $0.contains(marker) }) ?? text
         // Trailing `(<code>)` — the code is signed.
-        if let open = text.range(of: "(", options: .backwards),
-           text.hasSuffix(")"),
-           let code = Int(text[open.upperBound..<text.index(before: text.endIndex)]) {
-            var message = String(text[..<open.lowerBound]).trimmingCharacters(in: .whitespaces)
-            if let r = message.range(of: "execution error: ") {
+        if let open = candidate.range(of: "(", options: .backwards),
+           candidate.hasSuffix(")"),
+           let code = Int(candidate[open.upperBound..<candidate.index(before: candidate.endIndex)]) {
+            var message = String(candidate[..<open.lowerBound]).trimmingCharacters(in: .whitespaces)
+            if let r = message.range(of: marker) {
                 message = String(message[r.upperBound...])
             }
-            return (message.isEmpty ? text : message, code)
+            return (message.isEmpty ? candidate : message, code)
         }
-        return (text.isEmpty ? "osascript failed with no error output" : text, -1)
+        // Shapeless fallback: STILL strip everything through the marker — the
+        // POSTDISPATCH sentinel is a prefix check downstream, and returning the
+        // raw `path: execution error: ` prefix would silently flip
+        // "refuse to re-send" into "re-send" (verify Lens C P1).
+        var fallback = candidate
+        if let r = fallback.range(of: marker) {
+            fallback = String(fallback[r.upperBound...]).trimmingCharacters(in: .whitespaces)
+        }
+        return (fallback.isEmpty ? "osascript failed with no error output" : fallback, -1)
     }
 
     /// #297: fail fast — with an actionable error — instead of attempting a
@@ -1285,8 +1406,11 @@ actor MailController {
             fallbackReason: { "mailto GUI path failed: \(clampedErrorEcho($0.localizedDescription))" },
             // #242: once the send keystroke has been dispatched the send state
             // is UNKNOWN — refuse the legacy re-send (duplicate outbound risk)
-            // and tell the caller what to check instead.
-            shouldFallback: { !isPostDispatchError($0) },
+            // and tell the caller what to check instead. #301: a TIMEOUT on
+            // this (always-sending) flow is unknown-send-state too — the ONE
+            // script spans ⇧⌘D, so the deadline can fire on either side of it
+            // and the terminated interpreter cannot say which (verify P0).
+            shouldFallback: { !isPostDispatchError($0) && !isTimeoutError($0) },
             mapNoFallbackError: { unknownSendStateError($0) })
     }
 
@@ -1550,6 +1674,8 @@ actor MailController {
         }
 
         // #229: a reply always injects a new body on the legacy path → always disclose.
+        // #301: reply sends unless saved as draft — the timeout gate keys on this.
+        let sendFlow = !saveAsDraft
         return try routeWrapperFreeCompose(
             ineligibilityReason: pasteReplyForwardIneligibilityReasonForCall(format: format),
             cleanPath: {
@@ -1573,7 +1699,7 @@ actor MailController {
             // #254: once the send keystroke has been dispatched (or the
             // success-path tail errored — mail definitely sent), refuse the
             // legacy re-send and surface unknown-send-state (#242 pattern).
-            shouldFallback: { !isPostDispatchError($0) },
+            shouldFallback: { !isPostDispatchError($0) && !(sendFlow && isTimeoutError($0)) },
             mapNoFallbackError: {
                 MailError.scriptFailed(
                     message: "the send keystroke was already dispatched but a GUI step failed "
@@ -1653,6 +1779,8 @@ actor MailController {
         // path — a bodyless forward injects nothing (already wrapper-free), so
         // it bypasses the router entirely and never gets a suffix.
         if let newBody = body {
+            // #301: the with-body forward paste path always dispatches a send.
+            let sendFlow = true
             return try routeWrapperFreeCompose(
                 ineligibilityReason: pasteReplyForwardIneligibilityReasonForCall(format: format),
                 cleanPath: {
@@ -1668,7 +1796,7 @@ actor MailController {
             // #254: once the send keystroke has been dispatched (or the
             // success-path tail errored — mail definitely sent), refuse the
             // legacy re-send and surface unknown-send-state (#242 pattern).
-            shouldFallback: { !isPostDispatchError($0) },
+            shouldFallback: { !isPostDispatchError($0) && !(sendFlow && isTimeoutError($0)) },
             mapNoFallbackError: {
                 MailError.scriptFailed(
                     message: "the send keystroke was already dispatched but a GUI step failed "
@@ -2727,7 +2855,21 @@ enum MailError: LocalizedError {
 /// #301 — tiny reference box so the pipe-drain threads can hand their data
 /// back without capture-semantics friction.
 final class PipeDrainBox: @unchecked Sendable {
-    var data = Data()
+    private let lock = NSLock()
+    private var data = Data()
+    func set(_ d: Data) { lock.lock(); data = d; lock.unlock() }
+    func get() -> Data { lock.lock(); defer { lock.unlock() }; return data }
+}
+
+/// #301 — lock-protected counter of terminated-but-unreaped osascript children
+/// (SIGKILL did not take). Reference type so detached waiter threads can
+/// decrement without touching actor state.
+final class GuiChildAccounting: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func current() -> Int { lock.lock(); defer { lock.unlock() }; return count }
+    func increment() { lock.lock(); count += 1; lock.unlock() }
+    func decrement() { lock.lock(); count = max(0, count - 1); lock.unlock() }
 }
 
 /// #288 — actionable guidance for Automation-TCC denial (-1743), the

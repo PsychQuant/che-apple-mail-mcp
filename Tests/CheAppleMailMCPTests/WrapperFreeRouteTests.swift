@@ -257,8 +257,12 @@ final class SendStageNoRefallbackTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift")
         let source = try String(contentsOf: url, encoding: .utf8)
-        XCTAssertTrue(source.contains("shouldFallback: { !isPostDispatchError($0) }"),
-                      "composeEmail must refuse legacy fallback for post-dispatch send errors (#242)")
+        // #301: the compose gate now ALSO refuses fallback on a send-flow
+        // timeout (the deadline can fire on either side of ⇧⌘D) — the sentinel
+        // consultation this guard pins is unchanged, only strengthened.
+        XCTAssertTrue(source.contains("shouldFallback: { !isPostDispatchError($0) && !isTimeoutError($0) }"),
+                      "composeEmail must refuse legacy fallback for post-dispatch send errors (#242) "
+                      + "and send-flow timeouts (#301)")
         XCTAssertEqual(
             source.components(separatedBy: "isPostDispatchError").count - 1, 4,
             "the three send-capable router sites (composeEmail, replyEmail, forwardEmail) "
