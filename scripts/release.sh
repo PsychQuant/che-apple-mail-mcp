@@ -115,6 +115,22 @@ if [[ "$MANIFEST_VERSION" != "$VERSION_NO_V" ]]; then
   Bump it alongside the CHANGELOG entry (ManifestVersionTests pins the same invariant in CI)."
 fi
 
+# AppVersion.current (the server's self-reported version) MUST match the tag (#303).
+# This is what makes the "2.7.2"-rot impossible to repeat: the compiled MCP handshake
+# serverVersion + the staleness-check baseline both read AppVersion.current, so a tag
+# that disagrees with Version.swift is a release-blocking drift, not a silent mismatch.
+VERSION_SWIFT="Sources/CheAppleMailMCP/Version.swift"
+if [[ ! -f "$VERSION_SWIFT" ]]; then
+    die "$VERSION_SWIFT not found — cannot verify AppVersion.current matches $VERSION_NO_V."
+fi
+APP_VERSION=$(grep -oE 'static let current = "[^"]+"' "$VERSION_SWIFT" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+if [[ -z "$APP_VERSION" ]]; then
+    die "could not parse AppVersion.current from $VERSION_SWIFT."
+fi
+if [[ "$APP_VERSION" != "$VERSION_NO_V" ]]; then
+    die "version drift: AppVersion.current is '$APP_VERSION' but releasing '$VERSION_NO_V'. Update $VERSION_SWIFT to '$VERSION_NO_V' first."
+fi
+
 info "Sanity checks passed."
 
 # ---- Extract release notes ---------------------------------------------------
