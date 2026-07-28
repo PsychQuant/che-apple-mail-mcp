@@ -410,6 +410,14 @@ actor MailController {
     ///   timeout message so it never blames TCC when TCC was verified fine.
     @discardableResult
     private func preflightAutomation() throws -> Bool {
+        // #303: surface staleness ONCE, before any AppleScript work. Never
+        // throws / never refuses — #297's guard already makes a stale ≥v2.24.0
+        // server safe; this only nudges a restart so the user isn't silently
+        // running old features.
+        if let warning = MailController.stalenessWarningOnce(
+            state: &didCheckStaleness, reader: MailController.readVersionSidecar) {
+            FileHandle.standardError.write(Data(("⚠ " + warning + "\n").utf8))
+        }
         switch AutomationStatus.probe() {
         case .denied:
             throw MailError.scriptFailed(
@@ -422,6 +430,35 @@ actor MailController {
         case .notDetermined, .unknown:
             return false
         }
+    }
+
+    /// #303 — one-time-per-process staleness flag (actor-isolated: this actor is
+    /// the singleton every AppleScript tool funnels through, so a single instance
+    /// flag gives an O(1)-amortized check off the hot path).
+    private var didCheckStaleness = false
+
+    /// #303 — testable one-time gate. Returns the warning to emit (or nil) and
+    /// flips `state` so a second call short-circuits without re-reading. Pure
+    /// except for the injected `reader`/`state`; `nonisolated static` so tests
+    /// drive it synchronously with a counting reader.
+    nonisolated static func stalenessWarningOnce(state: inout Bool, reader: () -> String?) -> String? {
+        guard !state else { return nil }
+        state = true
+        return StalenessCheck.evaluate(compiled: AppVersion.current, sidecar: reader())
+    }
+
+    /// #303 — read the wrapper's version sidecar sitting next to THIS running
+    /// executable (`<dir>/.<binary>.version`, written by the auto-download
+    /// wrapper). Fail-open: nil when it can't be located, read, or is blank —
+    /// derived from the executable's own directory, never a hardcoded `~/bin`,
+    /// so a dev build (from `.build/`) or a non-plugin install simply yields nil.
+    nonisolated static func readVersionSidecar() -> String? {
+        guard let exe = Bundle.main.executableURL else { return nil }
+        let sidecar = exe.deletingLastPathComponent()
+            .appendingPathComponent(".\(exe.lastPathComponent).version")
+        guard let contents = try? String(contentsOf: sidecar, encoding: .utf8) else { return nil }
+        let trimmed = contents.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     // MARK: - Account Operations
