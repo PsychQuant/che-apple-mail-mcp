@@ -1275,15 +1275,61 @@ final class ServerSchemaTests: XCTestCase {
             var searchRange = source.startIndex..<source.endIndex
             var found = 0
             while let r = source.range(of: needle, range: searchRange) {
-                let lineEnd = source[r.upperBound...].firstIndex(of: "\n") ?? source.endIndex
-                let call = String(source[r.lowerBound..<lineEnd])
-                XCTAssertTrue(call.contains("accountId: accountId"),
-                              "\(label): mailController.\(needle) fallback must thread accountId; got:\n\(call)")
+                // #299: extract the WHOLE call (paren-balanced) rather than to
+                // end-of-line — a wrapped multi-line call would otherwise yield
+                // just `mailController.getEmail(` and fail spuriously.
+                let (call, _) = Self.balancedCall(in: source, openParenAfter: r)
+                // The invariant: the AppleScript fallback never drops the account
+                // selector. Pre-#299 this was pinned as the literal
+                // `accountId: accountId`. #299 introduced two more legitimate
+                // spellings (the resolved selector), so the check became an
+                // ALLOW-LIST rather than a substring relaxation — verify (Lens C)
+                // showed that `contains("accountId:")` + not-nil would have let
+                // `accountId: accountName` through, which is the #101/#180 bug
+                // this guard exists to catch, verbatim. A novel spelling must
+                // fail loudly and force a human decision.
+                let permitted = [
+                    "accountId: accountId",             // every pre-#299 call site
+                    "accountId: addressing.accountId",  // #299 get_email primary
+                    "accountId: retry.accountId",       // #299 get_email derived retry
+                ]
+                XCTAssertTrue(permitted.contains(where: { call.contains($0) }),
+                              "\(label): mailController.\(needle) must thread a resolved accountId "
+                              + "(one of \(permitted)). A new spelling needs review — do NOT relax "
+                              + "this to a bare `accountId:` check; got:\n\(call)")
                 found += 1
-                searchRange = lineEnd..<source.endIndex
+                // Advance minimally (verify Lens C): jumping past the whole call
+                // could skip a subsequent site if `balancedCall` over-ran on a
+                // paren inside a string literal or comment — silently shrinking
+                // coverage while still satisfying a `> 0` floor. Re-examining a
+                // self-nested same-needle call twice is harmless.
+                searchRange = r.upperBound..<source.endIndex
             }
             XCTAssertGreaterThan(found, 0, "\(label): expected ≥1 \(needle) call site")
         }
+    }
+
+    /// Extract a paren-balanced call expression starting at the `(` that ends
+    /// `range` (the matched `…foo(` needle). Returns the call text and the index
+    /// just past its closing paren. Falls back to end-of-line if unbalanced.
+    private static func balancedCall(in source: String,
+                                     openParenAfter range: Range<String.Index>) -> (String, String.Index) {
+        var depth = 0
+        var i = source.index(before: range.upperBound)   // the '(' itself
+        while i < source.endIndex {
+            let c = source[i]
+            if c == "(" { depth += 1 }
+            if c == ")" {
+                depth -= 1
+                if depth == 0 {
+                    let end = source.index(after: i)
+                    return (String(source[range.lowerBound..<end]), end)
+                }
+            }
+            i = source.index(after: i)
+        }
+        let lineEnd = source[range.upperBound...].firstIndex(of: "\n") ?? source.endIndex
+        return (String(source[range.lowerBound..<lineEnd]), lineEnd)
     }
 
     /// Brace-balanced extraction of a Swift method body from source text,
