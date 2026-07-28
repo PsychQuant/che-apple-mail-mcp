@@ -610,13 +610,44 @@ func requireWrapperFreeRefusal(reason: String) -> String {
         + "legacy path (body wrapped in <blockquote type=\"cite\"> on some mobile clients)."
 }
 
+/// #301 — true when the error is the script-deadline timeout. On a SENDING
+/// clean path a timeout is an unknown-send-state condition of its own: the
+/// whole keystroke flow (including ⇧⌘D and its post-dispatch tail) is ONE
+/// script, so the deadline can expire on either side of the send keystroke —
+/// and the terminated interpreter can no longer report which. The #242
+/// POSTDISPATCH sentinel only classifies `.scriptFailed` errors thrown BY the
+/// script; a timeout never carries the sentinel, so without this predicate it
+/// would sail through `!isPostDispatchError` into the legacy re-send — the
+/// duplicate-outbound hazard the sentinel exists to prevent (verify #301,
+/// regression lens P0). Draft flows deliberately do NOT gate on this: a
+/// duplicated draft is visible and harmless, and keeping their fallback is
+/// what un-hangs draft creation (#301's own goal).
+func isTimeoutError(_ error: Error) -> Bool {
+    if case MailError.scriptTimedOut = error { return true }
+    return false
+}
+
 /// #242/#239 — the canonical unknown-send-state error for a compose-family
 /// send whose dispatch was already attempted: names the hazard, directs the
 /// caller to check Sent/Outbox, and explicitly forbids a retry (an
 /// auto-retrying LLM caller would otherwise re-send — the exact duplicate
 /// hazard the sentinel exists to prevent). Shared by the default path's
 /// router hook and the #239 strict branch.
+///
+/// #301: a send-flow TIMEOUT gets its own wording — the send keystroke may or
+/// may not have fired (the interpreter was terminated mid-flight and cannot
+/// say), which is a different honest statement than "was already dispatched".
 func unknownSendStateError(_ error: Error) -> MailError {
+    if isTimeoutError(error) {
+        return MailError.scriptFailed(
+            message: "the GUI send flow hit its deadline and was terminated mid-flight — "
+                + "the send keystroke may or may not have fired, so the send state is "
+                + "UNKNOWN. NOT retrying via the legacy path (that could send a "
+                + "duplicate). Check Mail's Sent mailbox / Outbox and any leftover "
+                + "compose window before re-sending. Original error: "
+                + clampedErrorEcho(error.localizedDescription),
+            code: -1)
+    }
     return MailError.scriptFailed(
         message: "the send keystroke was already dispatched but the GUI step failed "
             + "afterwards — the send state is UNKNOWN and the mail may already be on "
