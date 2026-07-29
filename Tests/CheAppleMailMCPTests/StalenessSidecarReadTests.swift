@@ -72,6 +72,14 @@ final class StalenessSidecarReadTests: XCTestCase {
     /// the bound *executable* — a regression to a blocking `open()` produces a
     /// red test instead of a wedged run.
     ///
+    /// Scope, precisely: only the FIFO case can actually hang, because only a
+    /// FIFO's `open()` has wait-for-the-peer semantics (drop `O_NONBLOCK` and
+    /// `open(O_RDONLY)` blocks until a writer appears). `read` on a character
+    /// device is bounded by the count argument, and on a regular file does not
+    /// block at all — so those two could not wedge even without this helper.
+    /// It is applied uniformly anyway: cheap, and it keeps the bound honest if
+    /// the implementation later changes which syscall does the work.
+    ///
     /// Residual, stated: on timeout the worker thread is leaked, because the
     /// blocking syscall is uncancellable. That is the same tradeoff #297 took
     /// in production for `NSAppleScript`; the point is to bound the *test*, not
