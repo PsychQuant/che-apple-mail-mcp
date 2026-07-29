@@ -41,6 +41,33 @@ final class StalenessSidecarReadTests: XCTestCase {
         XCTAssertNil(MailController.readVersionSidecar(at: path("nope.version")))
     }
 
+    /// #303 verify round 3 — truncation must not CREATE a valid version.
+    ///
+    /// Reading exactly the cap silently changed meaning: a 65-byte file whose
+    /// full content is `"99.0.0" + 58 spaces + "X"` — not a version — trimmed
+    /// down to exactly `"99.0.0"` and raised a bogus drift warning from corrupt
+    /// input, breaking the fail-open invariant this function guarantees.
+    /// Reading cap+1 makes "larger than the cap" detectable, so it is rejected.
+    func testOversizedByOneByte_rejectedNotTruncatedIntoAValidVersion() throws {
+        let p = path("trunc.version")
+        try ("99.0.0" + String(repeating: " ", count: 58) + "X")
+            .write(toFile: p, atomically: true, encoding: .utf8)
+
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: p)).count, 65, "precondition: 65 bytes")
+        XCTAssertNil(MailController.readVersionSidecar(at: p),
+            "a file larger than the cap must be REJECTED — truncating it yields '99.0.0', "
+            + "a valid-looking version manufactured out of corrupt input")
+    }
+
+    func testExactlyAtTheCap_isAccepted() throws {
+        let p = path("atcap.version")
+        try ("2.26.0" + String(repeating: " ", count: 58))
+            .write(toFile: p, atomically: true, encoding: .utf8)
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: p)).count, 64, "precondition: exactly 64")
+        XCTAssertEqual(MailController.readVersionSidecar(at: p), "2.26.0",
+                       "a file exactly at the cap is still valid — the boundary is inclusive")
+    }
+
     func testBlankAndWhitespaceOnly_failOpen() throws {
         let blank = path("blank.version")
         try "".write(toFile: blank, atomically: true, encoding: .utf8)

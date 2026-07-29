@@ -31,16 +31,52 @@ actor MailController {
     /// production default (`defaultScriptTimeout`).
     private var scriptTimeoutOverride: TimeInterval?
 
+    /// #303: when set, the staleness check reads through this closure instead
+    /// of the real sidecar file, and writes through `stalenessSinkOverride`
+    /// instead of stderr.
+    ///
+    /// These exist because the round-2 source guards — which asserted that the
+    /// text `"stalenessWarningOnce"` appeared inside `preflightAutomation`'s
+    /// source — could not actually prove the call *executes*. A decoy string
+    /// (`_ = "stalenessWarningOnce didWarnStaleness"`) passed every assertion
+    /// with the real wiring deleted (#303 verify round 3). Text is not
+    /// behavior; only calling the real function and observing its effect is.
+    private var stalenessReaderOverride: (() -> String?)?
+    private var stalenessSinkOverride: ((String) -> Void)?
+
     func setTestSeams(
         scriptRunner: ((String) throws -> String)?,
         ineligibility: (() -> String?)?,
         openURL: ((URL) -> Bool)? = nil,
-        scriptTimeout: TimeInterval? = nil
+        scriptTimeout: TimeInterval? = nil,
+        stalenessReader: (() -> String?)? = nil,
+        stalenessSink: ((String) -> Void)? = nil
     ) {
         scriptRunnerOverride = scriptRunner
         ineligibilityOverride = ineligibility
         openURLOverride = openURL
         scriptTimeoutOverride = scriptTimeout
+        stalenessReaderOverride = stalenessReader
+        stalenessSinkOverride = stalenessSink
+    }
+
+    /// #303 — re-arm the warn-once gate. Test-only: the controller is a
+    /// process-wide singleton, so without this a test that triggers the warning
+    /// would leave the gate consumed for every test that runs after it.
+    func resetStalenessGateForTesting() {
+        didWarnStaleness = false
+    }
+
+    /// #303 — run the staleness check exactly as `preflightAutomation()` does,
+    /// exposed `internal` so behavioral tests can call the REAL code path.
+    /// Deleting its invocation from `preflightAutomation` now breaks a
+    /// behavioral test, not merely a text grep.
+    func runStalenessCheck() {
+        if let warning = MailController.stalenessWarningOnce(
+            state: &didWarnStaleness,
+            reader: stalenessReaderOverride ?? MailController.readVersionSidecar) {
+            (stalenessSinkOverride ?? { FileHandle.standardError.write(Data(("⚠ " + $0 + "\n").utf8)) })(warning)
+        }
     }
 
     // MARK: - AppleScript Execution
@@ -416,10 +452,7 @@ actor MailController {
         // ≥v2.24.0 server safe for execution, so refusing would break a working
         // session; this only nudges a restart. The read itself is bounded at
         // the syscall (verify B1) because this point is OUTSIDE that guard.
-        if let warning = MailController.stalenessWarningOnce(
-            state: &didWarnStaleness, reader: MailController.readVersionSidecar) {
-            FileHandle.standardError.write(Data(("⚠ " + warning + "\n").utf8))
-        }
+        runStalenessCheck()
         switch AutomationStatus.probe() {
         case .denied:
             throw MailError.scriptFailed(
@@ -515,9 +548,18 @@ actor MailController {
         var info = stat()
         guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return nil }
 
-        var buffer = [UInt8](repeating: 0, count: versionSidecarByteCap)
-        let n = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, versionSidecarByteCap) }
-        guard n > 0 else { return nil }
+        // Read cap+1 so "file is larger than the cap" is DETECTABLE rather than
+        // silently truncated. Truncating at exactly the cap changes meaning:
+        // a 65-byte `"99.0.0" + 58 spaces + "X"` — whose full content is NOT a
+        // version — trims down to exactly "99.0.0" and would raise a bogus
+        // drift warning from corrupt input, breaking the fail-open invariant
+        // this function is supposed to guarantee (#303 verify round 3).
+        // Anything over the cap is rejected outright: a real sidecar is
+        // `"2.25.0\n"`-sized, so oversize means corrupt, not merely verbose.
+        let probe = versionSidecarByteCap + 1
+        var buffer = [UInt8](repeating: 0, count: probe)
+        let n = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, probe) }
+        guard n > 0, n <= versionSidecarByteCap else { return nil }
 
         guard let text = String(bytes: buffer[0..<n], encoding: .utf8) else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)

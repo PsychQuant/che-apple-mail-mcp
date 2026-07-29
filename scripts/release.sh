@@ -123,28 +123,32 @@ VERSION_SWIFT="Sources/CheAppleMailMCP/Version.swift"
 if [[ ! -f "$VERSION_SWIFT" ]]; then
     die "$VERSION_SWIFT not found — cannot verify AppVersion.current matches $VERSION_NO_V."
 fi
-# Strip comments BEFORE extracting (#303 verify rounds 1-2). Two bypasses were
-# found here in sequence, and they are the same defect class:
-#   1. unanchored `grep | head -1` matched `// static let current = "9.9.9"`.
-#   2. anchoring at line start fixed THAT case but not a block comment —
-#        /*
-#        static let current = "9.9.9"
-#        */
-#      whose inner line begins with `static`, so the anchor matched and the
-#      release would ship a binary whose serverVersion disagreed with its tag.
-# Anchoring treated one instance; the class is "commented-out code is still
-# text". So remove /* */ (via awk) and // (via sed) first, then extract from
-# what actually compiles. If that leaves no match, the -z check below fails the
-# release closed rather than letting drift through.
+# COMPILE the value; do not parse for it (#303 verify rounds 1-3).
+#
+# Three text-matching attempts were defeated in sequence, each by a different
+# piece of legal Swift, and each "fix" only covered the instance it was shown:
+#   1. unanchored grep matched `// static let current = "9.9.9"`.
+#   2. anchoring at line start missed a block comment, whose inner line begins
+#      with `static`.
+#   3. a hand-rolled comment stripper missed NESTED block comments (Swift
+#      permits them; a boolean cannot track depth) and, more fundamentally,
+#      missed a multi-line string literal containing a fake declaration:
+#          private static let example = """
+#          static let current = "9.9.9"
+#          """
+#      which is not a comment at all and no comment-stripper can help with.
+#
+# Every one of those would have shipped a binary whose handshake version
+# disagreed with its tag — silently. The class is "recognising Swift requires a
+# Swift parser", so ask the compiler for the value instead of guessing at it.
+# This is also less code than the lexer it replaces.
 APP_VERSION=$(
-    awk '
-        inblk { if (sub(/^.*\*\//, "")) inblk = 0; else next }   # inside /* */: drop until the closer
-        { gsub(/\/\*[^*]*\*\//, "") }                            # same-line /* ... */
-        /\/\*/ { sub(/\/\*.*$/, ""); inblk = 1 }                 # an unterminated /* opens a block
-        { print }
-    ' "$VERSION_SWIFT" \
-    | sed -E 's://.*$::' \
-    | grep -oE '^[[:space:]]*static let current = "[^"]+"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/'
+    tmp=$(mktemp -d) || die "could not create temp dir for the version probe."
+    trap 'rm -rf "$tmp"' RETURN
+    cp "$VERSION_SWIFT" "$tmp/Version.swift"
+    printf 'print(AppVersion.current)\n' > "$tmp/main.swift"
+    xcrun swiftc -O "$tmp/Version.swift" "$tmp/main.swift" -o "$tmp/probe" 2>/dev/null \
+        && "$tmp/probe" 2>/dev/null
 )
 if [[ -z "$APP_VERSION" ]]; then
     die "could not parse AppVersion.current from $VERSION_SWIFT."
