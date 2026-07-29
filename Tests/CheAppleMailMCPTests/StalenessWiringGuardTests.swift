@@ -19,7 +19,87 @@ final class StalenessWiringGuardTests: XCTestCase {
             .deletingLastPathComponent()   // <package root>/
             .appendingPathComponent("Sources/CheAppleMailMCP")
             .appendingPathComponent(relativePath)
-        return try String(contentsOf: root, encoding: .utf8)
+        return Self.strippingComments(try String(contentsOf: root, encoding: .utf8))
+    }
+
+    /// Remove `//` and `/* */` comments before any `contains` check.
+    ///
+    /// Without this the guards were defeated by *commenting the wiring out*
+    /// rather than deleting it: the identifiers survive inside the comment, so
+    /// a lexical `contains` still matched and the guard passed on code that no
+    /// longer ran (#303 verify round 2). Deleting the lines was the only
+    /// mutation the guards were originally proven against — which is exactly
+    /// the blind spot: a guard tested only against the mutation its author
+    /// imagined is calibrated to that imagination, not to the defect class.
+    ///
+    /// Deliberately simple: this is a guard over our own source, not a Swift
+    /// lexer. It does not model string literals containing comment markers —
+    /// acceptable because a false *failure* is loud and immediately fixable,
+    /// whereas the false *pass* it replaces was silent.
+    static func strippingComments(_ source: String) -> String {
+        var out = ""
+        var inBlock = false, inLine = false, i = source.startIndex
+        while i < source.endIndex {
+            let c = source[i]
+            let next = source.index(after: i)
+            let pair = next < source.endIndex ? String([c, source[next]]) : ""
+
+            if inLine {
+                if c == "\n" { inLine = false; out.append(c) }
+            } else if inBlock {
+                if pair == "*/" { inBlock = false; i = next }
+            } else if pair == "//" {
+                inLine = true; i = next
+            } else if pair == "/*" {
+                inBlock = true; i = next
+            } else {
+                out.append(c)
+            }
+            i = source.index(after: i)
+        }
+        return out
+    }
+
+    /// Extract a function body by BRACE BALANCING from its signature, rather
+    /// than a fixed-size character window. A fixed window silently stops
+    /// covering the thing it guards once the function grows past it, and can
+    /// also over-run into unrelated following members — both failure modes are
+    /// silent false-passes (#303 verify round 2).
+    static func functionBody(_ source: String, startingWith signature: String) -> String? {
+        guard let sigRange = source.range(of: signature),
+              let openBrace = source[sigRange.lowerBound...].firstIndex(of: "{")
+        else { return nil }
+
+        var depth = 0
+        var i = openBrace
+        while i < source.endIndex {
+            if source[i] == "{" { depth += 1 }
+            if source[i] == "}" {
+                depth -= 1
+                if depth == 0 { return String(source[openBrace...i]) }
+            }
+            i = source.index(after: i)
+        }
+        return nil   // unbalanced — treat as not found, caller fails loudly
+    }
+
+    // MARK: - the comment-stripper itself must work (it is load-bearing)
+
+    func testStripsBothCommentForms() {
+        let stripped = Self.strippingComments("""
+        keep1
+        // gone_line
+        keep2 /* gone_block */ keep3
+        /*
+        gone_multiline
+        */
+        keep4
+        """)
+        XCTAssertTrue(stripped.contains("keep1") && stripped.contains("keep2")
+                      && stripped.contains("keep3") && stripped.contains("keep4"))
+        for gone in ["gone_line", "gone_block", "gone_multiline"] {
+            XCTAssertFalse(stripped.contains(gone), "'\(gone)' must not survive stripping")
+        }
     }
 
     // MARK: - #5: the staleness check is actually wired into the chokepoint
@@ -27,11 +107,9 @@ final class StalenessWiringGuardTests: XCTestCase {
     func testPreflightAutomation_stillInvokesTheStalenessCheck() throws {
         let src = try source("AppleScript/MailController.swift")
 
-        guard let preflightRange = src.range(of: "private func preflightAutomation() throws -> Bool {") else {
+        guard let body = Self.functionBody(src, startingWith: "private func preflightAutomation() throws -> Bool") else {
             return XCTFail("preflightAutomation() not found — this guard's anchor moved; re-point it")
         }
-        // Body runs from the signature to the next top-level member.
-        let body = src[preflightRange.lowerBound...].prefix(1200)
 
         XCTAssertTrue(body.contains("stalenessWarningOnce"),
             "the staleness check must remain wired into preflightAutomation — the chokepoint "
@@ -47,10 +125,9 @@ final class StalenessWiringGuardTests: XCTestCase {
     func testSidecarRead_usesBoundedSyscallsNotStringContentsOf() throws {
         let src = try source("AppleScript/MailController.swift")
 
-        guard let range = src.range(of: "static func readVersionSidecar(at path: String) -> String? {") else {
+        guard let body = Self.functionBody(src, startingWith: "static func readVersionSidecar(at path: String) -> String?") else {
             return XCTFail("readVersionSidecar(at:) not found — re-point this guard")
         }
-        let body = src[range.lowerBound...].prefix(1200)
 
         XCTAssertTrue(body.contains("O_NOFOLLOW"), "must refuse a planted symlink")
         XCTAssertTrue(body.contains("O_NONBLOCK"), "must not block on a FIFO")

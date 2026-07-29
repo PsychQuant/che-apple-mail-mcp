@@ -63,35 +63,63 @@ final class StalenessSidecarReadTests: XCTestCase {
                      "O_NOFOLLOW must refuse a planted symlink (ELOOP), not follow it")
     }
 
+    /// Run `body` on a detached thread and fail (rather than hang) if it does
+    /// not finish within `deadline`.
+    ///
+    /// Measuring `Date()` around a synchronous call is NOT a timeout: if the
+    /// call blocks, control never reaches the assertion and the whole suite
+    /// hangs until an external CI kill (#303 verify round 2, Codex). This makes
+    /// the bound *executable* — a regression to a blocking `open()` produces a
+    /// red test instead of a wedged run.
+    ///
+    /// Residual, stated: on timeout the worker thread is leaked, because the
+    /// blocking syscall is uncancellable. That is the same tradeoff #297 took
+    /// in production for `NSAppleScript`; the point is to bound the *test*, not
+    /// to pretend the syscall was cancelled.
+    private func withDeadline<T>(_ deadline: TimeInterval,
+                                 _ body: @escaping () -> T,
+                                 file: StaticString = #filePath,
+                                 line: UInt = #line) -> T? {
+        let done = DispatchSemaphore(value: 0)
+        let box = ResultBox<T>()
+        Thread.detachNewThread { box.value = body(); done.signal() }
+        if done.wait(timeout: .now() + deadline) == .timedOut {
+            XCTFail("blocked for more than \(deadline)s — the read is not bounded",
+                    file: file, line: line)
+            return nil
+        }
+        return box.value
+    }
+
+    private final class ResultBox<T>: @unchecked Sendable { var value: T? }
+
     /// The B1 proof. A reader-less FIFO is the one-command DoS
     /// (`mkfifo ~/bin/.CheAppleMailMCP.version`) that would otherwise wedge the
-    /// actor forever. Returning nil is necessary but NOT sufficient evidence —
-    /// only the time bound proves we did not block.
+    /// actor — and with it every AppleScript-backed tool — forever.
+    ///
+    /// Two independent defenses cover this: `O_NONBLOCK` stops `open()` from
+    /// waiting for a writer, and the subsequent `read` returns `EAGAIN`, caught
+    /// by `guard n > 0`. (Mutation testing confirms the FIFO case survives even
+    /// with the `fstat` check removed — `fstat`'s distinct job is the character
+    /// device case below.)
     func testFifo_failsFastDoesNotHang() throws {
         let p = path("fifo.version")
         guard mkfifo(p, 0o644) == 0 else {
             throw XCTSkip("mkfifo unavailable in this environment (errno \(errno))")
         }
 
-        let started = Date()
-        let result = MailController.readVersionSidecar(at: p)
-        let elapsed = Date().timeIntervalSince(started)
-
-        XCTAssertNil(result, "a FIFO is not a regular file — must be rejected")
-        XCTAssertLessThan(elapsed, 2.0,
-            "must fail FAST: an unbounded open/read on a reader-less FIFO blocks forever "
-            + "and would stall every AppleScript tool behind this actor (#303 verify B1)")
+        let result = withDeadline(2.0) { MailController.readVersionSidecar(at: p) }
+        XCTAssertEqual(result, .some(nil), "a reader-less FIFO must be rejected, promptly")
     }
 
     func testCharacterDevice_isRejected() {
-        // /dev/zero opens fine and yields endless bytes — the fstat S_ISREG
-        // check is what stops an unbounded read, not the byte cap alone.
-        let started = Date()
-        let result = MailController.readVersionSidecar(at: "/dev/zero")
-        let elapsed = Date().timeIntervalSince(started)
-
-        XCTAssertNil(result, "a character device must be rejected (not S_ISREG)")
-        XCTAssertLessThan(elapsed, 2.0, "and must not read endlessly")
+        // /dev/zero opens fine and reads happily — the 64-byte cap alone would
+        // already bound it, so what `fstat`/S_ISREG contributes here is
+        // REJECTION (nil rather than 64 NUL bytes), not boundedness. Removing
+        // the fstat check turns this test red; removing it does NOT affect the
+        // FIFO case above. The two checks cover different threats.
+        let result = withDeadline(2.0) { MailController.readVersionSidecar(at: "/dev/zero") }
+        XCTAssertEqual(result, .some(nil), "a character device must be rejected (not S_ISREG)")
     }
 
     func testDirectory_isRejected() {
@@ -106,11 +134,9 @@ final class StalenessSidecarReadTests: XCTestCase {
         try String(repeating: "A", count: 8 * 1024 * 1024)
             .write(toFile: p, atomically: true, encoding: .utf8)
 
-        let started = Date()
-        let result = MailController.readVersionSidecar(at: p)
-        let elapsed = Date().timeIntervalSince(started)
-
-        XCTAssertLessThan(elapsed, 2.0, "the read must be byte-capped, not file-sized")
+        guard let result = withDeadline(2.0, { MailController.readVersionSidecar(at: p) }) else {
+            return   // withDeadline already failed the test
+        }
         // 'AAAA…' is not a semver, so evaluate() fails open regardless; what
         // matters is that only the capped prefix was ever read into memory.
         XCTAssertNil(StalenessCheck.evaluate(compiled: "2.25.0", sidecar: result),

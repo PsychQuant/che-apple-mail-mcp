@@ -123,13 +123,29 @@ VERSION_SWIFT="Sources/CheAppleMailMCP/Version.swift"
 if [[ ! -f "$VERSION_SWIFT" ]]; then
     die "$VERSION_SWIFT not found — cannot verify AppVersion.current matches $VERSION_NO_V."
 fi
-# Anchored at line start (#303 verify #6): the previous unanchored pattern with
-# `head -1` would match a commented-out `// static let current = "..."` sitting
-# above the real declaration, and happily release a binary whose serverVersion
-# disagreed with the tag. Requiring the line to BEGIN with the declaration means
-# any commented form is skipped; if that leaves no match, the -z check below
-# fails the release closed rather than letting drift through.
-APP_VERSION=$(grep -oE '^[[:space:]]*static let current = "[^"]+"' "$VERSION_SWIFT" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+# Strip comments BEFORE extracting (#303 verify rounds 1-2). Two bypasses were
+# found here in sequence, and they are the same defect class:
+#   1. unanchored `grep | head -1` matched `// static let current = "9.9.9"`.
+#   2. anchoring at line start fixed THAT case but not a block comment —
+#        /*
+#        static let current = "9.9.9"
+#        */
+#      whose inner line begins with `static`, so the anchor matched and the
+#      release would ship a binary whose serverVersion disagreed with its tag.
+# Anchoring treated one instance; the class is "commented-out code is still
+# text". So remove /* */ (via awk) and // (via sed) first, then extract from
+# what actually compiles. If that leaves no match, the -z check below fails the
+# release closed rather than letting drift through.
+APP_VERSION=$(
+    awk '
+        inblk { if (sub(/^.*\*\//, "")) inblk = 0; else next }   # inside /* */: drop until the closer
+        { gsub(/\/\*[^*]*\*\//, "") }                            # same-line /* ... */
+        /\/\*/ { sub(/\/\*.*$/, ""); inblk = 1 }                 # an unterminated /* opens a block
+        { print }
+    ' "$VERSION_SWIFT" \
+    | sed -E 's://.*$::' \
+    | grep -oE '^[[:space:]]*static let current = "[^"]+"' | head -1 | sed -E 's/.*"([^"]+)".*/\1/'
+)
 if [[ -z "$APP_VERSION" ]]; then
     die "could not parse AppVersion.current from $VERSION_SWIFT."
 fi
