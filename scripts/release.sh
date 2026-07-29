@@ -123,7 +123,13 @@ VERSION_SWIFT="Sources/CheAppleMailMCP/Version.swift"
 if [[ ! -f "$VERSION_SWIFT" ]]; then
     die "$VERSION_SWIFT not found — cannot verify AppVersion.current matches $VERSION_NO_V."
 fi
-APP_VERSION=$(grep -oE 'static let current = "[^"]+"' "$VERSION_SWIFT" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+# Anchored at line start (#303 verify #6): the previous unanchored pattern with
+# `head -1` would match a commented-out `// static let current = "..."` sitting
+# above the real declaration, and happily release a binary whose serverVersion
+# disagreed with the tag. Requiring the line to BEGIN with the declaration means
+# any commented form is skipped; if that leaves no match, the -z check below
+# fails the release closed rather than letting drift through.
+APP_VERSION=$(grep -oE '^[[:space:]]*static let current = "[^"]+"' "$VERSION_SWIFT" | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
 if [[ -z "$APP_VERSION" ]]; then
     die "could not parse AppVersion.current from $VERSION_SWIFT."
 fi

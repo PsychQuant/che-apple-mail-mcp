@@ -410,12 +410,14 @@ actor MailController {
     ///   timeout message so it never blames TCC when TCC was verified fine.
     @discardableResult
     private func preflightAutomation() throws -> Bool {
-        // #303: surface staleness ONCE, before any AppleScript work. Never
-        // throws / never refuses — #297's guard already makes a stale ≥v2.24.0
-        // server safe; this only nudges a restart so the user isn't silently
-        // running old features.
+        // #303: surface staleness before any AppleScript work — warn ONCE, but
+        // keep checking until there is something to warn about (verify B2).
+        // Never throws / never refuses: #297's guard already makes a stale
+        // ≥v2.24.0 server safe for execution, so refusing would break a working
+        // session; this only nudges a restart. The read itself is bounded at
+        // the syscall (verify B1) because this point is OUTSIDE that guard.
         if let warning = MailController.stalenessWarningOnce(
-            state: &didCheckStaleness, reader: MailController.readVersionSidecar) {
+            state: &didWarnStaleness, reader: MailController.readVersionSidecar) {
             FileHandle.standardError.write(Data(("⚠ " + warning + "\n").utf8))
         }
         switch AutomationStatus.probe() {
@@ -432,32 +434,93 @@ actor MailController {
         }
     }
 
-    /// #303 — one-time-per-process staleness flag (actor-isolated: this actor is
-    /// the singleton every AppleScript tool funnels through, so a single instance
-    /// flag gives an O(1)-amortized check off the hot path).
-    private var didCheckStaleness = false
+    /// #303 — "已經警告過了嗎", NOT "已經檢查過了嗎" (verify B2).
+    ///
+    /// The original spelling (`didCheckStaleness`) consumed the gate on the
+    /// FIRST call regardless of outcome. `Server.swift`'s startup
+    /// `checkForNewMail()` reaches `preflightAutomation()` during `init()`,
+    /// before the transport starts — at which point the sidecar necessarily
+    /// still matches the running binary, so it burned the gate on a guaranteed
+    /// no-drift result and every later call short-circuited. That killed the
+    /// feature in exactly the long-lived-window scenario #303 exists for.
+    private var didWarnStaleness = false
 
-    /// #303 — testable one-time gate. Returns the warning to emit (or nil) and
-    /// flips `state` so a second call short-circuits without re-reading. Pure
-    /// except for the injected `reader`/`state`; `nonisolated static` so tests
-    /// drive it synchronously with a counting reader.
+    /// #303 — testable warn-once gate. Consumes `state` **only when a warning
+    /// is actually produced**, so a no-drift result leaves the gate armed and a
+    /// drift appearing hours later is still caught. `nonisolated static` so
+    /// tests drive it synchronously with a counting reader.
+    ///
+    /// Re-reading on every preflight until a warning fires is deliberate: the
+    /// read is bounded (see `readVersionSidecar(at:)`) to a few syscalls,
+    /// negligible next to the `AutomationStatus.probe()` Apple Event already on
+    /// this path — and per `.claude/rules/r-must-direct-db.md` most *read*
+    /// tools go through SQLite and never reach here at all, so this is
+    /// user-paced, not a hot path. A time-based throttle was rejected: it would
+    /// reintroduce a smaller version of the detection gap above plus extra
+    /// mutable state.
     nonisolated static func stalenessWarningOnce(state: inout Bool, reader: () -> String?) -> String? {
         guard !state else { return nil }
-        state = true
-        return StalenessCheck.evaluate(compiled: AppVersion.current, sidecar: reader())
+        guard let warning = StalenessCheck.evaluate(compiled: AppVersion.current, sidecar: reader())
+        else { return nil }          // no drift → gate stays armed
+        state = true                 // warned once; stay quiet from here on
+        return warning
     }
 
-    /// #303 — read the wrapper's version sidecar sitting next to THIS running
-    /// executable (`<dir>/.<binary>.version`, written by the auto-download
-    /// wrapper). Fail-open: nil when it can't be located, read, or is blank —
-    /// derived from the executable's own directory, never a hardcoded `~/bin`,
-    /// so a dev build (from `.build/`) or a non-plugin install simply yields nil.
+    /// Max bytes read from the sidecar. A version string is `"2.25.0"`-sized;
+    /// 64 is generous and bounds a huge or corrupt file.
+    private static let versionSidecarByteCap = 64
+
+    /// #303 — locate the wrapper's version sidecar next to THIS running
+    /// executable (`<dir>/.<binary>.version`). Derived from the executable's
+    /// own directory, never a hardcoded `~/bin`, so a dev build (from
+    /// `.build/`) or a non-plugin install simply finds nothing.
     nonisolated static func readVersionSidecar() -> String? {
         guard let exe = Bundle.main.executableURL else { return nil }
         let sidecar = exe.deletingLastPathComponent()
             .appendingPathComponent(".\(exe.lastPathComponent).version")
-        guard let contents = try? String(contentsOf: sidecar, encoding: .utf8) else { return nil }
-        let trimmed = contents.trimmingCharacters(in: .whitespacesAndNewlines)
+        return readVersionSidecar(at: sidecar.path)
+    }
+
+    /// #303 verify B1 — the bounded read, split out so the live layer is
+    /// directly testable (the seam whose absence let B1/B2 through review).
+    ///
+    /// This runs in `preflightAutomation()`, which callers invoke BEFORE
+    /// `runGuarded` — so it is NOT covered by #297's deadline, and it occupies
+    /// the serial executor of this process-wide singleton actor. An unbounded
+    /// read here would stall every AppleScript-backed tool indefinitely. The
+    /// defense mirrors `ExportDirLock.acquire` (#236), which solved this exact
+    /// primitive (fixed path in a user-writable directory):
+    ///
+    /// - `O_NOFOLLOW` refuses a planted symlink (`ELOOP`).
+    /// - `O_NONBLOCK` keeps `open()` from blocking on a FIFO.
+    /// - `fstat` + `S_ISREG` rejects anything that is not a regular file, so a
+    ///   FIFO or a character device like `/dev/zero` (endless reads) is out.
+    /// - a single capped `read` bounds a huge or corrupt regular file.
+    ///
+    /// `O_CLOEXEC` is deliberately omitted, matching the `ExportDirLock` call
+    /// site's documented reasoning rather than cargo-culting it.
+    ///
+    /// Fail-open everywhere: any failure yields nil (no warning), because a
+    /// spurious restart nag is worse than the staleness it would report.
+    ///
+    /// Residual, stated not hidden: `O_NONBLOCK` does not defeat a hard-mounted
+    /// network filesystem, where `open()` can still block uninterruptibly. That
+    /// is pathological for an executable's own directory — the same mount would
+    /// stall `exec` of this binary — and is out of scope.
+    nonisolated static func readVersionSidecar(at path: String) -> String? {
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+
+        var info = stat()
+        guard fstat(fd, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return nil }
+
+        var buffer = [UInt8](repeating: 0, count: versionSidecarByteCap)
+        let n = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, versionSidecarByteCap) }
+        guard n > 0 else { return nil }
+
+        guard let text = String(bytes: buffer[0..<n], encoding: .utf8) else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 
