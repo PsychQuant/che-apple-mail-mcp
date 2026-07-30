@@ -30,4 +30,10 @@ case .checkFDA:
     SetupCLI.runCheckFDA()
 case .setup:
     await SetupWindow.run()
+case .version:
+    // #303: lets `scripts/release.sh` interrogate the ACTUAL shipped artifact
+    // (each slice of the universal binary) instead of separately compiling a
+    // host-only probe — which a legal `#if arch(...)` or `#if compiler(...)`
+    // in Version.swift could make disagree with what ships.
+    print(AppVersion.current)
 }

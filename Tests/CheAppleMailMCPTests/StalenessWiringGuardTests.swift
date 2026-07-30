@@ -1,107 +1,123 @@
 import XCTest
 @testable import CheAppleMailMCP
 
-/// #303 verify round 3 — BEHAVIORAL wiring tests, replacing the text-based
-/// source guards that used to live here.
+/// #303 verify round 4 — wiring proven against the REAL reader and REAL stderr,
+/// with no test seams in production code.
 ///
-/// Those guards asserted that the string `"stalenessWarningOnce"` appeared
-/// inside `preflightAutomation`'s source. Round 3 showed that cannot work:
+/// The lineage of this file is the lesson:
+///   R2: text guards (`contains("stalenessWarningOnce")`) — defeated by
+///       commenting the code out.
+///   R3: better text guards — defeated outright by a decoy string, by nested
+///       block comments, and by `{` in a string literal. Text is not behavior.
+///   R4: behavioral tests via injected seams — defeated by
+///       `guard stalenessReaderOverride != nil else { return }`, because a test
+///       must ENABLE the seam to control the version it reads, so its
+///       verification was coupled to the very condition the mutation keys on.
+///       The test could only observe a world it had already intervened in.
 ///
-///   - a decoy (`_ = "stalenessWarningOnce didWarnStaleness"`) passed every
-///     assertion with the real call deleted and the check disabled;
-///   - Swift permits NESTED block comments, which the hand-rolled stripper
-///     (a boolean, not a depth counter) closed early;
-///   - a `"{"` inside a string literal inflated the brace count so
-///     `functionBody` overran into the following declarations — which happen
-///     to contain both identifiers, yielding a false pass.
-///
-/// Each of those was patched and then bypassed again by the next legal-Swift
-/// construct, because the premise was wrong: **text is not behavior**. Only
-/// calling the real function and observing its effect proves the wiring runs.
-/// This follows the file's own established `setTestSeams` convention
-/// (`scriptRunnerOverride` etc.), which existed all along.
+/// So this version injects nothing. It builds a real sidecar next to a real
+/// executable, runs it as a real process, and reads its real stderr. There is
+/// no seam to key off, and the production sink is exercised rather than
+/// substituted — which matters, since that sink could crash the server (R4).
 final class StalenessWiringGuardTests: XCTestCase {
 
-    private func makeController() -> MailController { MailController.shared }
-
-    override func tearDown() async throws {
-        await MailController.shared.setTestSeams(
-            scriptRunner: nil, ineligibility: nil, openURL: nil,
-            scriptTimeout: nil, stalenessReader: nil, stalenessSink: nil)
-        await MailController.shared.resetStalenessGateForTesting()
+    /// Locate the built product directory (where `swift test`'s bundle lives),
+    /// which is also where the server executable is built.
+    private func builtProductsDir() throws -> URL {
+        let bundle = Bundle(for: type(of: self))
+        return bundle.bundleURL.deletingLastPathComponent()
     }
 
-    /// THE wiring test. It must enter through a real caller, not through
-    /// `runStalenessCheck()` directly — an earlier version of this test called
-    /// the extracted method and therefore proved nothing about whether
-    /// `preflightAutomation()` invokes it (deleting the call left the test
-    /// green, exactly like the text guards it replaced).
+    /// The end-to-end proof: a real binary + a real drifted sidecar must print
+    /// a real warning on real stderr.
     ///
-    /// `runScriptAsList` is the entry point that reaches `preflightAutomation()`
-    /// unconditionally — unlike `runScript`, it has no `scriptRunnerOverride`
-    /// short-circuit. The call is expected to throw afterwards (no live Mail /
-    /// no Automation grant in CI); that is irrelevant, because the staleness
-    /// check runs BEFORE `AutomationStatus.probe()`. What matters is that the
-    /// warning reached the sink on the way through.
-    func testDriftReachesTheSink_throughTheRealChokepoint() async {
-        let sink = Sink()
-        await MailController.shared.setTestSeams(
-            scriptRunner: nil, ineligibility: nil,
-            stalenessReader: { "99.0.0" }, stalenessSink: { sink.lines.append($0) })
-        await MailController.shared.resetStalenessGateForTesting()
+    /// This cannot be satisfied by a decoy string, by commented-out code, or by
+    /// a guard keyed on a test seam — there is no seam, and nothing but the
+    /// production path can produce the output being asserted.
+    func testRealBinary_withDriftedSidecar_warnsOnRealStderr() throws {
+        let products = try builtProductsDir()
+        let server = products.appendingPathComponent("CheAppleMailMCP")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: server.path),
+                          "server executable not built in \(products.path)")
 
-        _ = try? await MailController.shared.runScriptAsList("return {}")
+        // Stage a private copy so we never write a sidecar next to the real build.
+        let lab = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("staleness-wiring-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: lab, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: lab) }
 
-        XCTAssertEqual(sink.lines.count, 1,
-            "a drifted sidecar must warn when a real AppleScript entry point runs its "
-            + "preflight — if this is 0, the wiring was removed from preflightAutomation()")
-        XCTAssertTrue(sink.lines.first?.contains("99.0.0") == true)
-        XCTAssertTrue(sink.lines.first?.lowercased().contains("restart") == true)
+        let exe = lab.appendingPathComponent("CheAppleMailMCP")
+        try FileManager.default.copyItem(at: server, to: exe)
+        try "99.0.0".write(to: lab.appendingPathComponent(".CheAppleMailMCP.version"),
+                           atomically: true, encoding: .utf8)
+
+        let stderr = try runBriefly(exe)
+
+        XCTAssertTrue(stderr.contains("stale binary"),
+            "a real drifted sidecar must produce the warning through the production path. "
+            + "Empty means the wiring is gone from preflightAutomation(), the reader is "
+            + "broken, or the sink is not writing.\nstderr was:\n\(stderr)")
+        XCTAssertTrue(stderr.contains("99.0.0"), "must name the on-disk version")
+        XCTAssertTrue(stderr.lowercased().contains("restart"), "must be actionable")
     }
 
-    func testWarnsOnlyOnce_butKeepsCheckingUntilItWarns() async {
-        let sink = Sink()
-        var version = AppVersion.current          // start with no drift
-        await MailController.shared.setTestSeams(
-            scriptRunner: nil, ineligibility: nil,
-            stalenessReader: { version }, stalenessSink: { sink.lines.append($0) })
-        await MailController.shared.resetStalenessGateForTesting()
+    /// The negative half — without which the test above could pass on a server
+    /// that warns unconditionally.
+    func testRealBinary_withMatchingSidecar_staysSilent() throws {
+        let products = try builtProductsDir()
+        let server = products.appendingPathComponent("CheAppleMailMCP")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: server.path),
+                          "server executable not built in \(products.path)")
 
-        await MailController.shared.runStalenessCheck()
-        await MailController.shared.runStalenessCheck()
-        XCTAssertEqual(sink.lines.count, 0, "no drift → silent, and the gate must stay armed")
+        let lab = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("staleness-wiring-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: lab, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: lab) }
 
-        version = "99.0.0"                         // a newer binary lands on disk
-        await MailController.shared.runStalenessCheck()
-        XCTAssertEqual(sink.lines.count, 1, "the later drift must still be caught (B2)")
+        let exe = lab.appendingPathComponent("CheAppleMailMCP")
+        try FileManager.default.copyItem(at: server, to: exe)
+        try AppVersion.current.write(to: lab.appendingPathComponent(".CheAppleMailMCP.version"),
+                                     atomically: true, encoding: .utf8)
 
-        await MailController.shared.runStalenessCheck()
-        XCTAssertEqual(sink.lines.count, 1, "…but only warned about once")
+        let stderr = try runBriefly(exe)
+        XCTAssertFalse(stderr.contains("stale binary"),
+                       "no drift → no warning. stderr was:\n\(stderr)")
     }
 
-    func testNeverThrowsAndNeverBlocksTheCaller() async {
-        // A hostile reader must not be able to make the check throw or refuse:
-        // the invariant is that a stale server keeps working (post-#297) and is
-        // merely nudged.
-        let sink = Sink()
-        await MailController.shared.setTestSeams(
-            scriptRunner: nil, ineligibility: nil,
-            stalenessReader: { "\u{1B}[2Jgarbage\nnot a version" },
-            stalenessSink: { sink.lines.append($0) })
-        await MailController.shared.resetStalenessGateForTesting()
+    /// Run the server just long enough for its startup path to reach the
+    /// preflight, then terminate it and return whatever it wrote to stderr.
+    /// stdin is held open briefly because the server exits as soon as stdin
+    /// closes — which would race the fire-and-forget startup task.
+    private func runBriefly(_ exe: URL, seconds: TimeInterval = 6) throws -> String {
+        let p = Process()
+        p.executableURL = exe
+        let err = Pipe(), inp = Pipe(), out = Pipe()
+        p.standardError = err; p.standardInput = inp; p.standardOutput = out
 
-        await MailController.shared.runStalenessCheck()   // must simply return
-        XCTAssertEqual(sink.lines.count, 0, "unparseable input fails open — no warning, no throw")
+        // Drain concurrently: a full pipe buffer would block the child.
+        let collected = NSMutableData()
+        let lock = NSLock()
+        err.fileHandleForReading.readabilityHandler = { h in
+            let d = h.availableData
+            if !d.isEmpty { lock.lock(); collected.append(d); lock.unlock() }
+        }
+
+        try p.run()
+        Thread.sleep(forTimeInterval: seconds)
+        if p.isRunning { p.terminate() }
+        p.waitUntilExit()
+        err.fileHandleForReading.readabilityHandler = nil
+        try? inp.fileHandleForWriting.close()
+        _ = try? out.fileHandleForReading.readToEnd()
+
+        lock.lock(); defer { lock.unlock() }
+        return String(data: collected as Data, encoding: .utf8) ?? ""
     }
 
-    private final class Sink: @unchecked Sendable { var lines: [String] = [] }
-
-    // MARK: - #7: the handshake version cannot silently re-rot
+    // MARK: - the handshake version cannot silently re-rot
     //
-    // This one legitimately stays a source assertion: it is a statement about
-    // what the source SAYS (no hardcoded literal), not about what executes, so
-    // reading the text is the right instrument. The version actually reported
-    // at runtime is covered separately by VersionTests.
+    // This one legitimately stays a source assertion: it is a claim about what
+    // the source SAYS (no hardcoded literal), not about what executes.
 
     func testServer_reportsAppVersionNotAHardcodedLiteral() throws {
         let src = try String(contentsOf: URL(fileURLWithPath: #filePath)

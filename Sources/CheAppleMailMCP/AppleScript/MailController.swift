@@ -31,52 +31,16 @@ actor MailController {
     /// production default (`defaultScriptTimeout`).
     private var scriptTimeoutOverride: TimeInterval?
 
-    /// #303: when set, the staleness check reads through this closure instead
-    /// of the real sidecar file, and writes through `stalenessSinkOverride`
-    /// instead of stderr.
-    ///
-    /// These exist because the round-2 source guards — which asserted that the
-    /// text `"stalenessWarningOnce"` appeared inside `preflightAutomation`'s
-    /// source — could not actually prove the call *executes*. A decoy string
-    /// (`_ = "stalenessWarningOnce didWarnStaleness"`) passed every assertion
-    /// with the real wiring deleted (#303 verify round 3). Text is not
-    /// behavior; only calling the real function and observing its effect is.
-    private var stalenessReaderOverride: (() -> String?)?
-    private var stalenessSinkOverride: ((String) -> Void)?
-
     func setTestSeams(
         scriptRunner: ((String) throws -> String)?,
         ineligibility: (() -> String?)?,
         openURL: ((URL) -> Bool)? = nil,
-        scriptTimeout: TimeInterval? = nil,
-        stalenessReader: (() -> String?)? = nil,
-        stalenessSink: ((String) -> Void)? = nil
+        scriptTimeout: TimeInterval? = nil
     ) {
         scriptRunnerOverride = scriptRunner
         ineligibilityOverride = ineligibility
         openURLOverride = openURL
         scriptTimeoutOverride = scriptTimeout
-        stalenessReaderOverride = stalenessReader
-        stalenessSinkOverride = stalenessSink
-    }
-
-    /// #303 — re-arm the warn-once gate. Test-only: the controller is a
-    /// process-wide singleton, so without this a test that triggers the warning
-    /// would leave the gate consumed for every test that runs after it.
-    func resetStalenessGateForTesting() {
-        didWarnStaleness = false
-    }
-
-    /// #303 — run the staleness check exactly as `preflightAutomation()` does,
-    /// exposed `internal` so behavioral tests can call the REAL code path.
-    /// Deleting its invocation from `preflightAutomation` now breaks a
-    /// behavioral test, not merely a text grep.
-    func runStalenessCheck() {
-        if let warning = MailController.stalenessWarningOnce(
-            state: &didWarnStaleness,
-            reader: stalenessReaderOverride ?? MailController.readVersionSidecar) {
-            (stalenessSinkOverride ?? { FileHandle.standardError.write(Data(("⚠ " + $0 + "\n").utf8)) })(warning)
-        }
     }
 
     // MARK: - AppleScript Execution
@@ -452,7 +416,10 @@ actor MailController {
         // ≥v2.24.0 server safe for execution, so refusing would break a working
         // session; this only nudges a restart. The read itself is bounded at
         // the syscall (verify B1) because this point is OUTSIDE that guard.
-        runStalenessCheck()
+        if let warning = MailController.stalenessWarningOnce(
+            state: &didWarnStaleness, reader: MailController.readVersionSidecar) {
+            MailController.emitDiagnostic("⚠ " + warning)
+        }
         switch AutomationStatus.probe() {
         case .denied:
             throw MailError.scriptFailed(
@@ -502,6 +469,22 @@ actor MailController {
     /// Max bytes read from the sidecar. A version string is `"2.25.0"`-sized;
     /// 64 is generous and bounds a huge or corrupt file.
     private static let versionSidecarByteCap = 64
+
+    /// #303 — write an advisory diagnostic to stderr WITHOUT being able to kill
+    /// the process.
+    ///
+    /// `FileHandle.standardError.write(_:)` is non-throwing and raises an
+    /// uncatchable ObjC exception on a bad descriptor: a host that launches the
+    /// server with fd 2 closed turns this advisory nudge into `SIGABRT`
+    /// (verified — exit 134). An *advisory* check must never do that; it
+    /// violates the "never throws / never refuses" invariant by a route the
+    /// invariant's wording did not anticipate (#303 verify round 4).
+    ///
+    /// Same lesson #301 already learned for the osascript stdin path, and the
+    /// same remedy: the throwing API, with the error swallowed.
+    nonisolated static func emitDiagnostic(_ line: String) {
+        try? FileHandle.standardError.write(contentsOf: Data((line + "\n").utf8))
+    }
 
     /// #303 — locate the wrapper's version sidecar next to THIS running
     /// executable (`<dir>/.<binary>.version`). Derived from the executable's

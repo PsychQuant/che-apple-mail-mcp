@@ -146,14 +146,23 @@ fi
 # only honors a RETURN trap inside a function body, so the original spelling
 # never fired and leaked a temp dir (holding a compiled binary) on every
 # release. EXIT fires when the subshell ends, which is exactly the scope here.
+# `|| true` so a failing probe cannot trip `set -e` at THIS assignment: without
+# it errexit terminated the script right here and the diagnostic below — which
+# names the causes — was unreachable dead code for exactly the two cases most
+# worth explaining (missing swiftc, Version.swift no longer compiling). Verified
+# with isolated repros (#303 verify round 4). Compiler stderr is kept and shown.
+
 APP_VERSION=$(
-    tmp=$(mktemp -d) || exit 0          # empty output → the -z check below dies
+    tmp=$(mktemp -d) || exit 0          # empty output → the check below dies
     trap 'rm -rf "$tmp"' EXIT
     cp "$VERSION_SWIFT" "$tmp/Version.swift"
     printf 'print(AppVersion.current)\n' > "$tmp/main.swift"
-    xcrun swiftc -O "$tmp/Version.swift" "$tmp/main.swift" -o "$tmp/probe" 2>/dev/null \
-        && "$tmp/probe" 2>/dev/null
-)
+    if xcrun swiftc -O "$tmp/Version.swift" "$tmp/main.swift" -o "$tmp/probe" 2>"$tmp/err"; then
+        "$tmp/probe" 2>/dev/null
+    else
+        sed 's/^/    /' "$tmp/err" >&2      # surface WHY, don't swallow it
+    fi
+) || true
 if [[ -z "$APP_VERSION" ]]; then
     die "could not read AppVersion.current from $VERSION_SWIFT.
   The probe compiles that file and prints the value, so an empty result means one of:
@@ -216,6 +225,37 @@ ARCHS="$(lipo -archs "$BINARY_PATH")"
 
 BINARY_SIZE="$(ls -lh "$BINARY_PATH" | awk '{print $5}')"
 info "Universal binary built: $BINARY_PATH ($BINARY_SIZE), archs: $ARCHS"
+
+# Interrogate the ACTUAL shipped artifact — every slice (#303 verify round 4).
+#
+# The earlier sanity check compiled Version.swift into a separate host-only
+# probe. That guesses at the artifact rather than examining it, and a perfectly
+# legal Version.swift can make the two disagree:
+#     #if arch(x86_64)
+#     static let current = "0.0.0"
+#     #else
+#     static let current = "2.25.0"
+#     #endif
+# The arm64 probe prints 2.25.0 and every check passes, while the Intel slice of
+# the binary being signed and shipped reports 0.0.0 — wrong handshake version,
+# wrong staleness baseline, silently. `#if compiler(...)` does the same (and this
+# repo genuinely builds the probe and the slices with different toolchains).
+# So ask each slice what it is, using the mode it exposes for exactly this.
+for slice in $ARCHS; do
+    SLICE_VERSION="$(arch -"$slice" "$BINARY_PATH" --version 2>/dev/null || true)"
+    [[ -n "$SLICE_VERSION" ]] \
+        || die "the $slice slice did not report a version (--version produced nothing).
+  Cannot ship an artifact that cannot state its own version."
+    # Exact match, not a prefix: a trailing newline or stray whitespace baked
+    # into the literal would break semver parsing at runtime while a looser
+    # comparison here waved it through (bash \$( ) strips trailing newlines,
+    # which is precisely how that slips past).
+    [[ "$SLICE_VERSION" == "$VERSION_NO_V" ]] \
+        || die "version mismatch in the SHIPPED binary: the $slice slice reports '$SLICE_VERSION' but this is release '$VERSION_NO_V'.
+  A conditional or malformed AppVersion.current can make the host probe and the
+  actual slices disagree — this check reads the artifact itself."
+done
+info "Both slices self-report $VERSION_NO_V."
 
 # ---- Confirm with user -------------------------------------------------------
 
