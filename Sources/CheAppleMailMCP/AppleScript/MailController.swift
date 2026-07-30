@@ -470,18 +470,27 @@ actor MailController {
     /// 64 is generous and bounds a huge or corrupt file.
     private static let versionSidecarByteCap = 64
 
-    /// #303 — write an advisory diagnostic to stderr WITHOUT being able to kill
-    /// the process.
+    /// #303 — write an advisory diagnostic to stderr, swallowing descriptor
+    /// errors so an *advisory* nudge cannot itself abort the process.
     ///
-    /// `FileHandle.standardError.write(_:)` is non-throwing and raises an
-    /// uncatchable ObjC exception on a bad descriptor: a host that launches the
-    /// server with fd 2 closed turns this advisory nudge into `SIGABRT`
-    /// (verified — exit 134). An *advisory* check must never do that; it
-    /// violates the "never throws / never refuses" invariant by a route the
-    /// invariant's wording did not anticipate (#303 verify round 4).
+    /// The non-throwing `FileHandle.standardError.write(_:)` raises an
+    /// uncatchable ObjC exception on a bad descriptor: a host launching the
+    /// server with fd 2 closed turned this into `SIGABRT` (verified, exit 134),
+    /// violating "never throws / never refuses" by a route its wording did not
+    /// anticipate (#303 verify round 4). The throwing `write(contentsOf:)` with
+    /// the error swallowed fixes the descriptor-error family (closed / read-only
+    /// fd 2 — both verified to survive), the same remedy #301 took on the
+    /// osascript stdin path.
     ///
-    /// Same lesson #301 already learned for the osascript stdin path, and the
-    /// same remedy: the throwing API, with the error swallowed.
+    /// Precise boundary (#303 verify round 5): this does NOT cover `SIGPIPE`. A
+    /// broken-pipe fd 2 (write end open, read end gone) kills the process in the
+    /// kernel *before* `write()` returns to Swift, so no `try?` / `do-catch` can
+    /// intercept it (verified, exit 141). That exposure is **not specific to
+    /// this call** — all 27 `FileHandle.standardError.write` sites across the
+    /// server share it, and there is no process-wide `SIGPIPE` handling. It is a
+    /// pre-existing whole-server property, tracked separately as a hardening
+    /// item (#320), not introduced here; fixing it belongs at process scope (a
+    /// startup `SIG_IGN` plus `EPIPE` handling), not in this one advisory writer.
     nonisolated static func emitDiagnostic(_ line: String) {
         try? FileHandle.standardError.write(contentsOf: Data((line + "\n").utf8))
     }
