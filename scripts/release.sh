@@ -142,16 +142,25 @@ fi
 # disagreed with its tag — silently. The class is "recognising Swift requires a
 # Swift parser", so ask the compiler for the value instead of guessing at it.
 # This is also less code than the lexer it replaces.
+# EXIT, not RETURN: this runs inside a `$( )` subshell, not a function. bash
+# only honors a RETURN trap inside a function body, so the original spelling
+# never fired and leaked a temp dir (holding a compiled binary) on every
+# release. EXIT fires when the subshell ends, which is exactly the scope here.
 APP_VERSION=$(
-    tmp=$(mktemp -d) || die "could not create temp dir for the version probe."
-    trap 'rm -rf "$tmp"' RETURN
+    tmp=$(mktemp -d) || exit 0          # empty output → the -z check below dies
+    trap 'rm -rf "$tmp"' EXIT
     cp "$VERSION_SWIFT" "$tmp/Version.swift"
     printf 'print(AppVersion.current)\n' > "$tmp/main.swift"
     xcrun swiftc -O "$tmp/Version.swift" "$tmp/main.swift" -o "$tmp/probe" 2>/dev/null \
         && "$tmp/probe" 2>/dev/null
 )
 if [[ -z "$APP_VERSION" ]]; then
-    die "could not parse AppVersion.current from $VERSION_SWIFT."
+    die "could not read AppVersion.current from $VERSION_SWIFT.
+  The probe compiles that file and prints the value, so an empty result means one of:
+    - xcrun/swiftc unavailable (check: xcrun swiftc --version)
+    - $VERSION_SWIFT no longer compiles standalone (a new import or dependency?)
+    - mktemp failed
+  Fails closed by design: without a verified version we will not tag a release."
 fi
 if [[ "$APP_VERSION" != "$VERSION_NO_V" ]]; then
     die "version drift: AppVersion.current is '$APP_VERSION' but releasing '$VERSION_NO_V'. Update $VERSION_SWIFT to '$VERSION_NO_V' first."
