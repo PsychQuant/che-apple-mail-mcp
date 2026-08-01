@@ -402,48 +402,42 @@ extension SpecialMailboxesScriptBuilderTests {
         XCTAssertNil(obj["inbox_path"])
     }
 
-    /// The builder must emit a container-walk that joins parent mailbox names with
-    /// `/` up to (but not including) the account, reproducing MailboxURL.mailboxPath.
-    func testScript_containsContainerWalk() {
+    // MARK: - #315: the container walk is GONE — the script identifies leaves only
+    //
+    // The #268 walk these tests used to pin succeeded VACUOUSLY: references
+    // enumerated from the app-level unified container have a non-mailbox
+    // `container` on the first probe, so the climb never ran and the "full
+    // path" was the leaf — wrong for every nested mailbox (4/5 types on all 7
+    // live accounts) yet indistinguishable from a correct top-level result.
+    // Paths now come from the Envelope Index via `joinSpecialMailboxPath`
+    // (covered by SpecialMailboxPathJoinTests); the script's only job is the
+    // leaf + account identification, and these tests pin the walk's ABSENCE so
+    // it cannot quietly return.
+
+    func testScript_hasNoContainerWalk() {
         let script = buildSpecialMailboxNamesScript(accountId: "UUID-A", accountName: "Google")
-        XCTAssertTrue(script.contains("container of mb"),
-                      "must start the full-path walk from the matched child's container; got:\n\(script)")
-        XCTAssertTrue(script.contains("class of") && script.contains("is mailbox"),
-                      "must stop the walk at the account boundary (walk while container is a mailbox); got:\n\(script)")
-        XCTAssertTrue(script.contains("& \"/\" &"),
-                      "must join parent names with `/` to match the mailboxPath form; got:\n\(script)")
+        XCTAssertFalse(script.contains("container of mb"),
+                       "the vacuous container walk must not return (#315); got:\n\(script)")
+        XCTAssertFalse(script.contains("fullPath"),
+                       "no path assembly in AppleScript — paths come from the index (#315)")
     }
 
-    /// The return tuple appends the 5 path slots AFTER the 5 name slots, so the
-    /// existing n0…n4 leaf positions stay stable (the #179 fixed-tuple discipline).
-    func testScript_returnsNamesThenPaths() {
+    func testScript_returnsNamesOnly_stablePositions() {
         let script = buildSpecialMailboxNamesScript(accountId: "UUID-A", accountName: "Google")
-        // names n0..n4 then paths p0..p4 in the return list
-        XCTAssertTrue(script.contains("n0, n1, n2, n3, n4, p0, p1, p2, p3, p4"),
-                      "return tuple must be names-then-paths (stable leaf positions); got:\n\(script)")
+        XCTAssertTrue(script.contains("n0, n1, n2, n3, n4"),
+                      "leaf tuple positions n0…n4 stay stable (the #179 fixed-tuple discipline); got:\n\(script)")
+        XCTAssertFalse(script.contains("p0"),
+                       "no path slots in the tuple any more (#315); got:\n\(script)")
     }
 
-    /// The path walk must be guarded so a failure never loses the already-read leaf
-    /// name (leaf is set BEFORE the walk; the walk has its own try).
-    func testScript_pathWalkGuardedSeparatelyFromLeaf() {
+    func testScript_leafGuardsSurviveWalkRemoval() {
         let script = buildSpecialMailboxNamesScript(accountId: "UUID-A", accountName: "Google")
-        // Each of the 5 specials: a per-child try + a per-walk try, plus the
-        // container-level try → at least 3 `try` per special.
+        // Container-level try + per-child try per special must survive the walk
+        // removal (D3: absent container / account-less child stay non-fatal).
         let tryCount = script.components(separatedBy: "try").count - 1
-        XCTAssertGreaterThanOrEqual(tryCount, perAccountSpecialMailboxes.count * 3,
-                      "each special needs container-try + child-try + walk-try; got \(tryCount):\n\(script)")
-    }
-
-    /// A nameless mid-hierarchy container must ABANDON the path (reset fullPath to "")
-    /// so the walk omits `<key>_path` rather than emitting a TRUNCATED path a consumer
-    /// could trust — the "walk failure → omit, never a wrong value" discipline
-    /// (post-verify hardening: correctness + regression + Codex lenses converged on
-    /// the pre-hardening `exit repeat` leaving a partial path).
-    func testScript_namelessContainerAbandonsPathNotTruncates() {
-        let script = buildSpecialMailboxNamesScript(accountId: "UUID-A", accountName: "Google")
-        XCTAssertTrue(script.contains("if parName is missing value then"),
-                      "must special-case a nameless container; got:\n\(script)")
-        XCTAssertTrue(script.contains("set fullPath to \"\""),
-                      "nameless container must reset fullPath to empty (abandon, not truncate); got:\n\(script)")
+        XCTAssertGreaterThanOrEqual(tryCount, perAccountSpecialMailboxes.count * 2,
+                      "each special keeps container-try + child-try; got \(tryCount):\n\(script)")
+        XCTAssertTrue(script.contains("if mbName is not missing value then"),
+                      "the missing-value name guard (#179 R5) must survive (#315); got:\n\(script)")
     }
 }
