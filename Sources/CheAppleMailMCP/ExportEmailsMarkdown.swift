@@ -17,6 +17,12 @@ struct ExportManifestItem {
     // be header-only; nil = no partial-file evidence of a missing body.
     // Never true. See `partialBodyMissingForExport`.
     var bodyDownloaded: Bool? = nil
+    // #316 — negative-only fallback signal (mirrors `bodyDownloaded`):
+    // `true` = the own-addresses set was empty, so this item's frontmatter
+    // `direction` came from the whole-batch mailbox-label fallback, not from
+    // per-email sender identity; nil = sender-identity derivation applied.
+    // Never false.
+    var directionInferred: Bool? = nil
 
     var jsonObject: [String: Any] {
         var o: [String: Any] = ["id": id, "status": status, "attachments": attachments]
@@ -25,6 +31,7 @@ struct ExportManifestItem {
         if !attachmentErrors.isEmpty { o["attachment_errors"] = attachmentErrors }
         if let e = error { o["error"] = e }
         if bodyDownloaded == false { o["body_downloaded"] = false }
+        if directionInferred == true { o["direction_inferred"] = true }
         return o
     }
 }
@@ -312,7 +319,14 @@ enum ExportEmailsMarkdown {
     ///   - ids: message ids (SQLite rowId strings).
     ///   - outputDir: ALREADY-VALIDATED canonical output directory (the caller
     ///     runs `AllowedRootsValidator` first). Created if absent.
-    ///   - direction: `"received"` / `"sent"` (caller derives from mailbox).
+    ///   - ownAddresses: the user's own bare email addresses (ALREADY lowercased;
+    ///     union across configured accounts). Non-empty → per-email direction:
+    ///     sender ∈ set → `"sent"`, else `"received"` (#316). Empty → whole batch
+    ///     takes `fallbackDirection` and every written item discloses
+    ///     `direction_inferred: true`.
+    ///   - fallbackDirection: `"received"` / `"sent"` — the mailbox-label
+    ///     heuristic value, used only when `ownAddresses` is empty (EWS/#9
+    ///     accounts with no resolvable address, or index-less callers).
     ///   - includeAttachments: also export each email's attachments.
     ///   - filenameTemplate / filenameOverrides: optional overrides (per design D4).
     ///   - extraFrontmatter: optional extra frontmatter fields.
@@ -324,7 +338,8 @@ enum ExportEmailsMarkdown {
     static func run(
         ids: [String],
         outputDir: URL,
-        direction: String,
+        ownAddresses: Set<String>,
+        fallbackDirection: String,
         includeAttachments: Bool,
         filenameTemplate: String?,
         filenameOverrides: [String: String],
@@ -354,8 +369,9 @@ enum ExportEmailsMarkdown {
         // #232: seed the collision guard with `.md` files already present in
         // outputDir from PRIOR run() calls, so the `-N` suffix continues ACROSS
         // calls — not just within one call. Without this, a second export to the
-        // same outputDir (e.g. a mixed-direction corpus split into a received +
-        // a sent batch, forced by the single `direction` param) re-derives
+        // same outputDir (e.g. a corpus archived across multiple runs; before
+        // #316 also the received/sent split forced by the then-single
+        // `direction` param) re-derives
         // filenames from an empty set and silently overwrites same-(date,slug)
         // files written earlier. `uniquify()` (applied to every filename branch
         // — default/template/override — at the resolution site below) consults
@@ -431,6 +447,20 @@ enum ExportEmailsMarkdown {
             let iso = EmailMarkdownRenderer.rfc822ToISO8601(content.date)
             let localDate = Self.filenameDatePart(fromISO: iso)
             let bareSender = EmailMarkdownRenderer.bareEmail(content.sender)
+
+            // #316 — per-email direction from sender identity. Empty set =
+            // fail-open (no resolvable own address): whole batch takes the
+            // caller's mailbox-label fallback, disclosed per written item via
+            // the negative-only `direction_inferred` manifest field.
+            let direction: String
+            let directionInferred: Bool?
+            if ownAddresses.isEmpty {
+                direction = fallbackDirection
+                directionInferred = true
+            } else {
+                direction = ownAddresses.contains(bareSender.lowercased()) ? "sent" : "received"
+                directionInferred = nil
+            }
 
             // Resolve filename: per-id override > template > default(+collision).
             // Every branch yields a single sanitized segment, then `uniquify`
@@ -568,7 +598,8 @@ enum ExportEmailsMarkdown {
                     id: id, messageId: content.messageId, writtenPath: destURL.path,
                     attachments: savedAttachments, attachmentErrors: attachmentErrors,
                     status: "written", error: nil,
-                    bodyDownloaded: bodyDownloaded))
+                    bodyDownloaded: bodyDownloaded,
+                    directionInferred: directionInferred))
             } catch {
                 // The .md failed — remove attachments already written so a failed
                 // item leaves no orphan files behind.
