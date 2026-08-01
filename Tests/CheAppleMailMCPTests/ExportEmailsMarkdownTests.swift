@@ -208,6 +208,78 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     /// that two path strings differ (a same-content test would still pass on a
     /// silent clobber). Covers both the default (date,slug) branch and the
     /// caller-supplied `filenameTemplate` branch.
+    // MARK: - #313: case-only filename collisions (APFS is case-insensitive)
+
+    /// Unit level: the guard itself must treat `Re--X.md` / `RE--X.md` as the
+    /// SAME family. On APFS (case-insensitive, case-preserving — the macOS
+    /// default) they are one directory entry, and treating them as distinct let
+    /// the second silently overwrite the first (#313, P0 data loss).
+    func testUniquify_caseVariantCollision_getsSuffix() {
+        var used: Set<String> = []
+        let first = ExportEmailsMarkdown.uniquify("Re--X.md", used: &used)
+        XCTAssertEqual(first, "Re--X.md")
+        let second = ExportEmailsMarkdown.uniquify("RE--X.md", used: &used)
+        XCTAssertEqual(second, "RE--X-1.md",
+            "a case-variant of an already-used name MUST get a -N suffix — on APFS "
+            + "it is the same file (#313)")
+        // And the suffix allocation itself must be case-folded too.
+        let third = ExportEmailsMarkdown.uniquify("re--x.md", used: &used)
+        XCTAssertEqual(third, "re--x-2.md", "the whole family shares one -N sequence")
+    }
+
+    /// Single call, two override filenames differing only by case — the issue's
+    /// Exchange (`RE:`) vs Apple Mail (`Re:`) scenario. Content comparison, not
+    /// path comparison: distinct returned paths with only one surviving file is
+    /// precisely the silent-loss shape being pinned (#313).
+    func testRun_caseOnlyCollision_singleCall_noSilentOverwrite() throws {
+        let out = tempDir()
+        let m = try ExportEmailsMarkdown.run(
+            ids: ["1", "2"], outputDir: out, direction: "received",
+            includeAttachments: false, filenameTemplate: nil,
+            filenameOverrides: ["1": "2026-07-18_Re--Some-subject.md",
+                                "2": "2026-07-18_RE--Some-subject.md"],
+            extraFrontmatter: [],
+            fetch: { id in self.makeEmail(subject: "S", textBody: "BODY-\(id)") },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() })
+
+        XCTAssertEqual(m.items.filter { $0.status == "written" }.count, 2)
+        let paths = m.items.compactMap(\.writtenPath)
+        XCTAssertEqual(Set(paths.map { $0.lowercased() }).count, 2,
+            "the two written_paths must differ beyond letter case — same-case-folded "
+            + "paths are one APFS file (#313)")
+        let contents = try paths.map { try String(contentsOfFile: $0, encoding: .utf8) }
+        XCTAssertTrue(contents.contains { $0.contains("BODY-1") },
+                      "email 1's content must survive (#313)")
+        XCTAssertTrue(contents.contains { $0.contains("BODY-2") },
+                      "email 2's content must survive (#313)")
+    }
+
+    /// Cross-call variant — the issue's literal reproduction: call 1 archives the
+    /// `Re:` side, call 2 (fresh run, seeded only from the on-disk scan) archives
+    /// the `RE:` side.
+    func testRun_caseOnlyCollision_crossCall_secondCallDoesNotOverwriteFirst() throws {
+        let out = tempDir()
+        func exportOnce(_ id: String, name: String, body: String) throws -> String {
+            let m = try ExportEmailsMarkdown.run(
+                ids: [id], outputDir: out, direction: "received",
+                includeAttachments: false, filenameTemplate: nil,
+                filenameOverrides: [id: name], extraFrontmatter: [],
+                fetch: { _ in self.makeEmail(subject: "S", textBody: body) },
+                attachmentNamesFor: { _ in [] },
+                attachmentData: { _, _ in Data() })
+            return try XCTUnwrap(m.items.first?.writtenPath)
+        }
+        let p1 = try exportOnce("A", name: "2026-07-18_Re--Some-subject.md", body: "SENT-SIDE")
+        let p2 = try exportOnce("B", name: "2026-07-18_RE--Some-subject.md", body: "RECEIVED-SIDE")
+
+        XCTAssertNotEqual(p1.lowercased(), p2.lowercased(),
+            "second call's case-variant must be uniquified against the on-disk seed (#313)")
+        XCTAssertTrue(try String(contentsOfFile: p1, encoding: .utf8).contains("SENT-SIDE"),
+            "call 1's file must not be clobbered by call 2 (#313)")
+        XCTAssertTrue(try String(contentsOfFile: p2, encoding: .utf8).contains("RECEIVED-SIDE"))
+    }
+
     func testRun_crossCallCollision_secondCallDoesNotOverwriteFirst() throws {
         let out = tempDir()
 
