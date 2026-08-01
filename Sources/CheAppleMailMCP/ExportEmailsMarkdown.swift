@@ -227,13 +227,21 @@ enum ExportEmailsMarkdown {
         return isCalendarDate ? prefix : "unknown-date"
     }
 
+    /// Membership is CASE-FOLDED (#313): APFS — the macOS default — is
+    /// case-insensitive but case-preserving, so `Re--X.md` and `RE--X.md` are
+    /// one directory entry. Exact-string comparison let a case-variant slip
+    /// through and silently overwrite the first file (manifest reported both
+    /// as `written`, errors: 0 — P0 data loss). The `used` set therefore
+    /// stores lowercased keys only; the RETURNED name keeps the caller's
+    /// original case, and the whole case-family shares one `-N` sequence.
     static func uniquify(_ filename: String, used: inout Set<String>) -> String {
-        if !used.contains(filename) { used.insert(filename); return filename }
+        let key = filename.lowercased()
+        if !used.contains(key) { used.insert(key); return filename }
         let base = filename.hasSuffix(".md") ? String(filename.dropLast(3)) : filename
         var n = 1
         var candidate = "\(base)-\(n).md"
-        while used.contains(candidate) { n += 1; candidate = "\(base)-\(n).md" }
-        used.insert(candidate)
+        while used.contains(candidate.lowercased()) { n += 1; candidate = "\(base)-\(n).md" }
+        used.insert(candidate.lowercased())
         return candidate
     }
 
@@ -353,14 +361,17 @@ enum ExportEmailsMarkdown {
         // — default/template/override — at the resolution site below) consults
         // this set, so seeding it is sufficient to make the suffix span calls.
         //
-        // Case-insensitive `.md` match: template/override branches may emit
-        // `.MD`/`.Md`, which must still seed the guard or a later default-cased
-        // `.md` for the same (date,slug) could reuse the base name.
+        // Seed keys are LOWERCASED to match uniquify's case-folded membership
+        // (#313). The old code lowercased only the extension filter and then
+        // inserted the ORIGINAL-case name — which is exactly how a `RE--` request
+        // sailed past an on-disk `Re--` file and silently overwrote it on APFS.
+        // (The `.lowercased()` on pathExtension also keeps `.MD`/`.Md` files
+        // seeding the guard, as before.)
         do {
             let existing = try fileManager.contentsOfDirectory(
                 at: outputDir, includingPropertiesForKeys: nil, options: [])
             for url in existing where url.pathExtension.lowercased() == "md" {
-                usedFilenames.insert(url.lastPathComponent)
+                usedFilenames.insert(url.lastPathComponent.lowercased())
             }
         } catch {
             // Best-effort seed — the within-call guard still applies — but do NOT
