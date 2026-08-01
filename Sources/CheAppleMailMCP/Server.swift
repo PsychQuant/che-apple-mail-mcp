@@ -1497,7 +1497,12 @@ class CheAppleMailMCPServer {
                             destination: destination,
                             partId: partId
                         )
-                        return "Attachment saved to \(savePath)"
+                        // #314: Tier 1 already guards emptiness pre-write
+                        // (#66/#238), so this is defense-in-depth — and it adds
+                        // the same `(N bytes)` suffix as the AppleScript tier,
+                        // so both paths' success strings carry a size signal.
+                        return try MailController.verifySavedAttachmentOnDisk(
+                            "Attachment saved to \(savePath)", savePath: savePath)
                     }
                 } catch {
                     if case MailSQLiteError.attachmentNotFound = error {
