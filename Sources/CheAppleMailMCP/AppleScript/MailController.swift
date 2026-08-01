@@ -2126,6 +2126,39 @@ actor MailController {
     /// routes its `msgRef` through the `resolveMsgRef` chokepoint — so this path
     /// is no longer an inline-legacy bypass while staying byte-identical at
     /// `accountId: nil`.
+    /// #314 — post-write verification for every "Attachment saved" success.
+    ///
+    /// Mail.app's `save att in POSIX file` is a black box: for an attachment
+    /// whose bytes are not locally cached it can write a 0-byte file and
+    /// return without error, and the tool then reported the same success
+    /// string as a correct save — indistinguishable to every caller, and
+    /// invisible to the archive audit (three 0-byte attachments sat
+    /// undetected for ~11 weeks). Tier 1 (SQLite/.emlx) has had a pre-write
+    /// emptiness guard since #66/#238; this closes the same hole on the
+    /// AppleScript tier, where no post-write check existed at all.
+    ///
+    /// Non-success strings ("Attachment not found") pass through untouched.
+    /// A verified success gains a `(N bytes)` suffix so callers and audits
+    /// finally have a size signal (`list_attachments` carries none).
+    nonisolated static func verifySavedAttachmentOnDisk(_ result: String, savePath: String) throws -> String {
+        guard result.hasPrefix("Attachment saved") else { return result }
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: savePath),
+              let size = (attrs[.size] as? NSNumber)?.int64Value else {
+            throw MailError.operationFailed(
+                "save_attachment reported success but no file exists at \(savePath) — "
+                + "Mail.app's save silently failed (#314). Try synchronize_account, or open "
+                + "the message in Mail so the attachment downloads, then retry.")
+        }
+        guard size > 0 else {
+            throw MailError.operationFailed(
+                "save_attachment reported success but wrote a 0-byte file at \(savePath) — "
+                + "Mail's local attachment cache likely lacks the bytes (#314). The empty "
+                + "file was left in place for inspection; try synchronize_account or "
+                + "save_attachment with download_if_missing, then retry.")
+        }
+        return "\(result) (\(size) bytes)"
+    }
+
     func saveAttachment(id: String, mailbox: String, accountName: String, attachmentName: String, savePath: String) throws -> String {
         let ref = msgRef(id, mailbox: mailbox, account: accountName)
         let script = """
@@ -2140,7 +2173,7 @@ actor MailController {
             return "Attachment not found"
         end tell
         """
-        return try runScript(script)
+        return try Self.verifySavedAttachmentOnDisk(try runScript(script), savePath: savePath)
     }
 
     /// `save_attachment` overload with optional `accountId` (UUID) for
@@ -2171,7 +2204,7 @@ actor MailController {
             attachmentName: attachmentName,
             savePath: savePath
         )
-        return try runScript(script)
+        return try Self.verifySavedAttachmentOnDisk(try runScript(script), savePath: savePath)
     }
 
     /// Best-effort `save_attachment` for a server-side-only (`not_downloaded`)
@@ -2230,8 +2263,13 @@ actor MailController {
             try await Task.sleep(nanoseconds: intervalNanos)
             do {
                 let result = try runScript(saveScript)
-                // "Attachment saved to ..." = the binary is now local.
-                if result.hasPrefix("Attachment saved") { return result }
+                // "Attachment saved to ..." = the binary is now local — but
+                // verify the bytes actually landed (#314): a stale cache can
+                // produce a 0-byte write with a success return, which is the
+                // exact state this retry loop exists to escape.
+                if result.hasPrefix("Attachment saved") {
+                    return try Self.verifySavedAttachmentOnDisk(result, savePath: savePath)
+                }
                 // A non-throwing NON-saved result ("Attachment not found") is a
                 // DEFINITIVE negative — the named part isn't on this message (a
                 // name-matching problem, not a download delay). Don't burn the

@@ -165,16 +165,22 @@ final class AttachmentDownloadScriptBuilderTests: XCTestCase {
     /// give up after the first -10000.
     func testRetryLoop_succeedsWhenAFetchLandsMidPoll() async throws {
         let counter = SaveCounter()
+        // #314: the retry loop now post-write-verifies a success, so the fake
+        // "saved" must be backed by a real non-empty file at savePath.
+        let saved = FileManager.default.temporaryDirectory
+            .appendingPathComponent("retry-\(UUID().uuidString).pdf").path
+        FileManager.default.createFile(atPath: saved, contents: Data([1, 2, 3]))
+        defer { try? FileManager.default.removeItem(atPath: saved) }
         try await withSeam({ source in
             if source.contains("source of") { counter.triggers += 1; return "" }
             counter.saves += 1
             // First two saves see the part still server-side (-10000); third lands.
             if counter.saves < 3 { throw MailError.scriptFailed(message: "-10000", code: -10000) }
-            return "Attachment saved to /tmp/x.pdf"
+            return "Attachment saved to \(saved)"
         }) {
             let result = try await MailController.shared.saveAttachmentRetryingForDownload(
                 id: "42", mailbox: "INBOX", accountId: nil, accountName: "Google",
-                attachmentName: "x.pdf", savePath: "/tmp/x.pdf", policy: self.fastPolicy)
+                attachmentName: "x.pdf", savePath: saved, policy: self.fastPolicy)
             XCTAssertTrue(result.contains("saved"), "a mid-poll success must return the saved result")
             XCTAssertEqual(counter.triggers, 1, "the fetch trigger fires exactly once, before polling")
             XCTAssertGreaterThanOrEqual(counter.saves, 3, "must keep retrying past the early -10000s")
