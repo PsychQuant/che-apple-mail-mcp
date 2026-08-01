@@ -100,6 +100,21 @@ if ! grep -q "^## \[$VERSION_NO_V\]" CHANGELOG.md; then
     die "CHANGELOG.md has no entry for [$VERSION_NO_V]. add one before releasing."
 fi
 
+# mcpb/manifest.json must agree with the tag (#311). The field had no owner in
+# the release pipeline and froze at 2.7.2 for ~18 releases — masked because
+# Server.swift's then-hardcoded handshake version had rotted to the same value.
+# Fail-closed check (not auto-edit: this script requires a clean tree, so
+# editing mid-release would contradict its own precondition). Parse with
+# python3 json, not grep — the file is JSON, so read it as JSON.
+MANIFEST_VERSION=$(python3 -c "import json; print(json.load(open('mcpb/manifest.json'))['version'])" 2>/dev/null || true)
+if [[ -z "$MANIFEST_VERSION" ]]; then
+    die "could not read version from mcpb/manifest.json (missing file or invalid JSON)."
+fi
+if [[ "$MANIFEST_VERSION" != "$VERSION_NO_V" ]]; then
+    die "mcpb/manifest.json version is '$MANIFEST_VERSION' but releasing '$VERSION_NO_V'.
+  Bump it alongside the CHANGELOG entry (ManifestVersionTests pins the same invariant in CI)."
+fi
+
 info "Sanity checks passed."
 
 # ---- Extract release notes ---------------------------------------------------
