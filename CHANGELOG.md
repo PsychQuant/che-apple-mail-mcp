@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.26.0] - 2026-08-02
+
 ### Added
 - **Deferred-live-verification rule** ([#318](https://github.com/PsychQuant/che-apple-mail-mcp/issues/318)): `.claude/rules/deferred-live-verification.md`. A shipped feature carrying a documented-but-never-run live check (the `KNOWN GATE` pattern) must either have the check actually run before its issue closes, or stay tracked OPEN under the existing `blocked-on-setup` label **with a caveat added to the affected tool's description** — closing comments are dead letters no consumer ever reads, which is precisely how #268 shipped an overconfident description whose gate, when finally executed by #315, failed on all 7 accounts. Audit of the known family (#179 → verified-later via #249; #249 → verified-and-completed; #268 → verified-and-failed) plus a repo-wide marker sweep (sole strict-marker hit: #268) is recorded on the issue.
 
