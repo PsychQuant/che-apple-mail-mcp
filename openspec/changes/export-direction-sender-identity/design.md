@@ -46,7 +46,7 @@
 **Behavior（caller 可觀察）**
 
 - 從 Gmail All Mail（或任何 mailbox）匯出時，使用者自寄的信 frontmatter 為 `direction: sent`、他人寄的為 `direction: received`，與 `mailbox` 參數字串無關 — 前提是至少一個帳號的地址可從 account mapping 解析。
-- own-addresses 集合為空（如全 EWS）時，整批 direction 回到現行 mailbox-label 行為，且**每個** manifest item 多 `"direction_inferred": true`；匯出成功、不丟錯。
+- own-addresses 集合為空（如全 EWS）時，整批 direction 回到現行 mailbox-label 行為，且每個 **written** manifest item 多 `"direction_inferred": true`（error/skipped/header_only item 沒有寫出 direction，不帶此欄位——與 spec「whose direction was produced by the fallback」的 written-scoped 語意一致）；匯出成功、不丟錯。
 - sender-identity 判定成功的 manifest item **沒有** `direction_inferred` 欄位（絕不 emit `false`）。
 - 比對為 bare address（display name 已剝）+ case-insensitive。
 - Frontmatter 六核心欄位（`message_id`, `thread_key`, `in_reply_to`, `date`, `sender`, `direction`）名稱與順序不變；`opts.extra_frontmatter` 行為不變。
