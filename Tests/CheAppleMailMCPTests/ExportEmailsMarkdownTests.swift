@@ -100,7 +100,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: evil) }
 
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10"], outputDir: out, direction: "received",
+            ids: ["10"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: true, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(subject: "Att") },
@@ -123,7 +123,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         addTeardownBlock { try? FileManager.default.removeItem(at: parentEvil) }
 
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10"], outputDir: out, direction: "received",
+            ids: ["10"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil,
             filenameOverrides: ["10": "../../evil"], extraFrontmatter: [],
             fetch: { _ in self.makeEmail(subject: "Override") },
@@ -142,7 +142,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         let out = tempDir()
         // Both emails resolve to the same template name → must NOT overwrite.
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10", "11"], outputDir: out, direction: "received",
+            ids: ["10", "11"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: "{date}", filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(subject: "Whatever") },
@@ -159,7 +159,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         let out = tempDir()
         struct Boom: Error {}
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10"], outputDir: out, direction: "received",
+            ids: ["10"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: true, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(subject: "AttFail") },
@@ -179,7 +179,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         let out = tempDir()
         let emails = ["10": makeEmail(subject: "First"), "11": makeEmail(subject: "Second")]
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10", "11"], outputDir: out, direction: "received",
+            ids: ["10", "11"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { emails[$0]! },
@@ -234,7 +234,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     func testRun_caseOnlyCollision_singleCall_noSilentOverwrite() throws {
         let out = tempDir()
         let m = try ExportEmailsMarkdown.run(
-            ids: ["1", "2"], outputDir: out, direction: "received",
+            ids: ["1", "2"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil,
             filenameOverrides: ["1": "2026-07-18_Re--Some-subject.md",
                                 "2": "2026-07-18_RE--Some-subject.md"],
@@ -262,7 +262,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         let out = tempDir()
         func exportOnce(_ id: String, name: String, body: String) throws -> String {
             let m = try ExportEmailsMarkdown.run(
-                ids: [id], outputDir: out, direction: "received",
+                ids: [id], outputDir: out, ownAddresses: [], fallbackDirection: "received",
                 includeAttachments: false, filenameTemplate: nil,
                 filenameOverrides: [id: name], extraFrontmatter: [],
                 fetch: { _ in self.makeEmail(subject: "S", textBody: body) },
@@ -285,7 +285,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
 
         func exportOnce(_ id: String, body: String, template: String? = nil) throws -> String {
             let m = try ExportEmailsMarkdown.run(
-                ids: [id], outputDir: out, direction: "received",
+                ids: [id], outputDir: out, ownAddresses: [], fallbackDirection: "received",
                 includeAttachments: false, filenameTemplate: template, filenameOverrides: [:],
                 extraFrontmatter: [],
                 fetch: { _ in self.makeEmail(subject: "Report", textBody: body) },
@@ -325,7 +325,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
 
     private func runOne(_ email: EmailContent, extra: [(String, String)] = []) throws -> ExportManifest {
         try ExportEmailsMarkdown.run(
-            ids: ["10"], outputDir: tempDir(), direction: "received",
+            ids: ["10"], outputDir: tempDir(), ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: extra,
             fetch: { _ in email },
@@ -366,7 +366,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         let out = tempDir()
         struct Boom: Error {}
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10", "bad", "11"], outputDir: out, direction: "received",
+            ids: ["10", "bad", "11"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { id in if id == "bad" { throw Boom() }; return self.makeEmail(subject: "S\(id)") },
@@ -384,7 +384,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         let out = tempDir()
         // Two emails, same date + same subject → second gets -1 suffix.
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10", "11"], outputDir: out, direction: "received",
+            ids: ["10", "11"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(subject: "Same Topic") },
@@ -399,7 +399,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     func testRun_includeAttachments_routesByClass() throws {
         let out = tempDir()
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10"], outputDir: out, direction: "received",
+            ids: ["10"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: true, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(subject: "WithAtt") },
@@ -429,7 +429,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         let out = tempDir()
         // id "10" → already archived (Message-ID in the skip set); id "11" → new.
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10", "11"], outputDir: out, direction: "received",
+            ids: ["10", "11"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { id in self.makeEmail(subject: "S\(id)", messageId: "<\(id)@x>") },
@@ -450,7 +450,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     func testRun_noSkipSet_skippedCountZeroAndAllWritten() throws {
         let out = tempDir()
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10"], outputDir: out, direction: "received",
+            ids: ["10"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(messageId: "<10@x>") },
@@ -472,7 +472,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         // false or absent, never true.
         let out = tempDir()
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10", "11"], outputDir: out, direction: "received",
+            ids: ["10", "11"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { id in
@@ -504,7 +504,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         // cleanup, no collision-guard -N duplicates.
         let out = tempDir()
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10", "11"], outputDir: out, direction: "received",
+            ids: ["10", "11"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { id in
@@ -536,7 +536,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         // format-aware; export fetches format "text").
         let out = tempDir()
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10"], outputDir: out, direction: "received",
+            ids: ["10"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(messageId: "<10@x>",
@@ -561,7 +561,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         // "missing".
         let out = tempDir()
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10"], outputDir: out, direction: "received",
+            ids: ["10"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(messageId: "<10@x>",
@@ -605,7 +605,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         // in one run. Without reservation the attribution flips with timing.
         let out = tempDir()
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10", "11"], outputDir: out, direction: "received",
+            ids: ["10", "11"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { id in
@@ -628,7 +628,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         // the "nudge" (body now present) and assert it lands on the BASE name
         // — the same assignment as if both had been complete in run 1.
         let rerun = try ExportEmailsMarkdown.run(
-            ids: ["10"], outputDir: out, direction: "received",
+            ids: ["10"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(subject: "Same", messageId: "<10@x>",
@@ -648,7 +648,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         // partial (annotation on a not-to-be-written duplicate is noise).
         let out = tempDir()
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["10"], outputDir: out, direction: "received",
+            ids: ["10"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(messageId: "<10@x>",
@@ -697,7 +697,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         defer { holder.release() }
         XCTAssertThrowsError(
             try ExportEmailsMarkdown.run(
-                ids: ["1"], outputDir: dir, direction: "received",
+                ids: ["1"], outputDir: dir, ownAddresses: [], fallbackDirection: "received",
                 includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
                 extraFrontmatter: [],
                 fetch: { _ in self.makeEmail() },
@@ -763,7 +763,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         let dir = tempDir()
         // First run writes one email; lockfile is created as a side effect.
         let m1 = try ExportEmailsMarkdown.run(
-            ids: ["1"], outputDir: dir, direction: "received",
+            ids: ["1"], outputDir: dir, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(messageId: "<a@x>") },
@@ -775,7 +775,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         // Second sequential run works (lock released) and the dotfile lockfile
         // (not .md) must not perturb the (date,slug) collision seeding.
         let m2 = try ExportEmailsMarkdown.run(
-            ids: ["2"], outputDir: dir, direction: "received",
+            ids: ["2"], outputDir: dir, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail(subject: "Other", messageId: "<b@x>") },
@@ -797,7 +797,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
             atPath: dir.appendingPathComponent(ExportDirLock.lockFileName).path,
             contents: Data())
         let manifest = try ExportEmailsMarkdown.run(
-            ids: ["1"], outputDir: dir, direction: "received",
+            ids: ["1"], outputDir: dir, ownAddresses: [], fallbackDirection: "received",
             includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
             extraFrontmatter: [],
             fetch: { _ in self.makeEmail() },
@@ -806,5 +806,86 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         let written = try XCTUnwrap(manifest.items.first?.writtenPath)
         XCTAssertTrue(written.hasSuffix("/2026-06-13_Topic.md"),
                       "base name expected — lockfile must not trigger a -N suffix: \(written)")
+    }
+
+    // MARK: - #316 per-email sender-identity direction
+
+    private func fileText(_ item: ExportManifestItem) throws -> String {
+        try String(contentsOf: URL(fileURLWithPath: XCTUnwrap(item.writtenPath)),
+                   encoding: .utf8)
+    }
+
+    func testRun_directionPerEmail_fromSenderIdentity() throws {
+        // Gmail All Mail scenario: own-sent message gets `sent`, others
+        // `received` — regardless of any batch-level label (#316).
+        let out = tempDir()
+        let manifest = try ExportEmailsMarkdown.run(
+            ids: ["10", "11", "12"], outputDir: out,
+            ownAddresses: ["user@gmail.com"], fallbackDirection: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { id in
+                switch id {
+                case "10": return self.makeEmail(
+                    subject: "Mine", sender: "Che Cheng <user@gmail.com>", messageId: "<a@x>")
+                case "11": return self.makeEmail(
+                    subject: "OtherA", sender: "boss@corp.com", messageId: "<b@x>")
+                default: return self.makeEmail(
+                    subject: "OtherB", sender: "Peer <peer@x.com>", messageId: "<c@x>")
+                }
+            },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() })
+
+        let byId = Dictionary(uniqueKeysWithValues: manifest.items.map { ($0.id, $0) })
+        XCTAssertTrue(try fileText(try XCTUnwrap(byId["10"])).contains("\ndirection: sent\n"))
+        XCTAssertTrue(try fileText(try XCTUnwrap(byId["11"])).contains("\ndirection: received\n"))
+        XCTAssertTrue(try fileText(try XCTUnwrap(byId["12"])).contains("\ndirection: received\n"))
+        for item in manifest.items {
+            XCTAssertNil(item.jsonObject["direction_inferred"],
+                         "identity-derived items must never carry direction_inferred")
+        }
+    }
+
+    func testRun_directionMatch_caseInsensitiveBareAddress() throws {
+        // Display name stripped + case-insensitive compare against the
+        // (lowercased) own-addresses set.
+        let out = tempDir()
+        let manifest = try ExportEmailsMarkdown.run(
+            ids: ["10"], outputDir: out,
+            ownAddresses: ["user@gmail.com"], fallbackDirection: "received",
+            includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+            extraFrontmatter: [],
+            fetch: { _ in self.makeEmail(
+                subject: "Case", sender: "\"Che Cheng\" <User@GMAIL.com>", messageId: "<d@x>") },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() })
+        XCTAssertTrue(try fileText(try XCTUnwrap(manifest.items.first))
+            .contains("\ndirection: sent\n"))
+        XCTAssertNil(manifest.items[0].jsonObject["direction_inferred"])
+    }
+
+    func testRun_emptyOwnAddresses_failsOpenWithDisclosure() throws {
+        // Empty own-addresses set (EWS family / index-less) → whole batch
+        // takes fallbackDirection AND every written item discloses
+        // direction_inferred: true (negative-only, like body_downloaded).
+        for fallback in ["sent", "received"] {
+            let out = tempDir()
+            let manifest = try ExportEmailsMarkdown.run(
+                ids: ["10", "11"], outputDir: out,
+                ownAddresses: [], fallbackDirection: fallback,
+                includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+                extraFrontmatter: [],
+                fetch: { id in self.makeEmail(
+                    subject: "FB\(id)", sender: "anyone@x.com", messageId: "<\(id)@x>") },
+                attachmentNamesFor: { _ in [] },
+                attachmentData: { _, _ in Data() })
+            for item in manifest.items {
+                XCTAssertTrue(try fileText(item).contains("\ndirection: \(fallback)\n"),
+                              "fallback \(fallback): every file takes the batch label")
+                XCTAssertEqual(item.jsonObject["direction_inferred"] as? Bool, true,
+                               "fallback \(fallback): every written item must disclose")
+            }
+        }
     }
 }

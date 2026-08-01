@@ -782,7 +782,7 @@ class CheAppleMailMCPServer {
                 "description": .string("Array of message id strings (SQLite rowIds)"),
                 "items": .object(["type": .string("string")])
             ]),
-            "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox name; used only to label direction (sent when it looks like a Sent mailbox, else received)")]),
+            "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox name. Direction is derived per email from sender identity (sender matches one of your accounts' addresses → sent, else received); this label is only the fallback direction source when no own address is resolvable (e.g. EWS-only setups) — those items carry direction_inferred: true in the manifest")]),
             "account_name": .object(["type": .string("string"), "description": .string("Optional mail account (accepted for consistency; the SQLite fast path is account-agnostic)")]),
             "output_dir": .object(["type": .string("string"), "description": .string("Directory to write .md files into. Must resolve under the user's home (path traversal and system directories are rejected).")]),
             "skip_message_ids_path": .object(["type": .string("string"), "description": .string("Optional dedup escape hatch (#177): path to a file listing already-archived RFC 5322 Message-IDs (one per line; blank lines and `#` comments ignored). Emails whose Message-ID is in the set are skipped (status 'skipped', counted in the manifest's `skipped`), not rewritten — so a re-run only writes new mail. Validated read-only under the same allowed-roots policy as output_dir; missing/unreadable file → no skips.")]),
@@ -1931,10 +1931,27 @@ class CheAppleMailMCPServer {
             guard let exportReader = indexReader else {
                 throw MailError.invalidParameter("batch_export_emails_markdown (alias: export_emails_markdown) requires the SQLite envelope index, which is unavailable. " + FullDiskAccessHelp.unavailableSuffix())
             }
-            // direction derived from the optional mailbox label (no AppleScript fallback path).
+            // #316 — direction is derived per email from sender identity: the
+            // own-addresses set is the union of every configured account's
+            // addresses resolvable from the local account mapping (IMAP-style
+            // accounts map to an email-form name; EWS accounts resolve to a
+            // UUID and contribute nothing — #9/#11). No AppleScript round-trip.
+            let exportOwnAddresses: Set<String> = Set(
+                exportReader.listAccounts().flatMap {
+                    ($0["email_addresses"] as? [String]) ?? []
+                }.map { $0.lowercased() })
+            // Mailbox-label heuristic, demoted to the fail-open fallback used
+            // only when no own address is resolvable (whole batch, disclosed
+            // per item via `direction_inferred: true`).
             let exportMailbox = arguments["mailbox"]?.stringValue ?? ""
-            let exportDirection = (exportMailbox.range(of: "sent", options: .caseInsensitive) != nil
+            let exportFallbackDirection = (exportMailbox.range(of: "sent", options: .caseInsensitive) != nil
                 || exportMailbox.contains("寄件")) ? "sent" : "received"
+            if exportOwnAddresses.isEmpty {
+                FileHandle.standardError.write(Data((
+                    "batch_export_emails_markdown: no own email address resolvable from the "
+                    + "account mapping — falling back to the mailbox-label direction heuristic "
+                    + "for the whole batch (manifest items carry direction_inferred: true) (#316)\n").utf8))
+            }
             let exportOpts = arguments["opts"]?.objectValue ?? [:]
             let includeAttachments = exportOpts["include_attachments"]?.boolValue ?? false
             // #283: opt-in — keep header-only (partial-.emlx, body absent)
@@ -1998,7 +2015,8 @@ class CheAppleMailMCPServer {
                 }
             }
             let exportManifest = try ExportEmailsMarkdown.run(
-                ids: exportIds, outputDir: validatedDir, direction: exportDirection,
+                ids: exportIds, outputDir: validatedDir,
+                ownAddresses: exportOwnAddresses, fallbackDirection: exportFallbackDirection,
                 includeAttachments: includeAttachments, filenameTemplate: filenameTemplate,
                 filenameOverrides: filenameOverrides, extraFrontmatter: extraFrontmatter,
                 fetch: { id in
