@@ -275,16 +275,15 @@ public final class EnvelopeIndexReader {
         var bindings: [String] = []
 
         // Account filter
-        if let uuid = accountUUIDs(forName: accountName).first {
+        let accountUUID = accountUUIDs(forName: accountName).first
+        if let uuid = accountUUID {
             conditions.append("mb.url LIKE ?")
             bindings.append("%://\(uuid)/%")
         }
 
-        // Mailbox filter
-        let encoded = mailbox.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? mailbox
-        conditions.append("(mb.url LIKE ? OR mb.url LIKE ?)")
-        bindings.append("%/\(encoded)")
-        bindings.append("%/\(encoded)/%")
+        // Mailbox filter (#317): decode-side ROWID resolution, not encode+LIKE.
+        let mailboxIds = try mailboxRowIds(matchingPath: mailbox, accountUUID: accountUUID)
+        conditions.append(Self.rowIdInCondition("m.mailbox", mailboxIds))
 
         let sql = """
             SELECT m.ROWID, s.subject, a.address, a.comment, m.date_received
@@ -343,15 +342,17 @@ public final class EnvelopeIndexReader {
         var conditions: [String] = []
         var bindings: [String] = []
 
+        var accountUUID: String?
         if let accountName = accountName, let uuid = accountUUIDs(forName: accountName).first {
+            accountUUID = uuid
             conditions.append("url LIKE ?")
             bindings.append("%://\(uuid)/%")
         }
         if let mailbox = mailbox {
-            let encoded = mailbox.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? mailbox
-            conditions.append("(url LIKE ? OR url LIKE ?)")
-            bindings.append("%/\(encoded)")
-            bindings.append("%/\(encoded)/%")
+            // #317: decode-side ROWID resolution, not encode+LIKE. This query
+            // runs over the mailboxes table itself, so filter its own ROWID.
+            let ids = try mailboxRowIds(matchingPath: mailbox, accountUUID: accountUUID)
+            conditions.append(Self.rowIdInCondition("ROWID", ids))
         }
 
         if !conditions.isEmpty {
@@ -487,7 +488,7 @@ public final class EnvelopeIndexReader {
         // (empty result, crash-free). (#204 verify CRITICAL)
         let limit = min(max(params.limit, 0), Int(Int32.max) - 1)
 
-        let (conditions, bindings) = buildSearchConditions(params)
+        let (conditions, bindings) = try buildSearchConditions(params)
 
         let sortDirection = params.sort == .asc ? "ASC" : "DESC"
 
@@ -576,7 +577,7 @@ public final class EnvelopeIndexReader {
         guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
 
         let limit = min(max(params.limit, 0), Int(Int32.max) - 1)
-        let (conditions, bindings) = buildSearchConditions(params)
+        let (conditions, bindings) = try buildSearchConditions(params)
         let sortDirection = params.sort == .asc ? "ASC" : "DESC"
         let whereClause = conditions.joined(separator: " AND ")
 
@@ -637,7 +638,55 @@ public final class EnvelopeIndexReader {
     /// Used by `searchPage` (full rows), `searchIds` (rowId projection), and
     /// `searchCount`. Defining the field / date / account / mailbox semantics
     /// here once guarantees every projection matches identically (#208).
-    private func buildSearchConditions(_ params: SearchParameters) -> (conditions: [String], bindings: [String]) {
+    /// #317 — pure decode-side mailbox path matcher. Preserves the pre-existing
+    /// two-pattern LIKE semantics (the named mailbox itself — by full path or
+    /// leaf/suffix-at-boundary — plus its descendants) with EXACT string
+    /// comparison instead of a wildcard pattern, so nothing the caller passes
+    /// can act as query syntax.
+    static func mailboxPathMatches(query: String, decodedPath p: String) -> Bool {
+        p == query                        // full path, exact (the round-trip case)
+            || p.hasSuffix("/" + query)   // leaf / suffix at a path boundary
+            || p.hasPrefix(query + "/")   // descendant of a full-path query
+            || p.contains("/" + query + "/") // descendant of a suffix-named mailbox
+    }
+
+    /// #317 — resolve mailbox ROWIDs by decoding each row's URL with the SAME
+    /// `MailboxURL.decode` that produces the `mailbox` strings in search
+    /// results, then comparing paths in Swift. The old encode-then-LIKE put
+    /// percent-encoded bytes into a LIKE pattern with no ESCAPE clause, so
+    /// every `%XX` — and any literal `%`/`_` in a mailbox name — acted as a
+    /// wildcard: `Se_t` matched `Sent`, and cross-account byte coincidences
+    /// over-matched. Decode-side equality makes "the tool accepts its own
+    /// output" true by construction. The mailboxes table is tens of rows, so
+    /// the extra pass is noise.
+    private func mailboxRowIds(matchingPath query: String, accountUUID: String? = nil) throws -> [Int64] {
+        guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "SELECT ROWID, url FROM mailboxes", -1, &stmt, nil) == SQLITE_OK else {
+            throw MailSQLiteError.queryFailed("Prepare failed: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        defer { sqlite3_finalize(stmt) }
+        var ids: [Int64] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let urlC = sqlite3_column_text(stmt, 1) else { continue }
+            let url = String(cString: urlC)
+            if let uuid = accountUUID, !url.contains("://\(uuid)/") { continue }
+            guard let decoded = MailboxURL.decode(url) else { continue }
+            if Self.mailboxPathMatches(query: query, decodedPath: decoded.mailboxPath) {
+                ids.append(sqlite3_column_int64(stmt, 0))
+            }
+        }
+        return ids
+    }
+
+    /// `col IN (…)` from resolver output; a never-true condition when the name
+    /// resolved to no mailbox (honest empty result, matching prior behavior).
+    /// ROWIDs come from sqlite3_column_int64, so interpolation is inert.
+    private static func rowIdInCondition(_ column: String, _ ids: [Int64]) -> String {
+        ids.isEmpty ? "0 = 1" : "\(column) IN (\(ids.map(String.init).joined(separator: ",")))"
+    }
+
+    private func buildSearchConditions(_ params: SearchParameters) throws -> (conditions: [String], bindings: [String]) {
         var conditions: [String] = ["m.deleted = 0"]
         var bindings: [String] = []
         let likeQuery = "%\(params.query)%"
@@ -689,20 +738,20 @@ public final class EnvelopeIndexReader {
             bindings.append(String(Int(dateTo.timeIntervalSince1970)))
         }
 
-        // Account filter via mailbox URL
+        // Account filter via mailbox URL (uuid is internal plist data — no %/_)
+        var accountUUID: String?
         if let accountName = params.accountName {
             if let uuid = accountUUIDs(forName: accountName).first {
+                accountUUID = uuid
                 conditions.append("mb.url LIKE ?")
                 bindings.append("%://\(uuid)/%")
             }
         }
 
-        // Mailbox filter
+        // Mailbox filter (#317): decode-side ROWID resolution, not encode+LIKE.
         if let mailbox = params.mailbox {
-            let encoded = mailbox.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? mailbox
-            conditions.append("(mb.url LIKE ? OR mb.url LIKE ?)")
-            bindings.append("%/\(encoded)")
-            bindings.append("%/\(encoded)/%")
+            let ids = try mailboxRowIds(matchingPath: mailbox, accountUUID: accountUUID)
+            conditions.append(Self.rowIdInCondition("m.mailbox", ids))
         }
 
         return (conditions, bindings)
@@ -722,7 +771,7 @@ public final class EnvelopeIndexReader {
 
         // Same clamp as searchPage: negative → 0 (crash-free), cap below Int32.max-1 (#204).
         let limit = min(max(params.limit, 0), Int(Int32.max) - 1)
-        let (conditions, bindings) = buildSearchConditions(params)
+        let (conditions, bindings) = try buildSearchConditions(params)
         let sortDirection = params.sort == .asc ? "ASC" : "DESC"
         let whereClause = conditions.joined(separator: " AND ")
 
@@ -786,7 +835,7 @@ public final class EnvelopeIndexReader {
             throw MailSQLiteError.queryFailed("Database not open")
         }
 
-        let (conditions, bindings) = buildSearchConditions(params)
+        let (conditions, bindings) = try buildSearchConditions(params)
         let whereClause = conditions.joined(separator: " AND ")
 
         let sql: String
