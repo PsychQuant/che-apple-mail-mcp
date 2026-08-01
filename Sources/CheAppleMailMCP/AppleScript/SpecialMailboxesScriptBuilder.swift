@@ -89,20 +89,18 @@ func buildSpecialMailboxNamesScript(accountId: String?, accountName: String) -> 
         // rather than coercing into the literal text "missing value" (the R4-only
         // coercion's leak, R5 finding 9). Matches the `(id of acc as string)` /
         // `(matchCount as string)` discipline below.
-        // #268: alongside the leaf name n<idx>, build the FULL mailbox path p<idx>
-        // by walking `container of mb` up to (not including) the account, joining
-        // parent names with "/" — reproducing MailboxURL.mailboxPath ("[Gmail]/草稿").
-        // The walk is in its OWN try so a failure leaves p<idx> "" (→ omitted key)
-        // WITHOUT losing the already-read leaf name (set before the walk). The stop
-        // condition is `class of par is mailbox`: a top-level mailbox's container is
-        // the account (not a mailbox) → loop body never runs → path == leaf.
-        // A nameless mid-hierarchy container (name is `missing value`) ABANDONS the
-        // path (fullPath → "" → omitted key) rather than emitting a TRUNCATED path
-        // that a consumer might trust — honoring "walk failure → omit, never a wrong
-        // value" (verify convergence: correctness + regression + Codex lenses).
+        // #315: the #268 container walk that used to live here is GONE — it was
+        // structurally unable to work. References enumerated from the app-level
+        // unified container have a non-mailbox `container` on the first probe,
+        // so `repeat while (class of par) is mailbox` never ran and the walk
+        // succeeded VACUOUSLY: it emitted the leaf as the "full path" for
+        // genuinely nested mailboxes (4/5 types wrong on all 7 live accounts),
+        // and neither documented fail-safe fired because nothing ever failed.
+        // The script now identifies LEAVES only; the full path is joined from
+        // the Envelope Index (`joinSpecialMailboxPath`) in the controller —
+        // the source that was correct all along (`MailboxURL.mailboxPath`).
         blocks.append("""
             set n\(idx) to ""
-            set p\(idx) to ""
             try
                 repeat with mb in (every mailbox of \(special.container))
                     try
@@ -110,20 +108,6 @@ func buildSpecialMailboxNamesScript(accountId: String?, accountName: String) -> 
                             set mbName to name of mb
                             if mbName is not missing value then
                                 set n\(idx) to (mbName as string)
-                                try
-                                    set fullPath to (mbName as string)
-                                    set par to container of mb
-                                    repeat while (class of par) is mailbox
-                                        set parName to name of par
-                                        if parName is missing value then
-                                            set fullPath to ""
-                                            exit repeat
-                                        end if
-                                        set fullPath to (parName as string) & "/" & fullPath
-                                        set par to container of par
-                                    end repeat
-                                    set p\(idx) to fullPath
-                                end try
                             end if
                             exit repeat
                         end if
@@ -132,10 +116,9 @@ func buildSpecialMailboxNamesScript(accountId: String?, accountName: String) -> 
             end try
         """)
     }
-    // #268: leaf names first (stable n0…n(N-1) positions — the #179 fixed-tuple
-    // discipline), then the parallel full paths p0…p(N-1) appended after them.
+    // Leaf names in stable n0…n(N-1) positions (the #179 fixed-tuple
+    // discipline). No p0…p(N-1) any more (#315): paths come from the index.
     let names = (0..<perAccountSpecialMailboxes.count).map { "n\($0)" }.joined(separator: ", ")
-    let paths = (0..<perAccountSpecialMailboxes.count).map { "p\($0)" }.joined(separator: ", ")
     return """
     tell application "Mail"
         set matchedId to ""
@@ -153,7 +136,7 @@ func buildSpecialMailboxNamesScript(accountId: String?, accountName: String) -> 
             end try
         end repeat
     \(blocks.joined(separator: "\n"))
-        return {matchedId, matchedName, (matchCount as string), \(names), \(paths)}
+        return {matchedId, matchedName, (matchCount as string), \(names)}
     end tell
     """
 }
@@ -179,6 +162,30 @@ enum SpecialMailboxesResolution: Equatable {
 /// - `matchCount > 1` → `.ambiguous` (description-name collision).
 /// - otherwise `.resolved` with `account_id` / `account_name` (canonical, from the
 ///   matched account — NOT the raw caller input) plus each non-empty special name.
+/// #315 — join an AppleScript-identified special-mailbox LEAF against the
+/// account's Envelope-Index mailbox paths to obtain the full path.
+///
+/// Replaces the #268 container walk, which was structurally unable to work:
+/// references enumerated from the app-level unified container have a
+/// non-mailbox `container` on the first probe, so the walk succeeded
+/// vacuously and emitted the leaf as the "full path" for genuinely nested
+/// mailboxes — a wrong value indistinguishable from a correct top-level
+/// result (4/5 types wrong on all 7 live accounts, #315). The Envelope Index
+/// already holds the true path (`MailboxURL.mailboxPath` — the same
+/// representation `search_emails` returns), so ask the source that works.
+///
+/// Honest by construction:
+/// - exactly one candidate whose path IS the leaf or ENDS in "/leaf" → that path
+/// - zero candidates (no index / EWS / leaf unknown) → nil → `_path` omitted
+/// - two or more candidates (ambiguous leaf) → nil — never guess; the consumer
+///   falls back to leaf comparison, which is the observable signal #268's
+///   fail-safe promised but never delivered
+func joinSpecialMailboxPath(leaf: String, mailboxPaths: [String]) -> String? {
+    guard !leaf.isEmpty else { return nil }
+    let candidates = mailboxPaths.filter { $0 == leaf || $0.hasSuffix("/" + leaf) }
+    return candidates.count == 1 ? candidates[0] : nil
+}
+
 func resolveSpecialMailboxesResult(_ raw: [String]) -> SpecialMailboxesResolution {
     guard raw.count >= 3 else { return .noMatch }
     let matchedId = raw[0]

@@ -639,7 +639,7 @@ class CheAppleMailMCPServer {
             // Special Mailboxes
             Tool(
                 name: "get_special_mailboxes",
-                description: "Get special mailbox names. Without account_id/account_name: the app-level unified names (inbox, drafts, sent, trash, junk, outbox). With an account selector: that account's per-account special-mailbox real (localized/provider) LEAF names (inbox, drafts, sent, trash, junk) — e.g. a Gmail account returns drafts \"草稿\", junk \"垃圾郵件\"; an Exchange account's inbox can localize (收件匣) (#179/#249). outbox stays unified-only. In the per-account mode each present type ALSO carries a `<type>_path` field with the FULL mailbox path (e.g. drafts_path \"[Gmail]/草稿\"), matching the `mailbox` field that `search_emails` returns — compare full-path == full-path directly instead of a leaf-suffix heuristic (#268). A top-level mailbox's path equals its leaf (inbox_path \"收件匣\"); `<type>_path` is omitted if the path can't be resolved (the leaf `<type>` still present).",
+                description: "Get special mailbox names. Without account_id/account_name: the app-level unified names (inbox, drafts, sent, trash, junk, outbox). With an account selector: that account's per-account special-mailbox real (localized/provider) LEAF names (inbox, drafts, sent, trash, junk) — e.g. a Gmail account returns drafts \"草稿\", junk \"垃圾郵件\"; an Exchange account's inbox can localize (收件匣) (#179/#249). outbox stays unified-only. In the per-account mode each present type ALSO carries a `<type>_path` field with the FULL mailbox path (e.g. drafts_path \"[Gmail]/草稿\") derived from the Mail Envelope Index — the same representation `search_emails`'s `mailbox` field uses (#315; requires Full Disk Access). `<type>_path` is OMITTED whenever it cannot be resolved unambiguously: no index access (e.g. EWS accounts / missing FDA), an unknown leaf, or two mailboxes sharing the same leaf name. Consumers MUST keep a leaf-based fallback for the absent-`_path` case — an absent path is an honest signal, not an error (the leaf `<type>` is always present when the mailbox exists). A present path equals the leaf exactly when the mailbox is genuinely top-level.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1850,7 +1850,29 @@ class CheAppleMailMCPServer {
             // account_name in the hint; otherwise reference the account_name the user
             // typed (preserving the email→UUID non-laundering fix).
             let hintAccountName = specialMailboxesHintAccountName(explicitAccountId: explicitAccountId, accountName: accountName)
-            let mailboxes = try await mailController.getSpecialMailboxes(accountId: resolvedAccountId, accountName: hintAccountName)
+            var mailboxes = try await mailController.getSpecialMailboxes(accountId: resolvedAccountId, accountName: hintAccountName)
+            // #315: derive `<type>_path` by joining each AppleScript-identified
+            // LEAF against the account's Envelope-Index mailbox paths — the
+            // same representation `search_emails`'s `mailbox` field carries
+            // (`MailboxURL.mailboxPath`), from the source that was correct all
+            // along. Replaces the #268 container walk, which succeeded
+            // vacuously and emitted leaf-for-nested (4/5 types wrong on all 7
+            // live accounts) without ever tripping its own fail-safes.
+            // Fail-open at every step: no index (EWS / missing FDA), an
+            // unknown leaf, or an AMBIGUOUS leaf (two mailboxes sharing it)
+            // all OMIT the key — an absent `_path` is the honest, observable
+            // signal the #268 design promised — while the leaf stays present.
+            if hasSelector, let reader = indexReader,
+               let matchedId = mailboxes["account_id"] as? String, !matchedId.isEmpty {
+                let mailboxPaths = ((try? reader.listMailboxes(accountId: matchedId)) ?? [])
+                    .compactMap { $0["name"] as? String }
+                for special in perAccountSpecialMailboxes {
+                    if let leaf = mailboxes[special.key] as? String,
+                       let path = joinSpecialMailboxPath(leaf: leaf, mailboxPaths: mailboxPaths) {
+                        mailboxes[special.key + "_path"] = path
+                    }
+                }
+            }
             return formatJSON(mailboxes)
 
         // Address Tools

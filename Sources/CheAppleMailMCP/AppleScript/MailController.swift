@@ -2633,12 +2633,18 @@ actor MailController {
         let hasAccount = !(accountId ?? "").isEmpty || !(accountName ?? "").isEmpty
         if hasAccount {
             let script = buildSpecialMailboxNamesScript(accountId: accountId, accountName: accountName ?? "")
-            let raw = try runScriptAsList(script)  // [matchedId, matchedName, matchCount, n0…n4 (leaf), p0…p4 (full path, #268)] for drafts/sent/trash/junk/inbox (#249 lifted the inbox deferral)
+            let raw = try runScriptAsList(script)  // [matchedId, matchedName, matchCount, n0…n4 (leaf)] for drafts/sent/trash/junk/inbox (#249 lifted the inbox deferral; #315 removed the vacuous path walk)
             // Pure parse + pure throw-translation (both unit-tested without the actor):
             // .resolved → canonical metadata + present special names (absent omitted, D3);
             // .noMatch → operationFailed; .ambiguous → invalidParameter (#179).
             let resolution = resolveSpecialMailboxesResult(raw)
             let obj = try specialMailboxesResultOrThrow(resolution, accountId: accountId, accountName: accountName ?? "")
+            // #315: `<type>_path` is NOT produced here any more. The #268
+            // AppleScript container walk succeeded vacuously (references from
+            // the unified container have a non-mailbox `container` on first
+            // probe) and returned leaf-for-nested — 4/5 wrong on every live
+            // account. Paths are joined from the Envelope Index at the Server
+            // layer (`joinSpecialMailboxPath`), where `indexReader` lives.
             return obj.reduce(into: [String: Any]()) { $0[$1.key] = $1.value }
         }
 
