@@ -66,10 +66,10 @@ ship an unsigned binary). See README "Signing & Notarization" for one-time
 setup and why signing is what keeps Full Disk Access working across upgrades
 ([#211](https://github.com/PsychQuant/che-apple-mail-mcp/issues/211)).
 
-After the script finishes, update `marketplace.json` in
-[`psychquant-claude-plugins`](https://github.com/PsychQuant/psychquant-claude-plugins)
-to bump the plugin's version, then run
-`/plugin marketplace update psychquant-claude-plugins`
+After the script finishes, bump `plugin/.claude-plugin/plugin.json`'s
+`binary_version` in this repo (the root `.claude-plugin/marketplace.json`
+deliberately carries no `binary_version` — `plugin.json` is the single source),
+then run `/plugin marketplace update che-apple-mail-mcp`
 in Claude Code to pick up the new binary.
 
 ### Future: automate via GitHub Actions

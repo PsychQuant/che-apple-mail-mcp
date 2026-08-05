@@ -507,6 +507,6 @@ echo
 echo "View at: https://github.com/$REPO/releases/tag/$VERSION"
 echo
 echo "Next steps:"
-echo "    - Update marketplace.json version in psychquant-claude-plugins"
-echo "    - /plugin marketplace update psychquant-claude-plugins"
-echo "    - /plugin update che-apple-mail-mcp@psychquant-claude-plugins"
+echo "    - Bump binary_version in plugin/.claude-plugin/plugin.json (single source)"
+echo "    - /plugin marketplace update che-apple-mail-mcp"
+echo "    - /plugin update che-apple-mail-mcp@che-apple-mail-mcp"

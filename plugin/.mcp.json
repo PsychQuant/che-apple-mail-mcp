@@ -1,0 +1,7 @@
+{
+  "mail": {
+    "type": "stdio",
+    "command": "${CLAUDE_PLUGIN_ROOT}/bin/che-apple-mail-mcp-wrapper.sh",
+    "description": "Apple Mail MCP server - Native AppleScript integration for macOS Mail.app"
+  }
+}
