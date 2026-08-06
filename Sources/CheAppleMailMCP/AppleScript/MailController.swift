@@ -416,10 +416,10 @@ actor MailController {
         // ≥v2.24.0 server safe for execution, so refusing would break a working
         // session; this only nudges a restart. The read itself is bounded at
         // the syscall (verify B1) because this point is OUTSIDE that guard.
-        if let warning = MailController.stalenessWarningOnce(
-            state: &didWarnStaleness, reader: MailController.readVersionSidecar) {
-            MailController.emitDiagnostic("⚠ " + warning)
-        }
+        MailController.stalenessWarnOnce(
+            state: &didWarnStaleness,
+            reader: MailController.readVersionSidecar,
+            emit: { MailController.emitDiagnostic("⚠ " + $0) })
         switch AutomationStatus.probe() {
         case .denied:
             throw MailError.scriptFailed(
@@ -458,12 +458,26 @@ actor MailController {
     /// user-paced, not a hot path. A time-based throttle was rejected: it would
     /// reintroduce a smaller version of the detection gap above plus extra
     /// mutable state.
-    nonisolated static func stalenessWarningOnce(state: inout Bool, reader: () -> String?) -> String? {
-        guard !state else { return nil }
+    /// The gate is consumed by a DELIVERED warning, not by a decided one
+    /// (#303 verify round 6, cross-model). `emit` returns whether the write
+    /// actually succeeded; a failed write leaves the gate armed so the next
+    /// preflight tries again. Without this, one transient stderr failure —
+    /// `EPIPE` while a log reader restarts, `ENOSPC` — permanently swallowed
+    /// the only warning the process would ever emit. #320's process-wide
+    /// `SIG_IGN` is what makes that path reachable at all: before it, a
+    /// broken-pipe stderr killed the process instead of returning an error.
+    @discardableResult
+    nonisolated static func stalenessWarnOnce(
+        state: inout Bool,
+        reader: () -> String?,
+        emit: (String) -> Bool
+    ) -> Bool {
+        guard !state else { return false }
         guard let warning = StalenessCheck.evaluate(compiled: AppVersion.current, sidecar: reader())
-        else { return nil }          // no drift → gate stays armed
-        state = true                 // warned once; stay quiet from here on
-        return warning
+        else { return false }        // no drift → gate stays armed
+        guard emit(warning) else { return false }   // delivery failed → gate stays armed
+        state = true                 // warned once, and it landed
+        return true
     }
 
     /// Max bytes read from the sidecar. A version string is `"2.25.0"`-sized;
@@ -482,17 +496,27 @@ actor MailController {
     /// fd 2 — both verified to survive), the same remedy #301 took on the
     /// osascript stdin path.
     ///
-    /// Precise boundary (#303 verify round 5): this does NOT cover `SIGPIPE`. A
-    /// broken-pipe fd 2 (write end open, read end gone) kills the process in the
-    /// kernel *before* `write()` returns to Swift, so no `try?` / `do-catch` can
-    /// intercept it (verified, exit 141). That exposure is **not specific to
-    /// this call** — all 27 `FileHandle.standardError.write` sites across the
-    /// server share it, and there is no process-wide `SIGPIPE` handling. It is a
-    /// pre-existing whole-server property, tracked separately as a hardening
-    /// item (#320), not introduced here; fixing it belongs at process scope (a
-    /// startup `SIG_IGN` plus `EPIPE` handling), not in this one advisory writer.
-    nonisolated static func emitDiagnostic(_ line: String) {
-        try? FileHandle.standardError.write(contentsOf: Data((line + "\n").utf8))
+    /// Broken-pipe boundary, restated for the post-#320 tree (#303 verify round
+    /// 6): round 5 recorded that a broken-pipe fd 2 kills the process in the
+    /// kernel before `write()` returns, with no process-wide `SIGPIPE` handling
+    /// anywhere — that was true then and is **false now**. `main.swift` installs
+    /// `signal(SIGPIPE, SIG_IGN)` at startup (#320, shipped in v2.26.0), so a
+    /// broken pipe surfaces as an `EPIPE` *error* from the throwing write, which
+    /// this function catches like any other descriptor error. Both families —
+    /// bad descriptor (closed / read-only fd 2) and broken pipe — are now
+    /// survivable here.
+    ///
+    /// - Returns: whether the line actually reached fd 2. Callers that consume a
+    ///   one-shot gate MUST branch on this (see `stalenessWarnOnce`): a
+    ///   swallowed failure that still burns the gate loses the warning forever.
+    @discardableResult
+    nonisolated static func emitDiagnostic(_ line: String) -> Bool {
+        do {
+            try FileHandle.standardError.write(contentsOf: Data((line + "\n").utf8))
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// #303 — locate the wrapper's version sidecar next to THIS running

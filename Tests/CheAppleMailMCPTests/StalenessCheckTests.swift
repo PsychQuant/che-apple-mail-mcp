@@ -86,16 +86,59 @@ final class StalenessCheckTests: XCTestCase {
     func testGate_warnsOnce_thenStopsReading() {
         var state = false
         var reads = 0
+        var emitted: [String] = []
         let reader: () -> String? = { reads += 1; return "99.0.0" }  // always drift vs any real compiled
+        let emit: (String) -> Bool = { emitted.append($0); return true }
 
-        let first = MailController.stalenessWarningOnce(state: &state, reader: reader)
-        XCTAssertNotNil(first, "first call must surface the drift warning")
+        XCTAssertTrue(MailController.stalenessWarnOnce(state: &state, reader: reader, emit: emit),
+                      "first call must surface the drift warning")
+        XCTAssertEqual(emitted.count, 1)
         XCTAssertTrue(state, "gate is consumed once a warning has actually been emitted")
         XCTAssertEqual(reads, 1)
 
-        let second = MailController.stalenessWarningOnce(state: &state, reader: reader)
-        XCTAssertNil(second, "already warned — do not nag every call")
+        XCTAssertFalse(MailController.stalenessWarnOnce(state: &state, reader: reader, emit: emit),
+                       "already warned — do not nag every call")
+        XCTAssertEqual(emitted.count, 1)
         XCTAssertEqual(reads, 1, "and do not keep re-reading once the point has been made")
+    }
+
+    // MARK: - Round-6 regression (cross-model): a FAILED emit must not burn the gate
+
+    /// A decided warning is not a delivered one. `emitDiagnostic` swallows write
+    /// errors so an advisory nudge can never abort the process — which means a
+    /// transient stderr failure (`EPIPE` while a log reader restarts, `ENOSPC`)
+    /// used to consume the gate and lose the process's only warning forever.
+    /// #320's process-wide `SIG_IGN` is what makes that path reachable: before
+    /// it, a broken-pipe stderr killed the process instead of returning an error.
+    func testGate_failedEmit_leavesGateArmed_thenWarnsWhenDeliveryRecovers() {
+        var state = false
+        var attempts = 0
+        var delivered = 0
+        var stderrIsBroken = true
+        let reader: () -> String? = { "99.0.0" }
+        let emit: (String) -> Bool = { _ in
+            attempts += 1
+            if stderrIsBroken { return false }
+            delivered += 1
+            return true
+        }
+
+        XCTAssertFalse(MailController.stalenessWarnOnce(state: &state, reader: reader, emit: emit),
+                       "the write failed — this is not a delivered warning")
+        XCTAssertEqual(attempts, 1)
+        XCTAssertEqual(delivered, 0)
+        XCTAssertFalse(state, "a failed emit must NOT consume the gate")
+
+        stderrIsBroken = false   // the log reader reconnects
+
+        XCTAssertTrue(MailController.stalenessWarnOnce(state: &state, reader: reader, emit: emit),
+                      "still armed → the warning lands as soon as stderr works again")
+        XCTAssertEqual(delivered, 1)
+        XCTAssertTrue(state)
+
+        XCTAssertFalse(MailController.stalenessWarnOnce(state: &state, reader: reader, emit: emit),
+                       "and once delivered, it stays quiet")
+        XCTAssertEqual(delivered, 1)
     }
 
     // MARK: - B2 regression (#303 verify): warn-once, NOT check-once
@@ -108,11 +151,13 @@ final class StalenessCheckTests: XCTestCase {
         var reads = 0
         let reader: () -> String? = { reads += 1; return nil }  // fail-open, no sidecar
 
-        XCTAssertNil(MailController.stalenessWarningOnce(state: &state, reader: reader))
+        let emit: (String) -> Bool = { _ in XCTFail("must not emit without drift"); return true }
+
+        XCTAssertFalse(MailController.stalenessWarnOnce(state: &state, reader: reader, emit: emit))
         XCTAssertFalse(state, "a no-warning check must NOT consume the gate")
         XCTAssertEqual(reads, 1)
 
-        XCTAssertNil(MailController.stalenessWarningOnce(state: &state, reader: reader))
+        XCTAssertFalse(MailController.stalenessWarnOnce(state: &state, reader: reader, emit: emit))
         XCTAssertEqual(reads, 2, "still armed → still checking on the next call")
     }
 
@@ -125,12 +170,14 @@ final class StalenessCheckTests: XCTestCase {
         var sidecar = AppVersion.current
         let reader: () -> String? = { sidecar }
 
-        XCTAssertNil(MailController.stalenessWarningOnce(state: &state, reader: reader),
-                     "no drift at startup — correct to stay silent")
+        let emit: (String) -> Bool = { _ in true }
+
+        XCTAssertFalse(MailController.stalenessWarnOnce(state: &state, reader: reader, emit: emit),
+                       "no drift at startup — correct to stay silent")
 
         sidecar = "99.0.0"   // a newer binary lands on disk mid-session
 
-        XCTAssertNotNil(MailController.stalenessWarningOnce(state: &state, reader: reader),
+        XCTAssertTrue(MailController.stalenessWarnOnce(state: &state, reader: reader, emit: emit),
             "drift after a no-drift startup must still warn — this is the whole "
             + "long-lived-window scenario #303 exists for")
     }

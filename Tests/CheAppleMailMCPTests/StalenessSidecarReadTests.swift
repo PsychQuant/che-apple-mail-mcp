@@ -186,12 +186,16 @@ final class StalenessSidecarReadTests: XCTestCase {
         try "99.0.0".write(toFile: p, atomically: true, encoding: .utf8)
 
         var state = false
-        let warning = MailController.stalenessWarningOnce(
-            state: &state, reader: { MailController.readVersionSidecar(at: p) })
+        var emitted: [String] = []
+        let warned = MailController.stalenessWarnOnce(
+            state: &state,
+            reader: { MailController.readVersionSidecar(at: p) },
+            emit: { emitted.append($0); return true })
 
-        XCTAssertNotNil(warning, "a real on-disk newer version must warn")
-        XCTAssertTrue(warning?.contains("99.0.0") == true)
-        XCTAssertTrue(state, "gate consumed after an actual warning")
+        XCTAssertTrue(warned, "a real on-disk newer version must warn")
+        XCTAssertEqual(emitted.count, 1)
+        XCTAssertTrue(emitted.first?.contains("99.0.0") == true)
+        XCTAssertTrue(state, "gate consumed after an actual DELIVERED warning")
     }
 
     func testEndToEnd_matchingVersion_staysSilentAndArmed() throws {
@@ -199,14 +203,15 @@ final class StalenessSidecarReadTests: XCTestCase {
         try AppVersion.current.write(toFile: p, atomically: true, encoding: .utf8)
 
         var state = false
-        XCTAssertNil(MailController.stalenessWarningOnce(
-            state: &state, reader: { MailController.readVersionSidecar(at: p) }))
+        let emit: (String) -> Bool = { _ in true }
+        XCTAssertFalse(MailController.stalenessWarnOnce(
+            state: &state, reader: { MailController.readVersionSidecar(at: p) }, emit: emit))
         XCTAssertFalse(state, "no drift → gate stays armed for a later update")
 
         // Now the update lands.
         try "99.0.0".write(toFile: p, atomically: true, encoding: .utf8)
-        XCTAssertNotNil(MailController.stalenessWarningOnce(
-            state: &state, reader: { MailController.readVersionSidecar(at: p) }),
+        XCTAssertTrue(MailController.stalenessWarnOnce(
+            state: &state, reader: { MailController.readVersionSidecar(at: p) }, emit: emit),
             "the later on-disk update must still be detected")
     }
 }

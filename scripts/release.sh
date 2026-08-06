@@ -106,7 +106,15 @@ fi
 # Fail-closed check (not auto-edit: this script requires a clean tree, so
 # editing mid-release would contradict its own precondition). Parse with
 # python3 json, not grep — the file is JSON, so read it as JSON.
-MANIFEST_VERSION=$(python3 -c "import json; print(json.load(open('mcpb/manifest.json'))['version'])" 2>/dev/null || true)
+#
+# X-GUARD (#303 verify round 6, cross-model): `$( )` strips EVERY trailing
+# newline, including LF bytes that belong to the VALUE. Without the guard a
+# manifest holding `"2.27.0\n"` normalizes to `2.27.0`, passes this exact
+# comparison, and ships — the very case the comparison claims to catch. The
+# probe therefore prints with `end=''` and appends a literal `X`, so any LF the
+# value carries is interior (never stripped) and survives into the comparison.
+MANIFEST_VERSION=$(python3 -c "import json; print(json.load(open('mcpb/manifest.json'))['version'], end='')" 2>/dev/null; printf 'X')
+MANIFEST_VERSION="${MANIFEST_VERSION%X}"
 if [[ -z "$MANIFEST_VERSION" ]]; then
     die "could not read version from mcpb/manifest.json (missing file or invalid JSON)."
 fi
@@ -156,13 +164,19 @@ APP_VERSION=$(
     tmp=$(mktemp -d) || exit 0          # empty output → the check below dies
     trap 'rm -rf "$tmp"' EXIT
     cp "$VERSION_SWIFT" "$tmp/Version.swift"
-    printf 'print(AppVersion.current)\n' > "$tmp/main.swift"
+    # `terminator: ""` + the X-guard below: see the manifest probe's comment.
+    # A value of "2.27.0\n" must NOT normalize to "2.27.0" here, or the guard
+    # waves through a version that fails SemVer parsing at runtime — silently
+    # disabling the very staleness check this PR adds.
+    printf 'print(AppVersion.current, terminator: "")\n' > "$tmp/main.swift"
     if xcrun swiftc -O "$tmp/Version.swift" "$tmp/main.swift" -o "$tmp/probe" 2>"$tmp/err"; then
         "$tmp/probe" 2>/dev/null
     else
         sed 's/^/    /' "$tmp/err" >&2      # surface WHY, don't swallow it
     fi
+    printf 'X'
 ) || true
+APP_VERSION="${APP_VERSION%X}"
 if [[ -z "$APP_VERSION" ]]; then
     die "could not read AppVersion.current from $VERSION_SWIFT.
   The probe compiles that file and prints the value, so an empty result means one of:
@@ -242,14 +256,22 @@ info "Universal binary built: $BINARY_PATH ($BINARY_SIZE), archs: $ARCHS"
 # repo genuinely builds the probe and the slices with different toolchains).
 # So ask each slice what it is, using the mode it exposes for exactly this.
 for slice in $ARCHS; do
-    SLICE_VERSION="$(arch -"$slice" "$BINARY_PATH" --version 2>/dev/null || true)"
+    # X-guard, then strip exactly ONE trailing newline — the one `print()` in
+    # the `--version` path emits. Without the guard, `$( )` would strip that
+    # newline AND any LF baked into the literal, so "2.27.0\n" would arrive
+    # here indistinguishable from "2.27.0" and pass (#303 verify round 6,
+    # cross-model). With it, the malformed value keeps one extra LF and fails
+    # the exact comparison below — which is what the comparison always claimed
+    # to do.
+    SLICE_RAW="$(arch -"$slice" "$BINARY_PATH" --version 2>/dev/null; printf 'X')"
+    SLICE_RAW="${SLICE_RAW%X}"
+    SLICE_VERSION="${SLICE_RAW%$'\n'}"
     [[ -n "$SLICE_VERSION" ]] \
         || die "the $slice slice did not report a version (--version produced nothing).
   Cannot ship an artifact that cannot state its own version."
     # Exact match, not a prefix: a trailing newline or stray whitespace baked
-    # into the literal would break semver parsing at runtime while a looser
-    # comparison here waved it through (bash \$( ) strips trailing newlines,
-    # which is precisely how that slips past).
+    # into the literal breaks semver parsing at runtime, and the X-guard above
+    # is what keeps it visible to this comparison.
     [[ "$SLICE_VERSION" == "$VERSION_NO_V" ]] \
         || die "version mismatch in the SHIPPED binary: the $slice slice reports '$SLICE_VERSION' but this is release '$VERSION_NO_V'.
   A conditional or malformed AppVersion.current can make the host probe and the
