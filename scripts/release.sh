@@ -107,19 +107,34 @@ fi
 # editing mid-release would contradict its own precondition). Parse with
 # python3 json, not grep — the file is JSON, so read it as JSON.
 #
-# X-GUARD (#303 verify round 6, cross-model): `$( )` strips EVERY trailing
-# newline, including LF bytes that belong to the VALUE. Without the guard a
-# manifest holding `"2.27.0\n"` normalizes to `2.27.0`, passes this exact
-# comparison, and ships — the very case the comparison claims to catch. The
-# probe therefore prints with `end=''` and appends a literal `X`, so any LF the
-# value carries is interior (never stripped) and survives into the comparison.
-MANIFEST_VERSION=$(python3 -c "import json; print(json.load(open('mcpb/manifest.json'))['version'], end='')" 2>/dev/null; printf 'X')
-MANIFEST_VERSION="${MANIFEST_VERSION%X}"
-if [[ -z "$MANIFEST_VERSION" ]]; then
-    die "could not read version from mcpb/manifest.json (missing file or invalid JSON)."
-fi
-if [[ "$MANIFEST_VERSION" != "$VERSION_NO_V" ]]; then
-    die "mcpb/manifest.json version is '$MANIFEST_VERSION' but releasing '$VERSION_NO_V'.
+# COMPARE THE BYTES WHERE THEY LIVE — never in a bash variable (#303 verify
+# rounds 6-7, cross-model). Two rounds attacked this comparison and each fix
+# only covered the byte it was shown:
+#   R6: `$( )` strips EVERY trailing newline, so a manifest holding
+#       `"2.27.0\n"` normalized to `2.27.0` and passed. An "X-guard" sentinel
+#       fixed that instance.
+#   R7: a bash variable CANNOT HOLD A NUL AT ALL — command substitution drops
+#       `\0` regardless of any sentinel — so a value of `"2.27.0<NUL>"`
+#       still arrived as `2.27.0` and passed.
+# The class is "bash string equality is not byte equality", and no amount of
+# quoting closes it. So the value never enters a variable: python compares it
+# in-process against the tag and communicates only an exit status. Any byte
+# that differs — NUL, LF, CR, space, anything — fails, and the diagnostic
+# prints a repr so the offending bytes are visible.
+if ! python3 - "$VERSION_NO_V" <<'PY'
+import json, sys
+want = sys.argv[1]
+try:
+    got = json.load(open('mcpb/manifest.json'))['version']
+except Exception as exc:                       # missing file / invalid JSON / no key
+    print(f"    could not read version from mcpb/manifest.json: {exc}", file=sys.stderr)
+    sys.exit(2)
+if not isinstance(got, str) or got != want:
+    print(f"    manifest version is {got!r}, releasing {want!r}", file=sys.stderr)
+    sys.exit(1)
+PY
+then
+    die "mcpb/manifest.json version does not match '$VERSION_NO_V' (exact bytes shown above).
   Bump it alongside the CHANGELOG entry (ManifestVersionTests pins the same invariant in CI)."
 fi
 
@@ -150,43 +165,40 @@ fi
 # disagreed with its tag — silently. The class is "recognising Swift requires a
 # Swift parser", so ask the compiler for the value instead of guessing at it.
 # This is also less code than the lexer it replaces.
-# EXIT, not RETURN: this runs inside a `$( )` subshell, not a function. bash
-# only honors a RETURN trap inside a function body, so the original spelling
-# never fired and leaked a temp dir (holding a compiled binary) on every
-# release. EXIT fires when the subshell ends, which is exactly the scope here.
-# `|| true` so a failing probe cannot trip `set -e` at THIS assignment: without
-# it errexit terminated the script right here and the diagnostic below — which
-# names the causes — was unreachable dead code for exactly the two cases most
-# worth explaining (missing swiftc, Version.swift no longer compiling). Verified
-# with isolated repros (#303 verify round 4). Compiler stderr is kept and shown.
-
-APP_VERSION=$(
-    tmp=$(mktemp -d) || exit 0          # empty output → the check below dies
+# EXIT, not RETURN: this runs inside a subshell, not a function. bash only
+# honors a RETURN trap inside a function body, so the original spelling never
+# fired and leaked a temp dir (holding a compiled binary) on every release.
+# EXIT fires when the subshell ends, which is exactly the scope here.
+#
+# The probe writes the value to a FILE and compares with `cmp` inside the
+# subshell; it never crosses into a bash variable (see the manifest probe's
+# comment for why — R7's NUL case is unfixable at the variable layer). The
+# subshell's exit status is the whole result; `if !` keeps a failure from
+# tripping errexit before the diagnostic below can run (#303 verify round 4).
+if ! (
+    tmp=$(mktemp -d) || { echo "    mktemp failed" >&2; exit 3; }
     trap 'rm -rf "$tmp"' EXIT
     cp "$VERSION_SWIFT" "$tmp/Version.swift"
-    # `terminator: ""` + the X-guard below: see the manifest probe's comment.
-    # A value of "2.27.0\n" must NOT normalize to "2.27.0" here, or the guard
-    # waves through a version that fails SemVer parsing at runtime — silently
-    # disabling the very staleness check this PR adds.
     printf 'print(AppVersion.current, terminator: "")\n' > "$tmp/main.swift"
-    if xcrun swiftc -O "$tmp/Version.swift" "$tmp/main.swift" -o "$tmp/probe" 2>"$tmp/err"; then
-        "$tmp/probe" 2>/dev/null
-    else
+    xcrun swiftc -O "$tmp/Version.swift" "$tmp/main.swift" -o "$tmp/probe" 2>"$tmp/err" || {
         sed 's/^/    /' "$tmp/err" >&2      # surface WHY, don't swallow it
-    fi
-    printf 'X'
-) || true
-APP_VERSION="${APP_VERSION%X}"
-if [[ -z "$APP_VERSION" ]]; then
-    die "could not read AppVersion.current from $VERSION_SWIFT.
-  The probe compiles that file and prints the value, so an empty result means one of:
+        exit 4
+    }
+    "$tmp/probe" > "$tmp/got" 2>/dev/null || { echo "    the probe crashed" >&2; exit 5; }
+    printf '%s' "$VERSION_NO_V" > "$tmp/want"
+    cmp -s "$tmp/got" "$tmp/want" || {
+        printf '    AppVersion.current, byte for byte:\n' >&2
+        od -c "$tmp/got" | sed 's/^/      /' | head -4 >&2
+        exit 1
+    }
+); then
+    die "AppVersion.current in $VERSION_SWIFT does not match '$VERSION_NO_V' (bytes above, if the probe got that far).
+  The probe compiles that file and compares the printed value byte for byte, so a failure means one of:
+    - a real version drift → update $VERSION_SWIFT to '$VERSION_NO_V'
+    - a malformed literal (stray NUL / newline / space inside the string)
     - xcrun/swiftc unavailable (check: xcrun swiftc --version)
     - $VERSION_SWIFT no longer compiles standalone (a new import or dependency?)
-    - mktemp failed
   Fails closed by design: without a verified version we will not tag a release."
-fi
-if [[ "$APP_VERSION" != "$VERSION_NO_V" ]]; then
-    die "version drift: AppVersion.current is '$APP_VERSION' but releasing '$VERSION_NO_V'. Update $VERSION_SWIFT to '$VERSION_NO_V' first."
 fi
 
 info "Sanity checks passed."
@@ -256,26 +268,29 @@ info "Universal binary built: $BINARY_PATH ($BINARY_SIZE), archs: $ARCHS"
 # repo genuinely builds the probe and the slices with different toolchains).
 # So ask each slice what it is, using the mode it exposes for exactly this.
 for slice in $ARCHS; do
-    # X-guard, then strip exactly ONE trailing newline — the one `print()` in
-    # the `--version` path emits. Without the guard, `$( )` would strip that
-    # newline AND any LF baked into the literal, so "2.27.0\n" would arrive
-    # here indistinguishable from "2.27.0" and pass (#303 verify round 6,
-    # cross-model). With it, the malformed value keeps one extra LF and fails
-    # the exact comparison below — which is what the comparison always claimed
-    # to do.
-    SLICE_RAW="$(arch -"$slice" "$BINARY_PATH" --version 2>/dev/null; printf 'X')"
-    SLICE_RAW="${SLICE_RAW%X}"
-    SLICE_VERSION="${SLICE_RAW%$'\n'}"
-    [[ -n "$SLICE_VERSION" ]] \
-        || die "the $slice slice did not report a version (--version produced nothing).
-  Cannot ship an artifact that cannot state its own version."
-    # Exact match, not a prefix: a trailing newline or stray whitespace baked
-    # into the literal breaks semver parsing at runtime, and the X-guard above
-    # is what keeps it visible to this comparison.
-    [[ "$SLICE_VERSION" == "$VERSION_NO_V" ]] \
-        || die "version mismatch in the SHIPPED binary: the $slice slice reports '$SLICE_VERSION' but this is release '$VERSION_NO_V'.
+    # Byte-exact against the artifact, without a bash variable in the path.
+    # `--version` prints the value plus one `print()` newline, so the expected
+    # bytes are `<version>\n` and `cmp` decides. Two earlier spellings routed
+    # the output through `$( )` and were defeated in turn — R6 by a trailing LF
+    # inside the literal (stripped along with print()'s), R7 by a NUL, which a
+    # bash variable cannot hold at all. Comparing files closes the whole class.
+    if ! (
+        tmp=$(mktemp -d) || { echo "    mktemp failed" >&2; exit 3; }
+        trap 'rm -rf "$tmp"' EXIT
+        arch -"$slice" "$BINARY_PATH" --version > "$tmp/got" 2>/dev/null || {
+            echo "    the $slice slice failed to run --version" >&2; exit 5; }
+        [[ -s "$tmp/got" ]] || { echo "    the $slice slice printed nothing" >&2; exit 6; }
+        printf '%s\n' "$VERSION_NO_V" > "$tmp/want"
+        cmp -s "$tmp/got" "$tmp/want" || {
+            printf '    the %s slice reports, byte for byte:\n' "$slice" >&2
+            od -c "$tmp/got" | sed 's/^/      /' | head -4 >&2
+            exit 1
+        }
+    ); then
+        die "version mismatch in the SHIPPED binary: the $slice slice does not report '$VERSION_NO_V' (bytes above).
   A conditional or malformed AppVersion.current can make the host probe and the
   actual slices disagree — this check reads the artifact itself."
+    fi
 done
 info "Both slices self-report $VERSION_NO_V."
 
