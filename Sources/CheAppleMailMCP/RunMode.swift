@@ -8,6 +8,7 @@ public enum RunMode: Equatable {
     case server        // default — the stdio MCP server
     case setup         // --setup — the SwiftUI Full Disk Access setup window
     case checkFDA      // --check-fda — headless one-shot status print + open the pane
+    case version       // --version — print AppVersion.current and exit (#303)
 
     /// Parse from raw `argv` (argv[0] is the binary path; flags follow). `--setup`
     /// wins over `--check-fda` if both are somehow present (GUI is the richer path).
@@ -15,6 +16,7 @@ public enum RunMode: Equatable {
         let flags = Set(arguments.dropFirst())
         if flags.contains("--setup") { return .setup }
         if flags.contains("--check-fda") { return .checkFDA }
+        if flags.contains("--version") { return .version }
         return .server
     }
 }

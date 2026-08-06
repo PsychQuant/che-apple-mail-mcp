@@ -55,9 +55,57 @@ fi
 VERSION="$1"
 TITLE="${2:-$VERSION}"
 
-# Validate version format: v<major>.<minor>.<patch>
-if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    die "version must match vMAJOR.MINOR.PATCH (got: $VERSION)"
+# Validate the tag against the rules the RUNTIME parser actually applies
+# (#303 verify round 8, cross-model). The byte-exact probes further down only
+# guarantee "manifest == Version.swift == tag"; they say nothing about whether
+# that agreed-upon value is one `SemVer()` can parse. Three ways the previous
+# `[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]` accepted a tag that `SemVer()`
+# then rejected — shipping a self-consistent but unparseable version, which
+# silently disables staleness detection exactly like R6/R7 did:
+#   1. `shopt -s nocasematch` (a `BASH_ENV` away) makes the pattern accept
+#      `V2.27.0`, and `${VERSION#v}` does not strip a capital V.
+#   2. bash's `[0-9]` is locale-sensitive: under some collations it matches
+#      characters that are not ASCII digits (`vA.27.0` was accepted).
+#   3. the components were unbounded, so `v9223372036854775808.0.0` passed and
+#      then overflowed Swift's `Int` inside `SemVer()`.
+# Same lesson as rounds 1-3 and 6-7 in a third costume: validate with the thing
+# that will actually consume the value. Python's `[0-9]` is ASCII by definition
+# and case-sensitivity is not a global toggle.
+#
+# The digit bound is `{1,19}`, not `{1,18}` (#303 verify round 9): `Int64`'s
+# ceiling 9223372036854775807 is 19 digits, so an 18-digit cap REJECTED values
+# `SemVer()` parses happily — e.g. `v1000000000000000000.0.0` — blocking a
+# release the old check allowed. The regex now admits every 19-digit component
+# and the `2**63 - 1` test does the real bounding; that test is load-bearing,
+# not decoration, since 19 digits reach past Int64.
+#
+# How this compares to `SemVer()` — measured against the real parser, not
+# assumed (#303 verify round 10 caught the previous version of this comment
+# asserting two asymmetries that do not exist):
+#   `01.02.03`   both accept  (`Int("01")` is 1; the regex allows leading zeros)
+#   `1.+1.0`     both reject  (`+` is a suffix separator, so SemVer sees 2 parts)
+#   `2.27.0-rc1` DIFFER: SemVer accepts it as 2.27.0 — it discards a `-`/`+`
+#                suffix by design — while this validator refuses the tag.
+# The direction of every difference is the same: `SemVer()` COERCES a range of
+# inputs to a version, this validator insists on the canonical `vN.N.N` form
+# with each component at most 19 digits. So anything SemVer would coerce —
+# a `-`/`+` suffix, or zero-padding past the digit cap (`v0…01.0.0`, which
+# SemVer reads as 1.0.0) — is refused at TAG time. Deliberate: the validator
+# gates what we cut, `SemVer()` parses what we later read, and being tighter on
+# the way out is fine provided it never blocks a sane release — precisely what
+# round 9's finding was about. (No exhaustive claim here: rounds 10 and 11 each
+# falsified a "these are the only differences" sentence in this very comment.)
+if ! LC_ALL=C python3 - "$VERSION" <<'PY'
+import re, sys
+m = re.fullmatch(r'v([0-9]{1,19})\.([0-9]{1,19})\.([0-9]{1,19})', sys.argv[1])
+if not m:
+    sys.exit(1)
+if any(int(g) > 2**63 - 1 for g in m.groups()):   # 19 digits can exceed Int64
+    sys.exit(1)
+PY
+then
+    die "version must match vMAJOR.MINOR.PATCH — ASCII decimal components, each within Swift's Int,
+  so the value round-trips through the same SemVer() the server parses at runtime (got: $VERSION)"
 fi
 
 # Strip leading 'v' for CHANGELOG lookup
@@ -106,13 +154,106 @@ fi
 # Fail-closed check (not auto-edit: this script requires a clean tree, so
 # editing mid-release would contradict its own precondition). Parse with
 # python3 json, not grep — the file is JSON, so read it as JSON.
-MANIFEST_VERSION=$(python3 -c "import json; print(json.load(open('mcpb/manifest.json'))['version'])" 2>/dev/null || true)
-if [[ -z "$MANIFEST_VERSION" ]]; then
-    die "could not read version from mcpb/manifest.json (missing file or invalid JSON)."
-fi
-if [[ "$MANIFEST_VERSION" != "$VERSION_NO_V" ]]; then
-    die "mcpb/manifest.json version is '$MANIFEST_VERSION' but releasing '$VERSION_NO_V'.
+#
+# COMPARE THE BYTES WHERE THEY LIVE — never in a bash variable (#303 verify
+# rounds 6-7, cross-model). Two rounds attacked this comparison and each fix
+# only covered the byte it was shown:
+#   R6: `$( )` strips EVERY trailing newline, so a manifest holding
+#       `"2.27.0\n"` normalized to `2.27.0` and passed. An "X-guard" sentinel
+#       fixed that instance.
+#   R7: a bash variable CANNOT HOLD A NUL AT ALL — command substitution drops
+#       `\0` regardless of any sentinel — so a value of `"2.27.0<NUL>"`
+#       still arrived as `2.27.0` and passed.
+# The class is "bash string equality is not byte equality", and no amount of
+# quoting closes it. So the value never enters a variable: python compares it
+# in-process against the tag and communicates only an exit status. Any byte
+# that differs — NUL, LF, CR, space, anything — fails, and the diagnostic
+# prints a repr so the offending bytes are visible.
+if ! python3 - "$VERSION_NO_V" <<'PY'
+import json, sys
+want = sys.argv[1]
+try:
+    got = json.load(open('mcpb/manifest.json'))['version']
+except Exception as exc:                       # missing file / invalid JSON / no key
+    print(f"    could not read version from mcpb/manifest.json: {exc}", file=sys.stderr)
+    sys.exit(2)
+if not isinstance(got, str) or got != want:
+    print(f"    manifest version is {got!r}, releasing {want!r}", file=sys.stderr)
+    sys.exit(1)
+PY
+then
+    die "mcpb/manifest.json version does not match '$VERSION_NO_V' (exact bytes shown above).
   Bump it alongside the CHANGELOG entry (ManifestVersionTests pins the same invariant in CI)."
+fi
+
+# AppVersion.current (the server's self-reported version) MUST match the tag (#303).
+# This is what makes the "2.7.2"-rot impossible to repeat: the compiled MCP handshake
+# serverVersion + the staleness-check baseline both read AppVersion.current, so a tag
+# that disagrees with Version.swift is a release-blocking drift, not a silent mismatch.
+VERSION_SWIFT="Sources/CheAppleMailMCP/Version.swift"
+if [[ ! -f "$VERSION_SWIFT" ]]; then
+    die "$VERSION_SWIFT not found — cannot verify AppVersion.current matches $VERSION_NO_V."
+fi
+# COMPILE the value; do not parse for it (#303 verify rounds 1-3).
+#
+# Three text-matching attempts were defeated in sequence, each by a different
+# piece of legal Swift, and each "fix" only covered the instance it was shown:
+#   1. unanchored grep matched `// static let current = "9.9.9"`.
+#   2. anchoring at line start missed a block comment, whose inner line begins
+#      with `static`.
+#   3. a hand-rolled comment stripper missed NESTED block comments (Swift
+#      permits them; a boolean cannot track depth) and, more fundamentally,
+#      missed a multi-line string literal containing a fake declaration:
+#          private static let example = """
+#          static let current = "9.9.9"
+#          """
+#      which is not a comment at all and no comment-stripper can help with.
+#
+# Every one of those would have shipped a binary whose handshake version
+# disagreed with its tag — silently. The class is "recognising Swift requires a
+# Swift parser", so ask the compiler for the value instead of guessing at it.
+# This is also less code than the lexer it replaces.
+# EXIT, not RETURN: this runs inside a subshell, not a function. bash only
+# honors a RETURN trap inside a function body, so the original spelling never
+# fired and leaked a temp dir (holding a compiled binary) on every release.
+# EXIT fires when the subshell ends, which is exactly the scope here.
+#
+# The probe writes the value to a FILE and compares with `cmp` inside the
+# subshell; it never crosses into a bash variable (see the manifest probe's
+# comment for why — R7's NUL case is unfixable at the variable layer). The
+# subshell's exit status is the whole result; `if !` keeps a failure from
+# tripping errexit before the diagnostic below can run (#303 verify round 4).
+if ! (
+    tmp=$(mktemp -d) || { echo "    mktemp failed" >&2; exit 3; }
+    trap 'rm -rf "$tmp"' EXIT
+    cp "$VERSION_SWIFT" "$tmp/Version.swift"
+    printf 'print(AppVersion.current, terminator: "")\n' > "$tmp/main.swift"
+    xcrun swiftc -O "$tmp/Version.swift" "$tmp/main.swift" -o "$tmp/probe" 2>"$tmp/err" || {
+        sed 's/^/    /' "$tmp/err" >&2      # surface WHY, don't swallow it
+        exit 4
+    }
+    "$tmp/probe" > "$tmp/got" 2>/dev/null || { echo "    the probe crashed" >&2; exit 5; }
+    printf '%s' "$VERSION_NO_V" > "$tmp/want"
+    # `cmp` distinguishes 0 (same) / 1 (differ) / >1 (trouble: unreadable file,
+    # cmp itself missing). Reporting >1 as "version mismatch" would be a false
+    # diagnosis of a correct fail-closed (#303 verify round 8, LOW).
+    cmp -s "$tmp/got" "$tmp/want"
+    case $? in
+        0) : ;;
+        1) printf '    AppVersion.current, byte for byte (first 64):\n' >&2
+           od -c "$tmp/got" | sed 's/^/      /' | head -4 >&2
+           exit 1 ;;
+        *) echo "    cmp could not compare the probe output (is cmp available?)" >&2
+           exit 2 ;;
+    esac
+); then
+    die "AppVersion.current in $VERSION_SWIFT does not match '$VERSION_NO_V' (bytes above, if the probe got that far).
+  The probe compiles that file and compares the printed value byte for byte, so a failure means one of:
+    - a real version drift → update $VERSION_SWIFT to '$VERSION_NO_V'
+    - a malformed literal (stray NUL / newline / space inside the string)
+    - xcrun/swiftc unavailable (check: xcrun swiftc --version)
+    - $VERSION_SWIFT no longer compiles standalone (a new import or dependency?)
+  Fails closed by design: without a verified version we will not tag a release."
 fi
 
 info "Sanity checks passed."
@@ -165,6 +306,52 @@ ARCHS="$(lipo -archs "$BINARY_PATH")"
 
 BINARY_SIZE="$(ls -lh "$BINARY_PATH" | awk '{print $5}')"
 info "Universal binary built: $BINARY_PATH ($BINARY_SIZE), archs: $ARCHS"
+
+# Interrogate the ACTUAL shipped artifact — every slice (#303 verify round 4).
+#
+# The earlier sanity check compiled Version.swift into a separate host-only
+# probe. That guesses at the artifact rather than examining it, and a perfectly
+# legal Version.swift can make the two disagree:
+#     #if arch(x86_64)
+#     static let current = "0.0.0"
+#     #else
+#     static let current = "2.25.0"
+#     #endif
+# The arm64 probe prints 2.25.0 and every check passes, while the Intel slice of
+# the binary being signed and shipped reports 0.0.0 — wrong handshake version,
+# wrong staleness baseline, silently. `#if compiler(...)` does the same (and this
+# repo genuinely builds the probe and the slices with different toolchains).
+# So ask each slice what it is, using the mode it exposes for exactly this.
+for slice in $ARCHS; do
+    # Byte-exact against the artifact, without a bash variable in the path.
+    # `--version` prints the value plus one `print()` newline, so the expected
+    # bytes are `<version>\n` and `cmp` decides. Two earlier spellings routed
+    # the output through `$( )` and were defeated in turn — R6 by a trailing LF
+    # inside the literal (stripped along with print()'s), R7 by a NUL, which a
+    # bash variable cannot hold at all. Comparing files closes the whole class.
+    if ! (
+        tmp=$(mktemp -d) || { echo "    mktemp failed" >&2; exit 3; }
+        trap 'rm -rf "$tmp"' EXIT
+        arch -"$slice" "$BINARY_PATH" --version > "$tmp/got" 2>/dev/null || {
+            echo "    the $slice slice failed to run --version" >&2; exit 5; }
+        [[ -s "$tmp/got" ]] || { echo "    the $slice slice printed nothing" >&2; exit 6; }
+        printf '%s\n' "$VERSION_NO_V" > "$tmp/want"
+        cmp -s "$tmp/got" "$tmp/want"
+        case $? in
+            0) : ;;
+            1) printf '    the %s slice reports, byte for byte (first 64):\n' "$slice" >&2
+               od -c "$tmp/got" | sed 's/^/      /' | head -4 >&2
+               exit 1 ;;
+            *) echo "    cmp could not compare the $slice slice output" >&2
+               exit 2 ;;
+        esac
+    ); then
+        die "version mismatch in the SHIPPED binary: the $slice slice does not report '$VERSION_NO_V' (bytes above).
+  A conditional or malformed AppVersion.current can make the host probe and the
+  actual slices disagree — this check reads the artifact itself."
+    fi
+done
+info "Both slices self-report $VERSION_NO_V."
 
 # ---- Confirm with user -------------------------------------------------------
 
