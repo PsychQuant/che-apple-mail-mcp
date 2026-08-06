@@ -55,9 +55,34 @@ fi
 VERSION="$1"
 TITLE="${2:-$VERSION}"
 
-# Validate version format: v<major>.<minor>.<patch>
-if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    die "version must match vMAJOR.MINOR.PATCH (got: $VERSION)"
+# Validate the tag against the rules the RUNTIME parser actually applies
+# (#303 verify round 8, cross-model). The byte-exact probes further down only
+# guarantee "manifest == Version.swift == tag"; they say nothing about whether
+# that agreed-upon value is one `SemVer()` can parse. Three ways the previous
+# `[[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]` accepted a tag that `SemVer()`
+# then rejected — shipping a self-consistent but unparseable version, which
+# silently disables staleness detection exactly like R6/R7 did:
+#   1. `shopt -s nocasematch` (a `BASH_ENV` away) makes the pattern accept
+#      `V2.27.0`, and `${VERSION#v}` does not strip a capital V.
+#   2. bash's `[0-9]` is locale-sensitive: under some collations it matches
+#      characters that are not ASCII digits (`vA.27.0` was accepted).
+#   3. the components were unbounded, so `v9223372036854775808.0.0` passed and
+#      then overflowed Swift's `Int` inside `SemVer()`.
+# Same lesson as rounds 1-3 and 6-7 in a third costume: validate with the thing
+# that will actually consume the value. Python's `[0-9]` is ASCII by definition
+# and case-sensitivity is not a global toggle; `{1,18}` keeps every component
+# inside Int64 (10^18 - 1 < 2^63 - 1) with the explicit bound as belt-and-braces.
+if ! LC_ALL=C python3 - "$VERSION" <<'PY'
+import re, sys
+m = re.fullmatch(r'v([0-9]{1,18})\.([0-9]{1,18})\.([0-9]{1,18})', sys.argv[1])
+if not m:
+    sys.exit(1)
+if any(int(g) > 2**63 - 1 for g in m.groups()):   # unreachable at {1,18}; kept explicit
+    sys.exit(1)
+PY
+then
+    die "version must match vMAJOR.MINOR.PATCH — ASCII decimal components, at most 18 digits each,
+  so the value round-trips through the same SemVer() the server parses at runtime (got: $VERSION)"
 fi
 
 # Strip leading 'v' for CHANGELOG lookup
@@ -186,11 +211,18 @@ if ! (
     }
     "$tmp/probe" > "$tmp/got" 2>/dev/null || { echo "    the probe crashed" >&2; exit 5; }
     printf '%s' "$VERSION_NO_V" > "$tmp/want"
-    cmp -s "$tmp/got" "$tmp/want" || {
-        printf '    AppVersion.current, byte for byte:\n' >&2
-        od -c "$tmp/got" | sed 's/^/      /' | head -4 >&2
-        exit 1
-    }
+    # `cmp` distinguishes 0 (same) / 1 (differ) / >1 (trouble: unreadable file,
+    # cmp itself missing). Reporting >1 as "version mismatch" would be a false
+    # diagnosis of a correct fail-closed (#303 verify round 8, LOW).
+    cmp -s "$tmp/got" "$tmp/want"
+    case $? in
+        0) : ;;
+        1) printf '    AppVersion.current, byte for byte (first 64):\n' >&2
+           od -c "$tmp/got" | sed 's/^/      /' | head -4 >&2
+           exit 1 ;;
+        *) echo "    cmp could not compare the probe output (is cmp available?)" >&2
+           exit 2 ;;
+    esac
 ); then
     die "AppVersion.current in $VERSION_SWIFT does not match '$VERSION_NO_V' (bytes above, if the probe got that far).
   The probe compiles that file and compares the printed value byte for byte, so a failure means one of:
@@ -281,11 +313,15 @@ for slice in $ARCHS; do
             echo "    the $slice slice failed to run --version" >&2; exit 5; }
         [[ -s "$tmp/got" ]] || { echo "    the $slice slice printed nothing" >&2; exit 6; }
         printf '%s\n' "$VERSION_NO_V" > "$tmp/want"
-        cmp -s "$tmp/got" "$tmp/want" || {
-            printf '    the %s slice reports, byte for byte:\n' "$slice" >&2
-            od -c "$tmp/got" | sed 's/^/      /' | head -4 >&2
-            exit 1
-        }
+        cmp -s "$tmp/got" "$tmp/want"
+        case $? in
+            0) : ;;
+            1) printf '    the %s slice reports, byte for byte (first 64):\n' "$slice" >&2
+               od -c "$tmp/got" | sed 's/^/      /' | head -4 >&2
+               exit 1 ;;
+            *) echo "    cmp could not compare the $slice slice output" >&2
+               exit 2 ;;
+        esac
     ); then
         die "version mismatch in the SHIPPED binary: the $slice slice does not report '$VERSION_NO_V' (bytes above).
   A conditional or malformed AppVersion.current can make the host probe and the
