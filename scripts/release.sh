@@ -70,18 +70,31 @@ TITLE="${2:-$VERSION}"
 #      then overflowed Swift's `Int` inside `SemVer()`.
 # Same lesson as rounds 1-3 and 6-7 in a third costume: validate with the thing
 # that will actually consume the value. Python's `[0-9]` is ASCII by definition
-# and case-sensitivity is not a global toggle; `{1,18}` keeps every component
-# inside Int64 (10^18 - 1 < 2^63 - 1) with the explicit bound as belt-and-braces.
+# and case-sensitivity is not a global toggle.
+#
+# The digit bound is `{1,19}`, not `{1,18}` (#303 verify round 9): `Int64`'s
+# ceiling 9223372036854775807 is 19 digits, so an 18-digit cap REJECTED values
+# `SemVer()` parses happily — e.g. `v1000000000000000000.0.0` — blocking a
+# release the old check allowed. The regex now admits every 19-digit component
+# and the `2**63 - 1` test does the real bounding; that test is load-bearing,
+# not decoration, since 19 digits reach past Int64.
+#
+# Deliberately STRICTER than `SemVer()` in two places, both malformed-tag
+# territory rather than anything a maintainer would cut: Swift's `Int()` accepts
+# a signed component (`1.+1.0`) and leading zeros (`01.02.03`), this does not.
+# The validator gates what we TAG; `SemVer()` parses what we later READ. Being
+# tighter on the way out is correct as long as it never blocks a sane version —
+# which is exactly what round 9's finding was about.
 if ! LC_ALL=C python3 - "$VERSION" <<'PY'
 import re, sys
-m = re.fullmatch(r'v([0-9]{1,18})\.([0-9]{1,18})\.([0-9]{1,18})', sys.argv[1])
+m = re.fullmatch(r'v([0-9]{1,19})\.([0-9]{1,19})\.([0-9]{1,19})', sys.argv[1])
 if not m:
     sys.exit(1)
-if any(int(g) > 2**63 - 1 for g in m.groups()):   # unreachable at {1,18}; kept explicit
+if any(int(g) > 2**63 - 1 for g in m.groups()):   # 19 digits can exceed Int64
     sys.exit(1)
 PY
 then
-    die "version must match vMAJOR.MINOR.PATCH — ASCII decimal components, at most 18 digits each,
+    die "version must match vMAJOR.MINOR.PATCH — ASCII decimal components, each within Swift's Int,
   so the value round-trips through the same SemVer() the server parses at runtime (got: $VERSION)"
 fi
 
