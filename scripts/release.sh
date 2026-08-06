@@ -86,10 +86,15 @@ TITLE="${2:-$VERSION}"
 #   `1.+1.0`     both reject  (`+` is a suffix separator, so SemVer sees 2 parts)
 #   `2.27.0-rc1` DIFFER: SemVer accepts it as 2.27.0 — it discards a `-`/`+`
 #                suffix by design — while this validator refuses the tag.
-# That last one is the only asymmetry, and it is intentional: the validator
-# gates what we TAG (no prerelease tags through this script), `SemVer()` parses
-# what we later READ. Being tighter on the way out is fine provided it never
-# blocks a sane release — which is precisely what round 9's finding was about.
+# The direction of every difference is the same: `SemVer()` COERCES a range of
+# inputs to a version, this validator insists on the canonical `vN.N.N` form
+# with each component at most 19 digits. So anything SemVer would coerce —
+# a `-`/`+` suffix, or zero-padding past the digit cap (`v0…01.0.0`, which
+# SemVer reads as 1.0.0) — is refused at TAG time. Deliberate: the validator
+# gates what we cut, `SemVer()` parses what we later read, and being tighter on
+# the way out is fine provided it never blocks a sane release — precisely what
+# round 9's finding was about. (No exhaustive claim here: rounds 10 and 11 each
+# falsified a "these are the only differences" sentence in this very comment.)
 if ! LC_ALL=C python3 - "$VERSION" <<'PY'
 import re, sys
 m = re.fullmatch(r'v([0-9]{1,19})\.([0-9]{1,19})\.([0-9]{1,19})', sys.argv[1])
