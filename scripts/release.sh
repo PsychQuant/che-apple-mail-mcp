@@ -79,12 +79,17 @@ TITLE="${2:-$VERSION}"
 # and the `2**63 - 1` test does the real bounding; that test is load-bearing,
 # not decoration, since 19 digits reach past Int64.
 #
-# Deliberately STRICTER than `SemVer()` in two places, both malformed-tag
-# territory rather than anything a maintainer would cut: Swift's `Int()` accepts
-# a signed component (`1.+1.0`) and leading zeros (`01.02.03`), this does not.
-# The validator gates what we TAG; `SemVer()` parses what we later READ. Being
-# tighter on the way out is correct as long as it never blocks a sane version —
-# which is exactly what round 9's finding was about.
+# How this compares to `SemVer()` — measured against the real parser, not
+# assumed (#303 verify round 10 caught the previous version of this comment
+# asserting two asymmetries that do not exist):
+#   `01.02.03`   both accept  (`Int("01")` is 1; the regex allows leading zeros)
+#   `1.+1.0`     both reject  (`+` is a suffix separator, so SemVer sees 2 parts)
+#   `2.27.0-rc1` DIFFER: SemVer accepts it as 2.27.0 — it discards a `-`/`+`
+#                suffix by design — while this validator refuses the tag.
+# That last one is the only asymmetry, and it is intentional: the validator
+# gates what we TAG (no prerelease tags through this script), `SemVer()` parses
+# what we later READ. Being tighter on the way out is fine provided it never
+# blocks a sane release — which is precisely what round 9's finding was about.
 if ! LC_ALL=C python3 - "$VERSION" <<'PY'
 import re, sys
 m = re.fullmatch(r'v([0-9]{1,19})\.([0-9]{1,19})\.([0-9]{1,19})', sys.argv[1])
