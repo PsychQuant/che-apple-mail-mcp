@@ -638,16 +638,87 @@ public final class EnvelopeIndexReader {
     /// Used by `searchPage` (full rows), `searchIds` (rowId projection), and
     /// `searchCount`. Defining the field / date / account / mailbox semantics
     /// here once guarantees every projection matches identically (#208).
-    /// #317 — pure decode-side mailbox path matcher. Preserves the pre-existing
-    /// two-pattern LIKE semantics (the named mailbox itself — by full path or
-    /// leaf/suffix-at-boundary — plus its descendants) with EXACT string
-    /// comparison instead of a wildcard pattern, so nothing the caller passes
-    /// can act as query syntax.
-    static func mailboxPathMatches(query: String, decodedPath p: String) -> Bool {
-        p == query                        // full path, exact (the round-trip case)
-            || p.hasSuffix("/" + query)   // leaf / suffix at a path boundary
-            || p.hasPrefix(query + "/")   // descendant of a full-path query
-            || p.contains("/" + query + "/") // descendant of a suffix-named mailbox
+    /// ASCII-only case-insensitive equality (#344).
+    ///
+    /// Deliberately **not** a Unicode fold. The only two things here that need
+    /// case-insensitivity — RFC 3501's `INBOX` and a hex account UUID — are
+    /// both defined over ASCII, and a Unicode fold would widen them in ways
+    /// neither spec asks for (a Turkish dotless `ı`, a Kelvin sign).
+    static func asciiCaseInsensitiveEqual(_ a: String, _ b: String) -> Bool {
+        let x = a.utf8, y = b.utf8
+        guard x.count == y.count else { return false }
+        return zip(x, y).allSatisfy { asciiLower($0) == asciiLower($1) }
+    }
+
+    private static func asciiLower(_ byte: UInt8) -> UInt8 {
+        (byte >= 0x41 && byte <= 0x5A) ? byte + 0x20 : byte  // 'A'...'Z'
+    }
+
+    private static func asciiLowercased(_ s: String) -> String {
+        String(decoding: s.utf8.map(asciiLower), as: UTF8.self)
+    }
+
+    /// Comparison key for one mailbox path component (#344).
+    ///
+    /// **Strict** is the shipping rule: `INBOX` folds — RFC 3501 §5.1 makes it
+    /// the one spec-level case-insensitive mailbox name — and every other
+    /// component compares byte-exact. Folding everything would restore the
+    /// pre-#317 `LIKE` behavior, but that behavior was accidentally lax rather
+    /// than correct: other names are implementation-dependent and typically
+    /// case-sensitive, so on such a server `Work` and `work` are two mailboxes
+    /// and returning the wrong one's mail is a failure nobody notices. A miss
+    /// is visible; a wrong hit is not.
+    ///
+    /// **Lax** exists only to hunt for a near-miss *after* a strict resolution
+    /// came up empty (see `mailboxRowIds`). It never selects rows to return.
+    static func mailboxComponentKey(_ component: String, lax: Bool) -> String {
+        if lax {
+            return asciiLowercased(component.trimmingCharacters(in: .whitespaces))
+        }
+        return asciiCaseInsensitiveEqual(component, "INBOX") ? "INBOX" : component
+    }
+
+    /// #317 kept the pre-existing two-pattern LIKE semantics (the named mailbox
+    /// itself — by full path or leaf/suffix-at-boundary — plus its descendants)
+    /// but moved them to exact string comparison so nothing a caller passes can
+    /// act as query syntax.
+    ///
+    /// #344 moves them again, from the decoded *string* to decoded
+    /// *components*. `MailboxURL.mailboxPath` decodes the whole path at once,
+    /// so a mailbox literally named `R&D/Sent` (raw `R%26D%2FSent`) is
+    /// indistinguishable from the hierarchy `R&D` → `Sent`; reasoning about
+    /// `/` in that string meant a name's own slash could pose as a separator
+    /// and get pulled in by a `Sent` query. Components are split before
+    /// decoding, so that is structurally impossible.
+    ///
+    /// Three of #317's four clauses collapse into one predicate here: full
+    /// path, leaf-at-a-boundary, and descendant-of-either are all *"the query's
+    /// components occur as a contiguous run inside the path's components"*,
+    /// differing only in where the run sits. Strings had to spell it four ways
+    /// because they could not see where a component began.
+    static func mailboxPathMatches(query: String, mailbox: MailboxURL, lax: Bool = false) -> Bool {
+        guard !query.isEmpty else { return false }
+
+        // The one clause that survives as a whole-string comparison: exact
+        // equality against the (lossy) decoded path, so `search_emails` still
+        // accepts its own `mailbox` output even for a name containing a
+        // literal '/'. Such a name and the equivalent hierarchy are genuinely
+        // indistinguishable in that representation — the caller cannot say
+        // which they mean, so both resolve rather than one being picked.
+        if mailboxComponentKey(mailbox.mailboxPath, lax: lax)
+            == mailboxComponentKey(query, lax: lax) {
+            return true
+        }
+
+        let q = query.split(separator: "/", omittingEmptySubsequences: false)
+            .map { mailboxComponentKey(String($0), lax: lax) }
+        let p = mailbox.pathComponents.map { mailboxComponentKey($0, lax: lax) }
+        guard !q.isEmpty, q.count <= p.count else { return false }
+
+        for start in 0...(p.count - q.count) where Array(p[start ..< start + q.count]) == q {
+            return true
+        }
+        return false
     }
 
     /// #317 — resolve mailbox ROWIDs by decoding each row's URL with the SAME
@@ -660,6 +731,32 @@ public final class EnvelopeIndexReader {
     /// output" true by construction. The mailboxes table is tens of rows, so
     /// the extra pass is noise.
     private func mailboxRowIds(matchingPath query: String, accountUUID: String? = nil) throws -> [Int64] {
+        let ids = try resolveMailboxRows(query: query, accountUUID: accountUUID, lax: false).ids
+        guard ids.isEmpty else { return ids }
+
+        // #344 — before conceding an empty result, look for a near-miss.
+        // #317's subject was "a zero you cannot trust": is the mailbox empty,
+        // is the name wrong, or is the filter too strict? Naming the candidate
+        // answers that WITHOUT loosening what actually matches.
+        //
+        // "Near" is defined by re-running the SAME matcher under a laxer
+        // component key rather than by a separate similarity rule that could
+        // drift away from it. Closed list of two classes, and no third is to be
+        // inferred by resemblance: (1) ASCII letter case, (2) leading/trailing
+        // whitespace. An unrelated name finds no candidate and still returns an
+        // honest empty result — this must not turn every legitimately empty
+        // filter into an error.
+        let candidates = try resolveMailboxRows(query: query, accountUUID: accountUUID, lax: true).paths
+        guard !candidates.isEmpty else { return ids }
+        throw MailSQLiteError.mailboxNotResolvable(
+            name: query,
+            candidates: Array(Set(candidates)).sorted().prefix(5).map { $0 })
+    }
+
+    /// Single scan of the mailboxes table, shared by the strict resolution and
+    /// the near-miss rescan so the two can never disagree about what "matches".
+    private func resolveMailboxRows(query: String, accountUUID: String?,
+                                    lax: Bool) throws -> (ids: [Int64], paths: [String]) {
         guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, "SELECT ROWID, url FROM mailboxes", -1, &stmt, nil) == SQLITE_OK else {
@@ -667,16 +764,22 @@ public final class EnvelopeIndexReader {
         }
         defer { sqlite3_finalize(stmt) }
         var ids: [Int64] = []
+        var paths: [String] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             guard let urlC = sqlite3_column_text(stmt, 1) else { continue }
-            let url = String(cString: urlC)
-            if let uuid = accountUUID, !url.contains("://\(uuid)/") { continue }
-            guard let decoded = MailboxURL.decode(url) else { continue }
-            if Self.mailboxPathMatches(query: query, decodedPath: decoded.mailboxPath) {
+            guard let decoded = MailboxURL.decode(String(cString: urlC)) else { continue }
+            // #344 (B) — a UUID is hex, so its case carries no meaning and
+            // folding it cannot over-match onto a different account. Comparing
+            // the PARSED authority also beats the old `url.contains("://uuid/")`,
+            // which the same text appearing inside a mailbox path could satisfy.
+            if let uuid = accountUUID,
+               !Self.asciiCaseInsensitiveEqual(decoded.accountUUID, uuid) { continue }
+            if Self.mailboxPathMatches(query: query, mailbox: decoded, lax: lax) {
                 ids.append(sqlite3_column_int64(stmt, 0))
+                paths.append(decoded.mailboxPath)
             }
         }
-        return ids
+        return (ids, paths)
     }
 
     /// `col IN (…)` from resolver output; a never-true condition when the name

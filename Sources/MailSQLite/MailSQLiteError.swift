@@ -31,6 +31,20 @@ public enum MailSQLiteError: Error, LocalizedError {
     /// return-all-unscoped latent bug).
     case accountNotResolvable(name: String)
 
+    /// #344 — a `mailbox` filter resolved to no mailbox, but at least one
+    /// **near-miss** exists: a mailbox that would have matched had the
+    /// comparison ignored ASCII letter case or surrounding whitespace.
+    ///
+    /// The point is not the case rule; it is that an empty result stops being
+    /// ambiguous. #317's whole subject was "a zero you cannot trust" — is the
+    /// mailbox empty, is the name wrong, or is the filter too strict? Naming
+    /// the candidate answers that without loosening the match (over-matching
+    /// would return *another mailbox's mail*, which nobody notices).
+    ///
+    /// Only fires when a candidate exists; an unrelated name still yields an
+    /// honest empty result, not an error.
+    case mailboxNotResolvable(name: String, candidates: [String])
+
     public var errorDescription: String? {
         switch self {
         case .databaseNotAccessible(let msg):
@@ -54,6 +68,12 @@ public enum MailSQLiteError: Error, LocalizedError {
             return "Attachment '\(name)' is \(size) bytes, exceeds in-memory limit of \(limit) bytes"
         case .accountNotResolvable(let name):
             return "Account '\(name)' not found — use list_accounts to see configured accounts (pass account_id to disambiguate an email-form name)"
+        case .mailboxNotResolvable(let name, let candidates):
+            let suggestion = candidates.map { "'\($0)'" }.joined(separator: ", ")
+            return "Mailbox '\(name)' matched no mailbox — did you mean \(suggestion)? "
+                + "Mailbox names are matched exactly (INBOX is the one exception, "
+                + "case-insensitive per RFC 3501 §5.1); use list_mailboxes to see the "
+                + "exact names (#344)"
         }
     }
 }

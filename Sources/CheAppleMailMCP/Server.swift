@@ -985,6 +985,15 @@ class CheAppleMailMCPServer {
                 do {
                     let page = try reader.listEmailsPage(mailbox: mailbox, accountName: accountName, limit: limit)
                     return formatJSON(Self.resultEnvelope(results: page.results, limit: limit, truncated: page.truncated))
+                } catch MailSQLiteError.mailboxNotResolvable(let name, let candidates) {
+                    // #344 — this catch exists for INFRASTRUCTURE failure
+                    // (corrupt row, schema drift), where retrying through
+                    // AppleScript is the right move. A near-miss verdict is the
+                    // opposite: the fast path succeeded and determined the name
+                    // does not resolve. Falling through would hand AppleScript
+                    // the same name and, on a miss, return the silent zero this
+                    // diagnostic exists to abolish.
+                    throw MailSQLiteError.mailboxNotResolvable(name: name, candidates: candidates)
                 } catch {
                     let message = "SQLite list_emails fast path failed for "
                         + "mailbox='\(mailbox)' account='\(accountName)': "

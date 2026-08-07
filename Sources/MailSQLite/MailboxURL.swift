@@ -13,7 +13,27 @@ public struct MailboxURL: Sendable {
     public let accountUUID: String
 
     /// The percent-decoded mailbox path (e.g., "[Gmail]/全部郵件").
+    ///
+    /// **Lossy by construction**: the whole path is decoded in one pass, so a
+    /// percent-encoded slash inside a mailbox *name* (`R%26D%2FSent`) becomes
+    /// indistinguishable from a hierarchy separator. This is the representation
+    /// `search_emails` reports and it is kept as-is for compatibility; anything
+    /// that needs to reason about hierarchy must use `pathComponents` (#344).
     public let mailboxPath: String
+
+    /// The mailbox path split into hierarchy components, each independently
+    /// percent-decoded.
+    ///
+    /// Splitting happens on the **encoded** path, so a `%2F` stays inside the
+    /// component it belongs to and can never masquerade as a separator:
+    ///
+    /// - `imap://UUID/R%26D%2FSent` → `["R&D/Sent"]`  (one mailbox, literal `/`)
+    /// - `imap://UUID/R%26D/Sent`   → `["R&D", "Sent"]` (two levels)
+    ///
+    /// Empty segments are preserved (`A//B` → `["A", "", "B"]`): dropping them
+    /// would collapse two distinct paths into one, which is the very loss this
+    /// accessor exists to avoid.
+    public let pathComponents: [String]
 
     /// The URL scheme (e.g., "imap", "ews").
     public let scheme: String
@@ -40,10 +60,15 @@ public struct MailboxURL: Sendable {
         let uuid = String(afterScheme[afterScheme.startIndex..<slashIndex])
         let encodedPath = String(afterScheme[afterScheme.index(after: slashIndex)...])
         let decodedPath = encodedPath.removingPercentEncoding ?? encodedPath
+        // Split FIRST, decode each piece SECOND — the order is the whole point.
+        let components = encodedPath
+            .split(separator: "/", omittingEmptySubsequences: false)
+            .map { String($0).removingPercentEncoding ?? String($0) }
 
         return MailboxURL(
             accountUUID: uuid,
             mailboxPath: decodedPath,
+            pathComponents: components,
             scheme: scheme
         )
     }
