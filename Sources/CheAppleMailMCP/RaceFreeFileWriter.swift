@@ -17,6 +17,10 @@ enum RaceFreeWriteError: Error, Equatable {
     /// symlinked target via `O_NOFOLLOW` / other).
     case createFailed(name: String, errno: Int32)
     case writeFailed(name: String, errno: Int32)
+    /// #342 — the exclusive leaf rename refused because the destination already
+    /// existed. Only reachable when the caller opted into `failIfExists`, i.e.
+    /// the in-memory collision guard predicted a free name and was wrong.
+    case destinationExists(name: String)
 }
 
 /// Race-free file writing for `export_emails_markdown` (#200).
@@ -36,15 +40,24 @@ enum RaceFreeFileWriter {
     /// no-follow, then atomically writes `filename`. All fds are opened + closed
     /// internally — callers never touch raw descriptors. `relativeDirComponents`
     /// empty → write directly in `rootDir`.
-    static func writeFile(rootDir: String, relativeDirComponents: [String], filename: String, data: Data) throws {
+    /// - Parameter failIfExists: opt-in (#342). `false` (default) keeps the
+    ///   create-or-REPLACE semantics every existing caller relies on. `true`
+    ///   makes the final rename exclusive, so an unexpected destination is a
+    ///   thrown `destinationExists` instead of a silent overwrite — for callers
+    ///   whose filenames come from a collision guard that is only a PREDICTION
+    ///   of filesystem behaviour and can therefore be wrong.
+    static func writeFile(rootDir: String, relativeDirComponents: [String], filename: String,
+                          data: Data, failIfExists: Bool = false) throws {
         let rootFd = try openValidatedRootDir(rootDir)
         defer { close(rootFd) }
         if relativeDirComponents.isEmpty {
-            try writeFileAtomicNoFollow(dirFd: rootFd, name: filename, data: data)
+            try writeFileAtomicNoFollow(dirFd: rootFd, name: filename, data: data,
+                                        failIfExists: failIfExists)
         } else {
             let leafFd = try descendCreatingDirs(rootFd: rootFd, components: relativeDirComponents)
             defer { close(leafFd) }
-            try writeFileAtomicNoFollow(dirFd: leafFd, name: filename, data: data)
+            try writeFileAtomicNoFollow(dirFd: leafFd, name: filename, data: data,
+                                        failIfExists: failIfExists)
         }
     }
 
@@ -118,7 +131,8 @@ enum RaceFreeFileWriter {
     /// (overwriting an existing `.md`) still works. Filenames are uniquified
     /// per run, so the temp never collides within a run; a stale temp from a
     /// crashed prior run is cleared first.
-    static func writeFileAtomicNoFollow(dirFd: Int32, name: String, data: Data) throws {
+    static func writeFileAtomicNoFollow(dirFd: Int32, name: String, data: Data,
+                                        failIfExists: Bool = false) throws {
         let tempName = name + ".idd200.tmp"
         if unlinkat(dirFd, tempName, 0) != 0 && errno != ENOENT {
             throw RaceFreeWriteError.createFailed(name: tempName, errno: errno)
@@ -134,9 +148,23 @@ enum RaceFreeFileWriter {
             _ = unlinkat(dirFd, tempName, 0)   // best-effort cleanup
             throw error
         }
-        if renameat(dirFd, tempName, dirFd, name) != 0 {
+        // #342 — ask the FILESYSTEM, do not trust a prediction. Plain `renameat`
+        // clobbers unconditionally, so the caller's in-memory collision guard was
+        // the ONLY thing standing between a mis-predicted name and silent data
+        // loss. `RENAME_EXCL` makes the kernel itself refuse (EEXIST, destination
+        // untouched) using the volume's own case-insensitivity — no fold table to
+        // get wrong, no volume-type assumption. Opt-in so create-or-replace
+        // callers (attachments: re-saving the same file is legitimate) are
+        // unaffected.
+        let renameRC = failIfExists
+            ? renameatx_np(dirFd, tempName, dirFd, name, UInt32(RENAME_EXCL))
+            : renameat(dirFd, tempName, dirFd, name)
+        if renameRC != 0 {
             let e = errno
             _ = unlinkat(dirFd, tempName, 0)
+            if failIfExists && e == EEXIST {
+                throw RaceFreeWriteError.destinationExists(name: name)
+            }
             throw RaceFreeWriteError.writeFailed(name: name, errno: e)
         }
     }

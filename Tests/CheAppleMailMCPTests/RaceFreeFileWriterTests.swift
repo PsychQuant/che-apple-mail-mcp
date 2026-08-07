@@ -78,4 +78,65 @@ final class RaceFreeFileWriterTests: XCTestCase {
                        "y.md must be a regular file, not the planted symlink")
         XCTAssertEqual(try String(contentsOfFile: root + "/y.md", encoding: .utf8), "payload")
     }
+    // MARK: - #342: opt-in exclusive rename (ask the filesystem, not a prediction)
+
+    /// Default (`failIfExists: false`) keeps create-or-REPLACE — every existing
+    /// caller, including the attachment write, depends on it.
+    func testWriteFile_defaultStillReplacesExistingFile() throws {
+        let dir = URL(fileURLWithPath: root)
+        let target = dir.appendingPathComponent("a.md")
+        try "OLD".write(to: target, atomically: true, encoding: .utf8)
+
+        try RaceFreeFileWriter.writeFile(
+            rootDir: dir.path, relativeDirComponents: [], filename: "a.md",
+            data: Data("NEW".utf8))
+
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "NEW",
+                       "default semantics must stay create-or-replace (#342)")
+    }
+
+    /// Opt-in refuses rather than clobbering, and leaves the existing file
+    /// byte-for-byte intact — the property that turns a guard miss from silent
+    /// data loss into a reportable error.
+    func testWriteFile_failIfExists_refusesAndLeavesExistingFileIntact() throws {
+        let dir = URL(fileURLWithPath: root)
+        let target = dir.appendingPathComponent("a.md")
+        try "PRECIOUS".write(to: target, atomically: true, encoding: .utf8)
+
+        XCTAssertThrowsError(try RaceFreeFileWriter.writeFile(
+            rootDir: dir.path, relativeDirComponents: [], filename: "a.md",
+            data: Data("CLOBBER".utf8), failIfExists: true)) { error in
+            guard case RaceFreeWriteError.destinationExists(let name) = error else {
+                return XCTFail("expected destinationExists, got \(error)")
+            }
+            XCTAssertEqual(name, "a.md")
+        }
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "PRECIOUS",
+                       "the refused write must not have touched the existing file (#342)")
+    }
+
+    /// Opt-in on a free name is an ordinary successful write.
+    func testWriteFile_failIfExists_succeedsOnFreshName() throws {
+        let dir = URL(fileURLWithPath: root)
+        try RaceFreeFileWriter.writeFile(
+            rootDir: dir.path, relativeDirComponents: [], filename: "fresh.md",
+            data: Data("OK".utf8), failIfExists: true)
+        XCTAssertEqual(
+            try String(contentsOf: dir.appendingPathComponent("fresh.md"), encoding: .utf8), "OK")
+    }
+
+    /// A refused write must not leave its sibling temp behind.
+    func testWriteFile_failIfExists_cleansUpTempOnRefusal() throws {
+        let dir = URL(fileURLWithPath: root)
+        try "X".write(to: dir.appendingPathComponent("a.md"), atomically: true, encoding: .utf8)
+
+        _ = try? RaceFreeFileWriter.writeFile(
+            rootDir: dir.path, relativeDirComponents: [], filename: "a.md",
+            data: Data("Y".utf8), failIfExists: true)
+
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasSuffix(".idd200.tmp") }
+        XCTAssertTrue(leftovers.isEmpty, "temp must be cleaned up on refusal, found: \(leftovers)")
+    }
+
 }

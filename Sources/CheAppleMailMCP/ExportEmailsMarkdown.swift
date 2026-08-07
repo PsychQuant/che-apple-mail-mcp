@@ -234,21 +234,47 @@ enum ExportEmailsMarkdown {
         return isCalendarDate ? prefix : "unknown-date"
     }
 
-    /// Membership is CASE-FOLDED (#313): APFS — the macOS default — is
-    /// case-insensitive but case-preserving, so `Re--X.md` and `RE--X.md` are
-    /// one directory entry. Exact-string comparison let a case-variant slip
-    /// through and silently overwrite the first file (manifest reported both
-    /// as `written`, errors: 0 — P0 data loss). The `used` set therefore
-    /// stores lowercased keys only; the RETURNED name keeps the caller's
-    /// original case, and the whole case-family shares one `-N` sequence.
+    /// The single key function for "are these two names the same file?" — used
+    /// by `uniquify` AND by the cross-call on-disk seed, so the two can never
+    /// drift apart (#342).
+    ///
+    /// `folding(.caseInsensitive)`, NOT `lowercased()`. APFS compares with full
+    /// Unicode case-folding; `lowercased()` is a different operation and the
+    /// gap is where #342 lived: `Straße.md`/`STRASSE.md` (ß folds to ss) and
+    /// `ος.md`/`οσ.md` (Greek final sigma) are ONE directory entry on disk
+    /// while `lowercased()` yields two distinct keys — so `uniquify` skipped
+    /// the `-N` suffix and the second write replaced the first, with the
+    /// manifest reporting both as `written`, `errors: 0`. Verified on a real
+    /// APFS volume; `folding` agrees with the disk on every pair tested.
+    ///
+    /// Case ONLY — no `.diacriticInsensitive`. `cafe.md` and `café.md` are
+    /// genuinely different files and must keep independent `-N` sequences.
+    ///
+    /// The residual asymmetry is deliberate: on a case-SENSITIVE volume this
+    /// over-collides (a spurious `-1` suffix — cosmetic), whereas under-
+    /// colliding loses data. Erring toward the fold is the safe side. The
+    /// exclusive leaf rename below is what makes a residual miss loud instead
+    /// of silent.
+    static func collisionKey(_ filename: String) -> String {
+        filename.folding(options: .caseInsensitive, locale: nil)
+    }
+
+    /// Membership is CASE-FOLDED (#313, corrected in #342): APFS — the macOS
+    /// default — is case-insensitive but case-preserving, so `Re--X.md` and
+    /// `RE--X.md` are one directory entry. Exact-string comparison let a
+    /// case-variant slip through and silently overwrite the first file
+    /// (manifest reported both as `written`, errors: 0 — P0 data loss). The
+    /// `used` set therefore stores `collisionKey` keys only; the RETURNED name
+    /// keeps the caller's original case, and the whole case-family shares one
+    /// `-N` sequence.
     static func uniquify(_ filename: String, used: inout Set<String>) -> String {
-        let key = filename.lowercased()
+        let key = collisionKey(filename)
         if !used.contains(key) { used.insert(key); return filename }
         let base = filename.hasSuffix(".md") ? String(filename.dropLast(3)) : filename
         var n = 1
         var candidate = "\(base)-\(n).md"
-        while used.contains(candidate.lowercased()) { n += 1; candidate = "\(base)-\(n).md" }
-        used.insert(candidate.lowercased())
+        while used.contains(collisionKey(candidate)) { n += 1; candidate = "\(base)-\(n).md" }
+        used.insert(collisionKey(candidate))
         return candidate
     }
 
@@ -377,17 +403,17 @@ enum ExportEmailsMarkdown {
         // — default/template/override — at the resolution site below) consults
         // this set, so seeding it is sufficient to make the suffix span calls.
         //
-        // Seed keys are LOWERCASED to match uniquify's case-folded membership
-        // (#313). The old code lowercased only the extension filter and then
-        // inserted the ORIGINAL-case name — which is exactly how a `RE--` request
-        // sailed past an on-disk `Re--` file and silently overwrote it on APFS.
-        // (The `.lowercased()` on pathExtension also keeps `.MD`/`.Md` files
-        // seeding the guard, as before.)
+        // Seed keys go through `collisionKey` — the SAME function `uniquify`
+        // uses, so the two can never drift (#313 inserted the ORIGINAL-case
+        // name, which is how a `RE--` request sailed past an on-disk `Re--`
+        // file; #342 then found `lowercased()` itself was the wrong fold for
+        // `ß`/`ss` and Greek final sigma). The `.lowercased()` on pathExtension
+        // is a separate concern — it keeps `.MD`/`.Md` files seeding the guard.
         do {
             let existing = try fileManager.contentsOfDirectory(
                 at: outputDir, includingPropertiesForKeys: nil, options: [])
             for url in existing where url.pathExtension.lowercased() == "md" {
-                usedFilenames.insert(url.lastPathComponent.lowercased())
+                usedFilenames.insert(collisionKey(url.lastPathComponent))
             }
         } catch {
             // Best-effort seed — the within-call guard still applies — but do NOT
@@ -591,9 +617,17 @@ enum ExportEmailsMarkdown {
                 // #200: race-free write into the validated output_dir (the leaf
                 // `.md` is created via a sibling temp + rename — a symlink at the
                 // target is replaced, never followed).
+                //
+                // #342: `failIfExists` — the filename came from `uniquify`, whose
+                // membership set is a PREDICTION of what the filesystem considers
+                // the same name. #313 and #342 are two instances of that prediction
+                // being wrong, each a silent overwrite. The exclusive rename asks
+                // the volume itself, so a third instance is a loud manifest error
+                // rather than lost mail. Attachments deliberately do NOT opt in —
+                // re-saving the same attachment over itself is legitimate.
                 try RaceFreeFileWriter.writeFile(
                     rootDir: outputDir.path, relativeDirComponents: [],
-                    filename: filename, data: Data(md.utf8))
+                    filename: filename, data: Data(md.utf8), failIfExists: true)
                 items.append(ExportManifestItem(
                     id: id, messageId: content.messageId, writtenPath: destURL.path,
                     attachments: savedAttachments, attachmentErrors: attachmentErrors,
@@ -604,10 +638,24 @@ enum ExportEmailsMarkdown {
                 // The .md failed — remove attachments already written so a failed
                 // item leaves no orphan files behind.
                 for url in savedAttachmentURLs { try? fileManager.removeItem(at: url) }
+                // #342: name the guard-miss explicitly. A bare
+                // `localizedDescription` on this enum renders as an opaque
+                // "error 8", which is exactly the kind of message that made the
+                // original silent loss hard to notice.
+                let reason: String
+                if case RaceFreeWriteError.destinationExists(let n) = error {
+                    reason = "collision guard miss: '\(n)' already exists on disk and was NOT "
+                        + "overwritten. The filename guard folds case (#342), so this means the "
+                        + "volume considers some existing file the same name by a rule the guard "
+                        + "does not model. The existing file is intact; re-run after renaming or "
+                        + "removing it, and please report the filename pair."
+                } else {
+                    reason = "write: \(error.localizedDescription)"
+                }
                 items.append(ExportManifestItem(
                     id: id, messageId: content.messageId, writtenPath: nil,
                     attachments: [], attachmentErrors: attachmentErrors,
-                    status: "error", error: "write: \(error.localizedDescription)",
+                    status: "error", error: reason,
                     bodyDownloaded: bodyDownloaded))
             }
         }

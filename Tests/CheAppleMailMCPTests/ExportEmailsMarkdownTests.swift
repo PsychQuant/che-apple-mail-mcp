@@ -808,6 +808,95 @@ final class ExportEmailsMarkdownTests: XCTestCase {
                       "base name expected — lockfile must not trigger a -N suffix: \(written)")
     }
 
+    // MARK: - #342: lowercased() is not APFS's case-fold
+
+    /// Count the `.md` files actually on disk. THE disk truth — the failure
+    /// shape here is that the manifest reports two distinct `written_path`s
+    /// while the directory holds one file, so any path-string assertion is
+    /// blind to it (#313's own lesson, re-learned one Unicode layer deeper).
+    private func mdFilesOnDisk(_ dir: URL) throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension.lowercased() == "md" }
+    }
+
+    private func exportTwoNames(_ out: URL, _ n1: String, _ n2: String) throws -> ExportManifest {
+        try ExportEmailsMarkdown.run(
+            ids: ["1", "2"], outputDir: out, ownAddresses: [], fallbackDirection: "received",
+            includeAttachments: false, filenameTemplate: nil,
+            filenameOverrides: ["1": n1, "2": n2], extraFrontmatter: [],
+            fetch: { id in self.makeEmail(subject: "S", textBody: "BODY-\(id)") },
+            attachmentNamesFor: { _ in [] },
+            attachmentData: { _, _ in Data() })
+    }
+
+    /// `ß` folds to `ss` under APFS's full case-folding but NOT under Swift's
+    /// `lowercased()` — so the guard saw two distinct keys, skipped the `-N`
+    /// suffix, and the second write replaced the first. Verified on this
+    /// machine's real APFS volume before this test was written (#342).
+    func testRun_caseFoldCollision_sharpS_noSilentOverwrite() throws {
+        let out = tempDir()
+        let m = try exportTwoNames(out, "Straße.md", "STRASSE.md")
+
+        XCTAssertEqual(m.items.filter { $0.status == "written" }.count, 2)
+        XCTAssertEqual(try mdFilesOnDisk(out).count, 2,
+            "APFS folds ß→ss, so Straße.md and STRASSE.md are ONE directory entry "
+            + "unless the guard folds too — the second export must take a -N suffix (#342)")
+        let contents = try mdFilesOnDisk(out).map { try String(contentsOf: $0, encoding: .utf8) }
+        XCTAssertTrue(contents.contains { $0.contains("BODY-1") }, "email 1 must survive (#342)")
+        XCTAssertTrue(contents.contains { $0.contains("BODY-2") }, "email 2 must survive (#342)")
+    }
+
+    /// Greek final sigma: `ος` / `οσ` are one file on APFS, and `lowercased()`
+    /// maps Σ to ς contextually so even the seed can key differently from what
+    /// a caller passes (#342).
+    func testRun_caseFoldCollision_greekFinalSigma_noSilentOverwrite() throws {
+        let out = tempDir()
+        let m = try exportTwoNames(out, "ος.md", "οσ.md")
+
+        XCTAssertEqual(m.items.filter { $0.status == "written" }.count, 2)
+        XCTAssertEqual(try mdFilesOnDisk(out).count, 2,
+            "ος.md and οσ.md are one APFS directory entry (#342)")
+        let contents = try mdFilesOnDisk(out).map { try String(contentsOf: $0, encoding: .utf8) }
+        XCTAssertTrue(contents.contains { $0.contains("BODY-1") })
+        XCTAssertTrue(contents.contains { $0.contains("BODY-2") })
+    }
+
+    /// The cross-call seed (#232) scans on-disk `.md` names — it must key on the
+    /// same fold, or a second run re-derives a colliding name from an empty set.
+    func testRun_caseFoldCollision_crossCall_seedAlsoFolds() throws {
+        let out = tempDir()
+        func exportOnce(_ id: String, name: String, body: String) throws -> String {
+            let m = try ExportEmailsMarkdown.run(
+                ids: [id], outputDir: out, ownAddresses: [], fallbackDirection: "received",
+                includeAttachments: false, filenameTemplate: nil,
+                filenameOverrides: [id: name], extraFrontmatter: [],
+                fetch: { _ in self.makeEmail(subject: "S", textBody: body) },
+                attachmentNamesFor: { _ in [] },
+                attachmentData: { _, _ in Data() })
+            return try XCTUnwrap(m.items.first?.writtenPath)
+        }
+        let p1 = try exportOnce("A", name: "Straße.md", body: "FIRST-RUN")
+        _ = try exportOnce("B", name: "STRASSE.md", body: "SECOND-RUN")
+
+        XCTAssertEqual(try mdFilesOnDisk(out).count, 2,
+            "the on-disk seed must fold too, or run 2 overwrites run 1 (#342)")
+        XCTAssertTrue(try String(contentsOfFile: p1, encoding: .utf8).contains("FIRST-RUN"),
+            "run 1's file must not be clobbered by run 2 (#342)")
+    }
+
+    /// Over-folding guard: the fix must fold CASE only. `cafe` and `café` are
+    /// genuinely different files on APFS and must keep independent -N sequences
+    /// — a `.diacriticInsensitive` fold here would merge real correspondence.
+    func testRun_diacriticsAreNotFolded_cafeAndCafeAcuteStayDistinct() throws {
+        let out = tempDir()
+        let m = try exportTwoNames(out, "cafe.md", "café.md")
+
+        XCTAssertEqual(m.items.filter { $0.status == "written" }.count, 2)
+        let names = try mdFilesOnDisk(out).map(\.lastPathComponent).sorted()
+        XCTAssertEqual(names, ["cafe.md", "café.md"],
+            "diacritics are NOT case — neither name may acquire a -N suffix (#342)")
+    }
+
     // MARK: - #316 per-email sender-identity direction
 
     private func fileText(_ item: ExportManifestItem) throws -> String {
