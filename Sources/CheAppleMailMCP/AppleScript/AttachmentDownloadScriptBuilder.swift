@@ -84,6 +84,29 @@ func shouldAttemptDownloadRetry(
     return notDownloaded && scriptCode == -10000 && downloadIfMissing
 }
 
+/// #347 — the second entry into the same retry loop: the save *claimed* success
+/// but the write did not verify.
+///
+/// Note what is **not** required here. The `-10000` path above needs the
+/// separate `notDownloaded` proof because a generic AppleScript error says
+/// nothing about where the bytes are. A 0-byte (or absent) file after a
+/// reported success **is** that evidence — there is nothing further to
+/// corroborate, so opt-in alone qualifies.
+///
+/// `.notRegular` is excluded deliberately: polling cannot turn a directory or
+/// a FIFO into a regular file, so retrying it would only spend the caller's
+/// 30-second budget before failing with the same message.
+func shouldAttemptDownloadRetry(
+    afterUnverifiedWrite problem: AttachmentWriteProblem,
+    downloadIfMissing: Bool
+) -> Bool {
+    guard downloadIfMissing else { return false }
+    switch problem {
+    case .empty, .missing: return true
+    case .notRegular:      return false
+    }
+}
+
 // MARK: - Retry policy
 
 /// Bounds for the best-effort download-retry loop: how long to keep polling and
