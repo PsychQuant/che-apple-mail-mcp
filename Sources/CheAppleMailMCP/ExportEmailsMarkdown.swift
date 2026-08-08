@@ -422,12 +422,12 @@ enum ExportEmailsMarkdown {
             // not-yet-created case; leaving usedFilenames unseeded could let a
             // later same-(date,slug) file overwrite an earlier one, reintroducing
             // exactly the silent loss #232 removes. Surface it to stderr.
-            FileHandle.standardError.write(Data(
+            Diagnostics.emit(
                 ("export_emails_markdown: could not list existing files in "
                  + outputDir.path + " to seed the cross-call collision guard ("
                  + error.localizedDescription
                  + "); same-(date,slug) filenames from a prior export to this "
-                 + "directory may be overwritten.\n").utf8))
+                 + "directory may be overwritten.\n"))
         }
 
         for id in ids {
