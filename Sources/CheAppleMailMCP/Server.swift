@@ -1534,8 +1534,33 @@ class CheAppleMailMCPServer {
                             "Attachment saved to \(savePath)", savePath: savePath,
                             allowEmpty: allowEmpty)
                     }
+                } catch MailSQLiteError.attachmentEmpty(let name) where allowEmpty {
+                    // #347 verify round 1 — `allow_empty` used to be inert on
+                    // this, the ONLY path that can actually establish "genuinely
+                    // empty". Tier 1 refuses an empty part before writing
+                    // anything, so the flag only ever reached the post-write
+                    // verifier — i.e. only when Tier 2 happened to run and
+                    // happened to succeed. With Mail unavailable the attested
+                    // override could not work at all.
+                    //
+                    // Honored here and nowhere broader: `attachmentEmpty` means
+                    // a part with this name exists and is empty. A typo'd name
+                    // still throws `attachmentNotFound` and can never be
+                    // answered with a 0-byte file.
+                    try Data().write(to: URL(fileURLWithPath: savePath))
+                    FileHandle.standardError.write(Data((
+                        "save_attachment: '\(name)' is an empty MIME part; wrote 0 bytes "
+                        + "under allow_empty (#347)\n").utf8))
+                    return "Attachment saved to \(savePath) "
+                        + "(0 bytes — empty write accepted via allow_empty)"
                 } catch {
                     if case MailSQLiteError.attachmentNotFound = error {
+                        localCopyConfirmedMissing = true
+                    }
+                    // #347 — without the override an empty part behaves exactly
+                    // as it did when it threw `attachmentNotFound`: no local
+                    // bytes, give AppleScript its turn.
+                    if case MailSQLiteError.attachmentEmpty = error {
                         localCopyConfirmedMissing = true
                     }
                     // #238: local state PROVES the part was never fetched from
@@ -1594,7 +1619,8 @@ class CheAppleMailMCPServer {
                     accountName: accountName,
                     attachmentName: attachmentName,
                     savePath: savePath,
-                    allowEmpty: allowEmpty
+                    allowEmpty: allowEmpty,
+                    enteredAfterUnverifiedWrite: problem
                 )
             } catch MailError.scriptFailed(let message, let code) {
                 // #272: opt-in best-effort recovery. Local state proved the part

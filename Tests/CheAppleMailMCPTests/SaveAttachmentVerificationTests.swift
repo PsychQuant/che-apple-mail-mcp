@@ -37,6 +37,23 @@ final class SaveAttachmentVerificationTests: XCTestCase {
     }
     private func path(_ n: String) -> String { dir.appendingPathComponent(n).path }
 
+    /// Install the script-runner seam and reset it **synchronously** on both
+    /// exits. Verify round 1: a deferred `Task { }` reset can run after the NEXT
+    /// test has installed its own seam and clobber it — that test then reaches
+    /// real NSAppleScript, touching TCC/Mail or hanging for 45s. Copied from
+    /// `AttachmentDownloadScriptBuilderTests`, which already documented this.
+    private func withSeam(_ runner: @escaping (String) throws -> String,
+                          _ body: () async throws -> Void) async throws {
+        await MailController.shared.setTestSeams(scriptRunner: runner, ineligibility: nil)
+        do {
+            try await body()
+        } catch {
+            await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil)
+            throw error
+        }
+        await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil)
+    }
+
     private func verify(_ p: String, allowEmpty: Bool = false) throws -> String {
         try MailController.verifySavedAttachmentOnDisk(
             "Attachment saved to \(p)", savePath: p, allowEmpty: allowEmpty)
@@ -102,6 +119,25 @@ final class SaveAttachmentVerificationTests: XCTestCase {
             "must reject at the stat, not block waiting for a writer to open the FIFO")
     }
 
+    /// A path that EXISTS but cannot be examined is not "missing" (verify
+    /// round 1). Reporting `ELOOP` as `.missing` told the caller no file was
+    /// there, and made the call eligible for a download retry that cannot
+    /// possibly unpick a symlink loop.
+    func testSymlinkLoop_isStatFailedNotMissing() throws {
+        let a = path("loop-a.pdf"), b = path("loop-b.pdf")
+        try FileManager.default.createSymbolicLink(atPath: a, withDestinationPath: b)
+        try FileManager.default.createSymbolicLink(atPath: b, withDestinationPath: a)
+
+        XCTAssertThrowsError(try verify(a)) { error in
+            guard case MailError.attachmentWriteUnverified(_, .statFailed(let e)) = error else {
+                return XCTFail("expected .statFailed, got \(error)")
+            }
+            XCTAssertEqual(e, ELOOP, "the errno must be carried, not flattened away")
+            XCTAssertTrue(error.localizedDescription.lowercased().contains("symlink loop"),
+                          "the message must point at the real cause: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - (B) the error must be typed so the retry contract can match it
 
     func testZeroByte_throwsTypedCaseNotTheGenericContainer() throws {
@@ -138,6 +174,10 @@ final class SaveAttachmentVerificationTests: XCTestCase {
             shouldAttemptDownloadRetry(afterUnverifiedWrite: .notRegular("directory"),
                                        downloadIfMissing: true),
             "polling cannot turn a directory into a regular file — terminal, not retryable")
+        XCTAssertFalse(
+            shouldAttemptDownloadRetry(afterUnverifiedWrite: .statFailed(errno: ELOOP),
+                                       downloadIfMissing: true),
+            "nor unpick a symlink loop, a permissions problem, or an I/O error")
     }
 
     // MARK: - (B) the loop must consume an attempt, not abort on the first 0-byte
@@ -151,43 +191,57 @@ final class SaveAttachmentVerificationTests: XCTestCase {
         FileManager.default.createFile(atPath: p, contents: Data())   // starts empty
 
         let calls = Counter()
-        await MailController.shared.setTestSeams(scriptRunner: { _ in
+        try await withSeam({ _ in
             // Call 1 is the fetch-trigger; the saves follow. Let the first save
             // find an empty file, then have the bytes "arrive".
             if calls.bump() >= 3 {
                 FileManager.default.createFile(atPath: p, contents: Data(repeating: 9, count: 512))
             }
             return "Attachment saved to \(p)"
-        }, ineligibility: nil)
-        defer { Task { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) } }
-
-        let out = try await MailController.shared.saveAttachmentRetryingForDownload(
-            id: "1", mailbox: "INBOX", accountId: nil, accountName: "A",
-            attachmentName: "late.pdf", savePath: p,
-            policy: DownloadRetryPolicy(timeout: 2.0, pollInterval: 0.05))
-        XCTAssertTrue(out.hasSuffix("(512 bytes)"),
-                      "the loop must keep polling past an empty write; got: \(out)")
+        }) {
+            let out = try await MailController.shared.saveAttachmentRetryingForDownload(
+                id: "1", mailbox: "INBOX", accountId: nil, accountName: "A",
+                attachmentName: "late.pdf", savePath: p,
+                enteredAfterUnverifiedWrite: .empty,
+                policy: DownloadRetryPolicy(timeout: 2.0, pollInterval: 0.05))
+            XCTAssertTrue(out.hasSuffix("(512 bytes)"),
+                          "the loop must keep polling past an empty write; got: \(out)")
+            XCTAssertGreaterThanOrEqual(calls.value(), 3,
+                "trigger + at least two saves — fewer means the loop exited early "
+                + "rather than polling through the empty write")
+        }
     }
 
     /// …and must still fail honestly when the bytes never arrive. A retry that
     /// converts "never landed" into a success would be worse than the bug.
+    /// Strengthened after verify round 1: the first version asserted only that
+    /// the error text lacked "Attachment saved", which the *pre-fix* immediate
+    /// abort also satisfies — it could not tell "polled to exhaustion" from
+    /// "gave up on attempt one". It now pins both the attempt count and the
+    /// error's TYPE, and that type is the second fix: the loop used to report
+    /// `not downloaded` no matter why it ran, fabricating a diagnosis for an
+    /// attachment that may be local and genuinely empty.
     func testRetryLoop_stillFailsHonestlyWhenBytesNeverArrive() async throws {
         let p = path("never.pdf")
         FileManager.default.createFile(atPath: p, contents: Data())
 
-        await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Attachment saved to \(p)" }, ineligibility: nil)
-        defer { Task { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) } }
-
-        do {
-            _ = try await MailController.shared.saveAttachmentRetryingForDownload(
-                id: "1", mailbox: "INBOX", accountId: nil, accountName: "A",
-                attachmentName: "never.pdf", savePath: p,
-                policy: DownloadRetryPolicy(timeout: 0.3, pollInterval: 0.05))
-            XCTFail("budget exhausted with an empty file must throw, never return success")
-        } catch {
-            XCTAssertFalse(error.localizedDescription.contains("Attachment saved"),
-                           "got a success string in the error: \(error.localizedDescription)")
+        let calls = Counter()
+        try await withSeam({ _ in _ = calls.bump(); return "Attachment saved to \(p)" }) {
+            do {
+                _ = try await MailController.shared.saveAttachmentRetryingForDownload(
+                    id: "1", mailbox: "INBOX", accountId: nil, accountName: "A",
+                    attachmentName: "never.pdf", savePath: p,
+                    enteredAfterUnverifiedWrite: .empty,
+                    policy: DownloadRetryPolicy(timeout: 0.3, pollInterval: 0.05))
+                XCTFail("budget exhausted with an empty file must throw, never return success")
+            } catch MailError.attachmentWriteUnverified(_, .empty) {
+                XCTAssertGreaterThanOrEqual(calls.value(), 3,
+                    "must have polled to exhaustion (trigger + ≥2 saves), not aborted on the "
+                    + "first empty write — the distinction the old assertion could not make")
+            } catch {
+                XCTFail("must surface the real reason, typed. The loop used to claim "
+                        + "'not downloaded' regardless of why it ran. Got: \(error)")
+            }
         }
     }
 
@@ -229,4 +283,5 @@ private final class Counter: @unchecked Sendable {
     private let lock = NSLock()
     private var n = 0
     func bump() -> Int { lock.lock(); defer { lock.unlock() }; n += 1; return n }
+    func value() -> Int { lock.lock(); defer { lock.unlock() }; return n }
 }

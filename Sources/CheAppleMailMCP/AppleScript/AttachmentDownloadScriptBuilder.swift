@@ -93,8 +93,9 @@ func shouldAttemptDownloadRetry(
 /// reported success **is** that evidence — there is nothing further to
 /// corroborate, so opt-in alone qualifies.
 ///
-/// `.notRegular` is excluded deliberately: polling cannot turn a directory or
-/// a FIFO into a regular file, so retrying it would only spend the caller's
+/// `.notRegular` and `.statFailed` are excluded deliberately: polling cannot
+/// turn a directory into a regular file, and cannot unpick a symlink loop or a
+/// permissions problem either. Retrying those would only spend the caller's
 /// 30-second budget before failing with the same message.
 func shouldAttemptDownloadRetry(
     afterUnverifiedWrite problem: AttachmentWriteProblem,
@@ -102,8 +103,8 @@ func shouldAttemptDownloadRetry(
 ) -> Bool {
     guard downloadIfMissing else { return false }
     switch problem {
-    case .empty, .missing: return true
-    case .notRegular:      return false
+    case .empty, .missing:        return true
+    case .notRegular, .statFailed: return false
     }
 }
 

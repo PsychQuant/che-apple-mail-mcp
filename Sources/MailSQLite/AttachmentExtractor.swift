@@ -148,7 +148,22 @@ extension EmlxParser {
             if part.headers["x-apple-content-length"] != nil {
                 throw MailSQLiteError.attachmentNotDownloaded(name: attachmentName)
             }
-            throw MailSQLiteError.attachmentNotFound(name: attachmentName)
+            // #347 — a part by this name DOES exist and is empty. Distinct from
+            // "no such part": the dispatcher may honor `allow_empty` here and
+            // must never honor it for a name that matched nothing.
+            //
+            // But ONLY from a complete `.emlx`. A `.partial.emlx` is Mail
+            // telling us it has not fetched the body — an empty part there
+            // means "not downloaded yet", and answering `allow_empty` with a
+            // 0-byte file would resurrect exactly the silent data loss #66/#314
+            // exist to prevent. Pinned by
+            // `testSaveAttachment_partialEmlxNoExternal_throwsAttachmentNotFound`,
+            // which caught this the first time the condition was written too
+            // broadly (#347 verify round 1).
+            if path.hasSuffix(".partial.emlx") {
+                throw MailSQLiteError.attachmentNotFound(name: attachmentName)
+            }
+            throw MailSQLiteError.attachmentEmpty(name: attachmentName)
         }
 
         // Size guard — large parts fall through to AppleScript streaming.

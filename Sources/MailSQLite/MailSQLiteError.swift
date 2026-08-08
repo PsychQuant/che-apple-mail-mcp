@@ -20,6 +20,17 @@ public enum MailSQLiteError: Error, LocalizedError {
     /// the attachment doesn't exist.
     case attachmentNotDownloaded(name: String)
 
+    /// #347 — a MIME part with the requested name EXISTS, its decoded body is
+    /// empty, there is no external cache file, and it carries no
+    /// `X-Apple-Content-Length` placeholder. That combination is the closest
+    /// thing to positive evidence that the attachment is genuinely empty rather
+    /// than merely unfetched.
+    ///
+    /// Distinct from `attachmentNotFound`, which also covers "no part by that
+    /// name at all" — a typo'd filename must never be answered with a 0-byte
+    /// file, so `allow_empty` can only be honored on THIS case.
+    case attachmentEmpty(name: String)
+
     /// A matching attachment was found but its decoded size exceeds the
     /// hard limit for in-memory extraction. Dispatchers fall through to
     /// the AppleScript path which can stream-write large files.
@@ -64,6 +75,10 @@ public enum MailSQLiteError: Error, LocalizedError {
                 + "not fetched its content (placeholder-only MIME part, no local cache). Open the "
                 + "message in Mail (or set Settings > Accounts > Download Attachments: All) to "
                 + "fetch it, then retry (#238)"
+        case .attachmentEmpty(let name):
+            return "Attachment '\(name)' exists in the message but has no content (empty MIME "
+                + "part, no external cache, no placeholder header). If it is genuinely an empty "
+                + "file, pass allow_empty to save it as 0 bytes (#347)"
         case .attachmentTooLarge(let name, let size, let limit):
             return "Attachment '\(name)' is \(size) bytes, exceeds in-memory limit of \(limit) bytes"
         case .accountNotResolvable(let name):

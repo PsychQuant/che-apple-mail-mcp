@@ -2315,6 +2315,20 @@ actor MailController {
     /// a regular file. `stat` rather than `open` + `fstat` because opening a
     /// FIFO blocks until a writer appears, and this runs on the shared actor.
     ///
+    /// Precisely: `stat` does not wait on a **local FIFO's** reader/writer
+    /// rendezvous, which is the hazard `open` introduces here. It is NOT
+    /// unconditionally non-blocking — on a hard-mounted NFS/SMB/FUSE path whose
+    /// server has stopped answering, any pathname resolution can hang, and this
+    /// one is outside #297's timeout guard. An earlier draft of this comment
+    /// claimed more than that (#347 verify round 1).
+    ///
+    /// Also inherent: this is a path-based check, so it cannot bind the result
+    /// to the inode Mail actually wrote. Between the save returning and this
+    /// `stat`, another process could swap the destination — the size reported
+    /// would then describe the substitute. Verifying "Mail wrote THIS inode"
+    /// would require a descriptor handed back by Mail, which AppleScript's
+    /// `save att in POSIX file` does not provide.
+    ///
     /// - Parameter allowEmpty: accept a 0-byte regular file — for an attachment
     ///   that is genuinely empty (#347 C). The success string then discloses it,
     ///   because the envelope carries no size and neither the caller nor this
@@ -2328,7 +2342,16 @@ actor MailController {
 
         var st = stat()
         guard stat(savePath, &st) == 0 else {
-            throw MailError.attachmentWriteUnverified(path: savePath, problem: .missing)
+            // ENOENT (and ENOTDIR on a missing intermediate) is genuinely
+            // "nothing is there" — the state Mail's silent no-op produces, and
+            // the one a download retry can still resolve. Every other errno
+            // describes a path that DOES exist but could not be examined;
+            // calling those "missing" both misinforms the caller and buys them
+            // a pointless 30s poll (#347 verify round 1).
+            let e = errno
+            throw MailError.attachmentWriteUnverified(
+                path: savePath,
+                problem: (e == ENOENT || e == ENOTDIR) ? .missing : .statFailed(errno: e))
         }
         guard (st.st_mode & S_IFMT) == S_IFREG else {
             throw MailError.attachmentWriteUnverified(
@@ -2429,6 +2452,7 @@ actor MailController {
         attachmentName: String,
         savePath: String,
         allowEmpty: Bool = false,
+        enteredAfterUnverifiedWrite: AttachmentWriteProblem? = nil,
         policy: DownloadRetryPolicy = .default
     ) async throws -> String {
         // 1. Nudge Mail to materialize the message (best-effort). Errors are
@@ -2501,7 +2525,16 @@ actor MailController {
             }
             if Date() >= deadline { break }   // wall-clock budget spent
         }
-        // Budget spent without the attachment landing — honest failure.
+        // Budget spent — fail honestly, and name the RIGHT failure.
+        //
+        // #347 verify round 1: this used to report "not downloaded" whatever
+        // brought us here. On the unverified-write entry that is a fabricated
+        // diagnosis — the attachment may well be local and genuinely empty, and
+        // the caller was told to go fetch something that is already there. It
+        // also dropped the typed error an upstream `catch` was matching on.
+        if let problem = enteredAfterUnverifiedWrite {
+            throw MailError.attachmentWriteUnverified(path: savePath, problem: problem)
+        }
         throw MailError.operationFailed(
             "Best-effort download did not complete within \(Int(policy.timeout))s. "
             + MailSQLiteError.attachmentNotDownloaded(name: attachmentName).localizedDescription)
@@ -3059,6 +3092,12 @@ enum AttachmentWriteProblem: Equatable {
     /// A regular file of zero length. Retryable, and overridable via
     /// `allow_empty` for a genuinely empty attachment.
     case empty
+    /// `stat` failed for a reason that is not "nothing is there" — `ELOOP`
+    /// (symlink loop), `EACCES`, `EIO`, `ENOTDIR`. Terminal: reporting these as
+    /// `.missing` told the caller "no file exists" about a path that does
+    /// exist, and made them eligible for a download retry that cannot help
+    /// (#347 verify round 1).
+    case statFailed(errno: Int32)
 }
 
 enum MailError: LocalizedError {
@@ -3147,6 +3186,12 @@ enum MailError: LocalizedError {
                     + "regular file (#347). Pass a save_path that names a file — note this "
                     + "is checked through symlinks, so a link pointing at a directory or a "
                     + "FIFO is rejected here too."
+            case .statFailed(let e):
+                let detail = String(cString: strerror(e))
+                return "save_attachment reported success but \(path) could not be examined: "
+                    + "\(detail) (errno \(e), #347). The path exists in some form — this is not "
+                    + "a missing file and retrying will not change it. Check for a symlink loop, "
+                    + "permissions on the containing directory, or an I/O error on the volume."
             case .empty:
                 return "save_attachment reported success but wrote a 0-byte file at \(path) — "
                     + "Mail's local attachment cache likely lacks the bytes (#314). The empty "
