@@ -993,7 +993,25 @@ class CheAppleMailMCPServer {
                     // does not resolve. Falling through would hand AppleScript
                     // the same name and, on a miss, return the silent zero this
                     // diagnostic exists to abolish.
-                    throw MailSQLiteError.mailboxNotResolvable(name: name, candidates: candidates)
+                    //
+                    // BUT only when AppleScript could not have done better
+                    // (#344 verify round 1). `listEmailsPage` takes no
+                    // `account_id`: it resolves a display name to the FIRST
+                    // matching UUID, so with two accounts sharing a name it can
+                    // scan the wrong one, miss, and report a near-miss for a
+                    // mailbox the caller never asked about — while the
+                    // AppleScript path below, which DOES take `account_id`,
+                    // would have resolved it correctly. Rethrowing there turns a
+                    // working call into an error, so when the caller supplied an
+                    // `account_id` the verdict is logged and the fallback runs.
+                    if (decodeAccountId(arguments, tool: invokedTool) ?? "").isEmpty {
+                        throw MailSQLiteError.mailboxNotResolvable(name: name, candidates: candidates)
+                    }
+                    FileHandle.standardError.write(Data((
+                        "list_emails: SQLite mailbox filter found no match for '\(name)' "
+                        + "(near-miss: \(candidates.joined(separator: ", "))), but an account_id was "
+                        + "supplied and the fast path cannot use it — falling through to "
+                        + "AppleScript, which can (#344)\n").utf8))
                 } catch {
                     let message = "SQLite list_emails fast path failed for "
                         + "mailbox='\(mailbox)' account='\(accountName)': "

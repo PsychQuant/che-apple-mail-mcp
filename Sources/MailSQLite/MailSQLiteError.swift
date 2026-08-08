@@ -71,9 +71,10 @@ public enum MailSQLiteError: Error, LocalizedError {
         case .mailboxNotResolvable(let name, let candidates):
             let suggestion = candidates.map { "'\($0)'" }.joined(separator: ", ")
             return "Mailbox '\(name)' matched no mailbox — did you mean \(suggestion)? "
-                + "Mailbox names are matched exactly (INBOX is the one exception, "
-                + "case-insensitive per RFC 3501 §5.1); use list_mailboxes to see the "
-                + "exact names (#344)"
+                + "Mailbox names are matched exactly, component by component (the one "
+                + "exception is a top-level INBOX, case-insensitive per RFC 3501 §5.1 — "
+                + "a nested component named 'inbox' is NOT folded); use list_mailboxes to "
+                + "see the exact names (#344)"
         }
     }
 }

@@ -43,6 +43,9 @@ final class MailboxComponentMatchingTests: XCTestCase {
     ///   4  UUID-A          R&D → Sent       1 msg   ← genuine two-level hierarchy
     ///   5  UUID-A          Sent             1 msg   (top-level)
     ///   6  E51B96AC-CAFE   Archive          1 msg   ← UPPER-case authority
+    ///   7  UUID-A          INBOX → Sub      1 msg   ← child of the root INBOX
+    ///   8  UUID-A          Team → INBOX     1 msg   ← 'INBOX' at a NON-root position
+    ///   9  UUID-A          Team → inbox     1 msg   ← its case twin, a DIFFERENT mailbox
     private func makeFixtureDB() throws -> String {
         let fm = FileManager.default
         let tmpDir = fm.temporaryDirectory.appendingPathComponent(
@@ -72,11 +75,15 @@ final class MailboxComponentMatchingTests: XCTestCase {
         INSERT INTO mailboxes VALUES (4, 'imap://UUID-A/R%26D/Sent', 1);
         INSERT INTO mailboxes VALUES (5, 'imap://UUID-A/Sent', 1);
         INSERT INTO mailboxes VALUES (6, 'imap://E51B96AC-CAFE/Archive', 1);
+        INSERT INTO mailboxes VALUES (7, 'imap://UUID-A/INBOX/Sub', 0);
+        INSERT INTO mailboxes VALUES (8, 'imap://UUID-A/Team/INBOX', 0);
+        INSERT INTO mailboxes VALUES (9, 'imap://UUID-A/Team/inbox', 0);
         INSERT INTO subjects VALUES (1, 'match one');
         INSERT INTO messages (ROWID, subject, sender, mailbox, date_received) VALUES
             (1, 1, 1, 1, 1001), (2, 1, 1, 1, 1002), (3, 1, 1, 2, 1003),
             (4, 1, 1, 3, 1004), (5, 1, 1, 4, 1005), (6, 1, 1, 5, 1006),
-            (7, 1, 1, 6, 1007);
+            (7, 1, 1, 6, 1007), (8, 1, 1, 7, 1008), (9, 1, 1, 8, 1009),
+            (10, 1, 1, 9, 1010);
         """
         var err: UnsafeMutablePointer<Int8>?
         guard sqlite3_exec(db, sql, nil, nil, &err) == SQLITE_OK else {
@@ -137,10 +144,15 @@ final class MailboxComponentMatchingTests: XCTestCase {
     /// so `inbox` silently returned nothing.
     func testInbox_isCaseInsensitivePerRFC3501() throws {
         let reader = try makeReader()
-        XCTAssertEqual(try count(reader, mailbox: "inbox"), 2,
+        // Root INBOX (2) + its child INBOX/Sub (1) + Team/inbox (1, matched by
+        // ORDINARY exact leaf comparison, not by the fold). Team/INBOX is the
+        // one excluded — see testInboxFold_isConfinedToThePathRoot.
+        XCTAssertEqual(try count(reader, mailbox: "inbox"), 4,
             "INBOX is case-insensitive by RFC 3501 §5.1 — 'inbox' must resolve")
-        XCTAssertEqual(try count(reader, mailbox: "InBoX"), 2)
-        XCTAssertEqual(try count(reader, mailbox: "INBOX"), 2)
+        XCTAssertEqual(try count(reader, mailbox: "InBoX"), 3,
+            "a mixed-case spelling folds at the root (INBOX + INBOX/Sub) but matches "
+            + "no leaf exactly, so Team/inbox drops out — the fold and exact matching "
+            + "are visibly separate mechanisms")
         XCTAssertEqual(try reader.getUnreadCount(mailbox: "inbox", accountName: nil), 3,
             "the same rule must hold on the getUnreadCount fast path")
     }
@@ -223,6 +235,64 @@ final class MailboxComponentMatchingTests: XCTestCase {
     }
 
     // MARK: - descendant / leaf semantics must survive the rewrite
+
+    // MARK: - the INBOX fold belongs at the root, and nowhere else (verify R1)
+
+    /// The first cut of this fix folded `INBOX` at **every** component
+    /// position, so a store holding both `Team/INBOX` and `Team/inbox` returned
+    /// both mailboxes' mail for a query naming either — the exact over-match
+    /// this issue's diagnosis rejected when it argued against blanket folding,
+    /// reintroduced one level down. RFC 3501 §5.1's `INBOX` is a mailbox
+    /// *name*, not a token that may appear anywhere in a hierarchy.
+    func testInboxFold_isConfinedToThePathRoot() throws {
+        let reader = try makeReader()
+        XCTAssertEqual(try count(reader, mailbox: "Team/inbox"), 1,
+            "must resolve ONLY the mailbox actually named Team/inbox")
+        XCTAssertEqual(try count(reader, mailbox: "Team/INBOX"), 1,
+            "…and its case twin must resolve only itself — these are two mailboxes")
+        XCTAssertEqual(try count(reader, mailbox: "Team"), 2,
+            "both are descendants of Team, so the parent query still sees both")
+    }
+
+    /// The other half, and the sharpest statement of the rule: `inbox` and
+    /// `INBOX` both resolve four messages, but **not the same four**. The
+    /// counts being equal is a coincidence; the membership is the point.
+    ///
+    ///  - `inbox`  → root INBOX(2) + INBOX/Sub(1) + Team/inbox(1)   [Team/INBOX out]
+    ///  - `INBOX`  → root INBOX(2) + INBOX/Sub(1) + Team/INBOX(1)   [Team/inbox out]
+    ///
+    /// Each reaches a nested mailbox only by matching it EXACTLY. The fold buys
+    /// exactly one thing — the root — which is what RFC 3501 §5.1 grants.
+    func testTheFoldAndExactMatchingAreSeparateMechanisms() throws {
+        let reader = try makeReader()
+        // Scope to the nested pair so the membership, not the total, is asserted.
+        XCTAssertEqual(try count(reader, mailbox: "Team/inbox"), 1)
+        XCTAssertEqual(try count(reader, mailbox: "Team/INBOX"), 1)
+        // A mixed-case spelling can only ever hit the root: it matches no leaf
+        // exactly, and the fold does not apply below position 0.
+        XCTAssertEqual(try count(reader, mailbox: "InBoX"), 3,
+            "root INBOX(2) + INBOX/Sub(1) — neither Team/INBOX nor Team/inbox, because "
+            + "off-root components compare exactly and 'InBoX' equals neither")
+    }
+
+    /// An EXACT-case query is unaffected by any of this: it matches at any
+    /// depth, exactly as every other mailbox name does.
+    func testExactCaseINBOX_stillMatchesAtAnyDepth() throws {
+        let reader = try makeReader()
+        XCTAssertEqual(try count(reader, mailbox: "INBOX"), 4,
+            "root INBOX (2) + INBOX/Sub (1) + Team/INBOX (1); Team/inbox is excluded "
+            + "because exact comparison, not folding, is what matched here")
+    }
+
+    /// A child of INBOX folds at the root and stays exact below it.
+    func testInboxChild_rootFoldsButTheChildDoesNot() throws {
+        let reader = try makeReader()
+        XCTAssertEqual(try count(reader, mailbox: "inbox/Sub"), 1,
+            "root folds, child compares exactly")
+        XCTAssertThrowsError(try count(reader, mailbox: "inbox/sub"),
+            "the child is not INBOX, so 'sub' must not fold — and the near-miss "
+            + "diagnostic should name the real one rather than return a silent zero")
+    }
 
     func testDescendantAndLeafSemanticsPreserved() throws {
         let reader = try makeReader()

@@ -675,7 +675,40 @@ public final class EnvelopeIndexReader {
         if lax {
             return asciiLowercased(component.trimmingCharacters(in: .whitespaces))
         }
-        return asciiCaseInsensitiveEqual(component, "INBOX") ? "INBOX" : component
+        return component
+    }
+
+    /// Compare one path component against one query component.
+    ///
+    /// - Parameter atPathRoot: whether the path component sits at index 0.
+    ///   **RFC 3501 §5.1's `INBOX` is a mailbox *name*, not a token that may
+    ///   appear anywhere in a hierarchy**, so the fold applies only there — at
+    ///   the mailbox called INBOX, and at the root of `INBOX/Sub`.
+    ///
+    ///   The first cut of this fix folded `INBOX` at **every** position, which
+    ///   meant a store holding both `Team/INBOX` and `Team/inbox` returned both
+    ///   mailboxes' mail for a query naming either one (#344 verify round 1).
+    ///   That is precisely the over-match this issue's own diagnosis argued
+    ///   against when it rejected blanket folding — reintroduced one level down.
+    ///   Note an exact-case query still matches at any depth; only the
+    ///   *case-insensitive* privilege is confined to the root.
+    ///
+    /// Non-root components compare with `==`, which for Swift `String` means
+    /// **canonically equivalent**, not byte-identical: an NFC `Café` and an NFD
+    /// `Cafe\u{301}` compare equal. That is deliberate — APFS and IMAP servers
+    /// both treat those as the same name — but it is not "byte-exact", as an
+    /// earlier version of this comment claimed.
+    static func mailboxComponentsMatch(path: String, query: String,
+                                       atPathRoot: Bool, lax: Bool) -> Bool {
+        if lax {
+            return mailboxComponentKey(path, lax: true) == mailboxComponentKey(query, lax: true)
+        }
+        if atPathRoot,
+           asciiCaseInsensitiveEqual(path, "INBOX"),
+           asciiCaseInsensitiveEqual(query, "INBOX") {
+            return true
+        }
+        return path == query
     }
 
     /// #317 kept the pre-existing two-pattern LIKE semantics (the named mailbox
@@ -710,13 +743,22 @@ public final class EnvelopeIndexReader {
             return true
         }
 
-        let q = query.split(separator: "/", omittingEmptySubsequences: false)
-            .map { mailboxComponentKey(String($0), lax: lax) }
-        let p = mailbox.pathComponents.map { mailboxComponentKey($0, lax: lax) }
+        let q = query.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        let p = mailbox.pathComponents
         guard !q.isEmpty, q.count <= p.count else { return false }
 
-        for start in 0...(p.count - q.count) where Array(p[start ..< start + q.count]) == q {
-            return true
+        // The run is compared position-aware rather than by pre-keying both
+        // sides, because whether `INBOX` may fold depends on the component's
+        // absolute index in the PATH — which a symmetric key cannot express.
+        for start in 0...(p.count - q.count) {
+            var matched = true
+            for i in 0 ..< q.count
+            where !mailboxComponentsMatch(path: p[start + i], query: q[i],
+                                          atPathRoot: (start + i) == 0, lax: lax) {
+                matched = false
+                break
+            }
+            if matched { return true }
         }
         return false
     }
@@ -731,7 +773,7 @@ public final class EnvelopeIndexReader {
     /// output" true by construction. The mailboxes table is tens of rows, so
     /// the extra pass is noise.
     private func mailboxRowIds(matchingPath query: String, accountUUID: String? = nil) throws -> [Int64] {
-        let ids = try resolveMailboxRows(query: query, accountUUID: accountUUID, lax: false).ids
+        let (ids, nearMisses) = try resolveMailboxRows(query: query, accountUUID: accountUUID)
         guard ids.isEmpty else { return ids }
 
         // #344 — before conceding an empty result, look for a near-miss.
@@ -746,17 +788,23 @@ public final class EnvelopeIndexReader {
         // whitespace. An unrelated name finds no candidate and still returns an
         // honest empty result — this must not turn every legitimately empty
         // filter into an error.
-        let candidates = try resolveMailboxRows(query: query, accountUUID: accountUUID, lax: true).paths
-        guard !candidates.isEmpty else { return ids }
+        guard !nearMisses.isEmpty else { return ids }
         throw MailSQLiteError.mailboxNotResolvable(
             name: query,
-            candidates: Array(Set(candidates)).sorted().prefix(5).map { $0 })
+            candidates: Array(Set(nearMisses)).sorted().prefix(5).map { $0 })
     }
 
-    /// Single scan of the mailboxes table, shared by the strict resolution and
-    /// the near-miss rescan so the two can never disagree about what "matches".
-    private func resolveMailboxRows(query: String, accountUUID: String?,
-                                    lax: Bool) throws -> (ids: [Int64], paths: [String]) {
+    /// One scan of the mailboxes table producing BOTH the strict matches and
+    /// the lax near-misses.
+    ///
+    /// Deliberately a single statement rather than two passes (#344 verify
+    /// round 1): with separate scans, a mailbox arriving between them — Mail
+    /// syncs into this database continuously — could be absent from the strict
+    /// pass and present in the lax one, producing the absurd
+    /// `no mailbox matched 'Work'; did you mean 'Work'?`. One snapshot makes
+    /// that unrepresentable, and costs half the work rather than more.
+    private func resolveMailboxRows(query: String,
+                                    accountUUID: String?) throws -> (ids: [Int64], nearMisses: [String]) {
         guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, "SELECT ROWID, url FROM mailboxes", -1, &stmt, nil) == SQLITE_OK else {
@@ -764,7 +812,7 @@ public final class EnvelopeIndexReader {
         }
         defer { sqlite3_finalize(stmt) }
         var ids: [Int64] = []
-        var paths: [String] = []
+        var nearMisses: [String] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             guard let urlC = sqlite3_column_text(stmt, 1) else { continue }
             guard let decoded = MailboxURL.decode(String(cString: urlC)) else { continue }
@@ -774,12 +822,15 @@ public final class EnvelopeIndexReader {
             // which the same text appearing inside a mailbox path could satisfy.
             if let uuid = accountUUID,
                !Self.asciiCaseInsensitiveEqual(decoded.accountUUID, uuid) { continue }
-            if Self.mailboxPathMatches(query: query, mailbox: decoded, lax: lax) {
+            if Self.mailboxPathMatches(query: query, mailbox: decoded, lax: false) {
                 ids.append(sqlite3_column_int64(stmt, 0))
-                paths.append(decoded.mailboxPath)
+            } else if Self.mailboxPathMatches(query: query, mailbox: decoded, lax: true) {
+                // Lax-only: a strict match is never also a near-miss, so the
+                // suggestion list can never contain the answer itself.
+                nearMisses.append(decoded.mailboxPath)
             }
         }
-        return (ids, paths)
+        return (ids, nearMisses)
     }
 
     /// `col IN (…)` from resolver output; a never-true condition when the name
