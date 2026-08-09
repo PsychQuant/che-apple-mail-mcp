@@ -4,7 +4,7 @@ import Foundation
 ///
 /// ## Why this exists as its own type
 ///
-/// `FileHandle.standardError.write(_:)` — the non-throwing overload — raises an
+/// The non-throwing `write` overload on `FileHandle.standardError` raises an
 /// **uncatchable Objective-C exception** when the descriptor errors. Not a Swift
 /// error: no `try?` and no `do/catch` can intercept it. The process aborts
 /// (`SIGABRT`, exit 134), which #303 verified on the real binary.

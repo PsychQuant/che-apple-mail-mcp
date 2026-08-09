@@ -1548,9 +1548,9 @@ class CheAppleMailMCPServer {
                     // still throws `attachmentNotFound` and can never be
                     // answered with a 0-byte file.
                     try Data().write(to: URL(fileURLWithPath: savePath))
-                    FileHandle.standardError.write(Data((
+                    Diagnostics.emit(
                         "save_attachment: '\(name)' is an empty MIME part; wrote 0 bytes "
-                        + "under allow_empty (#347)\n").utf8))
+                        + "under allow_empty (#347)\n")
                     return "Attachment saved to \(savePath) "
                         + "(0 bytes — empty write accepted via allow_empty)"
                 } catch {

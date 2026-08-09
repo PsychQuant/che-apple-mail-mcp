@@ -29,35 +29,65 @@ final class NoNonThrowingStderrWriteGuardTests: XCTestCase {
             .appendingPathComponent("Sources")
     }
 
+    /// Two bans, both scanned over the WHOLE file text rather than line by line.
+    ///
+    /// Line-by-line matching of one adjacent literal was the first version, and
+    /// verify round 1 walked straight through it: a call split across lines
+    /// (`FileHandle.standardError.write(` then `Data(...)` on the next) left
+    /// `offenders` empty, so "the 27th writer fails the build" was not true.
+    /// Binding the handle to a variable first evaded it just as easily.
+    ///
+    /// **Ban 1** — any `standardError.write(` that is not `write(contentsOf:`,
+    /// whitespace- and newline-tolerant.
+    /// **Ban 2** — binding `FileHandle.standardError` to a variable outside the
+    /// sink, which is the other way to reach the non-throwing overload.
+    ///
+    /// Deliberately **comment-agnostic**: no attempt is made to skip `//` lines.
+    /// Stripping comments needs a Swift lexer to avoid mangling `https://` in a
+    /// string literal, and a guard that can be defeated by appending a comment
+    /// is not a guard. The cost is that prose must not spell the banned call
+    /// form — the three doc comments that did were reworded to say
+    /// "the non-throwing `write` overload on `FileHandle.standardError`".
     func testNoSourceFileUsesTheNonThrowingStderrWrite() throws {
-        let fm = FileManager.default
-        let dir = shippedSourcesDir()
-        guard let walker = fm.enumerator(at: dir, includingPropertiesForKeys: nil) else {
-            return XCTFail("could not enumerate \(dir.path)")
-        }
+        let banned = try NSRegularExpression(
+            pattern: #"standardError\s*\.\s*write\s*\(\s*(?!contentsOf)"#)
+        let binding = try NSRegularExpression(
+            pattern: #"(let|var)\s+\w+\s*(:[^=\n]+)?=\s*FileHandle\s*\.\s*standardError\b"#)
 
-        // The exact shape that aborts. `write(contentsOf:)` is the throwing
-        // API and is deliberately NOT matched.
-        let needle = "standardError.write(Data("
         var offenders: [String] = []
-        for case let url as URL in walker where url.pathExtension == "swift" {
+        for url in try swiftFiles() {
             let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-            for (idx, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated()
-            where line.contains(needle) {
-                // Skip prose: a doc comment naming the banned call (this file's
-                // own rationale, or #320's note in main.swift) is not a call.
-                let trimmed = line.trimmingCharacters(in: .whitespaces)
-                if trimmed.hasPrefix("//") || trimmed.hasPrefix("///") || trimmed.hasPrefix("*") {
-                    continue
-                }
-                offenders.append("\(url.lastPathComponent):\(idx + 1): \(trimmed)")
+            let range = NSRange(text.startIndex..., in: text)
+
+            for m in banned.matches(in: text, range: range) {
+                offenders.append("\(url.lastPathComponent):\(line(of: m.range, in: text)): "
+                                 + "non-throwing stderr write")
+            }
+            // The sink is the one place allowed to hold the handle.
+            guard url.lastPathComponent != "Diagnostics.swift" else { continue }
+            for m in binding.matches(in: text, range: range) {
+                offenders.append("\(url.lastPathComponent):\(line(of: m.range, in: text)): "
+                                 + "FileHandle.standardError bound to a variable — route through "
+                                 + "Diagnostics.emit instead")
             }
         }
 
         XCTAssertTrue(offenders.isEmpty,
-            "non-throwing stderr write(s) found — these abort the process (SIGABRT) on a "
-            + "broken pipe instead of returning an error (#346). Use Diagnostics.emit:\n"
-            + offenders.joined(separator: "\n"))
+            "these abort the process (SIGABRT) on a broken pipe instead of returning an "
+            + "error (#346). Use Diagnostics.emit:\n" + offenders.joined(separator: "\n"))
+    }
+
+    private func swiftFiles() throws -> [URL] {
+        let fm = FileManager.default
+        guard let walker = fm.enumerator(at: shippedSourcesDir(), includingPropertiesForKeys: nil) else {
+            return []
+        }
+        return walker.compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+    }
+
+    private func line(of range: NSRange, in text: String) -> Int {
+        guard let r = Range(range, in: text) else { return 0 }
+        return text[text.startIndex..<r.lowerBound].filter { $0 == "\n" }.count + 1
     }
 
     /// The counterpart: the sink must still exist and be used. A guard that only
@@ -71,19 +101,27 @@ final class NoNonThrowingStderrWriteGuardTests: XCTestCase {
             (try String(contentsOf: sink, encoding: .utf8)).contains("write(contentsOf:"),
             "the sink must use the THROWING write — that is the entire point")
 
-        let fm = FileManager.default
-        guard let walker = fm.enumerator(at: dir, includingPropertiesForKeys: nil) else {
-            return XCTFail("could not enumerate \(dir.path)")
+        // Per-file floors, not one global count. Verify round 1's objection to a
+        // single `>= 20` was fair: with 27 present you could delete any seven
+        // real diagnostics and still pass. Per-file floors at least localize a
+        // wholesale loss — deleting Export's only diagnostic, or gutting
+        // MailController's, now fails where a global floor absorbed it.
+        //
+        // Stated plainly: this is a smoke check against bulk deletion, NOT a
+        // completeness proof. Nothing here can tell that a specific diagnostic
+        // still fires; the ban above is the invariant that actually holds.
+        let floors = [("Server.swift", 15), ("MailController.swift", 5),
+                      ("ExportEmailsMarkdown.swift", 1)]
+        for (name, floor) in floors {
+            let hits = try swiftFiles()
+                .filter { $0.lastPathComponent == name }
+                .map { (try? String(contentsOf: $0, encoding: .utf8)) ?? "" }
+                .map { $0.components(separatedBy: "Diagnostics.emit(").count - 1 }
+                .reduce(0, +)
+            XCTAssertGreaterThanOrEqual(hits, floor,
+                "\(name) routes \(hits) diagnostics through the sink, expected ≥ \(floor) — "
+                + "a drop this large means sites were deleted or re-routed, not that the server "
+                + "stopped needing diagnostics")
         }
-        var callSites = 0
-        for case let url as URL in walker where url.pathExtension == "swift"
-        && url.lastPathComponent != "Diagnostics.swift" {
-            let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-            callSites += text.components(separatedBy: "Diagnostics.emit(").count - 1
-        }
-        XCTAssertGreaterThanOrEqual(callSites, 20,
-            "expected the ~26 converted diagnostics to route through the sink; found \(callSites). "
-            + "A sharp drop means sites were deleted or routed somewhere else, not that the "
-            + "server stopped needing diagnostics.")
     }
 }

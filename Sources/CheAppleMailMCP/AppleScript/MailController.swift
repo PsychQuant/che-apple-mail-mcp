@@ -533,7 +533,7 @@ actor MailController {
     /// #303 — write an advisory diagnostic to stderr, swallowing descriptor
     /// errors so an *advisory* nudge cannot itself abort the process.
     ///
-    /// The non-throwing `FileHandle.standardError.write(_:)` raises an
+    /// The non-throwing `write` overload on `FileHandle.standardError` raises an
     /// uncatchable ObjC exception on a bad descriptor: a host launching the
     /// server with fd 2 closed turned this into `SIGABRT` (verified, exit 134),
     /// violating "never throws / never refuses" by a route its wording did not

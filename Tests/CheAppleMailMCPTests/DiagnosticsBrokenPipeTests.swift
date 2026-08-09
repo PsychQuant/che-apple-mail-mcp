@@ -44,7 +44,12 @@ final class DiagnosticsBrokenPipeTests: XCTestCase {
         close(fds[0])                       // reader gone → the pipe is broken
 
         defer {
-            dup2(savedStderr, STDERR_FILENO)
+            // A failed restore leaves fd 2 pointing at the broken pipe, which
+            // would kill the test host on the next unrelated stderr write — so
+            // retry EINTR and fail loudly rather than continue quietly.
+            var rc = dup2(savedStderr, STDERR_FILENO)
+            while rc < 0 && errno == EINTR { rc = dup2(savedStderr, STDERR_FILENO) }
+            XCTAssertGreaterThanOrEqual(rc, 0, "could not restore fd 2 — later tests are unsafe")
             close(savedStderr)
             close(fds[1])
             signal(SIGPIPE, savedSigpipe)
@@ -94,7 +99,7 @@ final class DiagnosticsBrokenPipeTests: XCTestCase {
         try XCTSkipIf(savedStderr < 0, "could not duplicate fd 2")
         var fds: [Int32] = [-1, -1]
         XCTAssertEqual(pipe(&fds), 0)
-        defer { dup2(savedStderr, STDERR_FILENO); close(savedStderr); close(fds[0]); close(fds[1]) }
+        defer { dup2(savedStderr, STDERR_FILENO); close(savedStderr); close(fds[0]); if fds[1] >= 0 { close(fds[1]) } }
 
         XCTAssertEqual(dup2(fds[1], STDERR_FILENO), STDERR_FILENO)
         let delivered = Diagnostics.emit("hello stderr\n")
@@ -102,6 +107,11 @@ final class DiagnosticsBrokenPipeTests: XCTestCase {
                                              // failed read cannot cascade
         XCTAssertTrue(delivered)
 
+        // Close EVERY writer end before reading. Verify round 1: with a writer
+        // still open, a regression where `emit` silently wrote nothing would
+        // leave `read` blocked forever — the suite would time out instead of
+        // failing cleanly, and a hang is a much worse signal than a red test.
+        close(fds[1]); fds[1] = -1
         var buf = [UInt8](repeating: 0, count: 64)
         let n = read(fds[0], &buf, 64)
         XCTAssertEqual(String(decoding: buf.prefix(max(0, n)), as: UTF8.self), "hello stderr\n",
@@ -117,13 +127,14 @@ final class DiagnosticsBrokenPipeTests: XCTestCase {
         try XCTSkipIf(savedStderr < 0, "could not duplicate fd 2")
         var fds: [Int32] = [-1, -1]
         XCTAssertEqual(pipe(&fds), 0)
-        defer { dup2(savedStderr, STDERR_FILENO); close(savedStderr); close(fds[0]); close(fds[1]) }
+        defer { dup2(savedStderr, STDERR_FILENO); close(savedStderr); close(fds[0]); if fds[1] >= 0 { close(fds[1]) } }
 
         XCTAssertEqual(dup2(fds[1], STDERR_FILENO), STDERR_FILENO)
         let delivered = MailController.emitDiagnostic("stale binary")
         dup2(savedStderr, STDERR_FILENO)
         XCTAssertTrue(delivered)
 
+        close(fds[1]); fds[1] = -1        // see the note above: never read with a live writer
         var buf = [UInt8](repeating: 0, count: 64)
         let n = read(fds[0], &buf, 64)
         XCTAssertEqual(String(decoding: buf.prefix(max(0, n)), as: UTF8.self), "stale binary\n")
