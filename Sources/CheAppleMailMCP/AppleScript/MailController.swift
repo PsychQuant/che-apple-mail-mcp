@@ -82,6 +82,21 @@ actor MailController {
     /// - Parameter timeout: optional per-call deadline (#301). nil → the #297
     ///   default. The `scriptTimeout` test seam still beats BOTH, so tests can
     ///   compress any call site's deadline.
+    /// Whether XCTest is loaded in this process (#362).
+    ///
+    /// Computed once — `NSClassFromString` is a runtime lookup and `runScript`
+    /// is on the hot path for every AppleScript-backed tool. In a shipped
+    /// binary this is always `false`: nothing links XCTest, so the guard it
+    /// gates is unreachable in production.
+    nonisolated static let isRunningUnderXCTest: Bool = NSClassFromString("XCTestCase") != nil
+
+    /// Live integration tests opt out of the #362 guard through the **same**
+    /// env var that already gates them (`MailAppIntegrationTests`) — reusing
+    /// the existing switch rather than inventing a second one, so there is no
+    /// way to be in live mode by one flag and blocked by the other.
+    nonisolated static let liveAppleScriptAllowedInTests: Bool =
+        ProcessInfo.processInfo.environment["MAIL_APP_INTEGRATION_TESTS"] != nil
+
     func runScript(_ source: String, timeout: TimeInterval? = nil) throws -> String {
         if let override = scriptRunnerOverride {
             // Route the fake runner through the same guard so tests can drive
@@ -89,6 +104,37 @@ actor MailController {
             // No preflight ran on this path — assume granted so the timeout
             // message never sends a TEST at the TCC dead end (#301).
             return try runGuarded(timeout: timeout, automationGranted: true) { try override(source) }
+        }
+        // #362 — a unit test must NEVER execute a real Apple Event.
+        //
+        // `runGuarded` runs every call on a detached thread and, on timeout,
+        // ABANDONS it (#297/#301: the AppleScript call cannot be cancelled).
+        // An abandoned thread running a real Apple Event keeps pumping
+        // AppleScript's nested event loop — and XCTest has run-loop observers
+        // installed, so its `performTest:` observer fires from inside that pump
+        // on a thread it never expected, asserts "Run loop nesting count is
+        // negative", and aborts the whole process. Crash report on #362 shows
+        // exactly that stack.
+        //
+        // The damage is not local: XCTest attributes the abandoned thread's
+        // 45-second wait, and the eventual abort, to whichever *unrelated* test
+        // happens to be running. Three runs produced three different victims,
+        // including a pure-function test on an empty array that "took" 333s.
+        //
+        // So: under XCTest, reaching this point at all is a defect in the test
+        // (a missing seam), and it must fail HERE — instantly, naming itself —
+        // rather than spawning a thread that corrupts its neighbours. Detected
+        // by whether XCTest is loaded in this process rather than by an env
+        // var, because SwiftPM runs the suite via the `xctest` binary directly.
+        if Self.isRunningUnderXCTest && !Self.liveAppleScriptAllowedInTests {
+            throw MailError.operationFailed(
+                "MailController.runScript reached the REAL NSAppleScript path while running "
+                + "under XCTest, with no test seam installed. A unit test must never execute a "
+                + "real Apple Event: on timeout runGuarded abandons the thread, and the "
+                + "still-running AppleScript event pump collides with XCTest's run-loop "
+                + "observers — aborting the process and blaming an unrelated test (#362). "
+                + "Install a seam with setTestSeams(scriptRunner:) around this call, or do not "
+                + "route it through MailController.")
         }
         let granted = try preflightAutomation()
         return try runGuarded(timeout: timeout, automationGranted: granted) {
