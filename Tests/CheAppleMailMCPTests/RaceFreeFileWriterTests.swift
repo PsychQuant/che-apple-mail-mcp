@@ -126,17 +126,53 @@ final class RaceFreeFileWriterTests: XCTestCase {
     }
 
     /// A refused write must not leave its sibling temp behind.
+    ///
+    /// Verify round 1: the first version swallowed the throw with `try?` and
+    /// asserted only that no temp remained — which a *successful* clobber also
+    /// satisfies, since a completed rename leaves no temp either. It could not
+    /// distinguish "refused and cleaned up" from "quietly overwrote the file".
+    /// Both halves are now pinned.
     func testWriteFile_failIfExists_cleansUpTempOnRefusal() throws {
         let dir = URL(fileURLWithPath: root)
-        try "X".write(to: dir.appendingPathComponent("a.md"), atomically: true, encoding: .utf8)
+        let target = dir.appendingPathComponent("a.md")
+        try "X".write(to: target, atomically: true, encoding: .utf8)
 
-        _ = try? RaceFreeFileWriter.writeFile(
+        XCTAssertThrowsError(try RaceFreeFileWriter.writeFile(
             rootDir: dir.path, relativeDirComponents: [], filename: "a.md",
-            data: Data("Y".utf8), failIfExists: true)
+            data: Data("Y".utf8), failIfExists: true)) { error in
+            guard case RaceFreeWriteError.destinationExists = error else {
+                return XCTFail("expected destinationExists, got \(error)")
+            }
+        }
+        XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "X",
+                       "the refused write must not have touched the existing file")
 
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path)
             .filter { $0.hasSuffix(".idd200.tmp") }
         XCTAssertTrue(leftovers.isEmpty, "temp must be cleaned up on refusal, found: \(leftovers)")
+    }
+
+    /// The exclusive-rename fallback chain must still refuse on a name that is
+    /// taken, whichever tier the volume lands on. This runs on whatever the temp
+    /// directory actually is; on APFS that is tier 1, but the assertion is
+    /// tier-agnostic on purpose — the contract is "refuses", not "refuses via
+    /// RENAME_EXCL" (#342 verify round 1: an unsupported volume used to fail
+    /// the entire export instead of falling back).
+    func testWriteFile_failIfExists_refusalHoldsWhicheverTierTheVolumeUses() throws {
+        let dir = URL(fileURLWithPath: root)
+        let target = dir.appendingPathComponent("tier.md")
+        try "FIRST".write(to: target, atomically: true, encoding: .utf8)
+
+        for attempt in 1...3 {
+            XCTAssertThrowsError(try RaceFreeFileWriter.writeFile(
+                rootDir: dir.path, relativeDirComponents: [], filename: "tier.md",
+                data: Data("ATTEMPT-\(attempt)".utf8), failIfExists: true),
+                "refusal must be stable across repeated attempts, not a one-shot")
+            XCTAssertEqual(try String(contentsOf: target, encoding: .utf8), "FIRST")
+        }
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: dir.path)
+                        .filter { $0.hasSuffix(".idd200.tmp") }.isEmpty,
+                      "no tier may leak a temp file on refusal")
     }
 
 }

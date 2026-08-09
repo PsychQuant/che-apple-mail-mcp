@@ -4,6 +4,37 @@ import XCTest
 
 final class ExportEmailsMarkdownTests: XCTestCase {
 
+    /// #342's whole premise is a **case-insensitive** volume: on APFS (the
+    /// macOS default) `Straße.md` and `STRASSE.md` are one directory entry, and
+    /// that is what makes an unfolded collision key lose data. On a
+    /// case-SENSITIVE volume there is no bug to reproduce — the two files
+    /// coexist, the assertions pass, and the tests prove nothing.
+    ///
+    /// Verify round 1 called those tests vacuous under that condition, which is
+    /// fair. They cannot be made to work there, so they now **skip visibly**
+    /// instead of reporting green: a skip shows up in the run summary, a silent
+    /// no-op does not. Probed by creating a lowercase name and asking for the
+    /// uppercase one — the volume's own answer, not an assumption about APFS.
+    func skipUnlessVolumeIsCaseInsensitive(_ dir: URL) throws {
+        // `tempDir()` hands back a URL WITHOUT creating it — `run()` does that
+        // later. The first version of this probe therefore wrote into a
+        // non-existent directory, found no uppercase twin, and skipped all
+        // three tests on a volume that is in fact case-insensitive. Caught by
+        // comparing the skip count against an independent shell probe: an
+        // anti-vacuity guard that silently disables the tests it guards is
+        // worse than the vacuity.
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let probe = dir.appendingPathComponent("case-probe-x")
+        FileManager.default.createFile(atPath: probe.path, contents: Data())
+        defer { try? FileManager.default.removeItem(at: probe) }
+        let upper = dir.appendingPathComponent("CASE-PROBE-X")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: upper.path),
+            "temp volume is case-SENSITIVE — #342's collision cannot occur here, so this "
+            + "test would pass without exercising the fix. Skipping rather than reporting "
+            + "a green it did not earn.")
+    }
+
+
     private func makeEmail(
         subject: String = "Topic",
         sender: String = "Joanne Peng <peng.cyj@gmail.com>",
@@ -835,6 +866,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     /// machine's real APFS volume before this test was written (#342).
     func testRun_caseFoldCollision_sharpS_noSilentOverwrite() throws {
         let out = tempDir()
+        try skipUnlessVolumeIsCaseInsensitive(out)
         let m = try exportTwoNames(out, "Straße.md", "STRASSE.md")
 
         XCTAssertEqual(m.items.filter { $0.status == "written" }.count, 2)
@@ -851,6 +883,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     /// a caller passes (#342).
     func testRun_caseFoldCollision_greekFinalSigma_noSilentOverwrite() throws {
         let out = tempDir()
+        try skipUnlessVolumeIsCaseInsensitive(out)
         let m = try exportTwoNames(out, "ος.md", "οσ.md")
 
         XCTAssertEqual(m.items.filter { $0.status == "written" }.count, 2)
@@ -865,6 +898,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
     /// same fold, or a second run re-derives a colliding name from an empty set.
     func testRun_caseFoldCollision_crossCall_seedAlsoFolds() throws {
         let out = tempDir()
+        try skipUnlessVolumeIsCaseInsensitive(out)
         func exportOnce(_ id: String, name: String, body: String) throws -> String {
             let m = try ExportEmailsMarkdown.run(
                 ids: [id], outputDir: out, ownAddresses: [], fallbackDirection: "received",
