@@ -82,6 +82,21 @@ actor MailController {
     /// - Parameter timeout: optional per-call deadline (#301). nil → the #297
     ///   default. The `scriptTimeout` test seam still beats BOTH, so tests can
     ///   compress any call site's deadline.
+    /// Whether XCTest is loaded in this process (#362).
+    ///
+    /// Computed once — `NSClassFromString` is a runtime lookup and `runScript`
+    /// is on the hot path for every AppleScript-backed tool. In a shipped
+    /// binary this is always `false`: nothing links XCTest, so the guard it
+    /// gates is unreachable in production.
+    nonisolated static let isRunningUnderXCTest: Bool = NSClassFromString("XCTestCase") != nil
+
+    /// Live integration tests opt out of the #362 guard through the **same**
+    /// env var that already gates them (`MailAppIntegrationTests`) — reusing
+    /// the existing switch rather than inventing a second one, so there is no
+    /// way to be in live mode by one flag and blocked by the other.
+    nonisolated static let liveAppleScriptAllowedInTests: Bool =
+        ProcessInfo.processInfo.environment["MAIL_APP_INTEGRATION_TESTS"] != nil
+
     func runScript(_ source: String, timeout: TimeInterval? = nil) throws -> String {
         if let override = scriptRunnerOverride {
             // Route the fake runner through the same guard so tests can drive
@@ -89,6 +104,37 @@ actor MailController {
             // No preflight ran on this path — assume granted so the timeout
             // message never sends a TEST at the TCC dead end (#301).
             return try runGuarded(timeout: timeout, automationGranted: true) { try override(source) }
+        }
+        // #362 — a unit test must NEVER execute a real Apple Event.
+        //
+        // `runGuarded` runs every call on a detached thread and, on timeout,
+        // ABANDONS it (#297/#301: the AppleScript call cannot be cancelled).
+        // An abandoned thread running a real Apple Event keeps pumping
+        // AppleScript's nested event loop — and XCTest has run-loop observers
+        // installed, so its `performTest:` observer fires from inside that pump
+        // on a thread it never expected, asserts "Run loop nesting count is
+        // negative", and aborts the whole process. Crash report on #362 shows
+        // exactly that stack.
+        //
+        // The damage is not local: XCTest attributes the abandoned thread's
+        // 45-second wait, and the eventual abort, to whichever *unrelated* test
+        // happens to be running. Three runs produced three different victims,
+        // including a pure-function test on an empty array that "took" 333s.
+        //
+        // So: under XCTest, reaching this point at all is a defect in the test
+        // (a missing seam), and it must fail HERE — instantly, naming itself —
+        // rather than spawning a thread that corrupts its neighbours. Detected
+        // by whether XCTest is loaded in this process rather than by an env
+        // var, because SwiftPM runs the suite via the `xctest` binary directly.
+        if Self.isRunningUnderXCTest && !Self.liveAppleScriptAllowedInTests {
+            throw MailError.operationFailed(
+                "MailController.runScript reached the REAL NSAppleScript path while running "
+                + "under XCTest, with no test seam installed. A unit test must never execute a "
+                + "real Apple Event: on timeout runGuarded abandons the thread, and the "
+                + "still-running AppleScript event pump collides with XCTest's run-loop "
+                + "observers — aborting the process and blaming an unrelated test (#362). "
+                + "Install a seam with setTestSeams(scriptRunner:) around this call, or do not "
+                + "route it through MailController.")
         }
         let granted = try preflightAutomation()
         return try runGuarded(timeout: timeout, automationGranted: granted) {
@@ -2298,26 +2344,88 @@ actor MailController {
     /// Non-success strings ("Attachment not found") pass through untouched.
     /// A verified success gains a `(N bytes)` suffix so callers and audits
     /// finally have a size signal (`list_attachments` carries none).
-    nonisolated static func verifySavedAttachmentOnDisk(_ result: String, savePath: String) throws -> String {
+    /// #347 — verify through `stat(2)`, not `FileManager.attributesOfItem`.
+    ///
+    /// `attributesOfItem(atPath:)` does **not** follow symlinks: for a link it
+    /// reports `.type = .symbolicLink` and a `.size` equal to the length of the
+    /// link's target path. Measured, on a link pointing at an empty file:
+    /// `type=NSFileTypeSymbolicLink size=55` — a non-zero number that sailed
+    /// past the `size > 0` guard, so the exact 0-byte state #314 exists to
+    /// catch verified as a success reporting `(55 bytes)`.
+    ///
+    /// `stat` follows the link, which is the right call here: `save_path` is a
+    /// destination the caller chose, and saving through a symlink is legitimate
+    /// use. (Contrast #303's version sidecar, where `O_NOFOLLOW` *rejects*
+    /// links — that path reads a file an attacker might plant, this one writes
+    /// where the caller asked.) What must be checked is that the **target** is
+    /// a regular file. `stat` rather than `open` + `fstat` because opening a
+    /// FIFO blocks until a writer appears, and this runs on the shared actor.
+    ///
+    /// Precisely: `stat` does not wait on a **local FIFO's** reader/writer
+    /// rendezvous, which is the hazard `open` introduces here. It is NOT
+    /// unconditionally non-blocking — on a hard-mounted NFS/SMB/FUSE path whose
+    /// server has stopped answering, any pathname resolution can hang, and this
+    /// one is outside #297's timeout guard. An earlier draft of this comment
+    /// claimed more than that (#347 verify round 1).
+    ///
+    /// Also inherent: this is a path-based check, so it cannot bind the result
+    /// to the inode Mail actually wrote. Between the save returning and this
+    /// `stat`, another process could swap the destination — the size reported
+    /// would then describe the substitute. Verifying "Mail wrote THIS inode"
+    /// would require a descriptor handed back by Mail, which AppleScript's
+    /// `save att in POSIX file` does not provide.
+    ///
+    /// - Parameter allowEmpty: accept a 0-byte regular file — for an attachment
+    ///   that is genuinely empty (#347 C). The success string then discloses it,
+    ///   because the envelope carries no size and neither the caller nor this
+    ///   code can distinguish "empty on purpose" from "the bytes never arrived":
+    ///   the override is a caller's attestation, and it has to leave a trace an
+    ///   archive audit can find later.
+    nonisolated static func verifySavedAttachmentOnDisk(
+        _ result: String, savePath: String, allowEmpty: Bool = false
+    ) throws -> String {
         guard result.hasPrefix("Attachment saved") else { return result }
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: savePath),
-              let size = (attrs[.size] as? NSNumber)?.int64Value else {
-            throw MailError.operationFailed(
-                "save_attachment reported success but no file exists at \(savePath) — "
-                + "Mail.app's save silently failed (#314). Try synchronize_account, or open "
-                + "the message in Mail so the attachment downloads, then retry.")
+
+        var st = stat()
+        guard stat(savePath, &st) == 0 else {
+            // ENOENT (and ENOTDIR on a missing intermediate) is genuinely
+            // "nothing is there" — the state Mail's silent no-op produces, and
+            // the one a download retry can still resolve. Every other errno
+            // describes a path that DOES exist but could not be examined;
+            // calling those "missing" both misinforms the caller and buys them
+            // a pointless 30s poll (#347 verify round 1).
+            let e = errno
+            throw MailError.attachmentWriteUnverified(
+                path: savePath,
+                problem: (e == ENOENT || e == ENOTDIR) ? .missing : .statFailed(errno: e))
         }
+        guard (st.st_mode & S_IFMT) == S_IFREG else {
+            throw MailError.attachmentWriteUnverified(
+                path: savePath, problem: .notRegular(Self.fileKindName(st.st_mode)))
+        }
+        let size = Int64(st.st_size)
         guard size > 0 else {
-            throw MailError.operationFailed(
-                "save_attachment reported success but wrote a 0-byte file at \(savePath) — "
-                + "Mail's local attachment cache likely lacks the bytes (#314). The empty "
-                + "file was left in place for inspection; try synchronize_account or "
-                + "save_attachment with download_if_missing, then retry.")
+            guard allowEmpty else {
+                throw MailError.attachmentWriteUnverified(path: savePath, problem: .empty)
+            }
+            return "\(result) (0 bytes — empty write accepted via allow_empty)"
         }
         return "\(result) (\(size) bytes)"
     }
 
-    func saveAttachment(id: String, mailbox: String, accountName: String, attachmentName: String, savePath: String) throws -> String {
+    /// Human-readable name for a `st_mode` file type, for the rejection message.
+    private nonisolated static func fileKindName(_ mode: mode_t) -> String {
+        switch mode & S_IFMT {
+        case S_IFDIR:  return "directory"
+        case S_IFIFO:  return "FIFO"
+        case S_IFSOCK: return "socket"
+        case S_IFBLK:  return "block device"
+        case S_IFCHR:  return "character device"
+        default:       return "non-regular file"
+        }
+    }
+
+    func saveAttachment(id: String, mailbox: String, accountName: String, attachmentName: String, savePath: String, allowEmpty: Bool = false) throws -> String {
         let ref = msgRef(id, mailbox: mailbox, account: accountName)
         let script = """
         tell application "Mail"
@@ -2331,7 +2439,8 @@ actor MailController {
             return "Attachment not found"
         end tell
         """
-        return try Self.verifySavedAttachmentOnDisk(try runScript(script), savePath: savePath)
+        return try Self.verifySavedAttachmentOnDisk(
+            try runScript(script), savePath: savePath, allowEmpty: allowEmpty)
     }
 
     /// `save_attachment` overload with optional `accountId` (UUID) for
@@ -2352,7 +2461,8 @@ actor MailController {
         accountId: String?,
         accountName: String,
         attachmentName: String,
-        savePath: String
+        savePath: String,
+        allowEmpty: Bool = false
     ) throws -> String {
         let script = buildSaveAttachmentScript(
             id: id,
@@ -2362,7 +2472,8 @@ actor MailController {
             attachmentName: attachmentName,
             savePath: savePath
         )
-        return try Self.verifySavedAttachmentOnDisk(try runScript(script), savePath: savePath)
+        return try Self.verifySavedAttachmentOnDisk(
+            try runScript(script), savePath: savePath, allowEmpty: allowEmpty)
     }
 
     /// Best-effort `save_attachment` for a server-side-only (`not_downloaded`)
@@ -2386,6 +2497,8 @@ actor MailController {
         accountName: String,
         attachmentName: String,
         savePath: String,
+        allowEmpty: Bool = false,
+        enteredAfterUnverifiedWrite: AttachmentWriteProblem? = nil,
         policy: DownloadRetryPolicy = .default
     ) async throws -> String {
         // 1. Nudge Mail to materialize the message (best-effort). Errors are
@@ -2426,7 +2539,8 @@ actor MailController {
                 // produce a 0-byte write with a success return, which is the
                 // exact state this retry loop exists to escape.
                 if result.hasPrefix("Attachment saved") {
-                    return try Self.verifySavedAttachmentOnDisk(result, savePath: savePath)
+                    return try Self.verifySavedAttachmentOnDisk(
+                        result, savePath: savePath, allowEmpty: allowEmpty)
                 }
                 // A non-throwing NON-saved result ("Attachment not found") is a
                 // DEFINITIVE negative — the named part isn't on this message (a
@@ -2442,10 +2556,31 @@ actor MailController {
                 if code != -10000 {
                     throw MailError.scriptFailed(message: message, code: code)
                 }
+            } catch MailError.attachmentWriteUnverified(let path, let problem) {
+                // #347 — this arm did not exist. The verifier threw the generic
+                // `operationFailed`, which the `scriptFailed` catch above cannot
+                // match, so ONE empty write exited the whole loop — burning the
+                // caller's opt-in on the very state the loop exists to escape.
+                // An empty or absent file is exactly "the bytes have not landed
+                // yet": consume the attempt and keep polling. A non-regular file
+                // is terminal (see `shouldAttemptDownloadRetry`).
+                guard shouldAttemptDownloadRetry(afterUnverifiedWrite: problem,
+                                                 downloadIfMissing: true) else {
+                    throw MailError.attachmentWriteUnverified(path: path, problem: problem)
+                }
             }
             if Date() >= deadline { break }   // wall-clock budget spent
         }
-        // Budget spent without the attachment landing — honest failure.
+        // Budget spent — fail honestly, and name the RIGHT failure.
+        //
+        // #347 verify round 1: this used to report "not downloaded" whatever
+        // brought us here. On the unverified-write entry that is a fabricated
+        // diagnosis — the attachment may well be local and genuinely empty, and
+        // the caller was told to go fetch something that is already there. It
+        // also dropped the typed error an upstream `catch` was matching on.
+        if let problem = enteredAfterUnverifiedWrite {
+            throw MailError.attachmentWriteUnverified(path: savePath, problem: problem)
+        }
         throw MailError.operationFailed(
             "Best-effort download did not complete within \(Int(policy.timeout))s. "
             + MailSQLiteError.attachmentNotDownloaded(name: attachmentName).localizedDescription)
@@ -2989,6 +3124,28 @@ actor MailController {
 
 // MARK: - Mail Error
 
+/// Why a post-write verification of `save_attachment` failed (#347).
+///
+/// Split by **whether waiting can fix it**, which is what the download-retry
+/// loop needs to decide: bytes can still land in a file that is missing or
+/// empty; no amount of polling turns a directory or a FIFO into a regular file.
+enum AttachmentWriteProblem: Equatable {
+    /// Nothing at `save_path` — Mail's save silently did nothing.
+    case missing
+    /// Something is there, but it is not a regular file (a directory, a FIFO,
+    /// a device node, or a symlink resolving to one). Terminal.
+    case notRegular(String)
+    /// A regular file of zero length. Retryable, and overridable via
+    /// `allow_empty` for a genuinely empty attachment.
+    case empty
+    /// `stat` failed for a reason that is not "nothing is there" — `ELOOP`
+    /// (symlink loop), `EACCES`, `EIO`, `ENOTDIR`. Terminal: reporting these as
+    /// `.missing` told the caller "no file exists" about a path that does
+    /// exist, and made them eligible for a download retry that cannot help
+    /// (#347 verify round 1).
+    case statFailed(errno: Int32)
+}
+
 enum MailError: LocalizedError {
     case scriptCreationFailed
     case scriptFailed(message: String, code: Int)
@@ -3002,6 +3159,18 @@ enum MailError: LocalizedError {
     /// from `.scriptFailed(code: -1743)` (a *returned* denial): this is the
     /// *never-returns* mode (TCC prompt pending/not-determined, or Mail stuck).
     case scriptTimedOut(seconds: Int, automationGranted: Bool)
+
+    /// #347 — `save_attachment` claimed success but the on-disk result did not
+    /// verify.
+    ///
+    /// A **distinct case** rather than `operationFailed(String)`, and that is
+    /// the whole fix for finding B: #314 threw the general-purpose container,
+    /// while both download-retry sites match `scriptFailed`. A 0-byte write
+    /// therefore flew straight past the `download_if_missing` recovery its own
+    /// error text recommended — the retry contract could only have recognised
+    /// it by matching prose, which nobody does. The payload is structured
+    /// because the three problems differ in whether *waiting* can fix them.
+    case attachmentWriteUnverified(path: String, problem: AttachmentWriteProblem)
 
     var errorDescription: String? {
         switch self {
@@ -3050,6 +3219,32 @@ enum MailError: LocalizedError {
                 + "means Automation permission is pending / not-determined (an "
                 + "authorization prompt may be waiting but cannot be answered in this "
                 + "headless context) or Mail is unresponsive.\n" + AutomationHelp.guidance
+        case .attachmentWriteUnverified(let path, let problem):
+            switch problem {
+            case .missing:
+                return "save_attachment reported success but no file exists at \(path) — "
+                    + "Mail.app's save silently failed (#314). Try synchronize_account, or open "
+                    + "the message in Mail so the attachment downloads, then retry."
+            case .notRegular(let kind):
+                // Deliberately does NOT suggest retrying: no amount of waiting
+                // turns a directory or a FIFO into a regular file (#347).
+                return "save_attachment reported success but \(path) is a \(kind), not a "
+                    + "regular file (#347). Pass a save_path that names a file — note this "
+                    + "is checked through symlinks, so a link pointing at a directory or a "
+                    + "FIFO is rejected here too."
+            case .statFailed(let e):
+                let detail = String(cString: strerror(e))
+                return "save_attachment reported success but \(path) could not be examined: "
+                    + "\(detail) (errno \(e), #347). The path exists in some form — this is not "
+                    + "a missing file and retrying will not change it. Check for a symlink loop, "
+                    + "permissions on the containing directory, or an I/O error on the volume."
+            case .empty:
+                return "save_attachment reported success but wrote a 0-byte file at \(path) — "
+                    + "Mail's local attachment cache likely lacks the bytes (#314). The empty "
+                    + "file was left in place for inspection; try synchronize_account or "
+                    + "save_attachment with download_if_missing, then retry. If the attachment "
+                    + "is genuinely empty, pass allow_empty (the success string then says so)."
+            }
         }
     }
 }

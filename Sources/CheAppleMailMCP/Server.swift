@@ -399,7 +399,8 @@ class CheAppleMailMCPServer {
                         "account_id": .object(["type": .string("string"), "description": .string("Optional: Mail.app account UUID for disambiguation. Discoverable from search_emails results (the `account_id` field) or from list_accounts (the `id` / `uuid` field). When non-empty, takes precedence over account_name in the AppleScript fallback path.")]),
                         "attachment_name": .object(["type": .string("string"), "description": .string("Name of the attachment to save")]),
                         "save_path": .object(["type": .string("string"), "description": .string("Full path where to save the file")]),
-                        "download_if_missing": .object(["type": .string("boolean"), "description": .string("Optional (default false). BEST-EFFORT, NOT GUARANTEED (#272): when the attachment is server-side only (savable_reason 'not_downloaded'), first nudge Mail to fetch the full message, then re-attempt the save for up to ~30s. Mail exposes no real per-attachment download command, so this relies on materializing the message to pull its content — an undocumented, version-/account-dependent side effect that may not work (notably on accounts where the save simply errors). On timeout it fails honestly with the not_downloaded guidance (never a false success); if it does not help, open the message in Mail manually. Scope: effective only for accounts with local .emlx message storage (IMAP/POP) whose not_downloaded state was detected locally — it is a silent no-op on Exchange/EWS accounts (no .emlx) and when the local index is unavailable. Leave off for normal saves.")])
+                        "download_if_missing": .object(["type": .string("boolean"), "description": .string("Optional (default false). BEST-EFFORT, NOT GUARANTEED (#272): when the attachment is server-side only (savable_reason 'not_downloaded'), first nudge Mail to fetch the full message, then re-attempt the save for up to ~30s. Mail exposes no real per-attachment download command, so this relies on materializing the message to pull its content — an undocumented, version-/account-dependent side effect that may not work (notably on accounts where the save simply errors). On timeout it fails honestly with the not_downloaded guidance (never a false success); if it does not help, open the message in Mail manually. Scope: effective only for accounts with local .emlx message storage (IMAP/POP) whose not_downloaded state was detected locally — it is a silent no-op on Exchange/EWS accounts (no .emlx) and when the local index is unavailable. Leave off for normal saves.")]),
+                        "allow_empty": .object(["type": .string("boolean"), "description": .string("Optional (default false). Accept a 0-byte write as success, for an attachment that is GENUINELY empty (#347). Leave off unless you have positive reason to believe the attachment has no content: a 0-byte result is normally Mail failing to produce the bytes (#314), and that failure is invisible to a count-based archive audit — which is why it is rejected by default. Nothing in the envelope distinguishes the two cases (list_attachments carries no size), so this is your attestation, not a check. When it is used, the success string says so explicitly — 'Attachment saved to … (0 bytes — empty write accepted via allow_empty)' — so an archive manifest records which files were accepted this way. Does NOT relax anything else: a missing file or a non-regular save_path is still rejected.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("attachment_name"), .string("save_path")])
                 ])
@@ -1490,6 +1491,7 @@ class CheAppleMailMCPServer {
             // (default off). Only consulted when BOTH tiers fail on the
             // not_downloaded / -10000 path below.
             let downloadIfMissing = arguments["download_if_missing"]?.boolValue ?? false
+            let allowEmpty = arguments["allow_empty"]?.boolValue ?? false
             // #178: ensure the save_path's parent directory exists before EITHER
             // tier. Both fail on a missing parent — Tier 1's Data.write throws
             // (AttachmentExtractor.saveAttachment requires the parent to exist),
@@ -1529,10 +1531,36 @@ class CheAppleMailMCPServer {
                         // the same `(N bytes)` suffix as the AppleScript tier,
                         // so both paths' success strings carry a size signal.
                         return try MailController.verifySavedAttachmentOnDisk(
-                            "Attachment saved to \(savePath)", savePath: savePath)
+                            "Attachment saved to \(savePath)", savePath: savePath,
+                            allowEmpty: allowEmpty)
                     }
+                } catch MailSQLiteError.attachmentEmpty(let name) where allowEmpty {
+                    // #347 verify round 1 — `allow_empty` used to be inert on
+                    // this, the ONLY path that can actually establish "genuinely
+                    // empty". Tier 1 refuses an empty part before writing
+                    // anything, so the flag only ever reached the post-write
+                    // verifier — i.e. only when Tier 2 happened to run and
+                    // happened to succeed. With Mail unavailable the attested
+                    // override could not work at all.
+                    //
+                    // Honored here and nowhere broader: `attachmentEmpty` means
+                    // a part with this name exists and is empty. A typo'd name
+                    // still throws `attachmentNotFound` and can never be
+                    // answered with a 0-byte file.
+                    try Data().write(to: URL(fileURLWithPath: savePath))
+                    FileHandle.standardError.write(Data((
+                        "save_attachment: '\(name)' is an empty MIME part; wrote 0 bytes "
+                        + "under allow_empty (#347)\n").utf8))
+                    return "Attachment saved to \(savePath) "
+                        + "(0 bytes — empty write accepted via allow_empty)"
                 } catch {
                     if case MailSQLiteError.attachmentNotFound = error {
+                        localCopyConfirmedMissing = true
+                    }
+                    // #347 — without the override an empty part behaves exactly
+                    // as it did when it threw `attachmentNotFound`: no local
+                    // bytes, give AppleScript its turn.
+                    if case MailSQLiteError.attachmentEmpty = error {
                         localCopyConfirmedMissing = true
                     }
                     // #238: local state PROVES the part was never fetched from
@@ -1567,7 +1595,32 @@ class CheAppleMailMCPServer {
                     accountId: resolvedAccountId,
                     accountName: accountName,
                     attachmentName: attachmentName,
-                    savePath: savePath
+                    savePath: savePath,
+                    allowEmpty: allowEmpty
+                )
+            } catch MailError.attachmentWriteUnverified(let path, let problem) {
+                // #347 — the gate that never fired. #314's verifier threw the
+                // generic `operationFailed`, which this `catch` (matching
+                // `scriptFailed`) cannot see, so a 0-byte write propagated
+                // straight past the recovery its own message recommended:
+                // "try save_attachment with download_if_missing" — already on.
+                //
+                // No `notDownloaded` precondition here, unlike the -10000 arm
+                // below: a reported-success-with-no-bytes IS the evidence that
+                // the bytes are not local, so opt-in alone qualifies.
+                guard shouldAttemptDownloadRetry(afterUnverifiedWrite: problem,
+                                                 downloadIfMissing: downloadIfMissing) else {
+                    throw MailError.attachmentWriteUnverified(path: path, problem: problem)
+                }
+                return try await mailController.saveAttachmentRetryingForDownload(
+                    id: id,
+                    mailbox: mailbox,
+                    accountId: resolvedAccountId,
+                    accountName: accountName,
+                    attachmentName: attachmentName,
+                    savePath: savePath,
+                    allowEmpty: allowEmpty,
+                    enteredAfterUnverifiedWrite: problem
                 )
             } catch MailError.scriptFailed(let message, let code) {
                 // #272: opt-in best-effort recovery. Local state proved the part
@@ -1585,7 +1638,8 @@ class CheAppleMailMCPServer {
                         accountId: resolvedAccountId,
                         accountName: accountName,
                         attachmentName: attachmentName,
-                        savePath: savePath
+                        savePath: savePath,
+                        allowEmpty: allowEmpty
                     )
                 }
                 // #238: local .emlx state proved the part is server-side only —

@@ -31,6 +31,18 @@ final class MailAppIntegrationTests: XCTestCase {
     }
 
     override func tearDown() async throws {
+        // #362 — MUST honour the same gate as setUp. XCTest runs tearDown even
+        // when setUp threw XCTSkip, so this cleanup was driving REAL AppleScript
+        // at the user's Mail.app on every ordinary `swift test` run: 7 live
+        // scripts per run, ~135s of wall clock, and — because runGuarded
+        // abandons its thread on timeout — a still-running AppleScript event
+        // pump that collided with XCTest's run-loop observers and aborted the
+        // process, blaming whichever unrelated test was live at the time.
+        //
+        // The suite-instability bisection pointed at the retry-loop tests, but
+        // they were only the SPARK (thread churn changing when the collision
+        // landed). This teardown was the fuel.
+        guard ProcessInfo.processInfo.environment["MAIL_APP_INTEGRATION_TESTS"] != nil else { return }
         // Best-effort cleanup of drafts created by this test suite.
         try? await cleanupIntegrationDrafts()
     }
