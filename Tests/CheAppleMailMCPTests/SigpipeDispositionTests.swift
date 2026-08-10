@@ -15,8 +15,23 @@ import XCTest
 /// load-independent, and byte-equivalent to what the kernel raises on a
 /// broken-pipe write. Before the fix the server dies by signal 13 (verified
 /// 2/2 on the pre-fix binary); with `signal(SIGPIPE, SIG_IGN)` installed at
-/// startup it survives (2/2), and broken-pipe writes surface as `EPIPE`
-/// errnos that the throwing write sites already swallow.
+/// startup it survives (2/2).
+///
+/// **What this test does NOT cover — corrected in #346.** The last clause of
+/// that sentence used to read "and broken-pipe writes surface as `EPIPE`
+/// errnos that the throwing write sites already swallow", which was true of
+/// *one* write site out of 27. A delivered signal is precisely what `SIG_IGN`
+/// handles, so this test passes with or without the remaining 26 non-throwing
+/// writers — writers that turned the resulting `EPIPE` into an uncatchable
+/// ObjC exception and killed the server by `SIGABRT` instead. The claim and
+/// the assertion had drifted apart, which is #303 round 4's lesson repeating:
+/// asserting on the mechanism you were thinking about rather than the one that
+/// must hold.
+///
+/// The write half now lives in `DiagnosticsBrokenPipeTests` (a real write into
+/// a broken pipe, through real call sites); the invariant that no 27th
+/// non-throwing writer appears is `NoNonThrowingStderrWriteGuardTests`. This
+/// test remains responsible for exactly one thing: the process disposition.
 ///
 /// Deliberately NOT tested here: "exits within N seconds of stdin EOF".
 /// Interleaved A/B measurement showed shutdown-after-EOF latency is highly

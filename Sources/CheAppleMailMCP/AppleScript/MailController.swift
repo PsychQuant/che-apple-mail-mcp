@@ -533,7 +533,7 @@ actor MailController {
     /// #303 — write an advisory diagnostic to stderr, swallowing descriptor
     /// errors so an *advisory* nudge cannot itself abort the process.
     ///
-    /// The non-throwing `FileHandle.standardError.write(_:)` raises an
+    /// The non-throwing `write` overload on `FileHandle.standardError` raises an
     /// uncatchable ObjC exception on a bad descriptor: a host launching the
     /// server with fd 2 closed turned this into `SIGABRT` (verified, exit 134),
     /// violating "never throws / never refuses" by a route its wording did not
@@ -557,12 +557,10 @@ actor MailController {
     ///   swallowed failure that still burns the gate loses the warning forever.
     @discardableResult
     nonisolated static func emitDiagnostic(_ line: String) -> Bool {
-        do {
-            try FileHandle.standardError.write(contentsOf: Data((line + "\n").utf8))
-            return true
-        } catch {
-            return false
-        }
+        // #346: delegates to the single stderr sink. The append-newline +
+        // delivery-reporting contract is #303's and is unchanged — the
+        // staleness gate stays armed on a failed write.
+        Diagnostics.emit(line + "\n")
     }
 
     /// #303 — locate the wrapper's version sidecar next to THIS running
@@ -1100,13 +1098,13 @@ actor MailController {
         let sep = "⏐"  // Separator unlikely to appear in email fields
 
         if field == .any {
-            FileHandle.standardError.write(Data((
+            Diagnostics.emit((
                 "search_emails AppleScript fallback: field=any matches subject+sender; "
-                + "recipient-only matches require the SQLite index (#194 known limitation)\n").utf8))
+                + "recipient-only matches require the SQLite index (#194 known limitation)\n"))
         } else if field == .recipient {
-            FileHandle.standardError.write(Data((
+            Diagnostics.emit((
                 "search_emails AppleScript fallback: field=recipient enumerates the mailbox in-loop "
-                + "(O(mailbox) — slow on large mailboxes); the SQLite index is the fast path (#194)\n").utf8))
+                + "(O(mailbox) — slow on large mailboxes); the SQLite index is the fast path (#194)\n"))
         }
         let dateClause = searchEmailsDateClause(dateFrom: dateFrom, dateTo: dateTo)
         let whoseSuffix = searchEmailsWhoseSuffix(
@@ -1663,7 +1661,7 @@ actor MailController {
         let msg = "mailto clean-compose path skipped (#237): \(reason); "
             + "using legacy AppleScript injection — body will be wrapped in "
             + "<blockquote type=\"cite\"> (looks quoted on some mobile clients)\n"
-        FileHandle.standardError.write(Data(msg.utf8))
+        Diagnostics.emit(msg)
     }
 
     /// #175 — run the wrapper-free mailto compose path. Builds the percent-encoded
@@ -1765,7 +1763,7 @@ actor MailController {
         let msg = "mailto clean-compose path failed (#175): "
             + "\(error.localizedDescription); falling back to AppleScript injection "
             + "— body will be wrapped in <blockquote type=\"cite\"> (looks quoted on some mobile clients)\n"
-        FileHandle.standardError.write(Data(msg.utf8))
+        Diagnostics.emit(msg)
     }
 
     /// #218 — surface (never swallow) a reply/forward clean-paste failure before
@@ -1776,7 +1774,7 @@ actor MailController {
         let msg = "reply/forward clean-paste path failed (#218): "
             + "\(error.localizedDescription); falling back to AppleScript injection "
             + "— new body will be wrapped in <blockquote type=\"cite\"> (looks quoted on some mobile clients)\n"
-        FileHandle.standardError.write(Data(msg.utf8))
+        Diagnostics.emit(msg)
     }
 
     /// #218/#229 — nil iff this reply/forward call should use the clean
@@ -1800,7 +1798,7 @@ actor MailController {
         let msg = "reply/forward clean-paste path skipped (#229): \(reason); "
             + "using legacy AppleScript injection — the NEW body will be wrapped in "
             + "<blockquote type=\"cite\"> (looks quoted on some mobile clients)\n"
-        FileHandle.standardError.write(Data(msg.utf8))
+        Diagnostics.emit(msg)
     }
 
     /// Reply to an email. Optionally add extra CC, attach files, and/or save as draft instead of sending.
@@ -2510,9 +2508,9 @@ actor MailController {
         do {
             _ = try runScript(trigger)
         } catch {
-            FileHandle.standardError.write(Data(
+            Diagnostics.emit(
                 ("download_if_missing: fetch-trigger failed for \"\(attachmentName)\": "
-                 + "\(error.localizedDescription); continuing to poll-retry the save\n").utf8))
+                 + "\(error.localizedDescription); continuing to poll-retry the save\n"))
         }
 
         // 2. Poll: re-attempt the save until it succeeds or the wall-clock budget

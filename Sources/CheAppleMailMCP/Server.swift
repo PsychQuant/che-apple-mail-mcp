@@ -35,7 +35,7 @@ class CheAppleMailMCPServer {
                 + "(slower; expected for EWS-only accounts, see README). "
                 + "For local IMAP/POP accounts this usually means Full Disk Access "
                 + "is missing — see the actionable steps above.\n"
-            FileHandle.standardError.write(Data(message.utf8))
+            Diagnostics.emit(message)
             self.indexReader = nil
         }
 
@@ -1008,16 +1008,16 @@ class CheAppleMailMCPServer {
                     if (decodeAccountId(arguments, tool: invokedTool) ?? "").isEmpty {
                         throw MailSQLiteError.mailboxNotResolvable(name: name, candidates: candidates)
                     }
-                    FileHandle.standardError.write(Data((
+                    Diagnostics.emit(
                         "list_emails: SQLite mailbox filter found no match for '\(name)' "
                         + "(near-miss: \(candidates.joined(separator: ", "))), but an account_id was "
                         + "supplied and the fast path cannot use it — falling through to "
-                        + "AppleScript, which can (#344)\n").utf8))
+                        + "AppleScript, which can (#344)\n")
                 } catch {
                     let message = "SQLite list_emails fast path failed for "
                         + "mailbox='\(mailbox)' account='\(accountName)': "
                         + "\(error.localizedDescription); falling through to AppleScript\n"
-                    FileHandle.standardError.write(Data(message.utf8))
+                    Diagnostics.emit(message)
                 }
             }
             let accountId = decodeAccountId(arguments, tool: invokedTool)
@@ -1140,10 +1140,10 @@ class CheAppleMailMCPServer {
                 let retry = retryTarget!   // non-nil per the where-clause
                 // Log the substitution (rowId + code only — a mailbox path is
                 // user data and these logs get pasted into issue reports).
-                FileHandle.standardError.write(Data((
+                Diagnostics.emit((
                     "get_email: supplied mailbox/account failed AppleScript resolution "
                     + "(code \(code)) for rowId \(id); retrying with the pair derived from "
-                    + "the Envelope Index (#299)\n").utf8))
+                    + "the Envelope Index (#299)\n"))
                 do {
                     email = try await mailController.getEmail(
                         id: id, mailbox: retry.mailbox, accountName: retry.accountName,
@@ -1448,7 +1448,7 @@ class CheAppleMailMCPServer {
                                 + "for rowId=\(rowId): no SQLite name matched a .emlx-parsed "
                                 + "attachment name (parsed names: "
                                 + "\(Set(detail.keys).sorted())); returning []\n"
-                            FileHandle.standardError.write(Data(message.utf8))
+                            Diagnostics.emit(message)
                         }
                         return formatJSON(validated)
                     } catch {
@@ -1461,7 +1461,7 @@ class CheAppleMailMCPServer {
                         let message = "list_attachments emlx validation failed for "
                             + "rowId=\(rowId): \(error.localizedDescription); "
                             + "returning unvalidated SQLite metadata\n"
-                        FileHandle.standardError.write(Data(message.utf8))
+                        Diagnostics.emit(message)
                     }
                 }
                 return formatJSON(sqliteAttachments)
@@ -1548,9 +1548,9 @@ class CheAppleMailMCPServer {
                     // still throws `attachmentNotFound` and can never be
                     // answered with a 0-byte file.
                     try Data().write(to: URL(fileURLWithPath: savePath))
-                    FileHandle.standardError.write(Data((
+                    Diagnostics.emit(
                         "save_attachment: '\(name)' is an empty MIME part; wrote 0 bytes "
-                        + "under allow_empty (#347)\n").utf8))
+                        + "under allow_empty (#347)\n")
                     return "Attachment saved to \(savePath) "
                         + "(0 bytes — empty write accepted via allow_empty)"
                 } catch {
@@ -1576,7 +1576,7 @@ class CheAppleMailMCPServer {
                     let message = "SQLite save_attachment fast path failed: "
                         + "\(error.localizedDescription), "
                         + "falling through to AppleScript\n"
-                    FileHandle.standardError.write(Data(message.utf8))
+                    Diagnostics.emit(message)
                 }
             }
             // Tier 2: AppleScript fallback. Use the #101 6-arg overload (preferring
@@ -1825,7 +1825,7 @@ class CheAppleMailMCPServer {
                     let message = "SQLite get_email_headers fast path failed for "
                         + "rowId=\(rowId): \(error.localizedDescription); "
                         + "falling through to AppleScript\n"
-                    FileHandle.standardError.write(Data(message.utf8))
+                    Diagnostics.emit(message)
                 }
             }
             let accountId = decodeAccountId(arguments, tool: invokedTool)
@@ -1849,7 +1849,7 @@ class CheAppleMailMCPServer {
                     let message = "SQLite get_email_source fast path failed for "
                         + "rowId=\(rowId): \(error.localizedDescription); "
                         + "falling through to AppleScript\n"
-                    FileHandle.standardError.write(Data(message.utf8))
+                    Diagnostics.emit(message)
                 }
             }
             let accountId = decodeAccountId(arguments, tool: invokedTool)
@@ -1886,7 +1886,7 @@ class CheAppleMailMCPServer {
                     let message = "SQLite get_email_metadata fast path failed for "
                         + "rowId=\(rowId): \(error.localizedDescription); "
                         + "falling through to AppleScript\n"
-                    FileHandle.standardError.write(Data(message.utf8))
+                    Diagnostics.emit(message)
                 }
             }
             let accountId = decodeAccountId(arguments, tool: invokedTool)
@@ -1994,7 +1994,7 @@ class CheAppleMailMCPServer {
             // deprecated alias can never diverge in behavior. Old-name calls
             // get a one-line stderr deprecation warn; the result is identical.
             if name == "export_emails_markdown" {
-                FileHandle.standardError.write(Data(exportAliasDeprecationWarning().utf8))
+                Diagnostics.emit(exportAliasDeprecationWarning())
             }
             guard let idsArray = arguments["ids"]?.arrayValue else {
                 throw MailError.invalidParameter("ids array is required")
@@ -2028,10 +2028,10 @@ class CheAppleMailMCPServer {
             let exportFallbackDirection = (exportMailbox.range(of: "sent", options: .caseInsensitive) != nil
                 || exportMailbox.contains("寄件")) ? "sent" : "received"
             if exportOwnAddresses.isEmpty {
-                FileHandle.standardError.write(Data((
+                Diagnostics.emit((
                     "batch_export_emails_markdown: no own email address resolvable from the "
                     + "account mapping — falling back to the mailbox-label direction heuristic "
-                    + "for the whole batch (manifest items carry direction_inferred: true) (#316)\n").utf8))
+                    + "for the whole batch (manifest items carry direction_inferred: true) (#316)\n"))
             }
             let exportOpts = arguments["opts"]?.objectValue ?? [:]
             let includeAttachments = exportOpts["include_attachments"]?.boolValue ?? false
@@ -2090,9 +2090,9 @@ class CheAppleMailMCPServer {
                 if let contents = skipContents {
                     skipMessageIds = Self.parseSkipMessageIds(contents)
                 } else {
-                    FileHandle.standardError.write(Data((
+                    Diagnostics.emit((
                         "export_emails_markdown: skip_message_ids_path not a readable regular file ≤64MB — "
-                        + "treating as empty skip-set (#177)\n").utf8))
+                        + "treating as empty skip-set (#177)\n"))
                 }
             }
             let exportManifest = try ExportEmailsMarkdown.run(
@@ -2264,13 +2264,13 @@ class CheAppleMailMCPServer {
                                         + "matched a .emlx-parsed attachment name (parsed names: "
                                         + "\(Set(savability.keys).sorted())); returning [] "
                                         + "for this item\n"
-                                    FileHandle.standardError.write(Data(message.utf8))
+                                    Diagnostics.emit(message)
                                 }
                             } catch {
                                 let message = "list_attachments_batch emlx validation failed for "
                                     + "rowId=\(rowId): \(error.localizedDescription); "
                                     + "returning unvalidated SQLite metadata for this item\n"
-                                FileHandle.standardError.write(Data(message.utf8))
+                                Diagnostics.emit(message)
                             }
                         }
                         results.append(["id": id, "mailbox": mailbox, "account_name": accountName, "attachments": attachments])
@@ -2280,7 +2280,7 @@ class CheAppleMailMCPServer {
                         let message = "list_attachments_batch SQLite fast path failed for "
                             + "rowId=\(rowId): \(error.localizedDescription); "
                             + "falling through to AppleScript for this item\n"
-                        FileHandle.standardError.write(Data(message.utf8))
+                        Diagnostics.emit(message)
                     }
                 }
                 // Tier 2: AppleScript fallback (legacy path, preserved unchanged).
@@ -2687,7 +2687,7 @@ func decodeAccountId(_ arguments: [String: Value], tool: String) -> String? {
     let warning = "WARN: \(tool) received non-string account_id "
         + "(got: \(typeName(of: raw))); ignoring — falling back to the account_name "
         + "(display_name) path, which may surface the #101 collision behavior.\n"
-    FileHandle.standardError.write(Data(warning.utf8))
+    Diagnostics.emit(warning)
     return nil
 }
 
@@ -2745,7 +2745,7 @@ func fastPathFallthroughLog(tool: String, rowId: Int, reason: FastPathFallthroug
 func logFastPathFallthrough(tool: String, rowId: Int, reason: FastPathFallthrough,
                             perItem: Bool = false) {
     let line = fastPathFallthroughLog(tool: tool, rowId: rowId, reason: reason, perItem: perItem)
-    FileHandle.standardError.write(Data(line.utf8))
+    Diagnostics.emit(line)
 }
 
 /// Re-word a `save_attachment` Tier-2 AppleScript failure into an actionable
@@ -2965,7 +2965,7 @@ func resolveAccountIdForTool(
         let label = tool.isEmpty ? "save_attachment" : tool
         let message = "\(label): account_name \"\(accountName)\" auto-upgraded to "
             + "(account id \"\(matches[0])\") via AccountsMap reverse lookup (#176)\n"
-        FileHandle.standardError.write(Data(message.utf8))
+        Diagnostics.emit(message)
         return matches[0]
     default:
         // Name the tool (verify PR #190 finding) so the error is distinguishable
