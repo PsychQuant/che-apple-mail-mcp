@@ -1008,11 +1008,11 @@ class CheAppleMailMCPServer {
                     if (decodeAccountId(arguments, tool: invokedTool) ?? "").isEmpty {
                         throw MailSQLiteError.mailboxNotResolvable(name: name, candidates: candidates)
                     }
-                    FileHandle.standardError.write(Data((
+                    Diagnostics.emit(
                         "list_emails: SQLite mailbox filter found no match for '\(name)' "
                         + "(near-miss: \(candidates.joined(separator: ", "))), but an account_id was "
                         + "supplied and the fast path cannot use it — falling through to "
-                        + "AppleScript, which can (#344)\n").utf8))
+                        + "AppleScript, which can (#344)\n")
                 } catch {
                     let message = "SQLite list_emails fast path failed for "
                         + "mailbox='\(mailbox)' account='\(accountName)': "
