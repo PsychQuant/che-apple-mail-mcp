@@ -1,17 +1,43 @@
-# 建立信件：wrapper-free 優先（#175 / #237）
+# 建立信件：正式信件絕不帶 cite-block（#175 / #237 / #220）
 
-> **嚴重性（CRITICAL）：對正式信件產生 cite-block 是嚴重缺陷，不是美觀小問題。**
+> **嚴重性（CRITICAL）：正式信件的 body 絕不可被包成 `<blockquote type="cite">`。無例外。**
 >
-> 用 `compose_email` / `create_draft` 建**正式信件**時若讓 body 被包成
-> `<blockquote type="cite">`（wrapped body），**等同把整封信的本文在行動端顯示成「被引用內容」**——
-> 對長輩、上位者、跨機構的正式往來，這是失禮、失專業的錯誤，不可當「桌面端看不出來就沒差」帶過。
-> **絕不可靜默接受 wrapped body**：要嘛滿足下方 eligibility 走乾淨路徑，要嘛在寄出前**明確告知使用者
-> 這封會被 wrap、由使用者拍板**。看到 result string 有 `[legacy path — …]` 後綴卻沒揭露就送出 = 嚴重違規。
+> wrapped body **等同把整封信的本文在行動端顯示成「被引用內容」**——對長輩、上位者、
+> 跨機構的正式往來，這是失禮、失專業的錯誤，不可當「桌面端看不出來就沒差」帶過。
+>
+> **「揭露後由 agent 自行判定可以接受」這個逃生門已於 2026-08-10 移除**（#220 重開的直接原因）。
+> 揭露是**報告**，不是**許可**。看到 result string 有 `[legacy path — …]` 後綴 = **那封信不能用**。
+
+## 強制作法：正式信件一律帶 `require_wrapper_free: true`
+
+這是本規則唯一的機械執行點，**不是建議**：
+
+```jsonc
+create_draft({ to, subject, body, format: "plain", require_wrapper_free: true })
+```
+
+帶了它，clean path 不可用時工具會**直接 fail 並具名原因**，不會產出已污染的草稿。
+不帶它 = 把「會不會被 wrap」交給運氣，而失敗模式是**寄件人自己看不出來**（桌面端被
+inline style 隱藏）——這正是它必須是預設的理由。
+
+## 唯一合法的處置順序（clean path 不可用時）
+
+1. **調整參數滿足 eligibility** —— 降 `format: plain`、`compose_email` 改成 `create_draft`、
+   把不合格的部分（非 ASCII 附件、bcc 人名）拆掉。
+2. **拆掉的部分改由使用者手動補** —— 拖曳附件、手動切寄件帳號。這些是 Mail 原生 GUI 動作，
+   不觸發 wrapper。
+3. **兩者都不行 → 停下來，不要建立那封信。** 把取捨講清楚交給使用者決定。
+   **破例只能由使用者明說；agent 不得自行以「我已揭露」為由接受 wrapped body。**
 
 ## 規則
 
-用本 MCP 的 `compose_email` / `create_draft` 建立**正式信件**時，**優先滿足 wrapper-free
-mailto path 的 eligibility**；做不到時必須**明知並揭露**取捨，不可靜默接受 wrapped body。
+用本 MCP 的 `compose_email` / `create_draft` 建立**正式信件**時，**必須**滿足 wrapper-free
+mailto path 的 eligibility；做不到時依上方三步處置，**不得**產出 wrapped body 的成品。
+
+> ⚠️ **跨 repo 呼叫時本規則不會自動載入。** 本檔住在 che-apple-mail-mcp 的
+> `.claude/rules/`，從別的 repo（Academic、教學、任何專案）呼叫本 MCP 時**看不到它**——
+> 那裡只看得到 tool description 的事後揭露，沒有事前禁令。2026-08-10 的實際事故即由此發生。
+> 對應的全域鏡像規則在 `che-claude-config/rules/common-mail-compose.md`；**修改本檔時一併更新它**。
 
 背景：Mail.app 對任何 AppleScript-injected body 在 MIME-serialization 時包
 `Apple-Mail-URLShareWrapperClass` → `<blockquote type="cite">`（#175 runtime 證實、
@@ -54,9 +80,17 @@ editor（mailto: hand-off + 鍵盤快捷鍵），即 #175 的 wrapper-free path�
 
 ### 要附件
 
-附件不影響 eligibility（走 GUI ⇧⌘A 注入），但 **CJK / 全形符號路徑有 #220 卡死風險**。
-含中文/全形「」路徑的附件：優先「乾淨草稿（不帶 attachments）+ 使用者手動拖曳檔案」。
-ASCII 路徑可正常帶 `attachments`。
+ASCII 路徑可正常帶 `attachments`（走 GUI ⇧⌘A 注入，不影響 eligibility）。
+
+**含中文／全形符號路徑的附件：一律建「乾淨草稿（不帶 `attachments`）」+ 請使用者手動拖曳檔案。**
+這是**必須**，不是「優先」——#220 把非 ASCII 路徑判為 mailto-ineligible，帶了就靜默落 legacy、
+body 被 wrap。**不要為了省使用者三秒的拖曳而交出一封 wrapped 的正式信。**
+
+> 2026-08-10 事故：明知本節存在仍帶 `attachments` 呼叫（中文檔名的申請表），拿到揭露後
+> 直接交件。**「優先」這個詞是漏洞** —— 它讓「這次比較方便」成為可辯護的偏離。故改為必須。
+
+不要用「複製到 ASCII 暫存路徑」規避：附件在收件人端顯示的就是那個 ASCII 檔名，對方看不懂
+收到什麼。檔名的可讀性優先於省一次拖曳。
 
 ### 要 rich text（markdown/html）
 
@@ -85,7 +119,10 @@ cite-block 迴避有三階，依 TCC 授權狀態選：
 
 ## 違反偵測
 
-- Result string 出現 `[legacy path — …]` 卻沒有向使用者揭露/確認 → 違反本規則
+- **正式信件呼叫未帶 `require_wrapper_free: true`** → 違反本規則（不論結果是否剛好乾淨）
+- Result string 出現 `[legacy path — …]`，而該草稿仍被交付／送出 → 違反本規則
+  （揭露不是許可；見頂部 CRITICAL）
+- 非 ASCII 附件路徑仍帶 `attachments` 呼叫 → 違反本規則
 - `Tests/CheAppleMailMCPTests/ComposeDisclosureGuardTests.swift` 掃 schema 描述必含警告
 - Reply/forward 的對應規範見 #218（native-verb + paste）；cite artifact 殘留議題見 #229
 
@@ -95,4 +132,7 @@ cite-block 迴避有三階，依 TCC 授權狀態選：
 - #237 — from_address 靜默降級的實證 + 三處揭露落地（本規則的直接動機）
 - #219 — custom-sender 乾淨化根治（open）
 - #277 — display-name recipients 乾淨化根治（open；與 #219 互補，兩者都修好 clean body + 人名 + 指定帳號 才能並存）
-- #220 — CJK 附件路徑 GUI 卡死（open）
+- #220 — CJK 附件路徑 GUI 卡死（**2026-08-10 重開**：原「legacy + 揭露」取捨在真實對外正式信件上失效）
+- #304 — **移除 legacy compose path（結構解，open）**。本規則是 #304 落地前的行為約束；
+  legacy path 一旦移除，wrapped body 在結構上不可能發生，本規則的多數條文即可退役。
+  **規則叫 agent 別走某條路，遠弱於把那條路拆掉。**
