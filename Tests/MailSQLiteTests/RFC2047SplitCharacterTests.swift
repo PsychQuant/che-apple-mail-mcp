@@ -93,3 +93,105 @@ final class RFC2047SplitCharacterTests: XCTestCase {
         XCTAssertEqual(RFC822Parser.decodeRFC2047("report=?bogus.pdf"), "report=?bogus.pdf")
     }
 }
+
+/// #352 verify round (cross-model) — three P1 regressions the first version of
+/// the fix introduced, all reproduced against that version before it changed.
+///
+/// They share one root: the run was treated as an all-or-nothing unit whose
+/// boundaries were decided too early. Aliases of one charset were treated as
+/// two; a single undecodable word discarded its run-mates' successful decodes;
+/// and the whitespace between words was dropped before it was known whether
+/// the next word would even join the run.
+final class RFC2047RunBoundaryTests: XCTestCase {
+
+    /// `stringEncoding(for:)` already maps `utf-8` and `utf8` to the same
+    /// encoding — so the run must break on the RESOLVED encoding, not on the
+    /// label. Before: the two words never joined and both came back raw.
+    func testCharsetAliasesShareARun() {
+        XCTAssertEqual(RFC822Parser.decodeRFC2047("=?utf-8?B?5g==?= =?utf8?B?l6U=?="), "日")
+    }
+
+    /// Before: BOTH words came back raw, losing an `A` the pre-#352 decoder
+    /// returned — which is exactly the "fallback is byte-identical" claim
+    /// being false. A run that fails as a unit now replays per word.
+    func testOneUndecodableWordDoesNotPoisonItsRunMates() {
+        XCTAssertEqual(RFC822Parser.decodeRFC2047("=?utf-8?B?QQ==?= =?utf-8?B?gA==?="),
+                       "A=?utf-8?B?gA==?=")
+    }
+
+    /// Before: the separator was dropped the moment the first word decoded,
+    /// so a following transport failure silently deleted it from a subject or
+    /// an attachment filename.
+    func testSeparatorSurvivesATransportFailureAfterASuccessfulWord() {
+        XCTAssertEqual(RFC822Parser.decodeRFC2047("=?utf-8?B?gA==?= =?utf-8?B?%%%?="),
+                       "=?utf-8?B?gA==?= =?utf-8?B?%%%?=")
+    }
+
+    /// The claim, pinned properly this time: wherever a run does NOT decode as
+    /// a unit, the output must equal the pre-#352 algorithm byte for byte. The
+    /// reference below IS that algorithm, transcribed from the code this fix
+    /// replaced, so the comparison cannot drift into agreeing with the new one.
+    func testFallbackIsByteIdenticalToThePreFixAlgorithm() {
+        let cases = [
+            "=?utf-8?B?QQ==?= =?utf-8?B?gA==?=",
+            "=?utf-8?B?gA==?= =?utf-8?B?%%%?=",
+            "=?utf-8?B?gA==?= =?utf-8?B?gQ==?=",
+            "=?utf-8?B?QQ==?= plain =?utf-8?B?Qg==?=",
+            "Re: =?utf-8?B?gA==?= (fwd)",
+            "=?utf-8?B?%%%?=",
+            "report=?bogus.pdf",
+            "=?utf-8?Q?caf=E9?=",
+            "no encoded words here",
+            "",
+        ]
+        for input in cases {
+            XCTAssertEqual(RFC822Parser.decodeRFC2047(input), Self.preFixReference(input),
+                           "diverged from the pre-#352 behaviour on: \(input)")
+        }
+    }
+
+    /// Verbatim transcription of the decoder as it stood before #352: decode
+    /// each word to a String independently, drop LWS only after a success.
+    private static func preFixReference(_ value: String) -> String {
+        var result = ""
+        var remaining = value[value.startIndex...]
+        var lastWasEncodedWord = false
+        while !remaining.isEmpty {
+            guard let startRange = remaining.range(of: "=?", options: .literal) else {
+                result += remaining; break
+            }
+            let prefix = remaining[remaining.startIndex..<startRange.lowerBound]
+            if lastWasEncodedWord && prefix.unicodeScalars.allSatisfy({
+                $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r" }) {
+                // dropped
+            } else {
+                result += prefix
+            }
+            let afterEq = remaining[startRange.upperBound...]
+            guard let parsed = RFC822Parser.parseEncodedWordForTesting(afterEq) else {
+                result += "=?"
+                remaining = remaining[startRange.upperBound...]
+                lastWasEncodedWord = false
+                continue
+            }
+            var decoded: String?
+            let enc = RFC822Parser.stringEncoding(for: parsed.charset)
+            if parsed.encoding == "B" {
+                if let d = Data(base64Encoded: parsed.text) { decoded = String(data: d, encoding: enc) }
+            } else if parsed.encoding == "Q" {
+                if let d = RFC822Parser.decodeQuotedPrintableBytes(
+                    parsed.text.replacingOccurrences(of: "_", with: " ")) {
+                    decoded = String(data: d, encoding: enc)
+                }
+            }
+            if let decoded = decoded {
+                result += decoded; lastWasEncodedWord = true
+            } else {
+                result += String(remaining[startRange.lowerBound..<parsed.endIndex])
+                lastWasEncodedWord = false
+            }
+            remaining = remaining[parsed.endIndex...]
+        }
+        return result
+    }
+}
