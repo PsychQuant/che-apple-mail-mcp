@@ -186,6 +186,25 @@ then
   Bump it alongside the CHANGELOG entry (ManifestVersionTests pins the same invariant in CI)."
 fi
 
+# mcpb/manifest.json's `tools` ARRAY must list exactly the registered tools (#348).
+# Same rot as the `version` field one line up, one field over: no owner, so it
+# drifted to 47 entries against 53 registered — the packaged .mcpb advertised an
+# incomplete tool surface (both TCC probes' names, update_draft, and both names
+# of the batch export were missing).
+#
+# Unlike the checks above this one CANNOT be evaluated statically: the authority
+# is `defineTools()`, which only exists once Swift compiles. So rather than
+# reimplementing name extraction in bash — a second spec that would drift from
+# the first — run the test that already owns the invariant. There is no CI in
+# this repo (no .github/workflows), so without this line nothing forces that
+# test to run before a release, which is the whole gap #311 was about.
+if ! swift test --filter 'ManifestToolsSetEqualityTests' > /tmp/che-mail-manifest-tools-gate.log 2>&1; then
+    grep -E "ABSENT from|NOT registered|duplicate tool names|error:" /tmp/che-mail-manifest-tools-gate.log >&2 || true
+    die "mcpb/manifest.json's tools array does not match the registered tools (#348).
+  Full output: /tmp/che-mail-manifest-tools-gate.log
+  Reproduce:   swift test --filter ManifestToolsSetEqualityTests"
+fi
+
 # AppVersion.current (the server's self-reported version) MUST match the tag (#303).
 # This is what makes the "2.7.2"-rot impossible to repeat: the compiled MCP handshake
 # serverVersion + the staleness-check baseline both read AppVersion.current, so a tag

@@ -192,3 +192,44 @@ final class ToolCountCensusGuardTests: XCTestCase {
         for claim in claims { XCTAssertEqual(claim, actualCount) }
     }
 }
+
+/// #348 — the manifest's `tools` array had rotted exactly the way its `version`
+/// field did before #311: no owner, so it drifted silently. Measured at the
+/// time: 47 listed, 53 registered, six missing — the three TCC probes
+/// (`check_fda` / `check_accessibility` / `check_automation`), `update_draft`,
+/// and BOTH names of the batch export. The packaged `.mcpb` (the Claude Desktop
+/// install path) therefore advertised an incomplete tool surface.
+///
+/// `ToolCountCensusGuardTests` did not catch it because it pins a *count string*
+/// in prose. The array could drift arbitrarily while the census stayed green —
+/// the same shape of gap, one field over.
+///
+/// This asserts **set equality in both directions**, so a removed tool fails
+/// just as loudly as an added one. That closes the field rather than the
+/// instance, which is the general form of #311's lesson.
+final class ManifestToolsSetEqualityTests: XCTestCase {
+
+    private static let repoRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+
+    func testManifestToolsMatchRegisteredToolsExactly() throws {
+        let data = try Data(contentsOf: Self.repoRoot.appendingPathComponent("mcpb/manifest.json"))
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let entries = (json?["tools"] as? [[String: Any]]) ?? []
+        let manifest = Set(entries.compactMap { $0["name"] as? String })
+        let registered = Set(CheAppleMailMCPServer.defineTools().map(\.name))
+
+        XCTAssertEqual(entries.count, manifest.count,
+                       "duplicate tool names in mcpb/manifest.json")
+
+        let missing = registered.subtracting(manifest).sorted()
+        let extra = manifest.subtracting(registered).sorted()
+
+        XCTAssertTrue(missing.isEmpty,
+            "registered but ABSENT from mcpb/manifest.json — the packaged .mcpb would "
+            + "advertise an incomplete tool surface: \(missing)")
+        XCTAssertTrue(extra.isEmpty,
+            "listed in mcpb/manifest.json but NOT registered — the .mcpb advertises tools "
+            + "that do not exist: \(extra)")
+    }
+}

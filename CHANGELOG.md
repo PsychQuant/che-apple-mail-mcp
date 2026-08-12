@@ -7,7 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.27.0] - 2026-08-10
+### Fixed
+
+- `mcpb/manifest.json`'s `tools` array had rotted to 47 entries against 53
+  registered tools, so the packaged `.mcpb` — the Claude Desktop install path —
+  advertised an incomplete tool surface. Missing: the three TCC probes
+  (`check_fda` / `check_accessibility` / `check_automation`), `update_draft`,
+  and both names of the batch export (`batch_export_emails_markdown` and its
+  `export_emails_markdown` alias). Same shape as the `version` rot #311 fixed,
+  one field over: no owner, so it drifted silently
+  ([#348](https://github.com/PsychQuant/che-apple-mail-mcp/issues/348)).
+- The array now has an owner in both places the `version` field got one:
+  `ManifestToolsSetEqualityTests` asserts **set equality in both directions**
+  against `defineTools()` (a removed tool fails as loudly as an added one), and
+  `scripts/release.sh` runs that test as a fail-closed gate. The release gate is
+  not redundant with the test — this repo has no CI, so nothing otherwise forces
+  the test to run before a release, which is the gap #311 was about.
 
 ### Added
 - **The server can tell you when it is running a stale binary** ([#303](https://github.com/PsychQuant/che-apple-mail-mcp/issues/303)). A long-lived Claude Code window keeps its MCP server process alive across a binary update — the wrapper checks the version only at spawn, then `exec`s itself away, and the `session-start.sh` staleness kill fires only on `SessionStart` — so a window left open across an update keeps serving a stale in-memory image with no external re-check. (The *hang* that used to follow is already prevented by #297; what was missing is knowing you are stale at all.) `preflightAutomation()`, the choke point every AppleScript-backed tool passes through, now compares the compiled `AppVersion.current` against the version sidecar the install wrapper writes next to the running executable, and emits a one-line warning naming both versions and advising a restart. It warns **once**, but keeps checking until it has something to say — a gate consumed on the first (necessarily no-drift) check would never fire again. It **never throws and never refuses** a tool call, and **fails open** on every ambiguous input: no sidecar, unparseable version, or an on-disk version not strictly newer all stay silent, because a spurious restart nag is worse than the staleness it would report. The sidecar read is bounded at the syscall (`O_NOFOLLOW | O_NONBLOCK`, `fstat` requiring a regular file, and a byte cap that rejects rather than truncates an oversized file), because this point runs *outside* #297's timeout guard on the shared actor. The warning is written with the throwing `write(contentsOf:)` and the error swallowed: the non-throwing `FileHandle.standardError.write` raises an uncatchable ObjC exception on a bad descriptor, so a host launching the server with stderr *closed* turned this *advisory* nudge into a `SIGABRT` — an advisory check must never be able to kill the process (the same lesson #301 learned on the osascript stdin path). Boundary, as it stands after [#320](https://github.com/PsychQuant/che-apple-mail-mcp/issues/320) (verify round 6): round 5 recorded this as covering the descriptor-error family (closed / read-only fd 2) but **not** `SIGPIPE`, because a broken-pipe stderr then killed the process in the kernel before `write()` returned. #320 shipped the process-scope fix in v2.26.0 — `main.swift` installs `signal(SIGPIPE, SIG_IGN)` before any transport starts — so a broken pipe now surfaces as an `EPIPE` *error* that this writer catches like any other. Both families are survivable here. That fix is also what makes a *silently failed* warning possible at all, so the one-shot gate is consumed by a **delivered** warning rather than a decided one: `emitDiagnostic` reports whether the line reached fd 2, and a failed write leaves the gate armed for the next preflight (a transient `EPIPE`/`ENOSPC` must not swallow the only warning the process will ever emit).

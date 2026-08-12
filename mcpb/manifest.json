@@ -39,140 +39,52 @@
   },
   "tools": [
     {
-      "name": "list_accounts",
-      "description": "List all mail accounts"
+      "name": "batch_export_emails_markdown",
+      "description": "batch_export_emails_markdown"
     },
     {
-      "name": "get_account_info",
-      "description": "Get account details"
+      "name": "check_accessibility",
+      "description": "Check whether Accessibility (GUI-scripting) is granted via AXIsProcessTrusted(). Required for the #175 wrapper-free compose path (compose_email / create_draft use mailto + keystrokes so the body is…"
     },
     {
-      "name": "list_mailboxes",
-      "description": "List all mailboxes (folders)"
+      "name": "check_automation",
+      "description": "Check whether Automation (Apple Events to Mail) is granted TO THIS BINARY — the third TCC axis after check_fda and check_accessibility (#293). Non-prompting probe (AEDeterminePermissionToAutomateTa…"
     },
     {
-      "name": "create_mailbox",
-      "description": "Create a new mailbox"
+      "name": "check_fda",
+      "description": "Check whether Full Disk Access is granted (functionally probes the Apple Mail Envelope Index). Returns status plus the exact steps to grant it if not. Use when SQLite-only features (search_emails p…"
     },
     {
-      "name": "delete_mailbox",
-      "description": "Delete a mailbox"
-    },
-    {
-      "name": "get_special_mailboxes",
-      "description": "Get special mailbox names"
-    },
-    {
-      "name": "list_emails",
-      "description": "List emails in a mailbox"
-    },
-    {
-      "name": "get_email",
-      "description": "Get full email content"
-    },
-    {
-      "name": "search_emails",
-      "description": "SQLite-powered search (subject/sender/recipient/date range)"
-    },
-    {
-      "name": "get_unread_count",
-      "description": "Get unread count"
-    },
-    {
-      "name": "get_email_headers",
-      "description": "Get all email headers"
-    },
-    {
-      "name": "get_email_source",
-      "description": "Get raw email source"
-    },
-    {
-      "name": "get_email_metadata",
-      "description": "Get metadata (forwarded, replied, size)"
-    },
-    {
-      "name": "mark_read",
-      "description": "Mark as read/unread"
-    },
-    {
-      "name": "flag_email",
-      "description": "Flag/unflag email"
-    },
-    {
-      "name": "set_flag_color",
-      "description": "Set flag color (7 colors)"
-    },
-    {
-      "name": "set_background_color",
-      "description": "Set email background color"
-    },
-    {
-      "name": "mark_as_junk",
-      "description": "Mark as junk/not junk"
-    },
-    {
-      "name": "move_email",
-      "description": "Move to another mailbox"
-    },
-    {
-      "name": "copy_email",
-      "description": "Copy to another mailbox"
-    },
-    {
-      "name": "delete_email",
-      "description": "Delete email (to trash)"
+      "name": "check_for_new_mail",
+      "description": "Check for new mail"
     },
     {
       "name": "compose_email",
       "description": "Send new email"
     },
     {
-      "name": "reply_email",
-      "description": "Reply to email"
-    },
-    {
-      "name": "forward_email",
-      "description": "Forward email"
-    },
-    {
-      "name": "redirect_email",
-      "description": "Redirect email (keeps original sender)"
-    },
-    {
-      "name": "open_mailto",
-      "description": "Open mailto URL"
-    },
-    {
-      "name": "list_drafts",
-      "description": "List draft emails"
+      "name": "copy_email",
+      "description": "Copy to another mailbox"
     },
     {
       "name": "create_draft",
       "description": "Create a draft"
     },
     {
-      "name": "list_attachments",
-      "description": "List email attachments"
-    },
-    {
-      "name": "save_attachment",
-      "description": "Save attachment to disk"
-    },
-    {
-      "name": "list_vip_senders",
-      "description": "List VIP senders"
-    },
-    {
-      "name": "list_rules",
-      "description": "List mail rules"
-    },
-    {
-      "name": "get_rule_details",
-      "description": "Get rule details"
+      "name": "create_mailbox",
+      "description": "Create a new mailbox"
     },
     {
       "name": "create_rule",
       "description": "Create a new rule"
+    },
+    {
+      "name": "delete_email",
+      "description": "Delete email (to trash)"
+    },
+    {
+      "name": "delete_mailbox",
+      "description": "Delete a mailbox"
     },
     {
       "name": "delete_rule",
@@ -183,48 +95,160 @@
       "description": "Enable/disable a rule"
     },
     {
-      "name": "list_signatures",
-      "description": "List email signatures"
-    },
-    {
-      "name": "get_signature",
-      "description": "Get signature content"
-    },
-    {
-      "name": "list_smtp_servers",
-      "description": "List SMTP servers"
-    },
-    {
-      "name": "check_for_new_mail",
-      "description": "Check for new mail"
-    },
-    {
-      "name": "synchronize_account",
-      "description": "Sync IMAP account"
-    },
-    {
-      "name": "extract_name_from_address",
-      "description": "Extract name from email address"
+      "name": "export_emails_markdown",
+      "description": "DEPRECATED — renamed to batch_export_emails_markdown; this alias will not be removed before the next major release (v3.0)."
     },
     {
       "name": "extract_address",
       "description": "Extract email from full address"
     },
     {
-      "name": "get_mail_app_info",
-      "description": "Get Mail.app info"
+      "name": "extract_name_from_address",
+      "description": "Extract name from email address"
     },
     {
-      "name": "import_mailbox",
-      "description": "Import mailbox from file"
+      "name": "flag_email",
+      "description": "Flag/unflag email"
+    },
+    {
+      "name": "forward_email",
+      "description": "Forward email"
+    },
+    {
+      "name": "get_account_info",
+      "description": "Get account details"
+    },
+    {
+      "name": "get_email",
+      "description": "Get full email content"
+    },
+    {
+      "name": "get_email_headers",
+      "description": "Get all email headers"
+    },
+    {
+      "name": "get_email_metadata",
+      "description": "Get metadata (forwarded, replied, size)"
+    },
+    {
+      "name": "get_email_source",
+      "description": "Get raw email source"
     },
     {
       "name": "get_emails_batch",
       "description": "Get multiple emails in one call"
     },
     {
+      "name": "get_mail_app_info",
+      "description": "Get Mail.app info"
+    },
+    {
+      "name": "get_rule_details",
+      "description": "Get rule details"
+    },
+    {
+      "name": "get_signature",
+      "description": "Get signature content"
+    },
+    {
+      "name": "get_special_mailboxes",
+      "description": "Get special mailbox names"
+    },
+    {
+      "name": "get_unread_count",
+      "description": "Get unread count"
+    },
+    {
+      "name": "import_mailbox",
+      "description": "Import mailbox from file"
+    },
+    {
+      "name": "list_accounts",
+      "description": "List all mail accounts"
+    },
+    {
+      "name": "list_attachments",
+      "description": "List email attachments"
+    },
+    {
       "name": "list_attachments_batch",
       "description": "List attachments for multiple emails"
+    },
+    {
+      "name": "list_drafts",
+      "description": "List draft emails"
+    },
+    {
+      "name": "list_emails",
+      "description": "List emails in a mailbox"
+    },
+    {
+      "name": "list_mailboxes",
+      "description": "List all mailboxes (folders)"
+    },
+    {
+      "name": "list_rules",
+      "description": "List mail rules"
+    },
+    {
+      "name": "list_signatures",
+      "description": "List email signatures"
+    },
+    {
+      "name": "list_smtp_servers",
+      "description": "List SMTP servers"
+    },
+    {
+      "name": "list_vip_senders",
+      "description": "List VIP senders"
+    },
+    {
+      "name": "mark_as_junk",
+      "description": "Mark as junk/not junk"
+    },
+    {
+      "name": "mark_read",
+      "description": "Mark as read/unread"
+    },
+    {
+      "name": "move_email",
+      "description": "Move to another mailbox"
+    },
+    {
+      "name": "open_mailto",
+      "description": "Open mailto URL"
+    },
+    {
+      "name": "redirect_email",
+      "description": "Redirect email (keeps original sender)"
+    },
+    {
+      "name": "reply_email",
+      "description": "Reply to email"
+    },
+    {
+      "name": "save_attachment",
+      "description": "Save attachment to disk"
+    },
+    {
+      "name": "search_emails",
+      "description": "SQLite-powered search (subject/sender/recipient/date range)"
+    },
+    {
+      "name": "set_background_color",
+      "description": "Set email background color"
+    },
+    {
+      "name": "set_flag_color",
+      "description": "Set flag color (7 colors)"
+    },
+    {
+      "name": "synchronize_account",
+      "description": "Sync IMAP account"
+    },
+    {
+      "name": "update_draft",
+      "description": "Replace an existing draft (upsert): locate it by draft_id (from list_drafts) or an EXACT subject_match, create the replacement via the same mechanism and eligibility rules as create_draft, then del…"
     }
   ],
   "compatibility": {
