@@ -253,6 +253,11 @@ public final class EnvelopeIndexReader {
 
             results.append([
                 "name": parsed.mailboxPath,
+                // #345 verify: `name` is the LOSSY single-pass decode, in which
+                // a mailbox literally named `R&D/Sent` is indistinguishable
+                // from the hierarchy R&D → Sent. Anything reasoning about
+                // hierarchy must use these (#344).
+                "path_components": parsed.pathComponents,
                 "account_name": acctName,
                 "total_count": totalCount,
                 "unread_count": unreadCount

@@ -1945,8 +1945,16 @@ class CheAppleMailMCPServer {
             // signal the #268 design promised — while the leaf stays present.
             if hasSelector, let reader = indexReader,
                let matchedId = mailboxes["account_id"] as? String, !matchedId.isEmpty {
-                let mailboxPaths = ((try? reader.listMailboxes(accountId: matchedId)) ?? [])
-                    .compactMap { $0["name"] as? String }
+                let mailboxRows = (try? reader.listMailboxes(accountId: matchedId)) ?? []
+                let mailboxEntries: [(path: String, components: [String])] = mailboxRows
+                    .compactMap { row in
+                        guard let name = row["name"] as? String else { return nil }
+                        // Fall back to a single component only if the reader
+                        // somehow omitted them — never re-split `name`, which
+                        // is exactly the lossy step #344/#345 warn about.
+                        let comps = (row["path_components"] as? [String]) ?? [name]
+                        return (path: name, components: comps)
+                    }
                 // #345: resolve every leaf TOGETHER. A lone nested candidate is
                 // not proof of identity — an ordinary `Projects/Drafts` matched
                 // the leaf uncontested when the real drafts mailbox was missing
@@ -1958,7 +1966,7 @@ class CheAppleMailMCPServer {
                         return (key: special.key, leaf: leaf)
                     }
                 for (key, path) in joinSpecialMailboxPaths(leaves: leafPairs,
-                                                           mailboxPaths: mailboxPaths) {
+                                                           mailboxes: mailboxEntries) {
                     mailboxes[key + "_path"] = path
                 }
             }

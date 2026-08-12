@@ -230,49 +230,63 @@ func joinSpecialMailboxPath(leaf: String, mailboxPaths: [String]) -> String? {
 /// reported case, and no data available here distinguishes it.
 func joinSpecialMailboxPaths(
     leaves: [(key: String, leaf: String)],
-    mailboxPaths: [String]
+    mailboxes: [(path: String, components: [String])]
 ) -> [String: String] {
-    func parent(of path: String) -> String? {
-        guard let slash = path.lastIndex(of: "/") else { return nil }
-        return String(path[path.startIndex..<slash])
+    // Parent key from COMPONENTS, never from the joined string (#345 verify):
+    // `MailboxURL.mailboxPath` decodes `%2F` inside a name into a `/`, so two
+    // unrelated TOP-LEVEL mailboxes named `Projects/Drafts` and `Projects/Sent`
+    // would appear to share a parent and corroborate each other. NUL-joined
+    // because no mailbox name can contain it.
+    func parentKey(_ components: [String]) -> String {
+        components.dropLast().joined(separator: "\u{0}")
     }
 
-    // Pass 1 — candidates per leaf. A unique TOP-LEVEL match is accepted
-    // outright: `path == leaf` at the account root has no competing reading.
     var accepted: [String: String] = [:]
-    var pending: [(key: String, candidates: [String])] = []
+    var pending: [(key: String, candidates: [(path: String, parent: String)])] = []
+
     for entry in leaves where !entry.leaf.isEmpty {
-        let candidates = mailboxPaths.filter { $0 == entry.leaf || $0.hasSuffix("/" + entry.leaf) }
-        if candidates.count == 1, candidates[0] == entry.leaf {
-            accepted[entry.key] = candidates[0]
-        } else if !candidates.isEmpty {
-            pending.append((entry.key, candidates))
+        // A leaf that is ALREADY a multi-component path needs no join —
+        // AppleScript handed us the whole thing, so nothing is inferred (#315).
+        // Restricted to `components.count > 1` on purpose: a top-level name
+        // trivially equals its own path, so without that guard this shortcut
+        // silently reinstates "accept any unique top-level match", which is the
+        // positional acceptance this issue exists to remove.
+        if let exact = mailboxes.first(where: { $0.path == entry.leaf && $0.components.count > 1 }) {
+            accepted[entry.key] = exact.path
+            continue
         }
-        // no candidates → omitted (#315)
+        let candidates = mailboxes.filter { $0.components.last == entry.leaf }
+        guard !candidates.isEmpty else { continue }
+
+        // RFC 3501 §5.1: INBOX is the one special mailbox the spec pins, and it
+        // lives at the path root. That is a rule, not a guess about position.
+        if entry.leaf.compare("INBOX", options: .caseInsensitive) == .orderedSame,
+           let root = candidates.first(where: { $0.components.count == 1 }) {
+            accepted[entry.key] = root.path
+            continue
+        }
+        pending.append((entry.key, candidates.map { ($0.path, parentKey($0.components)) }))
     }
 
-    // Pass 2 — which parents look like provider containers. Only UNAMBIGUOUS
-    // nested resolutions vote: an entry that is itself undecided cannot be
-    // evidence for anything.
-    var countByParent: [String: Int] = [:]
+    // Which containers hold SEVERAL special mailboxes. Only unambiguous
+    // resolutions vote — an entry that is itself undecided cannot be evidence —
+    // and votes are counted per DISTINCT PATH (#345 verify): two roles that
+    // report the same leaf would otherwise let one folder corroborate itself.
+    var pathsByParent: [String: Set<String>] = [:]
     for item in pending where item.candidates.count == 1 {
-        if let p = parent(of: item.candidates[0]) { countByParent[p, default: 0] += 1 }
+        let only = item.candidates[0]
+        pathsByParent[only.parent, default: []].insert(only.path)
     }
 
-    // Pass 3 — believe a nested candidate only on corroboration: another
-    // special mailbox resolving under the SAME parent. `[Gmail]` holds drafts,
-    // sent, junk and trash; an ordinary `Projects` folder that happens to share
-    // one leaf name holds exactly one.
     for item in pending {
-        let corroborated = item.candidates.filter { (countByParent[parent(of: $0) ?? ""] ?? 0) >= 2 }
-        // Exactly one corroborated reading resolves the entry — including the
-        // genuinely ambiguous `["垃圾桶", "[Gmail]/垃圾桶"]` shape, where the
-        // container evidence picks the right one. Zero or several → omit,
-        // exactly as #315 did. Position is never the tiebreak: a top-level
-        // folder named 垃圾桶 alongside a real `[Gmail]/垃圾桶` would make
-        // "prefer top-level" pick the wrong one, which is the same class of
-        // confident-wrong answer this issue exists to remove.
-        if corroborated.count == 1 { accepted[item.key] = corroborated[0] }
+        let corroborated = item.candidates.filter { (pathsByParent[$0.parent]?.count ?? 0) >= 2 }
+        // Exactly one supported reading resolves the entry; zero or several
+        // omit, as #315 did. Position is never the tiebreak — "prefer the
+        // top-level candidate" would pick a user folder named 垃圾桶 over the
+        // real `[Gmail]/垃圾桶`, which is the same class of confident-wrong
+        // answer this issue exists to remove. The root is just another
+        // container: several specials sitting at it corroborate each other.
+        if corroborated.count == 1 { accepted[item.key] = corroborated[0].path }
     }
     return accepted
 }
