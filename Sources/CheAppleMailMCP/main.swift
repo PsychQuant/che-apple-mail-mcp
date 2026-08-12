@@ -27,7 +27,9 @@ case .server:
     let server = try await CheAppleMailMCPServer()
     try await server.run()
 case .checkFDA:
-    SetupCLI.runCheckFDA()
+    exit(SetupCLI.runCheckFDA())
+case .checkFDAQuiet:
+    exit(SetupCLI.runCheckFDAQuiet())
 case .setup:
     await SetupWindow.run()
 case .version:

@@ -153,6 +153,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   all three. The belt-and-braces of #303 + #311 is only as strong as the two
   belts agreeing on what they measure. Release-notes extraction was verified
   byte-identical to the awk it replaces for v2.27.0.
+### Added
+
+- `--check-fda --quiet` — a Full Disk Access probe with **no side effects**:
+  status only, no output, no settings pane
+  ([#355](https://github.com/PsychQuant/che-apple-mail-mcp/issues/355)).
+  `--check-fda` prints prose and, on `.denied`, opens System Settings, so
+  nothing automated could ASK whether FDA was missing without throwing a
+  settings window at the user every time it asked. It also always exited 0, so
+  the answer was not machine-readable. `--check-fda` now exits
+  `0 granted / 1 denied / 2 no-Mail-data / 3 undetermined`, and `--quiet`
+  suppresses both the printing and the pane.
+
+  This is what lets the plugin's session-start hook offer the setup window on
+  first run. That window has existed since #213/#214 — live status, a button to
+  the right settings pane, a button to copy the binary path — and nothing on
+  the install path ever opened it, so it was reachable only by people who
+  already knew it was there.
+
+  `--quiet` is a modifier, not a mode: a stray `--quiet` alone still starts the
+  stdio server, which must stay untouched (#213).
 
 ## [2.27.0] - 2026-08-10
 
