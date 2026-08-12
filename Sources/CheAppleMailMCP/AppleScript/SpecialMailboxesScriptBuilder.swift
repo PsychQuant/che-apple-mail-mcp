@@ -180,10 +180,101 @@ enum SpecialMailboxesResolution: Equatable {
 /// - two or more candidates (ambiguous leaf) → nil — never guess; the consumer
 ///   falls back to leaf comparison, which is the observable signal #268's
 ///   fail-safe promised but never delivered
+///
+/// #345 — this single-leaf form is UNCORROBORATED: a lone nested candidate is
+/// not proof of identity. The server calls `joinSpecialMailboxPaths` instead.
+/// Kept as the candidate-selection building block and for the cases where leaf
+/// uniqueness genuinely is decisive.
 func joinSpecialMailboxPath(leaf: String, mailboxPaths: [String]) -> String? {
     guard !leaf.isEmpty else { return nil }
     let candidates = mailboxPaths.filter { $0 == leaf || $0.hasSuffix("/" + leaf) }
     return candidates.count == 1 ? candidates[0] : nil
+}
+
+/// #345 — resolve ALL of an account's special-mailbox leaves together, so a
+/// nested candidate can be corroborated before it is believed.
+///
+/// The defect this closes: "exactly one candidate" was decided purely by string
+/// shape. With the real Drafts mailbox missing from the index (fresh account,
+/// lagging sync) and an ordinary `Projects/Drafts` folder present, that folder
+/// won uncontested and was returned as `drafts_path` — a value
+/// wire-indistinguishable from a correct one, with #315's omission fail-safe
+/// never firing because nothing had failed.
+///
+/// Neither remedy the issue proposed is available:
+/// - "omit when the only candidate is nested" would break Gmail, whose real
+///   drafts mailbox IS `[Gmail]/草稿` — the most common configuration there is.
+/// - "cross-check against the index's role data" — there is none. Per
+///   `.claude/rules/r-must-direct-db.md` the `mailboxes` table carries only
+///   `url / total_count / unread_count`; special-mailbox role is app-level
+///   metadata that exists in AppleScript's object model and nowhere else.
+///
+/// So corroboration comes from data already in hand. A genuine provider
+/// container holds SEVERAL special mailboxes — `[Gmail]` is the parent of
+/// drafts, sent, junk and trash — while an ordinary folder that happens to
+/// share one leaf name is the parent of exactly one. Convergence is the signal:
+///
+/// - exact top-level match (`path == leaf`) → accepted outright
+/// - a single nested candidate → accepted only if ≥1 OTHER special leaf also
+///   resolves to a single candidate under the SAME parent
+/// - zero candidates, or an ambiguous leaf → omitted, exactly as in #315
+///
+/// Conservative on purpose: an account whose ONLY indexed special mailbox is
+/// nested gets an omitted `_path`. The leaf is still returned, and omission is
+/// the documented, observable contract — whereas a confident wrong path is the
+/// failure #268 and #315 were both about.
+///
+/// Residue: two ordinary folders under one parent that happen to carry two
+/// special leaf names (`Projects/Drafts` + `Projects/Sent`, with the real ones
+/// absent) would corroborate each other. Strictly more contrived than the
+/// reported case, and no data available here distinguishes it.
+func joinSpecialMailboxPaths(
+    leaves: [(key: String, leaf: String)],
+    mailboxPaths: [String]
+) -> [String: String] {
+    func parent(of path: String) -> String? {
+        guard let slash = path.lastIndex(of: "/") else { return nil }
+        return String(path[path.startIndex..<slash])
+    }
+
+    // Pass 1 — candidates per leaf. A unique TOP-LEVEL match is accepted
+    // outright: `path == leaf` at the account root has no competing reading.
+    var accepted: [String: String] = [:]
+    var pending: [(key: String, candidates: [String])] = []
+    for entry in leaves where !entry.leaf.isEmpty {
+        let candidates = mailboxPaths.filter { $0 == entry.leaf || $0.hasSuffix("/" + entry.leaf) }
+        if candidates.count == 1, candidates[0] == entry.leaf {
+            accepted[entry.key] = candidates[0]
+        } else if !candidates.isEmpty {
+            pending.append((entry.key, candidates))
+        }
+        // no candidates → omitted (#315)
+    }
+
+    // Pass 2 — which parents look like provider containers. Only UNAMBIGUOUS
+    // nested resolutions vote: an entry that is itself undecided cannot be
+    // evidence for anything.
+    var countByParent: [String: Int] = [:]
+    for item in pending where item.candidates.count == 1 {
+        if let p = parent(of: item.candidates[0]) { countByParent[p, default: 0] += 1 }
+    }
+
+    // Pass 3 — believe a nested candidate only on corroboration: another
+    // special mailbox resolving under the SAME parent. `[Gmail]` holds drafts,
+    // sent, junk and trash; an ordinary `Projects` folder that happens to share
+    // one leaf name holds exactly one.
+    for item in pending {
+        let corroborated = item.candidates.filter { (countByParent[parent(of: $0) ?? ""] ?? 0) >= 2 }
+        // Exactly one corroborated reading resolves the entry — including the
+        // genuinely ambiguous `["垃圾桶", "[Gmail]/垃圾桶"]` shape, where the
+        // container evidence picks the right one. Zero or several → omit,
+        // exactly as #315 did. Position is never the tiebreak: a top-level
+        // folder named 垃圾桶 alongside a real `[Gmail]/垃圾桶` would make
+        // "prefer top-level" pick the wrong one, which is the same class of
+        // confident-wrong answer this issue exists to remove.
+        if corroborated.count == 1 { accepted[item.key] = corroborated[0] }
+    }
+    return accepted
 }
 
 func resolveSpecialMailboxesResult(_ raw: [String]) -> SpecialMailboxesResolution {
