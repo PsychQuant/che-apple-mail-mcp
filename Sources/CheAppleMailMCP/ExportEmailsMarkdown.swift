@@ -29,10 +29,19 @@ struct ExportManifestItem {
     // signal at all. It now also fires when this email's own account
     // contributes no address, and when the `From` header does not parse.
     //
-    // The contract consumers rely on is unchanged and is the reason this is
-    // load-bearing: ABSENT means the value was derived from identity and can be
-    // trusted. Emitting a wrong `direction` without this field is worse than
+    // The contract consumers rely on: ABSENT means no address of any configured
+    // account matched AND this email's account contributes at least one
+    // address. Emitting a wrong `direction` without this field is worse than
     // emitting an uncertain one with it.
+    //
+    // KNOWN LIMIT, stated rather than implied (#343 verify): the Envelope Index
+    // maps an account to ONE address, so mail sent from an ALIAS on an
+    // otherwise-resolvable account matches nothing and is written `received`
+    // with no disclosure. Widening the fail-open to cover it would disclose
+    // essentially every received email — the account is "resolvable", we simply
+    // cannot enumerate every address it can send as — which would make the
+    // signal useless. The alias gap needs a real address source (the AppleScript
+    // `list_accounts` path enumerates them), not a broader guess.
     var directionInferred: Bool? = nil
 
     var jsonObject: [String: Any] {
@@ -176,7 +185,7 @@ enum ExportIdentity {
             let addrs = (account["email_addresses"] as? [String]) ?? []
             guard addrs.contains(where: { EmailAddress.canonical($0) != nil }),
                   let uuid = account["uuid"] as? String, !uuid.isEmpty else { return nil }
-            return uuid
+            return uuid.lowercased()
         })
     }
 }
@@ -551,10 +560,14 @@ enum ExportEmailsMarkdown {
             //   otherwise                         → received  (confident)
             // A positive match still wins first: mail sent from account A can
             // legitimately sit in account B's store.
-            let canonicalSender = EmailAddress.canonical(content.sender)
+            // EVERY mailbox in `From` is an author (#343 verify): taking only
+            // the first merely swapped which permutation of a co-authored
+            // message got archived as `received`.
+            let senderCandidates = EmailAddress.allCanonical(content.sender)
+            let canonicalSender = senderCandidates.first
             let direction: String
             let directionInferred: Bool?
-            if let sender = canonicalSender, ownAddresses.contains(sender) {
+            if senderCandidates.contains(where: { ownAddresses.contains($0) }) {
                 direction = "sent"
                 directionInferred = nil
             } else if ownAddresses.isEmpty

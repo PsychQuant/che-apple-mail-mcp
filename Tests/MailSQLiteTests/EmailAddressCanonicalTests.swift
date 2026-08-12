@@ -92,3 +92,41 @@ final class EmailAddressCanonicalTests: XCTestCase {
         }
     }
 }
+
+/// #343 verify round (cross-model) — three defects in the first fix, each
+/// reproduced against it before anything changed.
+final class EmailAddressVerifyRoundTests: XCTestCase {
+
+    /// Taking the FIRST mailbox only swapped which permutation breaks: with the
+    /// co-author listed first, the user's own message was still confidently
+    /// `received`. RFC 5322 does not privilege the first author — every mailbox
+    /// in `From` is one.
+    func testEveryAuthorCountsForIdentityRegardlessOfOrder() {
+        let forward = EmailAddress.allCanonical("User <user@gmail.com>, Coauthor <c@example.net>")
+        let reversed = EmailAddress.allCanonical("Coauthor <c@example.net>, User <user@gmail.com>")
+        XCTAssertTrue(forward.contains("user@gmail.com"))
+        XCTAssertTrue(reversed.contains("user@gmail.com"),
+            "the reversed order is the case the first fix still got wrong")
+        XCTAssertEqual(Set(forward), Set(reversed), "order must not change WHO the authors are")
+    }
+
+    /// `strippingComments` swallowed a `)` that never had an opener, so a
+    /// broken address was tidied into a well-formed-looking one that could
+    /// produce a confident `sent`.
+    func testStructurallyBrokenAddressesAreRejectedNotTidied() {
+        XCTAssertNil(EmailAddress.canonical("user@example.com)"))
+        XCTAssertNil(EmailAddress.canonical("user@example.com (unclosed"))
+        XCTAssertNil(EmailAddress.canonical("user@example.com>"))
+        XCTAssertNil(EmailAddress.canonical("<user@example.com"))
+        XCTAssertNil(EmailAddress.canonical("\"unterminated <user@example.com>"))
+    }
+
+    /// …without rejecting the legal shapes those delimiters appear in.
+    func testBalancedAndQuotedDelimitersStillParse() {
+        XCTAssertEqual(EmailAddress.canonical("Name <a@b.co>"), "a@b.co")
+        XCTAssertEqual(EmailAddress.canonical("A <a@b.co> (comment)"), "a@b.co")
+        XCTAssertEqual(EmailAddress.canonical("\"x<user@gmail.com>\"@evil.example"),
+                       "\"x<user@gmail.com>\"@evil.example")
+        XCTAssertEqual(EmailAddress.canonical("\"a)b\"@host.example"), "\"a)b\"@host.example")
+    }
+}

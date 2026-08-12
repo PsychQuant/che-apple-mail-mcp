@@ -20,7 +20,7 @@ import XCTest
 /// a file the archive treats as frozen.
 final class ExportDirectionIdentityTests: XCTestCase {
 
-    private func tempDir() -> URL {
+    fileprivate func tempDir() -> URL {
         let d = FileManager.default.temporaryDirectory
             .appendingPathComponent("direction-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
@@ -28,7 +28,7 @@ final class ExportDirectionIdentityTests: XCTestCase {
         return d
     }
 
-    private func email(from sender: String) -> EmailContent {
+    fileprivate func email(from sender: String) -> EmailContent {
         EmailContent(
             subject: "Topic", sender: sender, toRecipients: ["x@y.com"], ccRecipients: [],
             date: "Sat, 14 Dec 2024 19:11:21 +0800", messageId: "<m@x>", inReplyTo: "",
@@ -36,7 +36,7 @@ final class ExportDirectionIdentityTests: XCTestCase {
     }
 
     /// Run one email and return (direction, direction_inferred, file body).
-    private func export(
+    fileprivate func export(
         sender: String,
         ownAddresses: Set<String>,
         fallbackDirection: String = "received",
@@ -189,7 +189,7 @@ final class ExportIdentityInputsTests: XCTestCase {
     func testEWSAccountContributesNoAddressAndIsNotCountedAsResolved() {
         let accounts = [imap("U1", "owner@imap.example.org"), ews("EWS-A"), ews("EWS-B")]
         XCTAssertEqual(ExportIdentity.ownAddresses(from: accounts), ["owner@imap.example.org"])
-        XCTAssertEqual(ExportIdentity.resolvedAccountUUIDs(from: accounts), ["U1"],
+        XCTAssertEqual(ExportIdentity.resolvedAccountUUIDs(from: accounts), ["u1"],
             "an EWS account resolves to no address, so mail sent from it cannot be judged — "
             + "it must be absent here so the export discloses instead of asserting received")
     }
@@ -208,7 +208,8 @@ final class ExportIdentityInputsTests: XCTestCase {
         // `imap://Work%20%3Cuser%40example.com%3E/` → "Work <user@example.com>"
         let accounts = [["uuid": "U1", "email_addresses": ["Work <user@example.com>"]]]
         XCTAssertEqual(ExportIdentity.ownAddresses(from: accounts), ["user@example.com"])
-        XCTAssertEqual(ExportIdentity.resolvedAccountUUIDs(from: accounts), ["U1"])
+        XCTAssertEqual(ExportIdentity.resolvedAccountUUIDs(from: accounts), ["u1"],
+            "UUIDs are case-folded — hex case carries no meaning (#343 verify)")
     }
 
     func testMemberThatIsNotAnAddressIsDroppedAndItsAccountIsUnresolved() {
@@ -223,5 +224,45 @@ final class ExportIdentityInputsTests: XCTestCase {
     func testCaseAndWhitespaceVariantsCollapseToOneMember() {
         let accounts = [imap("U1", "  User@Example.COM "), imap("U2", "user@example.com")]
         XCTAssertEqual(ExportIdentity.ownAddresses(from: accounts), ["user@example.com"])
+    }
+}
+
+extension ExportDirectionIdentityTests {
+
+    /// #343 verify: the co-author case in the order the first fix failed on.
+    func testOwnAddressLastInAMultiAuthorFromIsStillSent() throws {
+        let r = try export(
+            sender: "Coauthor <coauthor@example.net>, Owner <owner@imap.example.org>",
+            ownAddresses: ["owner@imap.example.org"])
+        XCTAssertEqual(r.direction, "sent",
+            "every mailbox in From is an author; position must not decide identity")
+        XCTAssertNil(r.inferred)
+    }
+
+    /// A structurally broken From must reach the disclosure path, not be
+    /// tidied into a confident `received`.
+    func testBrokenFromIsDisclosed() throws {
+        for broken in ["owner@imap.example.org)", "owner@imap.example.org>",
+                       "owner@imap.example.org (unclosed"] {
+            let r = try export(sender: broken, ownAddresses: ["other@example.net"])
+            XCTAssertEqual(r.inferred, true, "should be disclosed, not asserted: \(broken)")
+        }
+    }
+}
+
+extension ExportIdentityInputsTests {
+
+    /// #343 verify: hex case in a UUID carries no meaning, and the reader folds
+    /// it elsewhere. A store reporting one case in the account map and the
+    /// other in the mailbox URL would otherwise make a perfectly resolvable
+    /// account look unresolvable, silently downgrading its mail to the
+    /// mailbox-label fallback.
+    func testAccountUUIDComparisonIsCaseInsensitive() {
+        let upper = [["uuid": "ABCD-1234", "email_addresses": ["a@x.com"]]]
+        XCTAssertEqual(ExportIdentity.resolvedAccountUUIDs(from: upper), ["abcd-1234"])
+        let lower = [["uuid": "abcd-1234", "email_addresses": ["a@x.com"]]]
+        XCTAssertEqual(ExportIdentity.resolvedAccountUUIDs(from: lower),
+                       ExportIdentity.resolvedAccountUUIDs(from: upper),
+                       "the same account written in either case must resolve identically")
     }
 }

@@ -783,7 +783,7 @@ class CheAppleMailMCPServer {
                 "description": .string("Array of message id strings (SQLite rowIds)"),
                 "items": .object(["type": .string("string")])
             ]),
-            "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox name. Direction is derived per email from sender identity (sender matches one of your accounts' addresses → sent, else received); this label is only the fallback direction source when identity CANNOT be established for that email — its account resolves to no address (EWS accounts, whose AccountURL is an opaque store id), no own address resolved at all, or the From header does not parse. Those items — and only those — carry direction_inferred: true in the manifest, so an absent direction_inferred means the value came from identity (#351/#343)")]),
+            "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox name. Direction is derived per email from sender identity (sender matches one of your accounts' addresses → sent, else received); this label is only the fallback direction source when identity CANNOT be established for that email — its account resolves to no address (EWS accounts, whose AccountURL is an opaque store id), no own address resolved at all, or the From header does not parse. Those items carry direction_inferred: true in the manifest. KNOWN LIMIT (#343): the index maps each account to ONE address, so mail you sent from an ALIAS on a resolvable account matches nothing and is written 'received' WITHOUT direction_inferred — an absent direction_inferred therefore means 'no address of any configured account matched, and this email's account does contribute at least one address', not 'every address you own was considered'")]),
             "account_name": .object(["type": .string("string"), "description": .string("Optional mail account (accepted for consistency; the SQLite fast path is account-agnostic)")]),
             "output_dir": .object(["type": .string("string"), "description": .string("Directory to write .md files into. Must resolve under the user's home (path traversal and system directories are rejected).")]),
             "skip_message_ids_path": .object(["type": .string("string"), "description": .string("Optional dedup escape hatch (#177): path to a file listing already-archived RFC 5322 Message-IDs (one per line; blank lines and `#` comments ignored). Emails whose Message-ID is in the set are skipped (status 'skipped', counted in the manifest's `skipped`), not rewritten — so a re-run only writes new mail. Validated read-only under the same allowed-roots policy as output_dir; missing/unreadable file → no skips.")]),
@@ -2117,7 +2117,11 @@ class CheAppleMailMCPServer {
                     guard let rowId = Int(id),
                           let url = try? exportReader.mailboxURL(forMessageId: rowId),
                           let mailbox = MailboxURL.decode(url) else { return false }
-                    return exportResolvedAccountUUIDs.contains(mailbox.accountUUID)
+                    // Hex case carries no meaning in a UUID, and the rest of
+                    // the reader already folds it (#343 verify) — a store that
+                    // reports one case in the account map and the other in the
+                    // mailbox URL would otherwise look unresolvable.
+                    return exportResolvedAccountUUIDs.contains(mailbox.accountUUID.lowercased())
                 },
                 fetch: { id in
                     guard let rowId = Int(id) else {
