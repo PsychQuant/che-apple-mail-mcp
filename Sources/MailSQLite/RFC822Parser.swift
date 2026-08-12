@@ -118,8 +118,47 @@ public enum RFC822Parser {
         var remaining = value[value.startIndex...]
         var lastWasEncodedWord = false
 
+        // A run of adjacent encoded-words sharing one charset (#352).
+        //
+        // Decoding each word to a String on its own is wrong whenever a
+        // multi-byte character straddles the word boundary: RFC 2047 §5 says an
+        // encoded-word must hold an integral number of characters, and real
+        // encoders break that by chunking the transport stream at a fixed
+        // width. Measured on the reported subject: all three words had
+        // well-formed base64 and none of their byte runs was valid UTF-8 alone,
+        // so all three conversions failed and all three were re-emitted raw.
+        //
+        // So the transport decode (base64 / QP) happens per word — it is
+        // per-word by construction — but the CHARSET conversion is deferred to
+        // the end of the run and applied to the concatenated bytes, which is
+        // what Mail.app and Python's `email.header` do. The run breaks on a
+        // charset change, on anything that is not LWS between two words, and on
+        // a word whose transport decode fails.
+        var pendingCharset: String?
+        var pendingBytes = Data()
+        var pendingStart: String.Index?
+        var pendingEnd: String.Index?
+
+        /// Convert the accumulated run and append it. On failure emit the run's
+        /// source verbatim — separators included — so an undecodable header is
+        /// passed through unchanged rather than corrupted.
+        func flushRun() {
+            guard let charset = pendingCharset,
+                  let start = pendingStart, let end = pendingEnd else { return }
+            if let decoded = String(data: pendingBytes, encoding: stringEncoding(for: charset)) {
+                result += decoded
+            } else {
+                result += String(value[start..<end])
+            }
+            pendingCharset = nil
+            pendingBytes = Data()
+            pendingStart = nil
+            pendingEnd = nil
+        }
+
         while !remaining.isEmpty {
             guard let startRange = remaining.range(of: "=?", options: .literal) else {
+                flushRun()
                 result += remaining
                 break
             }
@@ -142,7 +181,12 @@ public enum RFC822Parser {
                 // individual character literal in a `Character`-level
                 // `allSatisfy` — it must be decomposed to its scalars to
                 // match the LWS set component-wise.
+                //
+                // The run stays OPEN across this whitespace — that is the whole
+                // point of #352's fix, and it is also why the LWS rule and the
+                // byte accumulation have to agree about where a run ends.
             } else {
+                flushRun()
                 result += prefix
             }
 
@@ -151,23 +195,39 @@ public enum RFC822Parser {
             // then text (up to ?=)
             let afterEq = remaining[startRange.upperBound...]
             guard let parsed = parseEncodedWord(afterEq) else {
+                flushRun()
                 result += "=?"
                 remaining = remaining[startRange.upperBound...]
                 lastWasEncodedWord = false
                 continue
             }
 
-            var decoded: String?
+            // Transport decode only — the charset conversion belongs to the run.
+            var bytes: Data?
             if parsed.encoding == "B" {
-                decoded = decodeBase64(parsed.text, charset: parsed.charset)
+                bytes = Data(base64Encoded: parsed.text)
             } else if parsed.encoding == "Q" {
-                decoded = decodeQuotedPrintableWord(parsed.text, charset: parsed.charset)
+                // In encoded-words, `_` stands for space (not literal underscore).
+                bytes = decodeQuotedPrintableBytes(
+                    parsed.text.replacingOccurrences(of: "_", with: " "))
             }
 
-            if let decoded = decoded {
-                result += decoded
+            if let bytes = bytes {
+                // A charset change ends the run: latin1 bytes must never be
+                // appended to a utf-8 accumulation.
+                if let open = pendingCharset,
+                   open.lowercased() != parsed.charset.lowercased() {
+                    flushRun()
+                }
+                if pendingCharset == nil {
+                    pendingCharset = parsed.charset
+                    pendingStart = startRange.lowerBound
+                }
+                pendingBytes.append(bytes)
+                pendingEnd = parsed.endIndex
                 lastWasEncodedWord = true
             } else {
+                flushRun()
                 result += String(remaining[startRange.lowerBound..<parsed.endIndex])
                 lastWasEncodedWord = false
             }
@@ -175,6 +235,7 @@ public enum RFC822Parser {
             remaining = remaining[parsed.endIndex...]
         }
 
+        flushRun()
         return result
     }
 
@@ -217,19 +278,10 @@ public enum RFC822Parser {
         )
     }
 
-    private static func decodeBase64(_ text: String, charset: String) -> String? {
-        guard let data = Data(base64Encoded: text) else { return nil }
-        let encoding = stringEncoding(for: charset)
-        return String(data: data, encoding: encoding)
-    }
-
-    private static func decodeQuotedPrintableWord(_ text: String, charset: String) -> String? {
-        // In encoded-words, _ represents space (not literal underscore)
-        let withSpaces = text.replacingOccurrences(of: "_", with: " ")
-        guard let data = decodeQuotedPrintableBytes(withSpaces) else { return nil }
-        let encoding = stringEncoding(for: charset)
-        return String(data: data, encoding: encoding)
-    }
+    // `decodeBase64` / `decodeQuotedPrintableWord` (per-word transport + charset
+    // in one step) were removed by #352: converting each word to a String is
+    // precisely the bug. The transport decode is now inline in `decodeRFC2047`
+    // and the charset conversion happens once per run.
 
     static func decodeQuotedPrintableBytes(_ text: String) -> Data? {
         var data = Data()
