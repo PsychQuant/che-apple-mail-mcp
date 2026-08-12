@@ -16,18 +16,17 @@ final class ManifestVersionTests: XCTestCase {
     }
 
     private func newestChangelogVersion() throws -> String {
-        let text = try String(contentsOf: repoRoot().appendingPathComponent("CHANGELOG.md"),
-                              encoding: .utf8)
-        for line in text.split(separator: "\n") {
-            let s = line.trimmingCharacters(in: .whitespaces)
-            guard s.hasPrefix("## [") else { continue }
-            let inside = String(s.dropFirst(4).prefix(while: { $0 != "]" }))
-            // Skip "[Unreleased]" — accept only x.y.z
-            let parts = inside.split(separator: ".")
-            if parts.count == 3, parts.allSatisfy({ Int($0) != nil }) { return inside }
+        // #349: one shared parser (`scripts/changelog.py`). This used to be the
+        // second of three independent readings of the same file — it required
+        // three integer components while `VersionTests` went through `SemVer()`,
+        // so a `## [2.27.0-rc1]` header made them measure different releases.
+        let probe = try ChangelogParserTests.run(
+            ["newest"], changelog: repoRoot().appendingPathComponent("CHANGELOG.md").path)
+        guard probe.status == 0, !probe.out.isEmpty else {
+            XCTFail("no released ## [x.y.z] header found in CHANGELOG.md")
+            return ""
         }
-        XCTFail("no released ## [x.y.z] header found in CHANGELOG.md")
-        return ""
+        return probe.out
     }
 
     func testManifestVersionMatchesNewestRelease() throws {

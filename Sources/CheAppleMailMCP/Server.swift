@@ -1,11 +1,12 @@
 import Foundation
+import Logging
 import MCP
 import MailSQLite
 
 /// MCP Server for Apple Mail
 class CheAppleMailMCPServer {
     private let server: Server
-    private let transport: StdioTransport
+    private let transport: ShutdownOnWriteFailureTransport
     private let mailController = MailController.shared
     private let tools: [Tool]
     private let indexReader: EnvelopeIndexReader?
@@ -17,7 +18,10 @@ class CheAppleMailMCPServer {
             version: AppVersion.current,
             capabilities: .init(tools: .init())
         )
-        self.transport = StdioTransport()
+        // #349-B: a stdout write failure ends the session instead of leaving
+        // the server executing mutations whose responses vanish.
+        self.transport = ShutdownOnWriteFailureTransport(
+            wrapping: StdioTransport(), logger: Logger(label: "che-apple-mail-mcp"))
 
         // Initialize SQLite reader (optional — falls back to AppleScript if unavailable)
         // Only open the DB connection here; account mapping is built lazily on first search
@@ -47,6 +51,8 @@ class CheAppleMailMCPServer {
     }
 
     func run() async throws {
+        // The server exists only now, so the shutdown hook is installed here.
+        await transport.setOnWriteFailure { [server] in await server.stop() }
         try await server.start(transport: transport)
         await server.waitUntilCompleted()
     }

@@ -143,9 +143,15 @@ if [[ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]]; then
         push your commits first: git push origin main"
 fi
 
-# CHANGELOG must have an entry for this version
-if ! grep -q "^## \[$VERSION_NO_V\]" CHANGELOG.md; then
-    die "CHANGELOG.md has no entry for [$VERSION_NO_V]. add one before releasing."
+# CHANGELOG must have an entry for this version.
+#
+# Via scripts/changelog.py — the repo's single definition of a released header
+# (#349). The bare grep this replaced accepted a `## [x.y.z]` line inside a
+# fenced code block, and it was one of three parsers in the repo that could
+# disagree with each other about what "a release" is.
+if ! python3 scripts/changelog.py has "$VERSION_NO_V" CHANGELOG.md; then
+    die "CHANGELOG.md has no released entry for [$VERSION_NO_V] (a header inside a
+  fenced code block does not count). add one before releasing."
 fi
 
 # mcpb/manifest.json must agree with the tag (#311). The field had no owner in
@@ -289,14 +295,10 @@ info "Sanity checks passed."
 
 info "Extracting release notes from CHANGELOG.md..."
 
-RELEASE_NOTES="$(
-    awk -v ver="$VERSION_NO_V" '
-        $0 ~ "^## \\[" ver "\\]" { capture = 1; next }
-        capture && /^## \[/ { capture = 0 }
-        capture && /^---$/ { next }
-        capture { print }
-    ' CHANGELOG.md | sed -e '/./,$!d' -e ':a' -e '/^\n*$/{$d;N;ba' -e '}'
-)"
+# Same parser as the entry check and the two test guards (#349) — the awk this
+# replaced was the third independent reading of the file's structure.
+RELEASE_NOTES="$(python3 scripts/changelog.py notes "$VERSION_NO_V" CHANGELOG.md \
+    | sed -e '/^---$/d')"
 
 if [[ -z "$RELEASE_NOTES" ]]; then
     die "extracted release notes are empty. check CHANGELOG.md format for [$VERSION_NO_V]."
