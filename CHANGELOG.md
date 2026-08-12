@@ -104,6 +104,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Position is deliberately NOT used as evidence: "prefer the top-level
   candidate" would pick a user folder named `垃圾桶` over the real
   `[Gmail]/垃圾桶`, reintroducing the same class of confident-wrong answer.
+### Documentation
+
+- Both READMEs taught MCP-only installation as the default, so a first-time
+  reader ended up with a strictly smaller install and **no signal that anything
+  was missing** ([#353](https://github.com/PsychQuant/che-apple-mail-mcp/issues/353)).
+  Absent were the whole `/archive-mail` command family, the
+  `compose-wrapper-free` rule that prevents a CRITICAL cite-block defect on
+  formal mail, the confirmation-discipline rules, and the staleness hook — plus
+  two silent degradations of the binary itself: a self-built binary is ad-hoc
+  signed (macOS 26 TCC cannot reliably hold FDA/Automation for it, #211) and has
+  no version sidecar, which makes #303's staleness self-check permanently inert.
+  Quick Start now leads with the plugin install, carries a plugin-vs-MCP-only
+  comparison table so the smaller path is chosen knowingly, and demotes the raw
+  `claude mcp add` route to a collapsed advanced section. Applied to
+  `README.md` and `README_zh-TW.md` alike — the report came in Chinese, and
+  fixing only the English one would have missed the reporting reader.
+- Permission steps now point at `--setup` first. The setup window has existed
+  since #213/#214 with live status and a direct link to the right System
+  Settings pane, but the documented path never mentioned it until deep in a
+  reference section (related: #355).
 
 ## [2.27.0] - 2026-08-10
 
