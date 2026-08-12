@@ -18,10 +18,21 @@ struct ExportManifestItem {
     // Never true. See `partialBodyMissingForExport`.
     var bodyDownloaded: Bool? = nil
     // #316 — negative-only fallback signal (mirrors `bodyDownloaded`):
-    // `true` = the own-addresses set was empty, so this item's frontmatter
-    // `direction` came from the whole-batch mailbox-label fallback, not from
-    // per-email sender identity; nil = sender-identity derivation applied.
-    // Never false.
+    // `true` = this item's frontmatter `direction` came from the mailbox-label
+    // fallback because sender identity could NOT be established; nil = it came
+    // from sender identity. Never false.
+    //
+    // #351/#343 widened when it fires. It used to mean only "the own-addresses
+    // set was empty", which missed the case that bit in practice: an EWS
+    // account contributes no addresses while other accounts keep the set
+    // non-empty, so mail the user sent from it was written `received` with no
+    // signal at all. It now also fires when this email's own account
+    // contributes no address, and when the `From` header does not parse.
+    //
+    // The contract consumers rely on is unchanged and is the reason this is
+    // load-bearing: ABSENT means the value was derived from identity and can be
+    // trusted. Emitting a wrong `direction` without this field is worse than
+    // emitting an uncertain one with it.
     var directionInferred: Bool? = nil
 
     var jsonObject: [String: Any] {
@@ -133,6 +144,40 @@ struct ExportManifest {
             "body_not_downloaded": bodyNotDownloaded,
             "items": items.map { $0.jsonObject },
         ]
+    }
+}
+
+/// The two identity inputs the export's `direction` decision depends on,
+/// derived from `listAccounts()` output (#343/#351).
+///
+/// These live here rather than inline in `Server.swift` so they can be tested
+/// against account shapes that are awkward to produce live — specifically an
+/// EWS account, whose `AccountURL` is an opaque store id and which therefore
+/// contributes NO address (#9). That shape is the whole of #351 and it was
+/// invisible to the previous whole-set-emptiness test.
+enum ExportIdentity {
+
+    /// Every own address, each reduced by `EmailAddress.canonical` — the SAME
+    /// function the sender goes through, which is the property that makes the
+    /// comparison meaningful. Members that do not reduce to an address are
+    /// dropped: keeping them would inflate the set with entries that can never
+    /// match while suppressing the fail-open disclosure (#343-B).
+    static func ownAddresses(from accounts: [[String: Any]]) -> Set<String> {
+        Set(accounts
+            .flatMap { ($0["email_addresses"] as? [String]) ?? [] }
+            .compactMap { EmailAddress.canonical($0) })
+    }
+
+    /// UUIDs of accounts that contributed at least one usable address. An email
+    /// whose account is absent here cannot be judged: a non-match means "this
+    /// account's addresses are unknown", not "not yours".
+    static func resolvedAccountUUIDs(from accounts: [[String: Any]]) -> Set<String> {
+        Set(accounts.compactMap { account -> String? in
+            let addrs = (account["email_addresses"] as? [String]) ?? []
+            guard addrs.contains(where: { EmailAddress.canonical($0) != nil }),
+                  let uuid = account["uuid"] as? String, !uuid.isEmpty else { return nil }
+            return uuid
+        })
     }
 }
 
@@ -345,14 +390,22 @@ enum ExportEmailsMarkdown {
     ///   - ids: message ids (SQLite rowId strings).
     ///   - outputDir: ALREADY-VALIDATED canonical output directory (the caller
     ///     runs `AllowedRootsValidator` first). Created if absent.
-    ///   - ownAddresses: the user's own bare email addresses (ALREADY lowercased;
-    ///     union across configured accounts). Non-empty → per-email direction:
-    ///     sender ∈ set → `"sent"`, else `"received"` (#316). Empty → whole batch
-    ///     takes `fallbackDirection` and every written item discloses
-    ///     `direction_inferred: true`.
+    ///   - ownAddresses: the user's own bare email addresses, each ALREADY put
+    ///     through `EmailAddress.canonical` by the caller so both sides of the
+    ///     identity comparison are produced by the same function (#343).
+    ///     Per-email direction: sender ∈ set → `"sent"`, else `"received"`
+    ///     (#316). Empty → every written item takes `fallbackDirection` and
+    ///     discloses `direction_inferred: true`.
     ///   - fallbackDirection: `"received"` / `"sent"` — the mailbox-label
-    ///     heuristic value, used only when `ownAddresses` is empty (EWS/#9
-    ///     accounts with no resolvable address, or index-less callers).
+    ///     heuristic value, used only where identity cannot be established
+    ///     (EWS/#9 accounts with no resolvable address, an unparseable `From`,
+    ///     or index-less callers).
+    ///   - identityResolvable: id → does THIS email's account contribute any
+    ///     address to `ownAddresses`? A `false` means "cannot tell", which is a
+    ///     different answer from "not yours" and must be disclosed rather than
+    ///     resolved to `received` (#351). Defaults to `true` for callers that
+    ///     have no per-account view; fail CLOSED (`false`) when the account
+    ///     cannot be determined, so the doubt is disclosed rather than hidden.
     ///   - includeAttachments: also export each email's attachments.
     ///   - filenameTemplate / filenameOverrides: optional overrides (per design D4).
     ///   - extraFrontmatter: optional extra frontmatter fields.
@@ -370,6 +423,7 @@ enum ExportEmailsMarkdown {
         filenameTemplate: String?,
         filenameOverrides: [String: String],
         extraFrontmatter: [(String, String)],
+        identityResolvable: (String) -> Bool = { _ in true },
         fetch: (String) throws -> EmailContent,
         attachmentNamesFor: (String) throws -> [String],
         attachmentData: (String, String) throws -> Data,
@@ -475,16 +529,41 @@ enum ExportEmailsMarkdown {
             let bareSender = EmailMarkdownRenderer.bareEmail(content.sender)
 
             // #316 — per-email direction from sender identity. Empty set =
-            // fail-open (no resolvable own address): whole batch takes the
-            // caller's mailbox-label fallback, disclosed per written item via
-            // the negative-only `direction_inferred` manifest field.
+            // fail-open (no resolvable own address): the caller's mailbox-label
+            // fallback, disclosed per written item via the negative-only
+            // `direction_inferred` manifest field.
+            //
+            // #351/#343 — the fail-open test used to be "is the WHOLE set
+            // empty", which cannot see the case that actually bit: an EWS
+            // account contributes NO addresses (its AccountURL is an opaque
+            // store id, #9), while other accounts keep the set non-empty. Mail
+            // the user sent from the EWS account then matched nothing, was
+            // written `received`, and carried no disclosure — a confident wrong
+            // answer. Measured on the reporting machine: 6 of 8 accounts
+            // resolve, 2 EWS accounts resolve to nothing.
+            //
+            // So identity is now judged per email, and "I cannot tell" is a
+            // distinct outcome from "not mine":
+            //   sender ∈ own set                  → sent      (confident)
+            //   sender unparseable, or this email's account contributes no
+            //   addresses, or no address resolved at all
+            //                                     → fallback  (disclosed)
+            //   otherwise                         → received  (confident)
+            // A positive match still wins first: mail sent from account A can
+            // legitimately sit in account B's store.
+            let canonicalSender = EmailAddress.canonical(content.sender)
             let direction: String
             let directionInferred: Bool?
-            if ownAddresses.isEmpty {
+            if let sender = canonicalSender, ownAddresses.contains(sender) {
+                direction = "sent"
+                directionInferred = nil
+            } else if ownAddresses.isEmpty
+                        || canonicalSender == nil
+                        || !identityResolvable(id) {
                 direction = fallbackDirection
                 directionInferred = true
             } else {
-                direction = ownAddresses.contains(bareSender.lowercased()) ? "sent" : "received"
+                direction = "received"
                 directionInferred = nil
             }
 

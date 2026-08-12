@@ -104,13 +104,17 @@ enum EmailMarkdownRenderer {
 
     /// Extract the bare email address from a `From`/sender field such as
     /// `"Name" <addr@host>` → `addr@host`. Falls back to the trimmed input
-    /// when there are no angle brackets.
+    /// when no address can be recognised.
+    ///
+    /// #343: this used to take the LAST `<…>` pair, which is not a mailbox
+    /// parse — a trailing RFC 5322 comment could supply the address, a quoted
+    /// local part could be truncated, and in a multi-author `From` the last
+    /// author won. Since #316 made `direction` depend on this value, each of
+    /// those wrote a wrong value into frozen frontmatter. It now delegates to
+    /// `EmailAddress`, the same function that normalises the own-address set,
+    /// so both sides of the identity comparison are produced identically.
     static func bareEmail(_ sender: String) -> String {
-        if let lt = sender.lastIndex(of: "<"), let gt = sender.lastIndex(of: ">"), lt < gt {
-            let start = sender.index(after: lt)
-            return String(sender[start..<gt]).trimmingCharacters(in: .whitespaces).lowercased()
-        }
-        return sender.trimmingCharacters(in: .whitespaces).lowercased()
+        EmailAddress.display(sender)
     }
 
     /// Convert an RFC 822 / RFC 2822 email `Date` header to ISO 8601,

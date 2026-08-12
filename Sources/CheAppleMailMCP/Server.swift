@@ -783,7 +783,7 @@ class CheAppleMailMCPServer {
                 "description": .string("Array of message id strings (SQLite rowIds)"),
                 "items": .object(["type": .string("string")])
             ]),
-            "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox name. Direction is derived per email from sender identity (sender matches one of your accounts' addresses → sent, else received); this label is only the fallback direction source when no own address is resolvable (e.g. EWS-only setups) — those items carry direction_inferred: true in the manifest")]),
+            "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox name. Direction is derived per email from sender identity (sender matches one of your accounts' addresses → sent, else received); this label is only the fallback direction source when identity CANNOT be established for that email — its account resolves to no address (EWS accounts, whose AccountURL is an opaque store id), no own address resolved at all, or the From header does not parse. Those items — and only those — carry direction_inferred: true in the manifest, so an absent direction_inferred means the value came from identity (#351/#343)")]),
             "account_name": .object(["type": .string("string"), "description": .string("Optional mail account (accepted for consistency; the SQLite fast path is account-agnostic)")]),
             "output_dir": .object(["type": .string("string"), "description": .string("Directory to write .md files into. Must resolve under the user's home (path traversal and system directories are rejected).")]),
             "skip_message_ids_path": .object(["type": .string("string"), "description": .string("Optional dedup escape hatch (#177): path to a file listing already-archived RFC 5322 Message-IDs (one per line; blank lines and `#` comments ignored). Emails whose Message-ID is in the set are skipped (status 'skipped', counted in the manifest's `skipped`), not rewritten — so a re-run only writes new mail. Validated read-only under the same allowed-roots policy as output_dir; missing/unreadable file → no skips.")]),
@@ -2017,10 +2017,20 @@ class CheAppleMailMCPServer {
             // addresses resolvable from the local account mapping (IMAP-style
             // accounts map to an email-form name; EWS accounts resolve to a
             // UUID and contribute nothing — #9/#11). No AppleScript round-trip.
-            let exportOwnAddresses: Set<String> = Set(
-                exportReader.listAccounts().flatMap {
-                    ($0["email_addresses"] as? [String]) ?? []
-                }.map { $0.lowercased() })
+            // #343: normalise every set member through the SAME function the
+            // sender goes through. A member is not guaranteed to be a bare
+            // address — an AccountURL like `imap://Work%20%3Cuser%40x.com%3E/`
+            // yields `Work <user@x.com>`, which could never match a parsed
+            // sender and, because it kept the set non-empty, suppressed the
+            // disclosure too. Members that still do not reduce to an address
+            // are dropped rather than kept as permanently-unmatchable entries.
+            let exportAccounts = exportReader.listAccounts()
+            let exportOwnAddresses = ExportIdentity.ownAddresses(from: exportAccounts)
+            // #351: which ACCOUNTS actually contributed an address. EWS accounts
+            // contribute none (opaque AccountURL, #9), so mail sent from one can
+            // never match — and without this per-account view the whole-set
+            // emptiness test cannot see it while other accounts resolve.
+            let exportResolvedAccountUUIDs = ExportIdentity.resolvedAccountUUIDs(from: exportAccounts)
             // Mailbox-label heuristic, demoted to the fail-open fallback used
             // only when no own address is resolvable (whole batch, disclosed
             // per item via `direction_inferred: true`).
@@ -2100,6 +2110,15 @@ class CheAppleMailMCPServer {
                 ownAddresses: exportOwnAddresses, fallbackDirection: exportFallbackDirection,
                 includeAttachments: includeAttachments, filenameTemplate: filenameTemplate,
                 filenameOverrides: filenameOverrides, extraFrontmatter: extraFrontmatter,
+                identityResolvable: { id in
+                    // Fail CLOSED: anything we cannot resolve to a known
+                    // address-bearing account is "cannot tell" → disclosed,
+                    // never silently resolved to `received` (#351).
+                    guard let rowId = Int(id),
+                          let url = try? exportReader.mailboxURL(forMessageId: rowId),
+                          let mailbox = MailboxURL.decode(url) else { return false }
+                    return exportResolvedAccountUUIDs.contains(mailbox.accountUUID)
+                },
                 fetch: { id in
                     guard let rowId = Int(id) else {
                         throw MailError.invalidParameter("id '\(id)' is not a numeric rowId")
