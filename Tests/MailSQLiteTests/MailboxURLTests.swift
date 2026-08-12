@@ -46,3 +46,36 @@ final class MailboxURLTests: XCTestCase {
         XCTAssertEqual(result?.mailboxPath, "INBOX")
     }
 }
+
+/// #358 — `mailboxName` carried #344's `%2F` defect: it took the substring
+/// after the last `/` of the LOSSY decoded path, so a mailbox whose NAME
+/// contains a slash reported the wrong leaf. It had zero consumers at the time,
+/// so nothing was broken yet — it was fixed rather than deleted precisely
+/// because it would have handed its first user a wrong answer.
+final class MailboxNameLeafTests: XCTestCase {
+
+    func testLiteralSlashInName_isNotSplit() {
+        let u = MailboxURL.decode("imap://UUID/R%26D%2FSent")
+        XCTAssertEqual(u?.mailboxName, "R&D/Sent",
+            "the whole name IS the leaf — %2F is part of it, not a separator")
+    }
+
+    func testGenuineHierarchy_stillYieldsTheLeaf() {
+        XCTAssertEqual(MailboxURL.decode("imap://UUID/R%26D/Sent")?.mailboxName, "Sent")
+        XCTAssertEqual(MailboxURL.decode("imap://UUID/%5BGmail%5D/%E5%AF%84%E4%BB%B6%E5%82%99%E4%BB%BD")?.mailboxName,
+                       "寄件備份", "bracketed + CJK nesting still resolves its leaf")
+    }
+
+    func testTopLevel_isItsOwnLeaf() {
+        XCTAssertEqual(MailboxURL.decode("imap://UUID/INBOX")?.mailboxName, "INBOX")
+    }
+
+    /// The two URLs share one `mailboxPath` but differ in components — which is
+    /// the whole reason the leaf must come from components.
+    func testTheTwoFormsDisagreeOnLeafDespiteEqualMailboxPath() {
+        let named = MailboxURL.decode("imap://UUID/R%26D%2FSent")
+        let nested = MailboxURL.decode("imap://UUID/R%26D/Sent")
+        XCTAssertEqual(named?.mailboxPath, nested?.mailboxPath, "lossy paths are identical")
+        XCTAssertNotEqual(named?.mailboxName, nested?.mailboxName, "…but the leaves are not")
+    }
+}

@@ -73,11 +73,18 @@ public struct MailboxURL: Sendable {
         )
     }
 
-    /// Extract the leaf mailbox name (last path component).
+    /// The leaf mailbox name — the last hierarchy component.
+    ///
+    /// Derived from `pathComponents`, never from `mailboxPath` (#358). Taking
+    /// the substring after the last `/` of the decoded path is the same defect
+    /// #344 removed from the mailbox filter: a mailbox literally NAMED
+    /// `R&D/Sent` (raw `R%26D%2FSent`) would report its leaf as `Sent`.
+    ///
+    /// This accessor had no consumers when the flaw was found, which is exactly
+    /// why it was fixed rather than deleted — it reads naturally enough that
+    /// deleting it invites the next caller to write `mailboxPath.split("/").last`
+    /// themselves and reintroduce the bug in their own code.
     public var mailboxName: String {
-        if let lastSlash = mailboxPath.lastIndex(of: "/") {
-            return String(mailboxPath[mailboxPath.index(after: lastSlash)...])
-        }
-        return mailboxPath
+        pathComponents.last ?? mailboxPath
     }
 }
