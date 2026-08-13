@@ -22,10 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   document (⌘↓, locale-independent like the other shortcuts on this path) once,
   before the first attach cycle.
 
-  **Live-GUI verification is still outstanding** — the tests prove the script
-  emits the keystroke in the right place, not that Mail's compose window puts
-  the caret where intended. Tracked on both issues with `blocked-on-setup`
-  rather than asserted here.
+  **Live-verified** against real Mail: the pre-fix script produces
+  `<body …><object …x-apple-msg-attachment…` — the attachment first, ahead of
+  every line of text — while the fixed script produces
+  `<body …>FIRST-LINE-MARKER<br><br>--<br>signature line<object …`. (MIME part
+  order is *not* the signal: both produce the identical order, because Mail
+  serialises attachment parts at the end regardless of visual placement. The
+  `text/html` part is where placement lives.)
 
 ## [2.28.0] - 2026-08-13
 
