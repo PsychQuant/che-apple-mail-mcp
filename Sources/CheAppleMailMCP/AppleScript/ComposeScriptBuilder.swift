@@ -433,6 +433,31 @@ func buildMailtoComposeScript(
     // non-ASCII paths are routed to the legacy native-attach path upstream — do NOT
     // remove that gate.
     if !attachments.isEmpty {
+        // #341/#321 — put the caret at the END of the body before attaching.
+        //
+        // Mail's File ▸ Attach inserts at the CURRENT insertion point, and after
+        // the mailto hand-off fills the body the caret sits at its START. So the
+        // attachment icon landed to the LEFT of the first line — before the
+        // salutation — which for a formal letter is the first thing the
+        // recipient sees. Reported twice from live use (#321 2026-07-31,
+        // #341 2026-08-07 with a screenshot) before the cause was identified.
+        //
+        // ⌘↓ (key code 125 + command) is "move to end of document" in a Cocoa
+        // text view, and is locale-independent like the other shortcuts here.
+        // Emitted ONCE before the loop, not per attachment: after the first
+        // attach the caret is already past the body, and repeating it would be
+        // harmless but would misrepresent the intent.
+        s += """
+
+        tell application "System Events"
+            tell process "Mail"
+                set frontmost to true
+                \(raiseOnly)
+                key code 125 using {command down}
+            end tell
+        end tell
+        delay \(stepDelay)
+        """
         for path in attachments {
             s += """
 
