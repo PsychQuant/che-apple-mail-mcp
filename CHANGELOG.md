@@ -23,6 +23,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `scripts/release.sh` runs that test as a fail-closed gate. The release gate is
   not redundant with the test — this repo has no CI, so nothing otherwise forces
   the test to run before a release, which is the gap #311 was about.
+- RFC 2047 headers whose multi-byte character is split ACROSS two adjacent
+  encoded-words were not decoded at all — the raw `=?utf-8?B?...?=` string was
+  written into `batch_export_emails_markdown`'s frozen frontmatter (`thread_key`
+  and the body `Subject:` line) and returned by `get_email`
+  ([#352](https://github.com/PsychQuant/che-apple-mail-mcp/issues/352)).
+
+  The decoder was wired up correctly; it failed on the input. RFC 2047 §5
+  requires each encoded-word to hold an integral number of characters, and
+  encoders in the wild break that by chunking the transport stream at a fixed
+  width. On the reported subject every word's base64 was well-formed and no
+  word's bytes were valid UTF-8 on their own — only the concatenation decoded.
+  `decodeRFC2047` converted each word to a `String` independently, so every
+  conversion failed and every word was re-emitted verbatim.
+
+  The transport decode (base64 / quoted-printable) is still per word, but the
+  charset conversion is now deferred to the end of a run of adjacent
+  same-charset encoded-words and applied to the concatenated bytes — what
+  Mail.app and Python's `email.header` do. A run ends on a charset change, on
+  any non-LWS text between words, or on a failed transport decode; a run whose
+  concatenated bytes still do not decode falls back to its verbatim source,
+  separators included, so an undecodable header is passed through rather than
+  corrupted. Attachment filenames (#99 / #123) share this decoder and get the
+  same fix.
 
 ## [2.27.0] - 2026-08-10
 

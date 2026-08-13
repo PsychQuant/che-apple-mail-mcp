@@ -118,56 +118,146 @@ public enum RFC822Parser {
         var remaining = value[value.startIndex...]
         var lastWasEncodedWord = false
 
+        // A run of adjacent encoded-words sharing one charset (#352).
+        //
+        // Decoding each word to a String on its own is wrong whenever a
+        // multi-byte character straddles the word boundary: RFC 2047 §5 says an
+        // encoded-word must hold an integral number of characters, and real
+        // encoders break that by chunking the transport stream at a fixed
+        // width. Measured on the reported subject: all three words had
+        // well-formed base64 and none of their byte runs was valid UTF-8 alone.
+        //
+        // So the transport decode (base64 / QP) stays per word, and the CHARSET
+        // conversion is applied once to the run's concatenated bytes.
+        //
+        // Three things the first version of this fix got wrong (#352 verify,
+        // cross-model — all three reproduced before changing anything):
+        //
+        //  1. Runs were broken on the charset LABEL, so `utf-8` followed by
+        //     `utf8` — aliases `stringEncoding(for:)` already maps to the same
+        //     encoding — never joined. Runs now break on the RESOLVED encoding.
+        //  2. One undecodable word poisoned the whole run: `A` + an invalid
+        //     byte emitted BOTH words raw, losing an `A` the old code decoded.
+        //     A run that fails as a whole now replays the old per-word
+        //     algorithm, so the fallback really is what it claims to be.
+        //  3. The whitespace between two words was dropped before knowing
+        //     whether the second would join the run, so a transport failure
+        //     silently deleted it. It is now held and committed only once the
+        //     outcome is known.
+        struct RunWord { let bytes: Data; let range: Range<String.Index> }
+        var runEncoding: String.Encoding?
+        var runWords: [RunWord] = []
+        /// LWS after the last run word, not yet committed either way.
+        var heldSeparator: Substring?
+
+        /// Emit the open run. Returns whether the last thing emitted counts as
+        /// a decoded encoded-word — which is what decides, per RFC 2047 §6.2,
+        /// whether a following separator is dropped or kept.
+        func flushRun() -> Bool {
+            guard let encoding = runEncoding, !runWords.isEmpty else { return lastWasEncodedWord }
+            defer { runEncoding = nil; runWords = [] }
+
+            let joined = runWords.reduce(into: Data()) { $0.append($1.bytes) }
+            if let decoded = String(data: joined, encoding: encoding) {
+                result += decoded
+                return true
+            }
+
+            // The run does not decode as a unit. Replay the pre-#352 per-word
+            // behaviour so this path is byte-identical to what it replaced:
+            // each word that decodes alone still decodes, each that does not is
+            // emitted verbatim, and a separator survives exactly when the word
+            // before it failed.
+            var lastOK = false
+            for (i, word) in runWords.enumerated() {
+                if i > 0, !lastOK {
+                    result += value[runWords[i - 1].range.upperBound..<word.range.lowerBound]
+                }
+                if let decoded = String(data: word.bytes, encoding: encoding) {
+                    result += decoded
+                    lastOK = true
+                } else {
+                    result += value[word.range]
+                    lastOK = false
+                }
+            }
+            return lastOK
+        }
+
+        /// Close the run and settle the held separator with it.
+        func closeRun() {
+            let decodedLast = flushRun()
+            if let separator = heldSeparator {
+                if !decodedLast { result += separator }
+                heldSeparator = nil
+            }
+            lastWasEncodedWord = decodedLast
+        }
+
         while !remaining.isEmpty {
             guard let startRange = remaining.range(of: "=?", options: .literal) else {
+                closeRun()
                 result += remaining
                 break
             }
 
-            // Text before the encoded word
             let prefix = remaining[remaining.startIndex..<startRange.lowerBound]
-            if lastWasEncodedWord && prefix.unicodeScalars.allSatisfy({
+            let prefixIsLWS = !prefix.isEmpty && prefix.unicodeScalars.allSatisfy {
                 $0 == " " || $0 == "\t" || $0 == "\n" || $0 == "\r"
-            }) {
-                // RFC 2047 §6.2: skip linear-white-space (RFC 822 LWS — space,
-                // tab, CR, LF) between consecutive encoded-words. Previously
-                // only space + tab were stripped, so a CR/LF separator leaked
-                // through as a literal control character into the decoded
-                // result (#125 — sister of #99). Header unfolding upstream
-                // (`parseHeaders`) already normalises folded continuation
-                // lines, but inter-EW CR/LF can still survive in
-                // `decodeRFC2047IfApplicable`'s per-parameter input.
-                // Iterates `unicodeScalars` because Swift treats `\r\n` as
-                // a single extended grapheme cluster that does NOT equal any
-                // individual character literal in a `Character`-level
-                // `allSatisfy` — it must be decomposed to its scalars to
-                // match the LWS set component-wise.
+            }
+            if prefix.isEmpty {
+                // nothing between the words
+            } else if lastWasEncodedWord && prefixIsLWS {
+                // RFC 2047 §6.2: LWS between two encoded-words is dropped — but
+                // only if what follows really is one. Hold it until we know.
+                // (Iterates unicodeScalars because Swift treats "\r\n" as a
+                // single grapheme cluster that equals no individual literal.)
+                heldSeparator = prefix
             } else {
+                closeRun()
                 result += prefix
             }
 
-            // Parse =?charset?encoding?text?= structure:
-            // After =?, find charset (up to ?), encoding (single char, up to ?),
-            // then text (up to ?=)
             let afterEq = remaining[startRange.upperBound...]
             guard let parsed = parseEncodedWord(afterEq) else {
+                closeRun()
                 result += "=?"
                 remaining = remaining[startRange.upperBound...]
                 lastWasEncodedWord = false
                 continue
             }
 
-            var decoded: String?
+            // Transport decode only — the charset conversion belongs to the run.
+            var bytes: Data?
             if parsed.encoding == "B" {
-                decoded = decodeBase64(parsed.text, charset: parsed.charset)
+                bytes = Data(base64Encoded: parsed.text)
             } else if parsed.encoding == "Q" {
-                decoded = decodeQuotedPrintableWord(parsed.text, charset: parsed.charset)
+                // In encoded-words, `_` stands for space (not literal underscore).
+                bytes = decodeQuotedPrintableBytes(
+                    parsed.text.replacingOccurrences(of: "_", with: " "))
             }
 
-            if let decoded = decoded {
-                result += decoded
+            if let bytes = bytes {
+                let encoding = stringEncoding(for: parsed.charset)
+                // Compare the RESOLVED encoding, not the label: `utf-8` and
+                // `utf8` are the same encoding and must share a run.
+                if let open = runEncoding, open != encoding {
+                    closeRun()
+                }
+                if runEncoding == nil { runEncoding = encoding }
+                runWords.append(RunWord(
+                    bytes: bytes,
+                    range: startRange.lowerBound..<parsed.endIndex))
+                // The separator now sits INSIDE the run's source span.
+                heldSeparator = nil
                 lastWasEncodedWord = true
             } else {
+                // Cannot even transport-decode: this word joins no run.
+                let decodedLast = flushRun()
+                if let separator = heldSeparator {
+                    if !decodedLast { result += separator }
+                    heldSeparator = nil
+                }
                 result += String(remaining[startRange.lowerBound..<parsed.endIndex])
                 lastWasEncodedWord = false
             }
@@ -175,7 +265,17 @@ public enum RFC822Parser {
             remaining = remaining[parsed.endIndex...]
         }
 
+        closeRun()
+        if let separator = heldSeparator { result += separator }
         return result
+    }
+
+    /// #352 verify: lets the differential test drive the pre-fix reference
+    /// algorithm through the same tokenizer, so any divergence it reports is a
+    /// real behavioural difference and not a second parser disagreeing.
+    static func parseEncodedWordForTesting(_ input: Substring) -> (charset: String, encoding: String, text: String, endIndex: Substring.Index)? {
+        guard let w = parseEncodedWord(input) else { return nil }
+        return (w.charset, w.encoding, w.text, w.endIndex)
     }
 
     private struct EncodedWord {
@@ -217,19 +317,10 @@ public enum RFC822Parser {
         )
     }
 
-    private static func decodeBase64(_ text: String, charset: String) -> String? {
-        guard let data = Data(base64Encoded: text) else { return nil }
-        let encoding = stringEncoding(for: charset)
-        return String(data: data, encoding: encoding)
-    }
-
-    private static func decodeQuotedPrintableWord(_ text: String, charset: String) -> String? {
-        // In encoded-words, _ represents space (not literal underscore)
-        let withSpaces = text.replacingOccurrences(of: "_", with: " ")
-        guard let data = decodeQuotedPrintableBytes(withSpaces) else { return nil }
-        let encoding = stringEncoding(for: charset)
-        return String(data: data, encoding: encoding)
-    }
+    // `decodeBase64` / `decodeQuotedPrintableWord` (per-word transport + charset
+    // in one step) were removed by #352: converting each word to a String is
+    // precisely the bug. The transport decode is now inline in `decodeRFC2047`
+    // and the charset conversion happens once per run.
 
     static func decodeQuotedPrintableBytes(_ text: String) -> Data? {
         var data = Data()
