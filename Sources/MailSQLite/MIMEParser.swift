@@ -718,9 +718,15 @@ public enum MIMEParser {
         }
 
         // Decode transfer encoding
-        let decoded = decodeTransferEncoding(data, encoding: encoding)
+        var decoded = decodeTransferEncoding(data, encoding: encoding)
+        if mimeType.hasPrefix("text/") {
+            decoded = salvageMislabelledQuotedPrintable(decoded, declaredEncoding: encoding)
+        }
         let charset = params["charset"] ?? "utf-8"
         let textEncoding = RFC822Parser.stringEncoding(for: charset)
+        // UTF-8 is tried BEFORE the declared charset when the salvage fired,
+        // because a part that lies about its encoding generally lies about its
+        // charset too (the reported one said `US-ASCII` and carried UTF-8).
         let text = String(data: decoded, encoding: textEncoding)
             ?? String(data: decoded, encoding: .utf8)
             ?? String(data: decoded, encoding: .ascii)
@@ -808,6 +814,51 @@ public enum MIMEParser {
     }
 
     // MARK: - Transfer Encoding
+
+    /// #339 — recover a text part that declares `7bit`/`8bit`/`binary` but is
+    /// actually quoted-printable.
+    ///
+    /// The reported message (a Klaviyo newsletter) carries
+    /// `Content-Transfer-Encoding: 7bit` with `charset=US-ASCII` on a body that
+    /// is plainly QP-encoded UTF-8, while its `text/html` sibling declares
+    /// `quoted-printable` properly — which is exactly why one decoded and the
+    /// other did not. Obeying the header is correct and useless; 19 of 28
+    /// messages in one archive run were written unreadable with every gate green.
+    ///
+    /// The risk of guessing is corrupting honest text: a 7bit document ABOUT
+    /// quoted-printable, containing `=41`, must not silently become `A`. So the
+    /// salvage is **self-validating** and fires only when all of these hold:
+    ///
+    /// - the part was NOT decoded already (declared 7bit / 8bit / binary)
+    /// - it contains QP evidence — a `=XX` hex escape or a soft line break
+    /// - the QP decode yields **valid UTF-8**
+    /// - that decode recovers at least one **non-ASCII** scalar
+    ///
+    /// The last condition is what makes it safe: mislabelled QP exists in the
+    /// wild precisely to carry non-ASCII, so a decode that produces only ASCII
+    /// has nothing to gain and everything to lose, and is refused. `=41` decodes
+    /// to pure ASCII → refused. `=E7` alone decodes to a lone continuation byte
+    /// → not valid UTF-8 → refused.
+    static func salvageMislabelledQuotedPrintable(
+        _ data: Data,
+        declaredEncoding: String
+    ) -> Data {
+        switch declaredEncoding.lowercased() {
+        case "7bit", "8bit", "binary", "":
+            break
+        default:
+            return data   // already decoded by its own declaration — never second-guess
+        }
+        guard let text = String(data: data, encoding: .ascii),
+              text.range(of: #"=[0-9A-Fa-f]{2}"#, options: .regularExpression) != nil
+                || text.range(of: #"=\r?\n"#, options: .regularExpression) != nil,
+              let candidate = RFC822Parser.decodeQuotedPrintableBytes(text),
+              candidate != data,
+              let s = String(data: candidate, encoding: .utf8),
+              s.unicodeScalars.contains(where: { !$0.isASCII })
+        else { return data }
+        return candidate
+    }
 
     private static func decodeTransferEncoding(_ data: Data, encoding: String) -> Data {
         switch encoding.lowercased() {
