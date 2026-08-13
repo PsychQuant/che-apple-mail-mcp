@@ -192,3 +192,89 @@ final class ToolCountCensusGuardTests: XCTestCase {
         for claim in claims { XCTAssertEqual(claim, actualCount) }
     }
 }
+
+/// #348 — the manifest's `tools` array had rotted exactly the way its `version`
+/// field did before #311: no owner, so it drifted silently. Measured at the
+/// time: 47 listed, 53 registered, six missing — the three TCC probes
+/// (`check_fda` / `check_accessibility` / `check_automation`), `update_draft`,
+/// and BOTH names of the batch export. The packaged `.mcpb` (the Claude Desktop
+/// install path) therefore advertised an incomplete tool surface.
+///
+/// `ToolCountCensusGuardTests` did not catch it because it pins a *count string*
+/// in prose. The array could drift arbitrarily while the census stayed green —
+/// the same shape of gap, one field over.
+///
+/// This asserts **set equality in both directions**, so a removed tool fails
+/// just as loudly as an added one. That closes the field rather than the
+/// instance, which is the general form of #311's lesson.
+final class ManifestToolsSetEqualityTests: XCTestCase {
+
+    private static let repoRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+
+    /// Set `REGENERATE_MCPB_MANIFEST=1` to rewrite the array from
+    /// `defineTools()` instead of asserting against it. A golden file, because
+    /// the alternative — scraping `Server.swift` for `Tool(name:description:)`
+    /// literals — is what produced the first version of this fix, and it
+    /// silently mangled six entries: descriptions assembled from concatenated
+    /// literals were missed entirely (`batch_export_emails_markdown` ended up
+    /// with its own NAME as its description) and the rest were cut mid-word.
+    /// The registered tools are the authority, so read them, don't re-derive
+    /// them from their source text.
+    func testManifestToolsMatchRegisteredToolsExactly() throws {
+        let url = Self.repoRoot.appendingPathComponent("mcpb/manifest.json")
+        let registered = CheAppleMailMCPServer.defineTools()
+
+        if ProcessInfo.processInfo.environment["REGENERATE_MCPB_MANIFEST"] == "1" {
+            var root = try JSONSerialization.jsonObject(with: Data(contentsOf: url))
+                as? [String: Any] ?? [:]
+            root["tools"] = registered
+                .sorted { $0.name < $1.name }
+                .map { ["name": $0.name, "description": $0.description ?? ""] }
+            let out = try JSONSerialization.data(
+                withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+            try (String(data: out, encoding: .utf8)! + "\n").write(to: url, atomically: true, encoding: .utf8)
+            print("regenerated mcpb/manifest.json tools[] from \(registered.count) registered tools")
+            return
+        }
+
+        let data = try Data(contentsOf: url)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let entries = (json?["tools"] as? [[String: Any]]) ?? []
+        let manifest = Set(entries.compactMap { $0["name"] as? String })
+        let registeredNames = Set(registered.map(\.name))
+
+        XCTAssertEqual(entries.count, manifest.count,
+                       "duplicate tool names in mcpb/manifest.json")
+
+        let missing = registeredNames.subtracting(manifest).sorted()
+        let extra = manifest.subtracting(registeredNames).sorted()
+
+        XCTAssertTrue(missing.isEmpty,
+            "registered but ABSENT from mcpb/manifest.json — the packaged .mcpb would "
+            + "advertise an incomplete tool surface: \(missing)")
+        XCTAssertTrue(extra.isEmpty,
+            "listed in mcpb/manifest.json but NOT registered — the .mcpb advertises tools "
+            + "that do not exist: \(extra)")
+
+        // Names alone were not enough: the array's DESCRIPTIONS could still rot
+        // (or arrive truncated) while the name set stayed perfect, which is the
+        // same "owner for one field, none for the neighbour" shape as #311 and
+        // as this issue. Regenerate with REGENERATE_MCPB_MANIFEST=1.
+        var descriptionMismatches: [String] = []
+        let byName = Dictionary(uniqueKeysWithValues: registered.map { ($0.name, $0.description ?? "") })
+        for entry in entries {
+            guard let name = entry["name"] as? String, let want = byName[name] else { continue }
+            let got = entry["description"] as? String
+            if got != want {
+                descriptionMismatches.append(
+                    "\(name): manifest has \(got.map { "\"\($0.prefix(60))…\"" } ?? "no description"), "
+                    + "registered is \"\(want.prefix(60))…\"")
+            }
+        }
+        XCTAssertTrue(descriptionMismatches.isEmpty,
+            "mcpb/manifest.json descriptions differ from the registered tools "
+            + "(re-run with REGENERATE_MCPB_MANIFEST=1):\n"
+            + descriptionMismatches.joined(separator: "\n"))
+    }
+}

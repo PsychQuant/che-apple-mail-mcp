@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `mcpb/manifest.json`'s `tools` array had rotted to 47 entries against 53
+  registered tools, so the packaged `.mcpb` — the Claude Desktop install path —
+  advertised an incomplete tool surface. Missing: the three TCC probes
+  (`check_fda` / `check_accessibility` / `check_automation`), `update_draft`,
+  and both names of the batch export (`batch_export_emails_markdown` and its
+  `export_emails_markdown` alias). Same shape as the `version` rot #311 fixed,
+  one field over: no owner, so it drifted silently
+  ([#348](https://github.com/PsychQuant/che-apple-mail-mcp/issues/348)).
+- The array now has an owner in both places the `version` field got one:
+  `ManifestToolsSetEqualityTests` asserts **set equality in both directions**
+  against `defineTools()` (a removed tool fails as loudly as an added one), and
+  `scripts/release.sh` runs that test as a fail-closed gate. The release gate is
+  not redundant with the test — this repo has no CI, so nothing otherwise forces
+  the test to run before a release, which is the gap #311 was about.
+
 ## [2.27.0] - 2026-08-10
 
 ### Added
