@@ -46,6 +46,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   separators included, so an undecodable header is passed through rather than
   corrupted. Attachment filenames (#99 / #123) share this decoder and get the
   same fix.
+- `batch_export_emails_markdown` wrote a **wrong `direction` with no
+  disclosure** into frozen frontmatter for mail sent from an Exchange/EWS
+  account ([#351](https://github.com/PsychQuant/che-apple-mail-mcp/issues/351)),
+  and the sender-identity comparison it depends on could be fooled by ordinary
+  RFC 5322 header shapes
+  ([#343](https://github.com/PsychQuant/che-apple-mail-mcp/issues/343)). One
+  defect from two sides: the inputs to #316's comparison were not what the
+  comparison assumed, and the fail-open test could not detect that.
+
+  Measured on the reporting machine: of 8 configured accounts, 6 IMAP resolve to
+  an address and **2 EWS accounts resolve to nothing** (their `AccountURL` is an
+  opaque store id, #9). Mail sent from an EWS account therefore matched no own
+  address and was written `direction: received` — and because the other six kept
+  the set non-empty, the fail-open gate (which only asked "is the WHOLE set
+  empty") never fired, so no `direction_inferred: true` was emitted. An absent
+  `direction_inferred` is the signal consumers use to mean "identity resolved,
+  trust this value", so the value was not merely wrong but confidently wrong.
+
+  - Identity is now judged **per email**, and "cannot tell" is a distinct
+    outcome from "not yours": a sender match still wins first; otherwise an
+    email whose own account contributes no address, or whose `From` does not
+    parse, takes the mailbox-label fallback **and discloses it**.
+  - `EmailAddress.canonical` replaces the old last-`<…>`-wins scan and
+    normalises **both** sides of the comparison — the property #316's design
+    claimed but did not enforce. It ignores RFC comments (a trailing
+    `(legacy <you@example.com>)` could previously forge `direction: sent` for an
+    attacker's message), keeps quoted local parts intact, and takes the FIRST
+    mailbox of a multi-author `From` (last-wins archived the user's own
+    co-authored mail as `received`).
+  - Own-address set members that do not reduce to an address are dropped rather
+    than kept as permanently-unmatchable entries that also suppress disclosure.
+  - The frontmatter `sender:` line and the filename template use the same parse,
+    so all three agree.
 
 ## [2.27.0] - 2026-08-10
 
