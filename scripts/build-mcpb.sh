@@ -24,12 +24,15 @@ fi
 echo "Building release..."
 swift build -c release
 
-echo "Copying binary to mcpb/server/..."
-cp .build/release/CheAppleMailMCP mcpb/server/
-
-echo "Packaging mcpb..."
-cd mcpb
-rm -f che-apple-mail-mcp.mcpb
-zip -r che-apple-mail-mcp.mcpb manifest.json icon.png PRIVACY.md server/
-
-echo "Done! Package: mcpb/che-apple-mail-mcp.mcpb"
+# #323: this script is a DEV convenience, not a distribution path. It builds
+# for the host arch only and leaves the binary ad-hoc signed — measured:
+# arm64-only, flags=0x20002(adhoc,linker-signed), TeamIdentifier=not set. On
+# macOS 26 such a binary cannot even trigger a TCC dialog (#211), so a bundle
+# built here can never be granted Full Disk Access by the user who installs it.
+#
+# Packaging itself now lives in ONE place (scripts/package-mcpb.sh), which
+# refuses an undistributable binary unless told explicitly that this is a dev
+# build. Ship with: make release-signed VERSION=vX.Y.Z
+MCPB_ALLOW_UNSIGNED=1 ./scripts/package-mcpb.sh \
+    .build/release/CheAppleMailMCP \
+    mcpb/che-apple-mail-mcp-dev.mcpb

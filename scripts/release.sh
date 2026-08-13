@@ -454,6 +454,28 @@ fi
 shasum -a 256 "$BINARY_PATH" | awk '{print $1}' > "$BINARY_PATH.sha256"
 info "SHA-256: $(cat "$BINARY_PATH.sha256")"
 
+# ---- Package the .mcpb around the SIGNED binary (#323) -----------------------
+#
+# `build-mcpb.sh` used to be an orphan pipeline: `swift build -c release` + `cp`
+# + `zip`, producing an arm64-only, ad-hoc-signed bundle. On macOS 26 such a
+# binary cannot even trigger a TCC dialog (#211), so every Desktop user who
+# installed the .mcpb got a server that could never be granted Full Disk
+# Access — while the GitHub-release asset beside it was universal and notarized.
+# The two pipelines drifted a little further apart with each release.
+#
+# Packaging now happens HERE, after sign+notarize, around the very artifact that
+# was just signed. The packager fails closed on a non-universal or unsigned
+# binary, so this cannot silently regress to shipping an ad-hoc bundle.
+MCPB_PATH=""
+if [[ -n "${DEVELOPER_ID:-}" && "${SKIP_CODESIGN:-}" != "1" ]]; then
+    info "Packaging .mcpb around the signed universal binary..."
+    ./scripts/package-mcpb.sh "$BINARY_PATH" "mcpb/che-apple-mail-mcp-$VERSION_NO_V.mcpb"
+    MCPB_PATH="mcpb/che-apple-mail-mcp-$VERSION_NO_V.mcpb"
+else
+    info "Skipping .mcpb packaging (no DEVELOPER_ID / SKIP_CODESIGN=1) — an"
+    info "unsigned bundle cannot acquire TCC permissions, so none is shipped."
+fi
+
 # ---- Tag + release + upload --------------------------------------------------
 
 info "Creating git tag $VERSION..."
@@ -470,6 +492,13 @@ gh release create "$VERSION" \
 
 info "Uploading $BINARY_NAME (+ .sha256)..."
 gh release upload "$VERSION" "$BINARY_PATH" "$BINARY_PATH.sha256" --repo "$REPO"
+
+# #323: ship the bundle too, so Desktop users install a current, signed one
+# instead of whatever stale artifact happens to sit in the repo.
+if [[ -n "$MCPB_PATH" ]]; then
+    info "Uploading $(basename "$MCPB_PATH") (+ .sha256)..."
+    gh release upload "$VERSION" "$MCPB_PATH" "$MCPB_PATH.sha256" --repo "$REPO"
+fi
 
 # ---- Done --------------------------------------------------------------------
 

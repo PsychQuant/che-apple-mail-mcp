@@ -65,6 +65,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   must yield an empty result on the stated premise that the opposite is
   "impossible in practice — would mean Mail.app missed indexing". That premise
   was measured false; correcting it is the fix.
+- The `.mcpb` bundle is now built from the **signed, notarized, universal**
+  binary and uploaded as a release asset
+  ([#323](https://github.com/PsychQuant/che-apple-mail-mcp/issues/323)).
+  `build-mcpb.sh` and `release.sh` were two unrelated pipelines: the release one
+  builds universal, Developer ID signs and notarizes — because on macOS 26 an
+  ad-hoc binary cannot even trigger a TCC dialog (#211) — while the bundle one
+  did `swift build -c release` + `cp` + `zip`. Measured: **arm64-only**,
+  `flags=0x20002(adhoc,linker-signed)`, `TeamIdentifier=not set`. Every Desktop
+  user installing the `.mcpb` therefore got a server that **structurally could
+  not be granted Full Disk Access**, while the GitHub-release asset beside it
+  was universal and notarized — and the gap widened with each release.
+
+  Packaging now lives in one place, `scripts/package-mcpb.sh`, and it **fails
+  closed**: a non-universal or unsigned binary is refused outright (verified:
+  exit 1, no artifact produced) unless the caller sets `MCPB_ALLOW_UNSIGNED=1`,
+  which `build-mcpb.sh` does while announcing the result is a dev bundle and not
+  distributable. `release.sh` calls it *after* sign+notarize, around the very
+  artifact it just signed, and uploads the bundle with its `.sha256`.
 
 ## [2.28.0] - 2026-08-13
 
