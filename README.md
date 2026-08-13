@@ -31,24 +31,69 @@
 
 ## Quick Start
 
+Install the **plugin**. It brings the signed binary, the `/archive-mail` command
+family, the safety rules, and the staleness hook as one unit:
+
 ```bash
-# Clone and build
+claude plugin marketplace add PsychQuant/psychquant-claude-plugins
+claude plugin install che-apple-mail-mcp@psychquant-claude-plugins
+```
+
+Then grant permissions — the setup window shows live status and links straight
+to the right System Settings pane:
+
+```bash
+~/bin/CheAppleMailMCP --setup
+```
+
+> **💡 Full Disk Access** is what makes the fast SQLite read path and
+> `batch_export_emails_markdown` work. Without it the tools still run but read
+> little or nothing, which is easy to mistake for a bug rather than a
+> permission. macOS does not let an app request FDA programmatically — it has to
+> be ticked by hand — which is exactly what the setup window is there to make
+> quick.
+
+### Plugin vs MCP-only
+
+Registering the MCP server by itself is a supported advanced path, but it is a
+**strictly smaller** install. Choose it knowingly — nothing at runtime will tell
+you these are missing (#353):
+
+| Shipped by the plugin | Present with MCP-only |
+|---|---|
+| All 53 MCP tools | ✅ yes |
+| `/archive-mail` + `-migrate` / `-rebuild-threads` / `-repair-synthetic-ids` / `-view` | ❌ the archiving SOP does not exist |
+| `rules/compose-wrapper-free.md` — the cite-block discipline for formal mail | ❌ **most consequential**: producing a `<blockquote type="cite">` body on a formal email is a CRITICAL defect, and this is the rule that prevents it |
+| `rules/confirmation-triggers.md`, `rules/false-positive-detection.md` | ❌ no confirmation discipline on destructive operations |
+| `hooks/session-start.sh` — staleness kill | ❌ a session can keep running a stale binary after an upgrade |
+| Developer ID **signed + notarized** binary | ❌ a self-built binary is ad-hoc signed; on macOS 26 TCC cannot reliably hold FDA/Automation for it, so permissions appear to be granted and then stop working ([#211](https://github.com/PsychQuant/che-apple-mail-mcp/issues/211)) |
+| Version sidecar → `--self-update` + the #303 staleness self-check | ❌ no sidecar next to a hand-built binary, so that check is permanently silent |
+
+<details>
+<summary><strong>Advanced: register the MCP server only</strong> (development, or you want no plugin)</summary>
+
+```bash
 git clone https://github.com/kiki830621/che-apple-mail-mcp.git
 cd che-apple-mail-mcp
 swift build -c release
 
-# Copy to ~/bin and add to Claude Code
-# --scope user    : available across all projects (stored in ~/.claude.json)
+# --scope user     : available across all projects (stored in ~/.claude.json)
 # --transport stdio: local binary execution via stdin/stdout
-# --              : separator between claude options and the command
+# --               : separator between claude options and the command
 mkdir -p ~/bin
 cp .build/release/CheAppleMailMCP ~/bin/
 claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheAppleMailMCP
 ```
 
-> **💡 Tip:** Always install the binary to a local directory like `~/bin/`. Avoid placing it in cloud-synced folders (Dropbox, iCloud, OneDrive) as file sync operations can cause MCP connection timeouts.
+Install the binary to a local directory like `~/bin/`. Avoid cloud-synced
+folders (Dropbox, iCloud, OneDrive) — sync activity causes MCP connection
+timeouts.
 
-Then grant Automation permission in **System Settings > Privacy & Security > Automation**.
+For a self-built binary to hold TCC permissions across rebuilds, sign it with a
+Developer ID; see [Signing & Notarization](#signing--notarization). Otherwise
+expect to re-grant permissions after every build.
+
+</details>
 
 ---
 
@@ -292,10 +337,17 @@ Both tools return an **envelope object** `{ results, returned, limit, truncated 
 
 ## Installation
 
+> **Start with [Quick Start](#quick-start)** — installing the plugin is the
+> supported path and gives you the commands, safety rules, staleness hook and a
+> signed binary. Everything below is the **advanced / development** route: it
+> registers the MCP server alone, which is a strictly smaller install (see
+> [Plugin vs MCP-only](#plugin-vs-mcp-only) for what is missing, since nothing
+> at runtime will tell you).
+
 ### Requirements
 
 - macOS 13.0+
-- Xcode Command Line Tools
+- Xcode Command Line Tools (for the build-it-yourself route below)
 - Apple Mail with at least one account configured
 
 ### Step 1: Build
@@ -332,6 +384,16 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 ```
 
 ### Step 3: Grant Permissions
+
+The fastest route is the setup window, which shows live Full Disk Access /
+Automation / Accessibility status, re-checks as you grant, and opens the right
+System Settings pane for you:
+
+```bash
+~/bin/CheAppleMailMCP --setup
+```
+
+To do it by hand instead:
 
 **Automation** (control Mail.app):
 

@@ -31,24 +31,63 @@
 
 ## 快速開始
 
+安裝 **plugin**。它把簽章過的 binary、`/archive-mail` 系列指令、安全規則、
+staleness hook 當成一整包帶進來：
+
 ```bash
-# 複製並編譯
+claude plugin marketplace add PsychQuant/psychquant-claude-plugins
+claude plugin install che-apple-mail-mcp@psychquant-claude-plugins
+```
+
+接著授予權限——設定視窗會顯示即時狀態，並直接帶你到對的系統設定頁面：
+
+```bash
+~/bin/CheAppleMailMCP --setup
+```
+
+> **💡 完全取用磁碟（Full Disk Access）** 是 SQLite 快速路徑與
+> `batch_export_emails_markdown` 的前提。沒授權時工具**看起來能跑但讀不到東西**，
+> 很容易被誤判成 bug 而不是權限問題。macOS 不允許程式以 API 觸發 FDA 授權對話框
+> ——必須手動勾選，這正是設定視窗存在的理由。
+
+### plugin 與「只裝 MCP」的差別
+
+單獨註冊 MCP server 是受支援的進階路徑，但它是**嚴格更小**的安裝。要選可以，
+但請**知情地選**——執行期不會有任何訊號告訴你少了這些（#353）：
+
+| plugin 提供 | 只裝 MCP |
+|---|---|
+| 全部 53 個 MCP 工具 | ✅ 有 |
+| `/archive-mail` 與 `-migrate` / `-rebuild-threads` / `-repair-synthetic-ids` / `-view` | ❌ 整套歸檔 SOP 不存在 |
+| `rules/compose-wrapper-free.md`——正式信件的 cite-block 紀律 | ❌ **影響最大**：對正式信件產生 `<blockquote type="cite">` 本文是 CRITICAL 缺陷，而這條規則正是防它的 |
+| `rules/confirmation-triggers.md`、`rules/false-positive-detection.md` | ❌ 破壞性操作沒有確認紀律 |
+| `hooks/session-start.sh`——staleness kill | ❌ 升級後 session 可能仍跑舊 binary |
+| Developer ID **簽章 + notarized** binary | ❌ 自行編譯是 ad-hoc 簽章；macOS 26 的 TCC 無法穩定保住 FDA/Automation，症狀是「權限給了又掉」（[#211](https://github.com/PsychQuant/che-apple-mail-mcp/issues/211)）|
+| Version sidecar → `--self-update` 與 #303 staleness 自檢 | ❌ 手建 binary 旁沒有 sidecar，該自檢對你**永遠靜默無效** |
+
+<details>
+<summary><strong>進階：只註冊 MCP server</strong>（開發用，或你不想裝 plugin）</summary>
+
+```bash
 git clone https://github.com/kiki830621/che-apple-mail-mcp.git
 cd che-apple-mail-mcp
 swift build -c release
 
-# 複製到 ~/bin 並加入 Claude Code
-# --scope user    : 跨所有專案可用（存在 ~/.claude.json）
+# --scope user     : 跨所有專案可用（存在 ~/.claude.json）
 # --transport stdio: 本地 binary 執行，透過 stdin/stdout
-# --              : 分隔 claude 選項和實際執行的命令
+# --               : 分隔 claude 選項和實際執行的命令
 mkdir -p ~/bin
 cp .build/release/CheAppleMailMCP ~/bin/
 claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheAppleMailMCP
 ```
 
-> **💡 提示：** 請將 binary 安裝到本機目錄如 `~/bin/`。避免放在雲端同步資料夾（Dropbox、iCloud、OneDrive），否則檔案同步可能造成 MCP 連線逾時。
+請將 binary 安裝到本機目錄如 `~/bin/`，避免雲端同步資料夾（Dropbox、iCloud、
+OneDrive）——同步活動會造成 MCP 連線逾時。
 
-然後在 **系統設定 > 隱私權與安全性 > 自動化** 中授予權限。
+自建 binary 若要跨重新編譯保住 TCC 權限，需自行用 Developer ID 簽章；否則每次
+重編都得重新授權。
+
+</details>
 
 ---
 
@@ -244,6 +283,10 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 
 ## 安裝方式
 
+> **請先看[快速開始](#快速開始)** —— 安裝 plugin 才是受支援的路徑，會一併帶進
+> 指令、安全規則、staleness hook 與簽章過的 binary。以下是**進階／開發**路線：
+> 只註冊 MCP server，是嚴格更小的安裝（少了什麼見上方對照表，執行期不會有訊號）。
+
 ### 系統需求
 
 - macOS 13.0+
@@ -287,6 +330,15 @@ claude mcp add --scope user --transport stdio che-apple-mail-mcp -- ~/bin/CheApp
 ```
 
 ### 步驟 3：授予權限
+
+最快的方式是設定視窗：顯示 Full Disk Access / Automation / Accessibility 的即時
+狀態，授權當下就會翻成 Ready，並直接帶你到對的系統設定頁面。
+
+```bash
+~/bin/CheAppleMailMCP --setup
+```
+
+若要手動處理：
 
 ```bash
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"
