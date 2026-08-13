@@ -79,6 +79,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     than kept as permanently-unmatchable entries that also suppress disclosure.
   - The frontmatter `sender:` line and the filename template use the same parse,
     so all three agree.
+- `get_special_mailboxes` could return an ordinary folder as a special mailbox's
+  `<type>_path` ([#345](https://github.com/PsychQuant/che-apple-mail-mcp/issues/345)).
+  #315's join accepted a path when exactly one indexed mailbox matched the
+  AppleScript leaf, decided purely by string shape — so with the real Drafts
+  mailbox not yet in the Envelope Index (fresh account, lagging sync) and an
+  ordinary `Projects/Drafts` folder present, that folder won uncontested and was
+  returned as `drafts_path`. Wire-indistinguishable from a correct answer, with
+  the documented omission fail-safe never firing because nothing had failed.
+
+  Neither remedy the issue suggested was usable: omitting nested candidates
+  would break Gmail (whose real drafts mailbox IS `[Gmail]/草稿`), and the index
+  records no special-mailbox role to cross-check against — the `mailboxes` table
+  holds only `url / total_count / unread_count`.
+
+  All five leaves are now resolved together, so a nested candidate can be
+  corroborated before it is believed: a genuine provider container holds several
+  special mailboxes (`[Gmail]` is the parent of drafts, sent, junk and trash)
+  while an ordinary folder sharing one leaf name is the parent of exactly one. A
+  nested path is accepted only when another special mailbox resolves under the
+  same parent. That evidence also breaks the previously-undecidable
+  `["垃圾桶", "[Gmail]/垃圾桶"]` tie, which used to be omitted.
+
+  Position is deliberately NOT used as evidence: "prefer the top-level
+  candidate" would pick a user folder named `垃圾桶` over the real
+  `[Gmail]/垃圾桶`, reintroducing the same class of confident-wrong answer.
 
 ## [2.27.0] - 2026-08-10
 
