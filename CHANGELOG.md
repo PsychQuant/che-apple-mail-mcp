@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ## [2.28.0] - 2026-08-14
+### Fixed
+
+- Attachments added via `create_draft` / `compose_email` landed at the **start**
+  of the body instead of the end
+  ([#341](https://github.com/PsychQuant/che-apple-mail-mcp/issues/341),
+  [#321](https://github.com/PsychQuant/che-apple-mail-mcp/issues/321) — the same
+  defect reported twice from live use). Mail's File ▸ Attach inserts at the
+  current insertion point, and after the mailto hand-off fills the body the
+  caret sits at its start, so the attachment icon appeared to the LEFT of the
+  first line, ahead of the salutation. For a formal letter that is the first
+  thing the recipient sees. The script now moves the caret to the end of the
+  document (⌘↓, locale-independent like the other shortcuts on this path) once,
+  before the first attach cycle.
+
+  **Live-GUI verification is still outstanding** — the tests prove the script
+  emits the keystroke in the right place, not that Mail's compose window puts
+  the caret where intended. Tracked on both issues with `blocked-on-setup`
+  rather than asserted here.
+
+## [2.28.0] - 2026-08-13
 
 ### Added
 
