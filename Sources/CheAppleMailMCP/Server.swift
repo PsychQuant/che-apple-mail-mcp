@@ -3055,23 +3055,53 @@ func crossValidateAttachments(
     savability: [String: Bool] = [:],
     unsavableReasons: [String: String] = [:]
 ) -> [[String: Any]] {
-    return sqliteAttachments.compactMap { entry in
-        guard let name = entry["name"] as? String, realNames.contains(name) else { return nil }
-        var stamped = entry
-        // #105: stamp `savable` so callers can predict save_attachment success.
-        // Absent from `savability` (e.g. the .emlx-parse-failure fallback path
-        // passes `[:]`) → the field is omitted, meaning "unknown" — callers
-        // must NOT read an absent `savable` as `false`.
+    /// Stamp the savability contract onto one entry (#105 / #238). Absent from
+    /// `savability` → the field is OMITTED, meaning "unknown"; callers must not
+    /// read an absent `savable` as `false`.
+    func stamped(_ entry: [String: Any], _ name: String) -> [String: Any] {
+        var out = entry
         if let savable = savability[name] {
-            stamped["savable"] = savable
+            out["savable"] = savable
             // #238: when not savable, say WHY — "not_downloaded" (open the
             // message in Mail to fetch it) vs "not_extractable".
             if !savable, let reason = unsavableReasons[name] {
-                stamped["savable_reason"] = reason
+                out["savable_reason"] = reason
             }
         }
-        return stamped
+        return out
     }
+
+    // SQLite rows that the .emlx confirms. A row the .emlx does not contain is
+    // stale cache, not an attachment — Mail keeps rows after stripping the
+    // binary on Sent / IMAP lazy-load (#24), and reporting those made
+    // save_attachment fail on names this tool had just advertised.
+    var results: [[String: Any]] = []
+    var seen = Set<String>()
+    for entry in sqliteAttachments {
+        guard let name = entry["name"] as? String, realNames.contains(name) else { continue }
+        guard seen.insert(name).inserted else { continue }
+        results.append(stamped(entry, name))
+    }
+
+    // #365 — and everything the .emlx has that SQLite never indexed.
+    //
+    // The set used to be seeded ONLY from SQLite, with the .emlx as a filter, so
+    // the result was `SQLite ∩ emlx`. Apple Mail writes no `attachments` rows
+    // for messages it composed and sent itself, so for outgoing mail the left
+    // side is empty and the intersection is empty regardless of what is on
+    // disk — measured: 3 of 4 messages in one archive run, hiding 5 attachments
+    // (~427 KB), silently. `save_attachment` succeeded on the very same tuple,
+    // because retrieval parses the `.emlx` and never consults SQLite:
+    // enumeration was SQLite-gated, retrieval was not.
+    //
+    // These entries deliberately carry NO `attachment_id`: there is no SQLite
+    // row to take one from, and inventing one would send save_attachment's
+    // name-free part-dir probe (#183) after a directory that does not exist.
+    // Sorted because `Set` iteration order is not stable across runs.
+    for name in realNames.subtracting(seen).sorted() {
+        results.append(stamped(["name": name], name))
+    }
+    return results
 }
 
 /// #233 — single-line stderr deprecation warning emitted when the batch-export
