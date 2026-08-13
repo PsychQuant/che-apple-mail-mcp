@@ -24,6 +24,61 @@ RUNTIME_FILE="$INSTALL_DIR/.${BINARY_NAME}.runtime.json"
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLUGIN_JSON="$PLUGIN_ROOT/.claude-plugin/plugin.json"
 
+# ---- First-run Full Disk Access assist (mail#355) -----------------------------
+#
+# The setup window has existed since mail#213/#214 — live FDA status, a button
+# that opens the right System Settings pane, a button that copies the binary
+# path — and NOTHING on the install path ever opened it. The wrapper only
+# compares versions, this hook only killed stale processes, and the README
+# mentioned `--setup` in a reference section you had to already know to look
+# for. So the convenient way to grant FDA was reachable only by people who
+# already knew it existed.
+#
+# This must run BEFORE the staleness block below: that block exits early when
+# $RUNTIME_FILE is absent, which is precisely the state of a brand-new install —
+# the first run, the only run this assist cares about.
+#
+# Deliberate constraints:
+#   - offered ONCE per machine (marker), never a recurring nag
+#   - only when FDA is actually missing
+#   - the window is launched DETACHED; it runs a GUI runloop and would otherwise
+#     block session start forever
+#   - the marker is written BEFORE launching, so a failure cannot loop
+#   - old binaries are skipped by version: they parse `--check-fda --quiet` as
+#     plain `--check-fda`, which PRINTS and opens System Settings — exactly the
+#     nagging this is written to avoid
+first_run_fda_assist() {
+    local binary="$INSTALL_DIR/$BINARY_NAME"
+    [ -x "$binary" ] || return 0
+
+    local marker_dir="${XDG_STATE_HOME:-$HOME/.local/state}/che-apple-mail-mcp"
+    local marker="$marker_dir/fda-setup-offered"
+    [ -f "$marker" ] && return 0
+
+    # `--check-fda --quiet` (status only, no output, no pane) landed in binary
+    # 2.28.0. Anything older: skip rather than risk the loud path.
+    local bin_ver
+    bin_ver=$("$binary" --version 2>/dev/null | tr -d '[:space:]')
+    [ -z "$bin_ver" ] && return 0
+    [ "$(printf '%s\n2.28.0\n' "$bin_ver" | sort -V | head -1)" = "2.28.0" ] || return 0
+
+    # Silent probe. 0 = granted → nothing to offer.
+    "$binary" --check-fda --quiet >/dev/null 2>&1 && return 0
+
+    mkdir -p "$marker_dir" 2>/dev/null || return 0
+    : > "$marker" 2>/dev/null || return 0
+
+    echo "che-apple-mail-mcp: Full Disk Access is not granted — opening the setup window." >&2
+    echo "  It shows live status and links straight to the right System Settings pane." >&2
+    echo "  (Shown once. Re-open any time with: $binary --setup)" >&2
+
+    # Detached: the window owns a GUI runloop and must not block session start.
+    ( "$binary" --setup >/dev/null 2>&1 & ) >/dev/null 2>&1
+
+    return 0
+}
+first_run_fda_assist
+
 # Both files required.
 [ -f "$RUNTIME_FILE" ] || exit 0
 [ -f "$PLUGIN_JSON" ] || exit 0

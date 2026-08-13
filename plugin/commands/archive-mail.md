@@ -76,7 +76,7 @@ TaskCreate(subject="update_indices",
            description="Step 5.7 + Step 6: 對每封新歸檔的信 append 到 ${THREADS_FILE} 的 thread_key entry (messages append, participants set, first/last_message, message_count)。把新 Message-ID + thread_key 加到 ${INDEX_FILE}。Append-only,不修改既有 entry。")
 
 TaskCreate(subject="report_and_audit",
-           description="Step 7 + 8: 輸出歸檔報告(新歸檔/跳過/thread 索引/附件分流)。執行 Coverage Audit (8a 附件完整性 + 8b thread 完整性 → search by bare_subject 比對 archived/total)。")
+           description="Step 7 + 8: 輸出歸檔報告(新歸檔/跳過/thread 索引/附件分流)。執行 Coverage Audit (8a 附件完整性 + 8b thread 完整性 → search by bare_subject 比對 archived/total + 8d 方向覆蓋 → 讀 frontmatter direction 分布,零寄件且 ≥10 封則警告,有回覆串證據則升級,mail#350)。")
 
 TaskCreate(subject="reconcile_index",
            description="Step 8.5(強制最終 gate,mail#261 + plugins#110): Phase 0 若本 run 有 batch manifest → 對每個 written item 三源合併(written_path/manifest message_id/4.5-preview date+subject/寫出 frontmatter thread_key)機械化補齊,零 heuristic;Phase 1 掃 ${output_dir} 頂層全部 *.md 的 frontmatter message_id → 每個都必須在 Phase-0 set 或 ${INDEX_FILE} keys 內,歷史孤兒就地補寫 canonical schema entry {file,date,subject,thread_key}(subject 從本文 Subject: 行 heuristic,僅 Phase 1)或列 unparseable;index 寫回走 temp+rename 原子寫入;last_updated bump 為 max(entry date,經 robust to_ymd 正規化——ISO 快篩+RFC822 parse,mail#275);repaired>0 → 跑 /archive-mail-rebuild-threads;輸出 Phase0/Phase1 reconcile 摘要。此 task 未 verified 前,整個 run 不得標示成功 — 靜默完成 = 違規。")
@@ -1274,6 +1274,39 @@ Thread 索引行（v2.6.0+）：永遠顯示，即使沒新 thread。
 3. **檢查步驟 1 回傳的 `truncated`**：若 `truncated: true`（配對數超過 `limit`），過濾後的頁面只是**被截斷的一頁**，**不得**當成完整分母 —— 據此比對會把「其實缺兄弟」誤判成 complete（false-negative，比誤報更糟，因為它**靜默隱藏真正的缺口**）。改提高 `limit` 重取直到 `truncated: false`；若仍無法取全，發出 `⚠️ Thread "{subject}": 稽核分母被截斷（配對數 > limit），無法證明完整`，並**略過**此 thread 的 archived/total 比對（不得回報 complete）。
 4. `truncated: false` 時比對已歸檔的 count：若 `archived < total` → 發出 warning：`⚠️ Thread "{subject}": {差額} potential missing siblings (archived {已歸檔}/{total})`
 
+**8d. 方向覆蓋檢查（direction balance，mail#350）**：
+
+前兩軸查的是「**已知的信有沒有完整落地**」（附件、thread 兄弟），查不出「**整批只有一半的對話**」。實證（2026-08-07，四個學會歸檔庫）：266 封**全部** `direction: received`、零寄件，8a/8b 每次報綠燈；對其中一個補跑 Step 3 recipe (2) 的 Sent-scoped recipient 搜尋，撈出 **10 封從未歸檔的寄件**，最早回溯 2024-07。「來回協商」的 thread 裡只剩對方講的話。
+
+**做法**（純讀磁碟，不呼叫工具）：對 `${output_dir}` 頂層全部 `*.md` 的 frontmatter 統計：
+
+- `sent` = `direction: sent` 的封數
+- `received` = `direction: received` 的封數
+- `inferred` = 帶 `direction_inferred: true` 的封數（工具無法判定寄件人身分時才有；mail#351）
+
+**判定（封閉列舉：只有以下三條會發話，不得依性質相似類推第四條）**：
+
+1. **`sent == 0` 且 `received + sent >= 10`** → 發出
+   `⚠️ 方向覆蓋: {received} 封全部 received、零寄件 — 這個 archive 可能結構性缺少你自己寄出的信`
+   並附上補救指令（見下）。門檻 10 是為了不對「剛開始建、只有幾封」的 archive 發話。
+2. **同上，且 corpus 內存在「來回證據」** —— 任一檔案的 frontmatter `in_reply_to` 非空，**或**任一檔名/`thread_key` 以 `Re:`／`RE:`／`Fwd:`／`轉寄` 開頭 —— → 把上一條升級為
+   `⚠️⚠️ 方向覆蓋: {received} 封全部 received，但有 {n} 封是回覆串的一部分 — 對方的話在、自己的話不在`
+   這一條才是**強**訊號：一封回覆的存在，代表當時有人回過信。
+3. **`inferred > 0`** → 發出
+   `ℹ️ 方向覆蓋: {inferred} 封的 direction 由信箱標籤推定（寄件人身分無法判定，見 mail#351），此數不可當作方向統計的可信基礎`
+
+**明確不發話的情況**（避免誤報）：`sent == 0` 但總數 < 10；或 `sent > 0`（哪怕比例懸殊）。**單向本身可以是正確的** —— 純電子報、公告訂閱、單向通知的歸檔庫本來就沒有寄件。第 1 條只說「可能」，第 2 條才升級；兩條都**不阻擋** run，只報告。
+
+**補救指令**（隨警告一併輸出，讓使用者可直接複製）：
+
+```
+補救: 對該對象重跑 Step 3 recipe (2)（Sent-scoped recipient 搜尋）
+      search_emails(field: "recipient", query: "<對方 email>", projection: "summary", dedup: "logical", limit: 200)
+      再對結果套 keep-only-Sent 判定（見 Step 3 的 matchesSpecial 規則）
+```
+
+> **為什麼這一軸必須存在**：8a/8b 的分母都來自「**已經在 archive 裡的東西**」——附件比對的是已歸檔信的附件，thread 比對的是已歸檔 subject 的兄弟。**沒有任何一軸的分母來自「應該存在但從未被搜到的東西」**。方向分布是唯一能從 archive 內部看出「整個搜尋策略漏了一邊」的訊號，因為它不問「這封信完整嗎」，而問「這批信的形狀對嗎」。
+
 **8c. 稽核報告**：
 
 ```
@@ -1281,6 +1314,7 @@ Archive Coverage Audit
 ═══════════════════════════════════════════
 附件覆蓋: explicit 15/15 + inline 2/3 (1 cross-ref'd) (94%)
 Thread 覆蓋: 3 threads, 2 complete, 1 with gaps
+方向覆蓋: 55 received / 0 sent  ⚠️ 全部單向
 
 搜尋結果: 37 by sender + 14 by recipient/sent + 12 by subject + 9 by thread expansion = 58 unique
 
@@ -1289,6 +1323,8 @@ Issues:
   ⚠️ 2026-03-12_Re--Draft/manuscript.docx: 0-byte attachment (silent download failure)
   ⚠️ 2026-05-07_Re--Solution: 1 inline image cross-referenced (binary unsupported)
   ⚠️ Thread "indicator selection": 2 potential missing siblings
+  ⚠️⚠️ 方向覆蓋: 55 封全部 received，但有 12 封是回覆串的一部分 — 對方的話在、自己的話不在
+      補救: 對該對象重跑 Step 3 recipe (2)（Sent-scoped recipient 搜尋）
 
 建議: 在 .claude/.mail/config.md 加入 subject_keywords 擴大搜尋範圍
 ═══════════════════════════════════════════
@@ -1300,6 +1336,7 @@ Archive Coverage Audit
 ═══════════════════════════════════════════
 附件覆蓋: explicit 15/15 + inline 3/3 (100%) ✓
 Thread 覆蓋: 3 threads, 3 complete ✓
+方向覆蓋: 41 received / 17 sent ✓
 ═══════════════════════════════════════════
 ```
 

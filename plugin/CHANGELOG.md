@@ -11,6 +11,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `binary_version` 2.27.0 → **2.28.0**，讓 v2.46.0 的 first-run FDA assist（mail#355）真正生效。該 hook 從落地起就是 **no-op**：它以版本閘擋住 2.28.0 以前的 binary，因為更舊的版本會把 `--check-fda --quiet` 當成普通 `--check-fda` 解析、印出訊息並打開系統設定 —— 正是它要避免的騷擾。binary v2.28.0 已發布（signed + notarized），閘門現在開了。
+
+  同版本一併到位的 binary 修復：QP 內文解碼（mail#339，19/28 封信曾寫成不可讀）、`list_attachments` 對自寄信件回 `[]` 的靜默漏抓（mail#365）、`.mcpb` 改由簽章 universal binary 打包（mail#323 —— 在此之前 Desktop 安裝拿到的是 ad-hoc binary，**結構上無法**被授予 Full Disk Access）。
+
+### Added
+
+- **Coverage Audit 新增 8d 方向覆蓋（direction balance）** —— 稽核查得出「已知的信有沒有完整落地」，卻查不出「整批只有一半的對話」（mail#350）。實證：四個學會的歸檔庫 **266 封全部 `direction: received`、零寄件**，8a/8b 每次報綠燈；對其中一個補跑 Step 3 recipe (2) 的 Sent-scoped recipient 搜尋，撈出 **10 封從未歸檔的寄件**，最早回溯 2024-07 —— 「來回協商」的 thread 裡只剩對方講的話。
+
+  根因是分母的來源：8a 比對已歸檔信的附件、8b 比對已歸檔 subject 的兄弟，**兩軸的分母都來自 archive 內部已有的東西**，沒有任何一軸能看見「應該存在但從未被搜到」的一整邊。方向分布是唯一從 archive 內部就看得出「搜尋策略漏了一邊」的訊號 —— 它不問「這封信完整嗎」，問「這批信的形狀對嗎」。
+
+  8d 純讀磁碟 frontmatter，封閉列舉三條判定：零寄件且 ≥10 封 → 警告；同上且 corpus 內有回覆串證據（`in_reply_to` 非空或 `Re:`/`Fwd:` 主旨）→ 升級為強訊號；有 `direction_inferred: true` 的封數 → 註明該數不可當方向統計的可信基礎（mail#351）。**單向本身可以是正確的**（純電子報／公告訂閱），所以門檻以下與 `sent > 0` 都明確不發話，且三條都只報告、不阻擋 run。警告一併輸出可直接複製的補救指令。
+- **First-run Full Disk Access assist**（session-start hook，mail#355）—— `--setup` 視窗自 mail#213/#214 就做好了（live FDA 狀態、開啟對的系統設定頁面、複製 binary 路徑），但**安裝路徑上沒有任何一個環節會打開它**：wrapper 只比對版本、本 hook 只殺 stale process、README 只在深處的參考章節提過 `--setup`。等於那顆「方便按」的按鈕只有已經知道它在哪的人按得到。
+
+  hook 現在在第一次啟動時，若 FDA 未授權就替使用者打開該視窗。刻意的四個限制：**每台機器只提一次**（marker，不做重複騷擾）；**只在真的缺授權時**；視窗以 **detached** 方式啟動（它跑 GUI runloop，否則會把 session start 卡死）；marker 在啟動**之前**寫入，所以失敗不會變成迴圈。
+
+  這段必須放在 staleness 區塊**之前** —— 那個區塊在 `$RUNTIME_FILE` 不存在時就 early exit，而那正是全新安裝的狀態，也就是本功能唯一在意的那一次。
+
+  舊 binary 以版本閘跳過（需 binary **2.28.0+**）：更舊的版本會把 `--check-fda --quiet` 當成普通 `--check-fda` 解析，那會**印出訊息並打開系統設定** —— 正是本功能要避免的騷擾。在 2.28.0 發布前，這段一律 no-op。
+
 ## [2.44.1] - 2026-08-05
 
 ### Fixed
