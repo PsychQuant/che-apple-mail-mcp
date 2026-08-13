@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Quoted-printable `text/plain` bodies came back raw from `get_email(format:
+  "text")` and `batch_export_emails_markdown` — 19 of 28 messages in one archive
+  run were written unreadable with every gate green
+  ([#339](https://github.com/PsychQuant/che-apple-mail-mcp/issues/339)).
+  Reproducing it against the reported message found **two** defects, and neither
+  is "QP is not decoded":
+
+  - **`=` + CRLF soft line breaks were never collapsed.** Swift folds `"\r\n"`
+    into ONE extended grapheme cluster that equals neither `"\r"` nor `"\n"`,
+    so the check matched nothing and the escape was emitted verbatim, splitting
+    words across lines. Bare LF happened to work, which is why it survived —
+    and CRLF is the majority of real wire traffic. Same trap `decodeRFC2047`
+    documents for its LWS scan (#125): decompose to scalars, don't compare
+    whole clusters.
+  - **The reported part lies about its encoding.** It declares
+    `Content-Transfer-Encoding: 7bit` with `charset=US-ASCII` on a body that is
+    plainly QP-encoded UTF-8, while its `text/html` sibling declares
+    `quoted-printable` properly — which is exactly why one decoded and the other
+    did not. Obeying the header was correct and useless.
+
+  Mislabelled parts are now salvaged, but only when the guess is **self-
+  validating**: the part must be undecoded (7bit/8bit/binary), carry QP
+  evidence, decode to valid UTF-8, and recover at least one **non-ASCII** scalar.
+  That last condition is what keeps honest text safe — a 7bit document *about*
+  quoted-printable containing `=41` decodes to pure ASCII and is refused, and a
+  stray `=E7` decodes to a lone continuation byte and is refused.
+
 ## [2.28.0] - 2026-08-13
 
 ### Added

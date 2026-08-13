@@ -344,14 +344,20 @@ public enum RFC822Parser {
                     i = text.index(after: next2)
                     continue
                 }
-                // Soft line break (=\r\n or =\n) — skip
-                if text[next1] == "\r" || text[next1] == "\n" {
-                    i = next1
-                    if text[next1] == "\r" && next2 < text.endIndex && text[next2] == "\n" {
-                        i = text.index(after: next2)
-                    } else {
-                        i = text.index(after: next1)
-                    }
+                // Soft line break (RFC 2045 §6.7): `=` at end of line, the
+                // line break itself removed.
+                //
+                // #339: this compared a Character against "\r" and "\n" — and
+                // Swift folds "\r\n" into ONE extended grapheme cluster that
+                // equals NEITHER. So a CRLF soft break (the majority of real
+                // wire traffic) fell through to the "not a valid escape" path
+                // and was emitted verbatim, splitting words across lines. Bare
+                // LF happened to work, which is why the defect survived. Same
+                // trap `decodeRFC2047` documents for its LWS scan (#125);
+                // decompose to scalars rather than compare whole clusters.
+                let scalars = String(text[next1]).unicodeScalars
+                if scalars.allSatisfy({ $0 == "\r" || $0 == "\n" }) {
+                    i = text.index(after: next1)
                     continue
                 }
                 data.append(contentsOf: "=".utf8)
