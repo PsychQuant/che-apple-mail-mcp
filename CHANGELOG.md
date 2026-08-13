@@ -7,9 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.28.0] - 2026-08-14
 ### Fixed
-
 - Attachments added via `create_draft` / `compose_email` landed at the **start**
   of the body instead of the end
   ([#341](https://github.com/PsychQuant/che-apple-mail-mcp/issues/341),
@@ -21,7 +19,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   thing the recipient sees. The script now moves the caret to the end of the
   document (⌘↓, locale-independent like the other shortcuts on this path) once,
   before the first attach cycle.
-
   **Live-verified** against real Mail: the pre-fix script produces
   `<body …><object …x-apple-msg-attachment…` — the attachment first, ahead of
   every line of text — while the fixed script produces
@@ -30,7 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   serialises attachment parts at the end regardless of visual placement. The
   `text/html` part is where placement lives.)
 
-## [2.28.0] - 2026-08-13
+- **`MailboxURL.mailboxName` no longer splits a mailbox name on its own slash** ([#358](https://github.com/PsychQuant/che-apple-mail-mcp/issues/358)). It took the substring after the last `/` of `mailboxPath`, which is the lossy whole-path decode — so a mailbox literally *named* `R&D/Sent` (raw `R%26D%2FSent`) reported its leaf as `Sent`. Exactly the defect [#344](https://github.com/PsychQuant/che-apple-mail-mcp/issues/344) removed from the mailbox filter, still standing in the accessor next door. It now derives from `pathComponents`. It had **zero consumers**, which is why it was fixed rather than deleted: it reads naturally enough that removing it would invite the next caller to write `mailboxPath.split("/").last` themselves and reintroduce the bug in their own code.
+
+## [2.28.0] - 2026-08-14
 
 ### Added
 
@@ -275,8 +274,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interrupted — cancelling mid-mutation would be worse than the bug. Measured on
   the real binary with the stdout read end closed: **before, still running after
   30s; after, a diagnostic and a clean exit.**
-### Fixed
-- **`MailboxURL.mailboxName` no longer splits a mailbox name on its own slash** ([#358](https://github.com/PsychQuant/che-apple-mail-mcp/issues/358)). It took the substring after the last `/` of `mailboxPath`, which is the lossy whole-path decode — so a mailbox literally *named* `R&D/Sent` (raw `R%26D%2FSent`) reported its leaf as `Sent`. Exactly the defect [#344](https://github.com/PsychQuant/che-apple-mail-mcp/issues/344) removed from the mailbox filter, still standing in the accessor next door. It now derives from `pathComponents`. It had **zero consumers**, which is why it was fixed rather than deleted: it reads naturally enough that removing it would invite the next caller to write `mailboxPath.split("/").last` themselves and reintroduce the bug in their own code.
 
 ## [2.27.0] - 2026-08-10
 
