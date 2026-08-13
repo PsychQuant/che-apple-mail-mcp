@@ -7,84 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- Quoted-printable `text/plain` bodies came back raw from `get_email(format:
-  "text")` and `batch_export_emails_markdown` — 19 of 28 messages in one archive
-  run were written unreadable with every gate green
-  ([#339](https://github.com/PsychQuant/che-apple-mail-mcp/issues/339)).
-  Reproducing it against the reported message found **two** defects, and neither
-  is "QP is not decoded":
-
-  - **`=` + CRLF soft line breaks were never collapsed.** Swift folds `"\r\n"`
-    into ONE extended grapheme cluster that equals neither `"\r"` nor `"\n"`,
-    so the check matched nothing and the escape was emitted verbatim, splitting
-    words across lines. Bare LF happened to work, which is why it survived —
-    and CRLF is the majority of real wire traffic. Same trap `decodeRFC2047`
-    documents for its LWS scan (#125): decompose to scalars, don't compare
-    whole clusters.
-  - **The reported part lies about its encoding.** It declares
-    `Content-Transfer-Encoding: 7bit` with `charset=US-ASCII` on a body that is
-    plainly QP-encoded UTF-8, while its `text/html` sibling declares
-    `quoted-printable` properly — which is exactly why one decoded and the other
-    did not. Obeying the header was correct and useless.
-
-  Mislabelled parts are now salvaged, but only when the guess is **self-
-  validating**: the part must be undecoded (7bit/8bit/binary), carry QP
-  evidence, decode to valid UTF-8, and recover at least one **non-ASCII** scalar.
-  That last condition is what keeps honest text safe — a 7bit document *about*
-  quoted-printable containing `=41` decodes to pure ASCII and is refused, and a
-  stray `=E7` decodes to a lone continuation byte and is refused.
-- `list_attachments` returned `[]` for messages that demonstrably carry
-  attachments on disk — silently, with no stderr warning and no error
-  ([#365](https://github.com/PsychQuant/che-apple-mail-mcp/issues/365)). In one
-  archive run **3 of 4** messages were affected, hiding **5 attachments**
-  totalling ~427 KB; they would have been lost with no signal at all had a
-  sentence in the body ("the updated version is attached") not contradicted the
-  empty result.
-
-  The candidate set was seeded **exclusively** from the Envelope Index, with the
-  `.emlx` used only as a filter, so the result was a pure intersection —
-  `SQLite_rows ∩ emlx_names`. Apple Mail writes no `attachments` rows for
-  messages it composed and sent itself, so for outgoing mail the left side is
-  empty and the intersection is empty regardless of what is on disk. Confirmed
-  against the live index: rowIds 290037 / 290102 / 290338 (all sent) have **0**
-  rows while their `.emlx` files carry 1 / 2 / 2 attachments. The observable
-  signature was the asymmetry — `save_attachment` succeeded on the exact tuple
-  `list_attachments` failed on, because retrieval parses the `.emlx` and never
-  consults SQLite. **Enumeration was SQLite-gated; retrieval was not.**
-
-  The `.emlx` is now a **source**, not just a filter: the result is the union,
-  with disk membership still authoritative so #24's stale-cache rows stay
-  dropped. Entries found only on disk deliberately carry **no**
-  `attachment_id` — there is no SQLite row to take one from, and inventing one
-  would send `save_attachment`'s name-free part-dir probe (#183) after a
-  directory that does not exist.
-
-  A pre-existing test had pinned the defect in place, asserting empty-SQLite
-  must yield an empty result on the stated premise that the opposite is
-  "impossible in practice — would mean Mail.app missed indexing". That premise
-  was measured false; correcting it is the fix.
-- The `.mcpb` bundle is now built from the **signed, notarized, universal**
-  binary and uploaded as a release asset
-  ([#323](https://github.com/PsychQuant/che-apple-mail-mcp/issues/323)).
-  `build-mcpb.sh` and `release.sh` were two unrelated pipelines: the release one
-  builds universal, Developer ID signs and notarizes — because on macOS 26 an
-  ad-hoc binary cannot even trigger a TCC dialog (#211) — while the bundle one
-  did `swift build -c release` + `cp` + `zip`. Measured: **arm64-only**,
-  `flags=0x20002(adhoc,linker-signed)`, `TeamIdentifier=not set`. Every Desktop
-  user installing the `.mcpb` therefore got a server that **structurally could
-  not be granted Full Disk Access**, while the GitHub-release asset beside it
-  was universal and notarized — and the gap widened with each release.
-
-  Packaging now lives in one place, `scripts/package-mcpb.sh`, and it **fails
-  closed**: a non-universal or unsigned binary is refused outright (verified:
-  exit 1, no artifact produced) unless the caller sets `MCPB_ALLOW_UNSIGNED=1`,
-  which `build-mcpb.sh` does while announcing the result is a dev bundle and not
-  distributable. `release.sh` calls it *after* sign+notarize, around the very
-  artifact it just signed, and uploads the bundle with its `.sha256`.
-
-## [2.28.0] - 2026-08-13
+## [2.28.0] - 2026-08-14
 
 ### Added
 
@@ -216,6 +139,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Position is deliberately NOT used as evidence: "prefer the top-level
   candidate" would pick a user folder named `垃圾桶` over the real
   `[Gmail]/垃圾桶`, reintroducing the same class of confident-wrong answer.
+
+- Quoted-printable `text/plain` bodies came back raw from `get_email(format:
+  "text")` and `batch_export_emails_markdown` — 19 of 28 messages in one archive
+  run were written unreadable with every gate green
+  ([#339](https://github.com/PsychQuant/che-apple-mail-mcp/issues/339)).
+  Reproducing it against the reported message found **two** defects, and neither
+  is "QP is not decoded":
+
+  - **`=` + CRLF soft line breaks were never collapsed.** Swift folds `"\r\n"`
+    into ONE extended grapheme cluster that equals neither `"\r"` nor `"\n"`,
+    so the check matched nothing and the escape was emitted verbatim, splitting
+    words across lines. Bare LF happened to work, which is why it survived —
+    and CRLF is the majority of real wire traffic. Same trap `decodeRFC2047`
+    documents for its LWS scan (#125): decompose to scalars, don't compare
+    whole clusters.
+  - **The reported part lies about its encoding.** It declares
+    `Content-Transfer-Encoding: 7bit` with `charset=US-ASCII` on a body that is
+    plainly QP-encoded UTF-8, while its `text/html` sibling declares
+    `quoted-printable` properly — which is exactly why one decoded and the other
+    did not. Obeying the header was correct and useless.
+
+  Mislabelled parts are now salvaged, but only when the guess is **self-
+  validating**: the part must be undecoded (7bit/8bit/binary), carry QP
+  evidence, decode to valid UTF-8, and recover at least one **non-ASCII** scalar.
+  That last condition is what keeps honest text safe — a 7bit document *about*
+  quoted-printable containing `=41` decodes to pure ASCII and is refused, and a
+  stray `=E7` decodes to a lone continuation byte and is refused.
+- `list_attachments` returned `[]` for messages that demonstrably carry
+  attachments on disk — silently, with no stderr warning and no error
+  ([#365](https://github.com/PsychQuant/che-apple-mail-mcp/issues/365)). In one
+  archive run **3 of 4** messages were affected, hiding **5 attachments**
+  totalling ~427 KB; they would have been lost with no signal at all had a
+  sentence in the body ("the updated version is attached") not contradicted the
+  empty result.
+
+  The candidate set was seeded **exclusively** from the Envelope Index, with the
+  `.emlx` used only as a filter, so the result was a pure intersection —
+  `SQLite_rows ∩ emlx_names`. Apple Mail writes no `attachments` rows for
+  messages it composed and sent itself, so for outgoing mail the left side is
+  empty and the intersection is empty regardless of what is on disk. Confirmed
+  against the live index: rowIds 290037 / 290102 / 290338 (all sent) have **0**
+  rows while their `.emlx` files carry 1 / 2 / 2 attachments. The observable
+  signature was the asymmetry — `save_attachment` succeeded on the exact tuple
+  `list_attachments` failed on, because retrieval parses the `.emlx` and never
+  consults SQLite. **Enumeration was SQLite-gated; retrieval was not.**
+
+  The `.emlx` is now a **source**, not just a filter: the result is the union,
+  with disk membership still authoritative so #24's stale-cache rows stay
+  dropped. Entries found only on disk deliberately carry **no**
+  `attachment_id` — there is no SQLite row to take one from, and inventing one
+  would send `save_attachment`'s name-free part-dir probe (#183) after a
+  directory that does not exist.
+
+  A pre-existing test had pinned the defect in place, asserting empty-SQLite
+  must yield an empty result on the stated premise that the opposite is
+  "impossible in practice — would mean Mail.app missed indexing". That premise
+  was measured false; correcting it is the fix.
+- The `.mcpb` bundle is now built from the **signed, notarized, universal**
+  binary and uploaded as a release asset
+  ([#323](https://github.com/PsychQuant/che-apple-mail-mcp/issues/323)).
+  `build-mcpb.sh` and `release.sh` were two unrelated pipelines: the release one
+  builds universal, Developer ID signs and notarizes — because on macOS 26 an
+  ad-hoc binary cannot even trigger a TCC dialog (#211) — while the bundle one
+  did `swift build -c release` + `cp` + `zip`. Measured: **arm64-only**,
+  `flags=0x20002(adhoc,linker-signed)`, `TeamIdentifier=not set`. Every Desktop
+  user installing the `.mcpb` therefore got a server that **structurally could
+  not be granted Full Disk Access**, while the GitHub-release asset beside it
+  was universal and notarized — and the gap widened with each release.
+
+  Packaging now lives in one place, `scripts/package-mcpb.sh`, and it **fails
+  closed**: a non-universal or unsigned binary is refused outright (verified:
+  exit 1, no artifact produced) unless the caller sets `MCPB_ALLOW_UNSIGNED=1`,
+  which `build-mcpb.sh` does while announcing the result is a dev bundle and not
+  distributable. `release.sh` calls it *after* sign+notarize, around the very
+  artifact it just signed, and uploads the bundle with its `.sha256`.
 
 ### Documentation
 
