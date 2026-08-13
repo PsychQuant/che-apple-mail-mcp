@@ -1,18 +1,18 @@
 {
-  "author" : {
-    "name" : "Che Cheng",
-    "url" : "https://github.com/kiki830621"
+  "author": {
+    "name": "Che Cheng",
+    "url": "https://github.com/kiki830621"
   },
-  "compatibility" : {
-    "platforms" : [
+  "compatibility": {
+    "platforms": [
       "darwin"
     ]
   },
-  "description" : "Apple Mail MCP server with 53 tools — SQLite-powered millisecond search across 250K+ emails",
-  "display_name" : "Apple Mail Manager",
-  "homepage" : "https://github.com/kiki830621/che-apple-mail-mcp",
-  "icon" : "icon.png",
-  "keywords" : [
+  "description": "Apple Mail MCP server with 53 tools — SQLite-powered millisecond search across 250K+ emails",
+  "display_name": "Apple Mail Manager",
+  "homepage": "https://github.com/kiki830621/che-apple-mail-mcp",
+  "icon": "icon.png",
+  "keywords": [
     "apple-mail",
     "email",
     "mail",
@@ -20,244 +20,240 @@
     "applescript",
     "productivity"
   ],
-  "license" : "MIT",
-  "long_description" : "The most comprehensive Apple Mail MCP server providing 53 tools. v2.0 adds a SQLite search engine that queries Mail.app's Envelope Index directly for millisecond-speed search across all accounts (subject, sender, recipient, date range). Also includes .emlx file parser for direct email content reading, and batch operations (get_emails_batch, list_attachments_batch). Falls back to AppleScript when SQLite is unavailable. Requires macOS 13.0+ and Full Disk Access for SQLite features.",
-  "manifest_version" : "0.3",
-  "name" : "che-apple-mail-mcp",
-  "privacy_policies" : [
+  "license": "MIT",
+  "long_description": "The most comprehensive Apple Mail MCP server providing 53 tools. v2.0 adds a SQLite search engine that queries Mail.app's Envelope Index directly for millisecond-speed search across all accounts (subject, sender, recipient, date range). Also includes .emlx file parser for direct email content reading, and batch operations (get_emails_batch, list_attachments_batch). Falls back to AppleScript when SQLite is unavailable. Requires macOS 13.0+ and Full Disk Access for SQLite features.",
+  "manifest_version": "0.3",
+  "name": "che-apple-mail-mcp",
+  "privacy_policies": [
     "https://github.com/kiki830621/che-apple-mail-mcp/blob/main/mcpb/PRIVACY.md"
   ],
-  "repository" : {
-    "type" : "git",
-    "url" : "https://github.com/kiki830621/che-apple-mail-mcp.git"
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kiki830621/che-apple-mail-mcp.git"
   },
-  "server" : {
-    "entry_point" : "server/CheAppleMailMCP",
-    "mcp_config" : {
-      "args" : [
-
-      ],
-      "command" : "${__dirname}/server/CheAppleMailMCP",
-      "env" : {
-
-      }
+  "server": {
+    "entry_point": "server/CheAppleMailMCP",
+    "mcp_config": {
+      "args": [],
+      "command": "${__dirname}/server/CheAppleMailMCP",
+      "env": {}
     },
-    "type" : "binary"
+    "type": "binary"
   },
-  "support" : "https://github.com/kiki830621/che-apple-mail-mcp/issues",
-  "tools" : [
+  "support": "https://github.com/kiki830621/che-apple-mail-mcp/issues",
+  "tools": [
     {
-      "description" : "Export a batch of emails to verbatim markdown files server-side (frozen 6-field frontmatter + verbatim body), optionally with attachments, into an allowed-roots-validated output_dir. Returns a per-email manifest. Designed for large archive jobs: one call replaces per-email fetch + client-side transcription. Concurrency contract (#236): exports to the SAME output_dir are serialized via an advisory lock (.export.lock) — an overlapping call fails fast with a clear error instead of silently overwriting colliding filenames; wait for the other run and retry. Different output_dirs run freely in parallel. The lock serializes same-host runs on a local filesystem only (flock semantics) — two machines exporting to one cloud-synced folder are not coordinated.",
-      "name" : "batch_export_emails_markdown"
+      "description": "Export a batch of emails to verbatim markdown files server-side (frozen 6-field frontmatter + verbatim body), optionally with attachments, into an allowed-roots-validated output_dir. Returns a per-email manifest. Designed for large archive jobs: one call replaces per-email fetch + client-side transcription. Concurrency contract (#236): exports to the SAME output_dir are serialized via an advisory lock (.export.lock) — an overlapping call fails fast with a clear error instead of silently overwriting colliding filenames; wait for the other run and retry. Different output_dirs run freely in parallel. The lock serializes same-host runs on a local filesystem only (flock semantics) — two machines exporting to one cloud-synced folder are not coordinated.",
+      "name": "batch_export_emails_markdown"
     },
     {
-      "description" : "Check whether Accessibility (GUI-scripting) is granted via AXIsProcessTrusted(). Required for the #175 wrapper-free compose path (compose_email / create_draft use mailto + keystrokes so the body isn't wrapped in <blockquote type=\"cite\"> on mobile clients). Returns status plus steps to grant it. Separate grant from check_fda. If denied, compose still works but the body is wrapped in a quote on some mobile clients.",
-      "name" : "check_accessibility"
+      "description": "Check whether Accessibility (GUI-scripting) is granted via AXIsProcessTrusted(). Required for the #175 wrapper-free compose path (compose_email / create_draft use mailto + keystrokes so the body isn't wrapped in <blockquote type=\"cite\"> on mobile clients). Returns status plus steps to grant it. Separate grant from check_fda. If denied, compose still works but the body is wrapped in a quote on some mobile clients.",
+      "name": "check_accessibility"
     },
     {
-      "description" : "Check whether Automation (Apple Events to Mail) is granted TO THIS BINARY — the third TCC axis after check_fda and check_accessibility (#293). Non-prompting probe (AEDeterminePermissionToAutomateTarget, askUserIfNeeded=false). Four states with remediation: granted / denied (recorded -1743 — macOS never re-prompts; System Settings entry or tccutil reset, #288) / not-determined (run any Mail tool to trigger the prompt) / Mail-not-running (open Mail.app first; the probe deliberately has no side effects). Note (#288): the binary holds its OWN grant — osascript working in your shell does NOT mean this binary is authorized. Zero-TCC compose fallback: open_mailto (#287).",
-      "name" : "check_automation"
+      "description": "Check whether Automation (Apple Events to Mail) is granted TO THIS BINARY — the third TCC axis after check_fda and check_accessibility (#293). Non-prompting probe (AEDeterminePermissionToAutomateTarget, askUserIfNeeded=false). Four states with remediation: granted / denied (recorded -1743 — macOS never re-prompts; System Settings entry or tccutil reset, #288) / not-determined (run any Mail tool to trigger the prompt) / Mail-not-running (open Mail.app first; the probe deliberately has no side effects). Note (#288): the binary holds its OWN grant — osascript working in your shell does NOT mean this binary is authorized. Zero-TCC compose fallback: open_mailto (#287).",
+      "name": "check_automation"
     },
     {
-      "description" : "Check whether Full Disk Access is granted (functionally probes the Apple Mail Envelope Index). Returns status plus the exact steps to grant it if not. Use when SQLite-only features (search_emails projection=ids/count, export_emails_markdown) fail with an 'unavailable' error.",
-      "name" : "check_fda"
+      "description": "Check whether Full Disk Access is granted (functionally probes the Apple Mail Envelope Index). Returns status plus the exact steps to grant it if not. Use when SQLite-only features (search_emails projection=ids/count, export_emails_markdown) fail with an 'unavailable' error.",
+      "name": "check_fda"
     },
     {
-      "description" : "Trigger a check for new email",
-      "name" : "check_for_new_mail"
+      "description": "Trigger a check for new email",
+      "name": "check_for_new_mail"
     },
     {
-      "description" : "Compose and send a new email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Wrapper-free clean-body path (#175) is used only when ALL hold: format='plain' + non-empty subject + Accessibility granted (a custom from_address now RIDES the clean path via a verified From-popup selection with read-back, #219 — any popup mismatch falls back to legacy with the correct sender) + CHE_MAIL_DISABLE_MAILTO_COMPOSE not set + ASCII-only attachment paths (non-ASCII paths hang the GUI attach flow, #220 — they route to the legacy path whose native attach handles any path). Otherwise the legacy path runs and Mail wraps the body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#237). If the clean path fails AT the send-keystroke stage, the tool does NOT retry via the legacy path (the mail may already be sent — a retry could send a duplicate): it returns an unknown-send-state error telling you to check Sent/Outbox before re-sending (#242).",
-      "name" : "compose_email"
+      "description": "Compose and send a new email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Wrapper-free clean-body path (#175) is used only when ALL hold: format='plain' + non-empty subject + Accessibility granted (a custom from_address now RIDES the clean path via a verified From-popup selection with read-back, #219 — any popup mismatch falls back to legacy with the correct sender) + CHE_MAIL_DISABLE_MAILTO_COMPOSE not set + ASCII-only attachment paths (non-ASCII paths hang the GUI attach flow, #220 — they route to the legacy path whose native attach handles any path). Otherwise the legacy path runs and Mail wraps the body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#237). If the clean path fails AT the send-keystroke stage, the tool does NOT retry via the legacy path (the mail may already be sent — a retry could send a duplicate): it returns an unknown-send-state error telling you to check Sent/Outbox before re-sending (#242).",
+      "name": "compose_email"
     },
     {
-      "description" : "Copy an email to another mailbox",
-      "name" : "copy_email"
+      "description": "Copy an email to another mailbox",
+      "name": "copy_email"
     },
     {
-      "description" : "Create a new draft email. Display-name To recipients (Name <email>) can ride the clean path on DRAFTS: the GUI fills the To field via clipboard paste after the window opens (#277, needs Accessibility; TO ONLY — display-name cc/bcc keep the legacy path, so cc/bcc names are set natively; verify To in the saved draft). Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Wrapper-free clean-body path (#175) is used only when ALL hold: format='plain' + non-empty subject + Accessibility granted (a custom from_address now RIDES the clean path via a verified From-popup selection with read-back, #219 — any popup mismatch falls back to legacy with the correct sender) + CHE_MAIL_DISABLE_MAILTO_COMPOSE not set + ASCII-only attachment paths (non-ASCII paths hang the GUI attach flow, #220 — they route to the legacy path whose native attach handles any path). Otherwise the legacy path runs and Mail wraps the body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#237).",
-      "name" : "create_draft"
+      "description": "Create a new draft email. Display-name To recipients (Name <email>) can ride the clean path on DRAFTS: the GUI fills the To field via clipboard paste after the window opens (#277, needs Accessibility; TO ONLY — display-name cc/bcc keep the legacy path, so cc/bcc names are set natively; verify To in the saved draft). Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Wrapper-free clean-body path (#175) is used only when ALL hold: format='plain' + non-empty subject + Accessibility granted (a custom from_address now RIDES the clean path via a verified From-popup selection with read-back, #219 — any popup mismatch falls back to legacy with the correct sender) + CHE_MAIL_DISABLE_MAILTO_COMPOSE not set + ASCII-only attachment paths (non-ASCII paths hang the GUI attach flow, #220 — they route to the legacy path whose native attach handles any path). Otherwise the legacy path runs and Mail wraps the body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#237).",
+      "name": "create_draft"
     },
     {
-      "description" : "Create a new mailbox (folder) in an account",
-      "name" : "create_mailbox"
+      "description": "Create a new mailbox (folder) in an account",
+      "name": "create_mailbox"
     },
     {
-      "description" : "Create a new mail rule",
-      "name" : "create_rule"
+      "description": "Create a new mail rule",
+      "name": "create_rule"
     },
     {
-      "description" : "Delete an email (move to trash)",
-      "name" : "delete_email"
+      "description": "Delete an email (move to trash)",
+      "name": "delete_email"
     },
     {
-      "description" : "Delete a mailbox (folder) from an account",
-      "name" : "delete_mailbox"
+      "description": "Delete a mailbox (folder) from an account",
+      "name": "delete_mailbox"
     },
     {
-      "description" : "Delete a mail rule",
-      "name" : "delete_rule"
+      "description": "Delete a mail rule",
+      "name": "delete_rule"
     },
     {
-      "description" : "Enable or disable a mail rule",
-      "name" : "enable_rule"
+      "description": "Enable or disable a mail rule",
+      "name": "enable_rule"
     },
     {
-      "description" : "DEPRECATED — renamed to batch_export_emails_markdown; this alias will not be removed before the next major release (v3.0). Export a batch of emails to verbatim markdown files server-side (frozen 6-field frontmatter + verbatim body), optionally with attachments, into an allowed-roots-validated output_dir. Returns a per-email manifest. Designed for large archive jobs: one call replaces per-email fetch + client-side transcription. Concurrency contract (#236): exports to the SAME output_dir are serialized via an advisory lock (.export.lock) — an overlapping call fails fast with a clear error instead of silently overwriting colliding filenames; wait for the other run and retry. Different output_dirs run freely in parallel. The lock serializes same-host runs on a local filesystem only (flock semantics) — two machines exporting to one cloud-synced folder are not coordinated.",
-      "name" : "export_emails_markdown"
+      "description": "DEPRECATED — renamed to batch_export_emails_markdown; this alias will not be removed before the next major release (v3.0). Export a batch of emails to verbatim markdown files server-side (frozen 6-field frontmatter + verbatim body), optionally with attachments, into an allowed-roots-validated output_dir. Returns a per-email manifest. Designed for large archive jobs: one call replaces per-email fetch + client-side transcription. Concurrency contract (#236): exports to the SAME output_dir are serialized via an advisory lock (.export.lock) — an overlapping call fails fast with a clear error instead of silently overwriting colliding filenames; wait for the other run and retry. Different output_dirs run freely in parallel. The lock serializes same-host runs on a local filesystem only (flock semantics) — two machines exporting to one cloud-synced folder are not coordinated.",
+      "name": "export_emails_markdown"
     },
     {
-      "description" : "Extract the email address from a full address string (e.g., 'John Doe <john@example.com>' -> 'john@example.com')",
-      "name" : "extract_address"
+      "description": "Extract the email address from a full address string (e.g., 'John Doe <john@example.com>' -> 'john@example.com')",
+      "name": "extract_address"
     },
     {
-      "description" : "Extract the name from a full email address (e.g., 'John Doe <john@example.com>' -> 'John Doe')",
-      "name" : "extract_name_from_address"
+      "description": "Extract the name from a full email address (e.g., 'John Doe <john@example.com>' -> 'John Doe')",
+      "name": "extract_name_from_address"
     },
     {
-      "description" : "Flag or unflag an email",
-      "name" : "flag_email"
+      "description": "Flag or unflag an email",
+      "name": "flag_email"
     },
     {
-      "description" : "Forward an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). 'plain' embeds the original message as RFC 3676 `> `-prefixed quoted lines when body is provided (signature + rich text preserved); 'markdown'/'html' wrap the original's PLAIN-TEXT content (HTML-escaped) in a `<blockquote>` — Apple's AppleScript denies read access to the original's HTML on current macOS, so signature / rich-text formatting is NOT preserved in non-plain modes. Body is optional (omit for a bare forward without commentary — a bodyless forward is always wrapper-free). When a body IS provided, the clean new-body path (#218) is used only when ALL hold: format='plain' + Accessibility granted + CHE_MAIL_DISABLE_PASTE_REPLY not set; otherwise the legacy path runs and Mail wraps the NEW body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#229).",
-      "name" : "forward_email"
+      "description": "Forward an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). 'plain' embeds the original message as RFC 3676 `> `-prefixed quoted lines when body is provided (signature + rich text preserved); 'markdown'/'html' wrap the original's PLAIN-TEXT content (HTML-escaped) in a `<blockquote>` — Apple's AppleScript denies read access to the original's HTML on current macOS, so signature / rich-text formatting is NOT preserved in non-plain modes. Body is optional (omit for a bare forward without commentary — a bodyless forward is always wrapper-free). When a body IS provided, the clean new-body path (#218) is used only when ALL hold: format='plain' + Accessibility granted + CHE_MAIL_DISABLE_PASTE_REPLY not set; otherwise the legacy path runs and Mail wraps the NEW body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#229).",
+      "name": "forward_email"
     },
     {
-      "description" : "Get detailed information about a specific mail account",
-      "name" : "get_account_info"
+      "description": "Get detailed information about a specific mail account",
+      "name": "get_account_info"
     },
     {
-      "description" : "Get full content of a specific email. Returns HTML by default (preserving links), or plain text/raw source with format parameter.",
-      "name" : "get_email"
+      "description": "Get full content of a specific email. Returns HTML by default (preserving links), or plain text/raw source with format parameter.",
+      "name": "get_email"
     },
     {
-      "description" : "Get all headers of an email",
-      "name" : "get_email_headers"
+      "description": "Get all headers of an email",
+      "name": "get_email_headers"
     },
     {
-      "description" : "Get email metadata (was forwarded, replied, redirected, size)",
-      "name" : "get_email_metadata"
+      "description": "Get email metadata (was forwarded, replied, redirected, size)",
+      "name": "get_email_metadata"
     },
     {
-      "description" : "Get the raw source of an email",
-      "name" : "get_email_source"
+      "description": "Get the raw source of an email",
+      "name": "get_email_source"
     },
     {
-      "description" : "Get full content of multiple emails in a single call. Much faster than calling get_email repeatedly. Returns results for each email, including errors for any that failed.",
-      "name" : "get_emails_batch"
+      "description": "Get full content of multiple emails in a single call. Much faster than calling get_email repeatedly. Returns results for each email, including errors for any that failed.",
+      "name": "get_emails_batch"
     },
     {
-      "description" : "Get Mail application information (version, fetch interval, background activity)",
-      "name" : "get_mail_app_info"
+      "description": "Get Mail application information (version, fetch interval, background activity)",
+      "name": "get_mail_app_info"
     },
     {
-      "description" : "Get detailed information about a mail rule",
-      "name" : "get_rule_details"
+      "description": "Get detailed information about a mail rule",
+      "name": "get_rule_details"
     },
     {
-      "description" : "Get the content of a signature",
-      "name" : "get_signature"
+      "description": "Get the content of a signature",
+      "name": "get_signature"
     },
     {
-      "description" : "Get special mailbox names. Without account_id/account_name: the app-level unified names (inbox, drafts, sent, trash, junk, outbox). With an account selector: that account's per-account special-mailbox real (localized/provider) LEAF names (inbox, drafts, sent, trash, junk) — e.g. a Gmail account returns drafts \"草稿\", junk \"垃圾郵件\"; an Exchange account's inbox can localize (收件匣) (#179/#249). outbox stays unified-only. In the per-account mode each present type ALSO carries a `<type>_path` field with the FULL mailbox path (e.g. drafts_path \"[Gmail]/草稿\") derived from the Mail Envelope Index — the same representation `search_emails`'s `mailbox` field uses (#315; requires Full Disk Access). `<type>_path` is OMITTED whenever it cannot be resolved unambiguously: no index access (e.g. EWS accounts / missing FDA), an unknown leaf, or a leaf whose match cannot be corroborated. Corroboration matters because a unique leaf match is NOT proof of identity (#345): an ordinary `Projects/Drafts` folder matches the leaf `Drafts` uncontested when the real drafts mailbox is not in the index yet. A NESTED path is therefore returned only when another special mailbox of the same account resolves under the SAME parent container — which is what makes `[Gmail]/草稿` trustworthy (`[Gmail]` also holds sent/junk/trash) and `Projects/Drafts` not. Position is never used as evidence. Consumers MUST keep a leaf-based fallback for the absent-`_path` case — an absent path is an honest signal, not an error (the leaf `<type>` is always present when the mailbox exists). A present path equals the leaf exactly when the mailbox is genuinely top-level.",
-      "name" : "get_special_mailboxes"
+      "description": "Get special mailbox names. Without account_id/account_name: the app-level unified names (inbox, drafts, sent, trash, junk, outbox). With an account selector: that account's per-account special-mailbox real (localized/provider) LEAF names (inbox, drafts, sent, trash, junk) — e.g. a Gmail account returns drafts \"草稿\", junk \"垃圾郵件\"; an Exchange account's inbox can localize (收件匣) (#179/#249). outbox stays unified-only. In the per-account mode each present type ALSO carries a `<type>_path` field with the FULL mailbox path (e.g. drafts_path \"[Gmail]/草稿\") derived from the Mail Envelope Index — the same representation `search_emails`'s `mailbox` field uses (#315; requires Full Disk Access). `<type>_path` is OMITTED whenever it cannot be resolved unambiguously: no index access (e.g. EWS accounts / missing FDA), an unknown leaf, or a leaf whose match cannot be corroborated. Corroboration matters because a unique leaf match is NOT proof of identity (#345): an ordinary `Projects/Drafts` folder matches the leaf `Drafts` uncontested when the real drafts mailbox is not in the index yet. A NESTED path is therefore returned only when another special mailbox of the same account resolves under the SAME parent container — which is what makes `[Gmail]/草稿` trustworthy (`[Gmail]` also holds sent/junk/trash) and `Projects/Drafts` not. Position is never used as evidence. Consumers MUST keep a leaf-based fallback for the absent-`_path` case — an absent path is an honest signal, not an error (the leaf `<type>` is always present when the mailbox exists). A present path equals the leaf exactly when the mailbox is genuinely top-level.",
+      "name": "get_special_mailboxes"
     },
     {
-      "description" : "Get the number of unread emails",
-      "name" : "get_unread_count"
+      "description": "Get the number of unread emails",
+      "name": "get_unread_count"
     },
     {
-      "description" : "Import a mailbox from a file",
-      "name" : "import_mailbox"
+      "description": "Import a mailbox from a file",
+      "name": "import_mailbox"
     },
     {
-      "description" : "List all mail accounts configured in Apple Mail",
-      "name" : "list_accounts"
+      "description": "List all mail accounts configured in Apple Mail",
+      "name": "list_accounts"
     },
     {
-      "description" : "List attachments of an email. Each item carries `savable` (whether save_attachment can fulfill it from the local Mail store) and, when false, `savable_reason`: 'not_downloaded' (the content is server-side only — open the message in Mail to fetch it, #238) vs 'not_extractable'.",
-      "name" : "list_attachments"
+      "description": "List attachments of an email. Each item carries `savable` (whether save_attachment can fulfill it from the local Mail store) and, when false, `savable_reason`: 'not_downloaded' (the content is server-side only — open the message in Mail to fetch it, #238) vs 'not_extractable'.",
+      "name": "list_attachments"
     },
     {
-      "description" : "List attachments for multiple emails in a single call. Returns attachment lists for each email, including errors for any that failed.",
-      "name" : "list_attachments_batch"
+      "description": "List attachments for multiple emails in a single call. Returns attachment lists for each email, including errors for any that failed.",
+      "name": "list_attachments_batch"
     },
     {
-      "description" : "List all draft emails for one account. Each entry carries `subject` and the draft's numeric `id` (#276, additive) — the id feeds update_draft.draft_id and delete_email.id directly. Resolves the account's real drafts mailbox via Mail's unified drafts mailbox (works with localized/provider-specific names like Gmail's [Gmail]/草稿 — no hardcoded 'Drafts' lookup, see #174).",
-      "name" : "list_drafts"
+      "description": "List all draft emails for one account. Each entry carries `subject` and the draft's numeric `id` (#276, additive) — the id feeds update_draft.draft_id and delete_email.id directly. Resolves the account's real drafts mailbox via Mail's unified drafts mailbox (works with localized/provider-specific names like Gmail's [Gmail]/草稿 — no hardcoded 'Drafts' lookup, see #174).",
+      "name": "list_drafts"
     },
     {
-      "description" : "List emails in a mailbox. Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204).",
-      "name" : "list_emails"
+      "description": "List emails in a mailbox. Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204).",
+      "name": "list_emails"
     },
     {
-      "description" : "List all mailboxes (folders) for an account",
-      "name" : "list_mailboxes"
+      "description": "List all mailboxes (folders) for an account",
+      "name": "list_mailboxes"
     },
     {
-      "description" : "List all mail rules",
-      "name" : "list_rules"
+      "description": "List all mail rules",
+      "name": "list_rules"
     },
     {
-      "description" : "List all email signatures",
-      "name" : "list_signatures"
+      "description": "List all email signatures",
+      "name": "list_signatures"
     },
     {
-      "description" : "List all SMTP servers",
-      "name" : "list_smtp_servers"
+      "description": "List all SMTP servers",
+      "name": "list_smtp_servers"
     },
     {
-      "description" : "List VIP senders",
-      "name" : "list_vip_senders"
+      "description": "List VIP senders",
+      "name": "list_vip_senders"
     },
     {
-      "description" : "Mark an email as junk or not junk",
-      "name" : "mark_as_junk"
+      "description": "Mark an email as junk or not junk",
+      "name": "mark_as_junk"
     },
     {
-      "description" : "Mark an email as read or unread",
-      "name" : "mark_read"
+      "description": "Mark an email as read or unread",
+      "name": "mark_read"
     },
     {
-      "description" : "Move an email to another mailbox",
-      "name" : "move_email"
+      "description": "Move an email to another mailbox",
+      "name": "move_email"
     },
     {
-      "description" : "Open a mailto URL in the system default mail client via LaunchServices — ZERO Automation TCC required (#287), so it works even when AppleScript tools fail with -1743 (Not authorized to send Apple events). The mailto compose window is inherently cite-block-free (#175). Cite-block-avoidance ladder: (a) create_draft clean path — needs Automation + Accessibility TCC, carries attachments; (b) THIS TOOL — zero TCC, no attachments (RFC 6068; drag files in manually), window opens in the default mail app which may not be Mail.app; (c) legacy AppleScript injection — body wrapped in blockquote type=cite, unacceptable for formal mail. When TCC is not granted (-1743), (b) is the correct path — never fall to (c).",
-      "name" : "open_mailto"
+      "description": "Open a mailto URL in the system default mail client via LaunchServices — ZERO Automation TCC required (#287), so it works even when AppleScript tools fail with -1743 (Not authorized to send Apple events). The mailto compose window is inherently cite-block-free (#175). Cite-block-avoidance ladder: (a) create_draft clean path — needs Automation + Accessibility TCC, carries attachments; (b) THIS TOOL — zero TCC, no attachments (RFC 6068; drag files in manually), window opens in the default mail app which may not be Mail.app; (c) legacy AppleScript injection — body wrapped in blockquote type=cite, unacceptable for formal mail. When TCC is not granted (-1743), (b) is the correct path — never fall to (c).",
+      "name": "open_mailto"
     },
     {
-      "description" : "Redirect an email (keeps original sender, different from forward)",
-      "name" : "redirect_email"
+      "description": "Redirect an email (keeps original sender, different from forward)",
+      "name": "redirect_email"
     },
     {
-      "description" : "Reply to an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). 'plain' embeds the original message as RFC 3676 `> `-prefixed quoted lines (signature + rich text preserved by Mail.app); 'markdown'/'html' wrap the original's PLAIN-TEXT content (HTML-escaped) in a `<blockquote>` — Apple's AppleScript denies read access to the original message's HTML on current macOS, so signature / rich-text formatting is NOT preserved in non-plain modes. Use 'plain' if signature preservation matters. Optionally add extra CC, attach files, and save as draft instead of sending. Clean new-body path (#218) is used only when ALL hold: format='plain' + Accessibility granted + CHE_MAIL_DISABLE_PASTE_REPLY not set; otherwise the legacy path runs and Mail wraps the NEW body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients; the quoted original's cite block is normal) — the result string discloses which path ran and why (#229).",
-      "name" : "reply_email"
+      "description": "Reply to an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). 'plain' embeds the original message as RFC 3676 `> `-prefixed quoted lines (signature + rich text preserved by Mail.app); 'markdown'/'html' wrap the original's PLAIN-TEXT content (HTML-escaped) in a `<blockquote>` — Apple's AppleScript denies read access to the original message's HTML on current macOS, so signature / rich-text formatting is NOT preserved in non-plain modes. Use 'plain' if signature preservation matters. Optionally add extra CC, attach files, and save as draft instead of sending. Clean new-body path (#218) is used only when ALL hold: format='plain' + Accessibility granted + CHE_MAIL_DISABLE_PASTE_REPLY not set; otherwise the legacy path runs and Mail wraps the NEW body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients; the quoted original's cite block is normal) — the result string discloses which path ran and why (#229).",
+      "name": "reply_email"
     },
     {
-      "description" : "Save an email attachment to disk. Optionally accepts `account_id` (UUID) for disambiguation when multiple Mail.app accounts share the same `display_name` (e.g., iCloud catch-all alias + Gmail with the same address — #101). When provided, the AppleScript fallback path uses Mail.app's globally-unique `account id` selector; when omitted, falls back to the legacy `account_name` (display_name) form for backward compatibility.",
-      "name" : "save_attachment"
+      "description": "Save an email attachment to disk. Optionally accepts `account_id` (UUID) for disambiguation when multiple Mail.app accounts share the same `display_name` (e.g., iCloud catch-all alias + Gmail with the same address — #101). When provided, the AppleScript fallback path uses Mail.app's globally-unique `account id` selector; when omitted, falls back to the legacy `account_name` (display_name) form for backward compatibility.",
+      "name": "save_attachment"
     },
     {
-      "description" : "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101). Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204). For BULK collection (e.g. feeding export_emails_markdown), use `projection: \"ids\"` to get just rowId strings (far smaller payload, no per-row recipient fetch) and `dedup: \"logical\"` to collapse Gmail mailbox duplicates server-side; `projection: \"count\"` returns just the total match count for scoping (#208).",
-      "name" : "search_emails"
+      "description": "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101). Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204). For BULK collection (e.g. feeding export_emails_markdown), use `projection: \"ids\"` to get just rowId strings (far smaller payload, no per-row recipient fetch) and `dedup: \"logical\"` to collapse Gmail mailbox duplicates server-side; `projection: \"count\"` returns just the total match count for scoping (#208).",
+      "name": "search_emails"
     },
     {
-      "description" : "Set the background color of an email (blue, gray, green, none, orange, purple, red, yellow)",
-      "name" : "set_background_color"
+      "description": "Set the background color of an email (blue, gray, green, none, orange, purple, red, yellow)",
+      "name": "set_background_color"
     },
     {
-      "description" : "Set the flag color of an email (0=red, 1=orange, 2=yellow, 3=green, 4=blue, 5=purple, 6=gray, -1=clear)",
-      "name" : "set_flag_color"
+      "description": "Set the flag color of an email (0=red, 1=orange, 2=yellow, 3=green, 4=blue, 5=purple, 6=gray, -1=clear)",
+      "name": "set_flag_color"
     },
     {
-      "description" : "Synchronize an IMAP account with the server. Supply account_name (description) and/or account_id (UUID) — at least one is required.",
-      "name" : "synchronize_account"
+      "description": "Synchronize an IMAP account with the server. Supply account_name (description) and/or account_id (UUID) — at least one is required.",
+      "name": "synchronize_account"
     },
     {
-      "description" : "Replace an existing draft (upsert): locate it by draft_id (from list_drafts) or an EXACT subject_match, create the replacement via the same mechanism and eligibility rules as create_draft, then delete the old draft. Order is deliberately create-THEN-delete with a post-create receipt — the failure direction is always toward keeping drafts (worst case both MAY exist, recoverable), never toward losing both; this is the reverse of the naive delete-first flow, chosen for data safety. Ambiguity always refuses: 0 matches (update requires an existing draft — use create_draft for a new one) or >1 matches (candidates {id, subject} are listed; retry with draft_id). Notes: Apple Mail drafts cannot be edited in place, so the replacement is a NEW draft with a NEW id (never reuse the old id); the replacement is created under create_draft's account semantics (default account unless from_address) which may differ from the old draft's account; the body inherits create_draft's wrapper-free eligibility and disclosure (#175/#237/#239) — on a draft, a custom from_address (#219) and display-name To recipients (#277) ride the CLEAN path when Accessibility is granted, while display-name cc/bcc still route via the legacy path (blockquote-wrapped body, disclosed in new_draft). Deletion moves the old draft to Trash (recoverable). The delete is double-gated: (a) a post-create RECEIPT re-lists the drafts and requires a NEW id to appear before the old draft is touched (a GUI-path phantom success keeps the old draft, reported as deleted_old:false / not confirmed); (b) the delete predicate conjoins id AND exact subject, so a cross-account id collision cannot delete another account's draft. If deletion fails after a confirmed create, the result reports deleted_old:false with a note matched to what is known (confirmed absent / state unknown / both MAY exist) — nothing is silently lost or over-claimed.",
-      "name" : "update_draft"
+      "description": "Replace an existing draft (upsert): locate it by draft_id (from list_drafts) or an EXACT subject_match, create the replacement via the same mechanism and eligibility rules as create_draft, then delete the old draft. Order is deliberately create-THEN-delete with a post-create receipt — the failure direction is always toward keeping drafts (worst case both MAY exist, recoverable), never toward losing both; this is the reverse of the naive delete-first flow, chosen for data safety. Ambiguity always refuses: 0 matches (update requires an existing draft — use create_draft for a new one) or >1 matches (candidates {id, subject} are listed; retry with draft_id). Notes: Apple Mail drafts cannot be edited in place, so the replacement is a NEW draft with a NEW id (never reuse the old id); the replacement is created under create_draft's account semantics (default account unless from_address) which may differ from the old draft's account; the body inherits create_draft's wrapper-free eligibility and disclosure (#175/#237/#239) — on a draft, a custom from_address (#219) and display-name To recipients (#277) ride the CLEAN path when Accessibility is granted, while display-name cc/bcc still route via the legacy path (blockquote-wrapped body, disclosed in new_draft). Deletion moves the old draft to Trash (recoverable). The delete is double-gated: (a) a post-create RECEIPT re-lists the drafts and requires a NEW id to appear before the old draft is touched (a GUI-path phantom success keeps the old draft, reported as deleted_old:false / not confirmed); (b) the delete predicate conjoins id AND exact subject, so a cross-account id collision cannot delete another account's draft. If deletion fails after a confirmed create, the result reports deleted_old:false with a note matched to what is known (confirmed absent / state unknown / both MAY exist) — nothing is silently lost or over-claimed.",
+      "name": "update_draft"
     }
   ],
-  "version" : "2.27.0"
+  "version": "2.28.0"
 }
