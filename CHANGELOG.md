@@ -35,6 +35,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   That last condition is what keeps honest text safe — a 7bit document *about*
   quoted-printable containing `=41` decodes to pure ASCII and is refused, and a
   stray `=E7` decodes to a lone continuation byte and is refused.
+- `list_attachments` returned `[]` for messages that demonstrably carry
+  attachments on disk — silently, with no stderr warning and no error
+  ([#365](https://github.com/PsychQuant/che-apple-mail-mcp/issues/365)). In one
+  archive run **3 of 4** messages were affected, hiding **5 attachments**
+  totalling ~427 KB; they would have been lost with no signal at all had a
+  sentence in the body ("the updated version is attached") not contradicted the
+  empty result.
+
+  The candidate set was seeded **exclusively** from the Envelope Index, with the
+  `.emlx` used only as a filter, so the result was a pure intersection —
+  `SQLite_rows ∩ emlx_names`. Apple Mail writes no `attachments` rows for
+  messages it composed and sent itself, so for outgoing mail the left side is
+  empty and the intersection is empty regardless of what is on disk. Confirmed
+  against the live index: rowIds 290037 / 290102 / 290338 (all sent) have **0**
+  rows while their `.emlx` files carry 1 / 2 / 2 attachments. The observable
+  signature was the asymmetry — `save_attachment` succeeded on the exact tuple
+  `list_attachments` failed on, because retrieval parses the `.emlx` and never
+  consults SQLite. **Enumeration was SQLite-gated; retrieval was not.**
+
+  The `.emlx` is now a **source**, not just a filter: the result is the union,
+  with disk membership still authoritative so #24's stale-cache rows stay
+  dropped. Entries found only on disk deliberately carry **no**
+  `attachment_id` — there is no SQLite row to take one from, and inventing one
+  would send `save_attachment`'s name-free part-dir probe (#183) after a
+  directory that does not exist.
+
+  A pre-existing test had pinned the defect in place, asserting empty-SQLite
+  must yield an empty result on the stated premise that the opposite is
+  "impossible in practice — would mean Mail.app missed indexing". That premise
+  was measured false; correcting it is the fix.
 
 ## [2.28.0] - 2026-08-13
 

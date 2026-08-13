@@ -1152,12 +1152,27 @@ final class ServerSchemaTests: XCTestCase {
         XCTAssertTrue(result.isEmpty, "empty realNames must filter out all SQLite entries (#24 stale-cache scenario)")
     }
 
-    func testCrossValidateAttachments_emptySQLite_returnsEmpty() {
-        // Edge: SQLite has no rows but .emlx parser found names (impossible
-        // in practice — would mean Mail.app missed indexing — but filter
-        // must handle it gracefully).
+    func testCrossValidateAttachments_emptySQLite_stillEnumeratesFromTheEmlx() {
+        // This test used to assert the OPPOSITE — that an empty SQLite input
+        // yields an empty result — on the stated premise that "SQLite has no
+        // rows but the .emlx parser found names" is "impossible in practice —
+        // would mean Mail.app missed indexing".
+        //
+        // #365 measured that premise false. Apple Mail writes NO `attachments`
+        // rows for messages it composed and sent itself, so this is the normal
+        // case for outgoing mail, not an impossible edge: 3 of 4 messages in one
+        // archive run, hiding 5 attachments (~427 KB), reported as `[]` with no
+        // error. Confirmed against the live index — rowIds 290037 / 290102 /
+        // 290338 all have 0 rows while their .emlx files carry 1 / 2 / 2
+        // attachments.
+        //
+        // The assumption was load-bearing: it turned the .emlx from a source
+        // into a filter, and this test then pinned the resulting defect in
+        // place. Correcting the assumption is the fix.
         let result = crossValidateAttachments(sqliteAttachments: [], realNames: ["something.pdf"])
-        XCTAssertTrue(result.isEmpty, "empty SQLite input must yield empty result regardless of realNames")
+        XCTAssertEqual(result.compactMap { $0["name"] as? String }, ["something.pdf"],
+                       "the .emlx is ground truth for what a message contains; an unindexed "
+                       + "attachment is still an attachment (#365)")
     }
 
     func testCrossValidateAttachments_dropsEntriesWithoutNameField() {
