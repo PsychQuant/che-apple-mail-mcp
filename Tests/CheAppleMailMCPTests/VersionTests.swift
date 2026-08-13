@@ -25,16 +25,17 @@ final class VersionTests: XCTestCase {
         let changelog = repoRoot.appendingPathComponent("CHANGELOG.md")
         let text = try String(contentsOf: changelog, encoding: .utf8)
 
-        // First `## [x.y.z] - ...` header (skips `## [Unreleased]`, which is not x.y.z).
-        var newest: String?
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let s = line.trimmingCharacters(in: .whitespaces)
-            guard s.hasPrefix("## [") else { continue }
-            let inside = s.dropFirst(4).prefix(while: { $0 != "]" })
-            if SemVer(String(inside)) != nil { newest = String(inside); break }
-        }
-
-        let newestVersion = try XCTUnwrap(newest, "no `## [x.y.z]` header found in CHANGELOG.md")
+        // #349: ask `scripts/changelog.py` — the repo's single definition of a
+        // released header — instead of re-parsing. This local scan went through
+        // `SemVer()`, which discards a `-suffix` by design, so `## [2.27.0-rc1]`
+        // was accepted here while `ManifestVersionTests` skipped it: the two
+        // guards #303/#311 set against each other could measure different
+        // headers and both stay green.
+        let probe = try ChangelogParserTests.run(["newest"], changelog: changelog.path)
+        XCTAssertEqual(probe.status, 0, "scripts/changelog.py could not read CHANGELOG.md")
+        let newestVersion = probe.out
+        XCTAssertFalse(newestVersion.isEmpty, "no released `## [x.y.z]` header in CHANGELOG.md")
+        _ = text
         XCTAssertEqual(AppVersion.current, newestVersion,
                        "AppVersion.current ('\(AppVersion.current)') must match the newest CHANGELOG release "
                        + "('\(newestVersion)') — bump both together (release.sh enforces this at tag time).")

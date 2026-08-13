@@ -124,6 +124,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   since #213/#214 with live status and a direct link to the right System
   Settings pane, but the documented path never mentioned it until deep in a
   reference section (related: #355).
+- A stdout write failure no longer leaves the server executing tool calls whose
+  responses nobody receives
+  ([#349](https://github.com/PsychQuant/che-apple-mail-mcp/issues/349)). #320's
+  `signal(SIGPIPE, SIG_IGN)` was right — dying at the first broken-pipe write
+  was worse — but it created an unowned execution mode: the write returns
+  `EPIPE`, the SDK's per-request task swallows it (`_ = try? await
+  self.handleRequest(...)`), and the transport stays connected, so later
+  requests including `compose_email` / `delete_email` / `move_email` still RUN
+  while their responses vanish. A host that reconnects and retries then repeats
+  side effects that already happened.
+
+  A transport decorator now treats a failed write as the end of the session:
+  it reports once on stderr (a different fd, often still open) and stops the
+  server, so no new tool call is dispatched. An in-flight call is not
+  interrupted — cancelling mid-mutation would be worse than the bug. Measured on
+  the real binary with the stdout read end closed: **before, still running after
+  30s; after, a diagnostic and a clean exit.**
+
+### Changed
+
+- `scripts/changelog.py` is now the repo's single definition of a released
+  CHANGELOG header, used by `VersionTests`, `ManifestVersionTests` and
+  `scripts/release.sh` (#349). The three had their own parsers and could
+  disagree — `## [2.27.0-rc1]` was accepted by one and skipped by another, so
+  `AppVersion.current` and the manifest version could hold different values with
+  CI green, and a `## [9.9.9]` inside a fenced code block was a real release to
+  all three. The belt-and-braces of #303 + #311 is only as strong as the two
+  belts agreeing on what they measure. Release-notes extraction was verified
+  byte-identical to the awk it replaces for v2.27.0.
 
 ## [2.27.0] - 2026-08-10
 
