@@ -6,12 +6,40 @@ import MailSQLite
 /// one state where granting FDA is unambiguously the fix. No window — for
 /// terminals, scripts, or a quick check. (#213)
 enum SetupCLI {
-    static func runCheckFDA() {
+
+    /// Exit statuses for `--check-fda` (#355). Previously the command always
+    /// exited 0, so a script could not act on the result without parsing prose.
+    /// The plugin's first-run assist branches on these.
+    enum ExitStatus: Int32 {
+        case granted = 0
+        case denied = 1
+        case noMailData = 2
+        case undetermined = 3
+    }
+
+    static func status(for probe: FDAStatus.Probe) -> ExitStatus {
+        switch probe {
+        case .granted: return .granted
+        case .denied: return .denied
+        case .noMailData: return .noMailData
+        case .undetermined: return .undetermined
+        }
+    }
+
+    /// Status only — no output, no settings pane. For callers that need to ASK
+    /// without acting (#355).
+    static func runCheckFDAQuiet() -> Int32 {
+        status(for: FDAStatus.probe()).rawValue
+    }
+
+    @discardableResult
+    static func runCheckFDA() -> Int32 {
         let probe = FDAStatus.probe()
         print(FDAStatus.summary(probe))
+        defer {}
         switch probe {
         case .granted:
-            return
+            return status(for: probe).rawValue
         case .noMailData:
             // ENOENT is ambiguous (no Mail vs FDA-denied hiding ~/Library/Mail) —
             // present both, and offer the grant steps for the FDA-denied case.
@@ -35,6 +63,7 @@ enum SetupCLI {
                 + "permission denial). Retry first. If it persists and Full Disk Access might be the cause:")
             print(FullDiskAccessHelp.guidance(reason: "If Full Disk Access is the cause:"))
         }
+        return status(for: probe).rawValue
     }
 
     /// Open the deep-link via `/usr/bin/open` so the CLI path needs no AppKit.
