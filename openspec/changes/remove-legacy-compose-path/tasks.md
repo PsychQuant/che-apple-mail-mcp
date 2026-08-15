@@ -50,8 +50,8 @@
 
 ## 6. 文件（兩份規則必須一起改）
 
-- [ ] 6.1 改寫 `plugin/rules/compose-wrapper-free.md`：eligibility 表 → 失敗理由表；刪除「揭露後由使用者拍板」等已不存在的流程
-- [ ] 6.2 同步改寫全域鏡像 `che-claude-config/rules/common-mail-compose.md`——該規則自身即載明兩份必須一起改
-- [ ] 6.3 改寫 `README.md` 的 Accessibility 段落：現況把 legacy fallback 描述為正常行為
-- [ ] 6.4 `CHANGELOG.md`：breaking 條目逐項列出（`format` enum、`require_wrapper_free`、`sanitize_links`、兩個 env hatch），並明說「原本會靜默 wrap 的呼叫現在會失敗」是**預期**行為改變 （→ design: Migration）
-- [ ] 6.5 在 CHANGELOG 誠實記錄 D1 的代價：失去「不開可見視窗即可組信」的能力，且無替代方案 （→ design D1 的代價段）
+- [x] 6.1 改寫 `plugin/rules/compose-wrapper-free.md`：eligibility 表 → 失敗理由表；刪除「揭露後由使用者拍板」等已不存在的流程
+- [x] 6.2 同步改寫全域鏡像 `che-claude-config/rules/common-mail-compose.md`（已 commit `7bb9344`）。**更正**：實際上是**三份**不是兩份——`.claude/rules/`（canonical）、`plugin/rules/`（隨 plugin 出貨）、全域鏡像；三份皆已改，且三份的「相關」段都已改寫為「三份要一起改」
+- [x] 6.3 改寫 `README.md` 的 Accessibility 段落：現況把 legacy fallback 描述為正常行為
+- [x] 6.4 `CHANGELOG.md`：breaking 條目逐項列出（`format` enum、`require_wrapper_free`、`sanitize_links`、兩個 env hatch），並明說「原本會靜默 wrap 的呼叫現在會失敗」是**預期**行為改變 （→ design: Migration）
+- [x] 6.5 在 CHANGELOG 誠實記錄 D1 的代價：失去「不開可見視窗即可組信」的能力，且無替代方案 （→ design D1 的代價段）
