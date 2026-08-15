@@ -51,10 +51,13 @@ final class ServerSchemaTests: XCTestCase {
             return
         }
 
+        // #304: plain is the only supported body format — every path that
+        // could deliver rich text assigned the body via AppleScript, which is
+        // what produces the <blockquote type="cite"> wrapper.
         XCTAssertEqual(
             enumValues(on: formatProp),
-            ["plain", "markdown", "html"],
-            "Tool \(toolName) format enum must be exactly [plain, markdown, html]"
+            ["plain"],
+            "Tool \(toolName) format enum must be exactly [plain]"
         )
 
         let required = requiredArray(of: t) ?? []
@@ -225,8 +228,8 @@ final class ServerSchemaTests: XCTestCase {
 
     func testParseBodyFormat_validValues() throws {
         XCTAssertEqual(try parseBodyFormat("plain"), .plain)
-        XCTAssertEqual(try parseBodyFormat("markdown"), .markdown)
-        XCTAssertEqual(try parseBodyFormat("html"), .html)
+        // markdown / html are refused BY NAME (#304) — see
+        // ComposeRefusalTests.testParseBodyFormat_rejectsRichTextByName.
     }
 
     func testParseBodyFormat_invalidValueThrows() {
@@ -236,9 +239,7 @@ final class ServerSchemaTests: XCTestCase {
                 XCTFail("Expected MailError.invalidParameter, got \(error)")
                 return
             }
-            XCTAssertTrue(msg.contains("plain"), "error message must list valid values")
-            XCTAssertTrue(msg.contains("markdown"))
-            XCTAssertTrue(msg.contains("html"))
+            XCTAssertTrue(msg.contains("plain"), "error message must name the permitted value")
             XCTAssertTrue(msg.contains("rtf"), "error message must include the offending value")
         }
     }
@@ -952,7 +953,7 @@ final class ServerSchemaTests: XCTestCase {
     }
 
     func testParseBodyFormatArgument_stringValid() throws {
-        XCTAssertEqual(try parseBodyFormatArgument(.string("markdown")), .markdown)
+        XCTAssertEqual(try parseBodyFormatArgument(.string("plain")), .plain)
     }
 
     func testParseBodyFormatArgument_integerRejected() {

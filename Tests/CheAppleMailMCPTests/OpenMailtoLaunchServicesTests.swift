@@ -9,11 +9,11 @@ final class OpenMailtoLaunchServicesTests: XCTestCase {
     func testOpenMailto_validURL_handsOffViaLaunchServices() async throws {
         // The seam must receive the parsed URL; NO AppleScript may run (a
         // scriptRunner XCTFail seam proves the -1743-prone path is gone).
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         nonisolated(unsafe) var openedURL: URL?
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("open_mailto must not run AppleScript (#287)"); return "" },
-            ineligibility: nil,
+            refusal: nil,
             openURL: { url in openedURL = url; return true })
         let r = try await MailController.shared.openMailtoURL(
             url: "mailto:a@example.com?subject=Hello")
@@ -26,11 +26,11 @@ final class OpenMailtoLaunchServicesTests: XCTestCase {
         // Scheme guard: the old AppleScript path forwarded ANY string; the
         // LaunchServices path must refuse non-mailto URLs (an https: URL here
         // would silently open a browser).
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         nonisolated(unsafe) var called = false
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("no AppleScript"); return "" },
-            ineligibility: nil,
+            refusal: nil,
             openURL: { _ in called = true; return true })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.openMailtoURL(url: "https://example.com"))
@@ -42,10 +42,10 @@ final class OpenMailtoLaunchServicesTests: XCTestCase {
     func testOpenMailto_handlerMissing_failsLoud() async throws {
         // NSWorkspace.open returning false (no mailto: handler) must surface
         // an actionable error, not a fake success.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("no AppleScript"); return "" },
-            ineligibility: nil,
+            refusal: nil,
             openURL: { _ in false })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.openMailtoURL(url: "mailto:a@example.com"))

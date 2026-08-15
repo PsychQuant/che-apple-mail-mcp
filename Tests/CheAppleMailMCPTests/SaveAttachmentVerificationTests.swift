@@ -44,14 +44,14 @@ final class SaveAttachmentVerificationTests: XCTestCase {
     /// `AttachmentDownloadScriptBuilderTests`, which already documented this.
     private func withSeam(_ runner: @escaping (String) throws -> String,
                           _ body: () async throws -> Void) async throws {
-        await MailController.shared.setTestSeams(scriptRunner: runner, ineligibility: nil)
+        await MailController.shared.setTestSeams(scriptRunner: runner, refusal: nil)
         do {
             try await body()
         } catch {
-            await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil)
+            await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
             throw error
         }
-        await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil)
+        await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
     }
 
     private func verify(_ p: String, allowEmpty: Bool = false) throws -> String {

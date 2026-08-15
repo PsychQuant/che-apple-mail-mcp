@@ -197,10 +197,10 @@ final class RedirectEmailScriptBuilderTests: XCTestCase {
         // addTeardownBlock (awaited by XCTest) instead of defer+Task — a
         // detached reset of the process-wide singleton could land after the
         // next test starts (#264 verify; migrating the #251 sites is #267).
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
-            ineligibility: nil)
+            refusal: { nil })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.redirectEmail(
                 id: "42", mailbox: "INBOX", accountName: "alice@example.com",

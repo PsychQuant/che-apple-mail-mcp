@@ -1,105 +1,111 @@
 import XCTest
 @testable import CheAppleMailMCP
 
-/// #254 — production-site behavioral tests through the MailController test
-/// seams (script-runner + ineligibility overrides). Closes the #241 wiring
-/// guard's blind spot: that guard pins call-site PRESENCE only, so a single
-/// site swapping its disclosure/warn family (compose ↔ reply) stayed green.
-/// These tests drive the REAL composeEmail/createDraft/replyEmail/forwardEmail
-/// and assert the family-correct result suffix — no live Mail involved.
+/// #254/#304 — production-site behavioral tests through the MailController test
+/// seams (script-runner + refusal overrides). Closes the wiring guard's blind
+/// spot: that guard pins call-site PRESENCE only, so a single site wired to the
+/// wrong helper stayed green. These tests drive the REAL
+/// composeEmail/createDraft/replyEmail/forwardEmail — no live Mail involved.
+///
+/// Before #304 these tests asserted which DISCLOSURE SUFFIX each site appended
+/// after silently falling back to the body-assigning path. There is no fallback
+/// and no suffix now, so what they pin instead is the property that replaced it:
+/// each site REFUSES, runs nothing, and returns the clean result verbatim when
+/// it does proceed.
 final class MailControllerSeamTests: XCTestCase {
 
     override func tearDown() async throws {
-        await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil)
+        await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
         try await super.tearDown()
     }
 
-    /// Marker unique to the COMPOSE-family disclosure (`legacyPathDisclosure`).
-    private let composeFamilyMarker = "custom sender (#219) and draft display-name To (#277)"
-    /// Marker unique to the REPLY-family disclosure (`legacyReplyPathDisclosure`).
-    private let replyFamilyMarker = "the quoted original's cite block is normal"
-
-    func testComposeEmail_ineligible_legacyResultCarriesComposeFamilySuffix() async throws {
+    func testComposeEmail_refused_runsNothing() async throws {
+        var scripts = 0
         await MailController.shared.setTestSeams(
-            scriptRunner: { script in
-                XCTAssertTrue(script.contains("make new outgoing message"),
-                              "legacy compose must run the outgoing-message script")
-                return "Email sent successfully"
-            },
-            ineligibility: { "seam-test reason" })
-        let result = try await MailController.shared.composeEmail(
-            to: ["a@b.c"], subject: "s", body: "b")
-        XCTAssertTrue(result.hasPrefix("Email sent successfully"))
-        XCTAssertTrue(result.contains("Reason: seam-test reason."))
-        XCTAssertTrue(result.contains(composeFamilyMarker),
-                      "compose_email must use the COMPOSE-family disclosure: \(result)")
-        XCTAssertFalse(result.contains(replyFamilyMarker))
+            scriptRunner: { _ in scripts += 1; return "Email sent successfully" },
+            refusal: { .accessibilityNotGranted })
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.composeEmail(
+                to: ["a@b.c"], subject: "s", body: "b"))
+        XCTAssertEqual(scripts, 0, "a refused send must run no script at all")
     }
 
-    func testCreateDraft_ineligible_legacyResultCarriesComposeFamilySuffix() async throws {
+    func testCreateDraft_refused_runsNothing() async throws {
+        var scripts = 0
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Draft created successfully" },
-            ineligibility: { "seam-test reason" })
-        let result = try await MailController.shared.createDraft(
-            to: ["a@b.c"], subject: "s", body: "b")
-        XCTAssertTrue(result.hasPrefix("Draft created successfully"))
-        XCTAssertTrue(result.contains(composeFamilyMarker), result)
-        XCTAssertFalse(result.contains(replyFamilyMarker))
+            scriptRunner: { _ in scripts += 1; return "Draft created successfully" },
+            refusal: { .accessibilityNotGranted })
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.createDraft(
+                to: ["a@b.c"], subject: "s", body: "b"))
+        XCTAssertEqual(scripts, 0)
     }
 
-    func testReplyEmail_ineligible_legacyResultCarriesReplyFamilySuffix() async throws {
+    func testReplyEmail_refused_runsNothing() async throws {
+        var scripts = 0
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Reply sent successfully" },
-            ineligibility: { "seam-test reason" })
-        let result = try await MailController.shared.replyEmail(
-            id: "123", mailbox: "INBOX", accountName: "a@b.c", body: "new text")
-        XCTAssertTrue(result.hasPrefix("Reply sent successfully"))
-        XCTAssertTrue(result.contains(replyFamilyMarker),
-                      "reply_email must use the REPLY-family disclosure: \(result)")
-        XCTAssertFalse(result.contains(composeFamilyMarker))
+            scriptRunner: { _ in scripts += 1; return "Reply sent successfully" },
+            refusal: { .accessibilityNotGranted })
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.replyEmail(
+                id: "123", mailbox: "INBOX", accountName: "a@b.c", body: "new text"))
+        XCTAssertEqual(scripts, 0, "a refused reply must not even open the window")
     }
 
-    func testForwardEmail_withBody_ineligible_carriesReplyFamilySuffix() async throws {
+    func testForwardEmail_withBody_refused_runsNothing() async throws {
+        var scripts = 0
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Email forwarded successfully" },
-            ineligibility: { "seam-test reason" })
-        let result = try await MailController.shared.forwardEmail(
-            id: "123", mailbox: "INBOX", accountName: "a@b.c", to: ["x@y.z"], body: "note")
-        XCTAssertTrue(result.hasPrefix("Email forwarded successfully"))
-        XCTAssertTrue(result.contains(replyFamilyMarker), result)
-        XCTAssertFalse(result.contains(composeFamilyMarker))
+            scriptRunner: { _ in scripts += 1; return "Email forwarded successfully" },
+            refusal: { .accessibilityNotGranted })
+        await XCTAssertThrowsErrorAsync(
+            try await MailController.shared.forwardEmail(
+                id: "123", mailbox: "INBOX", accountName: "a@b.c", to: ["x@y.z"], body: "note"))
+        XCTAssertEqual(scripts, 0)
     }
 
-    func testForwardEmail_bodyless_neverSuffixed_neverProbesEligibility() async throws {
+    func testForwardEmail_bodyless_runsDirectly_neverProbesRefusal() async throws {
         // #229 invariant, now pinned at the PRODUCTION site: a bodyless forward
-        // injects nothing → already wrapper-free → no disclosure suffix, and
-        // the eligibility probe must not even run.
+        // assigns nothing → already wrapper-free → runs directly, and the
+        // pre-flight refusal probe must not even run (#304: it needs no
+        // Accessibility grant, so it must not be refused for lacking one).
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in "Email forwarded successfully" },
-            ineligibility: { XCTFail("bodyless forward must not probe eligibility"); return "x" })
+            refusal: { XCTFail("bodyless forward must not probe for a refusal")
+                       return .accessibilityNotGranted })
         let result = try await MailController.shared.forwardEmail(
             id: "123", mailbox: "INBOX", accountName: "a@b.c", to: ["x@y.z"], body: nil)
-        XCTAssertEqual(result, "Email forwarded successfully",
-                       "bodyless forward result must carry NO suffix")
+        XCTAssertEqual(result, "Email forwarded successfully")
     }
 
-    func testEligible_cleanPathFails_falseFromRunner_fallsBackWithClampedEcho() async throws {
-        // Tried-and-failed branch at the production site: eligible → clean path
-        // (mailto script) throws via the runner → legacy runs → clamped echo.
+    func testEligible_cleanPathFails_propagates_withoutASecondScript() async throws {
+        // What used to be the tried-and-failed FALLBACK branch. The clean path
+        // is the only path now, so a GUI failure must surface — and crucially
+        // must not be followed by a second script (that second run was the
+        // body-assigning one).
         enum Boom: Error, LocalizedError { case gui
-            var errorDescription: String? { "window vanished\nmid-flight" } }
+            var errorDescription: String? { "window vanished mid-flight" } }
         var calls = 0
         await MailController.shared.setTestSeams(
-            scriptRunner: { script in
-                calls += 1
-                if script.contains("mailto ") { throw Boom.gui }
-                return "Email sent successfully"
-            },
-            ineligibility: { nil })
-        let result = try await MailController.shared.composeEmail(
+            scriptRunner: { _ in calls += 1; throw Boom.gui },
+            refusal: { nil })
+        do {
+            _ = try await MailController.shared.composeEmail(
+                to: ["a@b.c"], subject: "s", body: "b")
+            XCTFail("the GUI failure must propagate")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("window vanished"),
+                          error.localizedDescription)
+        }
+        XCTAssertEqual(calls, 1, "exactly one attempt — nothing retries it")
+    }
+
+    func testEligible_cleanPathSucceeds_resultHasNoSuffix() async throws {
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in "Draft created successfully" },
+            refusal: { nil })
+        let result = try await MailController.shared.createDraft(
             to: ["a@b.c"], subject: "s", body: "b")
-        XCTAssertGreaterThanOrEqual(calls, 2, "clean attempt + legacy run")
-        XCTAssertTrue(result.contains("Reason: mailto GUI path failed: window vanished mid-flight"),
-                      "clamped (newline-folded) echo must reach the suffix: \(result)")
+        XCTAssertEqual(result, "Draft created successfully",
+                       "no path disclosure — there is only one path")
     }
 }

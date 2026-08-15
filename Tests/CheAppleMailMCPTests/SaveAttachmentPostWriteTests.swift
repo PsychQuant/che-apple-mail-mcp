@@ -70,8 +70,8 @@ final class SaveAttachmentPostWriteTests: XCTestCase {
         FileManager.default.createFile(atPath: p, contents: Data())   // Mail "saved" an empty file
 
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Attachment saved to \(p)" }, ineligibility: nil)
-        defer { Task { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) } }
+            scriptRunner: { _ in "Attachment saved to \(p)" }, refusal: { nil })
+        defer { Task { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) } }
 
         do {
             _ = try await MailController.shared.saveAttachment(
@@ -89,8 +89,8 @@ final class SaveAttachmentPostWriteTests: XCTestCase {
         FileManager.default.createFile(atPath: p, contents: Data(repeating: 1, count: 99))
 
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Attachment saved to \(p)" }, ineligibility: nil)
-        defer { Task { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) } }
+            scriptRunner: { _ in "Attachment saved to \(p)" }, refusal: { nil })
+        defer { Task { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) } }
 
         let out = try await MailController.shared.saveAttachment(
             id: "1", mailbox: "INBOX", accountName: "A",

@@ -29,7 +29,7 @@ final class GuiScriptTimeoutTests: XCTestCase {
     private func resetSeams() {
         let sem = DispatchSemaphore(value: 0)
         Task {
-            await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil)
+            await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
             sem.signal()
         }
         sem.wait()
@@ -43,7 +43,7 @@ final class GuiScriptTimeoutTests: XCTestCase {
     func testPerCallTimeout_boundsAHangingScript() async {
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in Thread.sleep(forTimeInterval: 5); return "late" },
-            ineligibility: nil)
+            refusal: { nil })
         defer { resetSeams() }
         let t0 = Date()
         do {
@@ -63,7 +63,7 @@ final class GuiScriptTimeoutTests: XCTestCase {
     func testSeamOverride_beatsPerCallTimeout() async {
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in Thread.sleep(forTimeInterval: 5); return "late" },
-            ineligibility: nil, scriptTimeout: 0.2)
+            refusal: nil, scriptTimeout: 0.2)
         defer { resetSeams() }
         let t0 = Date()
         do {
@@ -82,7 +82,7 @@ final class GuiScriptTimeoutTests: XCTestCase {
     /// A fast script under a per-call timeout returns its result unchanged.
     func testPerCallTimeout_doesNotAffectAFastScript() async throws {
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "quick" }, ineligibility: nil)
+            scriptRunner: { _ in "quick" }, refusal: { nil })
         defer { resetSeams() }
         let r = try await MailController.shared.runScript("fast", timeout: 30)
         XCTAssertEqual(r, "quick")
@@ -183,7 +183,7 @@ final class GuiScriptTimeoutTests: XCTestCase {
     /// subprocess involved.
     func testRunGuiScript_respectsScriptRunnerSeam() async throws {
         await MailController.shared.setTestSeams(
-            scriptRunner: { src in "seam:\(src.prefix(6))" }, ineligibility: nil)
+            scriptRunner: { src in "seam:\(src.prefix(6))" }, refusal: { nil })
         defer { resetSeams() }
         let r = try await MailController.shared.runGuiScript("payload", timeout: 5)
         XCTAssertEqual(r, "seam:payloa")
@@ -305,12 +305,17 @@ final class GuiScriptTimeoutTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift")
         let source = try String(contentsOf: url, encoding: .utf8)
-        let composeGate = source.components(
-            separatedBy: "!isPostDispatchError($0) && !isTimeoutError($0)").count - 1
-        XCTAssertEqual(composeGate, 1, "compose (always-send) gates unconditionally")
-        let rfGate = source.components(
-            separatedBy: "!isPostDispatchError($0) && !(sendFlow && isTimeoutError($0))").count - 1
-        XCTAssertEqual(rfGate, 2, "reply + forward gate on their send condition")
+        // #304: the gates moved from the router's `shouldFallback` into each
+        // site's `mapRuntimeError` — same condition, now deciding how to
+        // REPORT the failure rather than whether to re-run it on a second path.
+        let unconditional = source.components(
+            separatedBy: "isPostDispatchError(error) || isTimeoutError(error)").count - 1
+        XCTAssertEqual(unconditional, 2,
+                       "compose and forward-with-body always send, so they gate unconditionally")
+        let sendFlowGate = source.components(
+            separatedBy: "isPostDispatchError(error) || (sendFlow && isTimeoutError(error))").count - 1
+        XCTAssertEqual(sendFlowGate, 1,
+                       "reply gates on its send condition (a saved draft sends nothing)")
     }
 
     /// Termination is REAL (verify Lens C P2): promptness alone can't

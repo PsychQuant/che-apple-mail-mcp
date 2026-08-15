@@ -24,10 +24,10 @@ final class DerivedAddressingThreadingTests: XCTestCase {
                 // Minimal well-formed reply; getEmail parses a delimited record.
                 return ""
             },
-            ineligibility: nil)
+            refusal: { nil })
         defer {
             let sem = DispatchSemaphore(value: 0)
-            Task { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil); sem.signal() }
+            Task { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil); sem.signal() }
             sem.wait()
         }
         _ = try? await MailController.shared.getEmail(

@@ -36,7 +36,7 @@ final class NoLiveAppleScriptUnderXCTestTests: XCTestCase {
     func testUnseamedCallFailsFastAndNamesTheProblem() async throws {
         try XCTSkipIf(MailController.liveAppleScriptAllowedInTests,
                       "live mode intentionally permits the real path")
-        await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil)
+        await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
 
         let start = Date()
         do {

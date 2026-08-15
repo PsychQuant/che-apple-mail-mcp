@@ -1,13 +1,17 @@
 import XCTest
 @testable import CheAppleMailMCP
 
-/// #241 — regression-lock for the #237/#229 disclosure WIRING. The pure
-/// helpers (`mailtoIneligibilityReason`, `legacyPathDisclosure`, …) were
-/// already pinned, but the control flow that calls them lived inline in a
-/// singleton actor and had zero non-live coverage: deleting the wiring kept
-/// the whole suite green. `routeWrapperFreeCompose` extracts that control
-/// flow behind injectable closures so these tests can drive all branches.
-final class WrapperFreeRouteTests: XCTestCase {
+/// #241/#304 — regression-lock for the composing-path WIRING. The pure helpers
+/// (`composeRefusal`, `ComposeRefusal.message`, …) are pinned elsewhere, but the
+/// control flow that calls them lives inline in a singleton actor and had zero
+/// non-live coverage: deleting the wiring kept the whole suite green.
+/// `dispatchComposePath` extracts that control flow behind injectable closures.
+///
+/// #304 replaced the two-path router (clean-or-disclosed-legacy) with this
+/// single-path dispatcher. What used to be a route decision is now a refusal,
+/// so the branches these tests drive are: refuse before anything runs, run and
+/// return verbatim, or run and propagate.
+final class ComposeDispatchTests: XCTestCase {
 
     private enum Boom: Error, LocalizedError {
         case gui(String)
@@ -17,98 +21,84 @@ final class WrapperFreeRouteTests: XCTestCase {
         }
     }
 
-    /// Route call with spy closures; returns (result, warnsIneligible,
-    /// warnsFailed, cleanCalls, legacyCalls).
-    private func drive(
-        reason: String?,
-        clean: @escaping () throws -> String,
-        legacy: @escaping () throws -> String = { "Legacy OK" }
-    ) throws -> (result: String, ineligibleWarns: [String], failedWarns: [String],
-                 cleanCalls: Int, legacyCalls: Int) {
-        var ineligibleWarns: [String] = []
-        var failedWarns: [String] = []
+    func testProceed_cleanSucceeds_resultVerbatim() throws {
         var cleanCalls = 0
-        var legacyCalls = 0
-        let result = try routeWrapperFreeCompose(
-            ineligibilityReason: reason,
-            cleanPath: { cleanCalls += 1; return try clean() },
-            legacyPath: { legacyCalls += 1; return try legacy() },
-            disclosure: { legacyPathDisclosure(reason: $0) },
-            warnIneligible: { ineligibleWarns.append($0) },
-            warnTriedAndFailed: { failedWarns.append($0.localizedDescription) },
-            fallbackReason: { "mailto GUI path failed: \(clampedErrorEcho($0.localizedDescription))" })
-        return (result, ineligibleWarns, failedWarns, cleanCalls, legacyCalls)
+        let result = try dispatchComposePath(
+            refusal: nil,
+            cleanPath: { cleanCalls += 1; return "Draft created successfully" })
+        XCTAssertEqual(result, "Draft created successfully",
+                       "there is no second path, so there is nothing to disclose")
+        XCTAssertFalse(result.contains("[legacy path"))
+        XCTAssertEqual(cleanCalls, 1)
     }
 
-    func testEligible_cleanSucceeds_noSuffix_noWarns_legacyNeverRuns() throws {
-        let r = try drive(reason: nil, clean: { "Draft created successfully" })
-        XCTAssertEqual(r.result, "Draft created successfully",
-                       "clean-path result must carry NO legacy disclosure suffix")
-        XCTAssertFalse(r.result.contains("[legacy path"))
-        XCTAssertTrue(r.ineligibleWarns.isEmpty)
-        XCTAssertTrue(r.failedWarns.isEmpty)
-        XCTAssertEqual(r.cleanCalls, 1)
-        XCTAssertEqual(r.legacyCalls, 0)
+    func testRefused_throwsTheMessage_cleanPathNeverRuns() {
+        XCTAssertThrowsError(try dispatchComposePath(
+            refusal: .accessibilityNotGranted,
+            cleanPath: { XCTFail("clean path must not run"); return "" })) { error in
+            XCTAssertEqual("\(error)".contains("Accessibility"), true, "\(error)")
+            XCTAssertTrue("\(error)".contains("open_mailto"),
+                          "the refusal must reach the caller with its alternative: \(error)")
+        }
     }
 
-    func testEligible_cleanThrows_warnsOnce_legacyResultCarriesClampedReason() throws {
-        let r = try drive(reason: nil, clean: { throw Boom.gui("window vanished\nline2") })
-        XCTAssertEqual(r.failedWarns.count, 1, "tried-and-failed warn fires exactly once")
-        XCTAssertTrue(r.ineligibleWarns.isEmpty, "ineligible warn must NOT fire on the tried branch")
-        XCTAssertEqual(r.legacyCalls, 1)
-        XCTAssertTrue(r.result.hasPrefix("Legacy OK"))
-        XCTAssertTrue(r.result.contains("Reason: mailto GUI path failed: window vanished line2."),
-                      "suffix must name the reason with the newline-folded (clamped) error echo: \(r.result)")
-        XCTAssertFalse(r.result.contains("\n"), "clamped echo keeps the suffix single-line")
+    func testRuntimeError_propagates_unmappedByDefault() {
+        XCTAssertThrowsError(try dispatchComposePath(
+            refusal: nil,
+            cleanPath: { throw Boom.gui("window vanished") })) { error in
+            XCTAssertTrue(error.localizedDescription.contains("window vanished"),
+                          error.localizedDescription)
+        }
     }
 
-    func testIneligible_warnsOnce_cleanNeverRuns_suffixNamesReason() throws {
-        let reason = "custom from_address forces the legacy path until #219"
-        let r = try drive(reason: reason, clean: { XCTFail("clean path must not run"); return "" })
-        XCTAssertEqual(r.ineligibleWarns, [reason], "ineligible warn fires exactly once with the named reason")
-        XCTAssertTrue(r.failedWarns.isEmpty)
-        XCTAssertEqual(r.cleanCalls, 0)
-        XCTAssertEqual(r.legacyCalls, 1)
-        XCTAssertTrue(r.result.contains("Reason: \(reason)."),
-                      "suffix must carry the ineligibility reason verbatim: \(r.result)")
+    func testRuntimeError_mapperRewritesIt() {
+        XCTAssertThrowsError(try dispatchComposePath(
+            refusal: nil,
+            cleanPath: { throw Boom.gui("POSTDISPATCH: gone") },
+            mapRuntimeError: { _ in
+                MailError.scriptFailed(message: "send state UNKNOWN — check Sent/Outbox", code: -1)
+            })) { error in
+            XCTAssertTrue("\(error)".contains("send state UNKNOWN"), "\(error)")
+        }
     }
 
-    func testLegacyThrow_propagates_fromBothBranches() {
-        XCTAssertThrowsError(try drive(reason: "some reason",
-                                       clean: { "" },
-                                       legacy: { throw Boom.gui("legacy died") }))
-        XCTAssertThrowsError(try drive(reason: nil,
-                                       clean: { throw Boom.gui("clean died") },
-                                       legacy: { throw Boom.gui("legacy died") }))
+    func testMapper_isNotConsultedOnTheRefusalBranch() {
+        // A refusal happens BEFORE anything runs, so it must never be dressed
+        // up as a runtime condition — that is the distinction the whole design
+        // rests on (pre-flight = nothing happened; runtime = something might have).
+        XCTAssertThrowsError(try dispatchComposePath(
+            refusal: .emptySubject,
+            cleanPath: { XCTFail("clean path must not run"); return "" },
+            mapRuntimeError: { _ in
+                XCTFail("the runtime mapper must not see a pre-flight refusal")
+                return MailError.scriptCreationFailed
+            })) { error in
+            XCTAssertTrue("\(error)".contains("subject"), "\(error)")
+        }
     }
 
-    func testClampIntegration_longMultilineErrorBounded() throws {
-        let longError = String(repeating: "x", count: 500) + "\r\n" + String(repeating: "y", count: 500)
-        let r = try drive(reason: nil, clean: { throw Boom.gui(longError) })
-        let suffix = r.result.dropFirst("Legacy OK".count)
-        // legacyPathDisclosure's fixed boilerplate is ~330 chars; the clamped
-        // echo adds at most ~200 more. 1000-char input must not reach 600.
-        XCTAssertLessThan(suffix.count, 600,
-                          "clamped echo caps the disclosure suffix length: \(suffix.count) chars")
-        XCTAssertFalse(suffix.contains("\n"))
-        XCTAssertFalse(suffix.contains("\r"))
-    }
-
-    func testWiring_allFourCallSitesRouteThroughTheRouter() throws {
+    func testWiring_allFourCallSitesRouteThroughTheDispatcher() throws {
         // The actual #241 target: the WIRING must not be deletable while the
-        // suite stays green. Pin all four compose-family call sites onto the
-        // router (compose_email, create_draft, reply_email, forward_email).
+        // suite stays green. compose_email, create_draft, reply_email, and
+        // forward_email-with-body. A bodyless forward is deliberately NOT here:
+        // it assigns no body, so it needs no Accessibility grant and must not
+        // be refused for lacking one.
+        let source = try Self.mailControllerSource()
+        let count = source.components(separatedBy: "try dispatchComposePath(").count - 1
+        XCTAssertEqual(count, 4,
+                       "expected compose/createDraft/reply/forward-with-body to route via "
+                       + "dispatchComposePath; found \(count)")
+        XCTAssertFalse(source.contains("routeWrapperFreeCompose"),
+                       "the two-path router is gone (#304)")
+        XCTAssertFalse(source.contains("legacyPath:"),
+                       "no call site may still name a legacy path (#304)")
+    }
+
+    static func mailControllerSource() throws -> String {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift")
-        let source = try String(contentsOf: url, encoding: .utf8)
-        let count = source.components(separatedBy: "try routeWrapperFreeCompose(").count - 1
-        XCTAssertEqual(count, 4,
-                       "expected compose/createDraft/reply/forward to route via routeWrapperFreeCompose; found \(count)")
-        XCTAssertFalse(source.contains("var legacyReason"),
-                       "inline wiring must be gone — replaced by the router (#241)")
-        XCTAssertFalse(source.contains("var legacyReplyReason"))
-        XCTAssertFalse(source.contains("var legacyForwardReason"))
+        return try String(contentsOf: url, encoding: .utf8)
     }
 }
 
@@ -211,62 +201,43 @@ final class SendStageNoRefallbackTests: XCTestCase {
         var errorDescription: String? { "POSTDISPATCH: window vanished mid-send" }
     }
 
-    func testRouter_shouldFallbackFalse_rethrowsMapped_neverRunsLegacy() {
-        var legacyCalls = 0
-        var failedWarns = 0
-        XCTAssertThrowsError(try routeWrapperFreeCompose(
-            ineligibilityReason: nil,
-            cleanPath: { throw Boom.post },
-            legacyPath: { legacyCalls += 1; return "Legacy OK" },
-            disclosure: { _ in "" },
-            warnIneligible: { _ in },
-            warnTriedAndFailed: { _ in failedWarns += 1 },
-            fallbackReason: { _ in "unused" },
-            shouldFallback: { _ in false },
-            mapNoFallbackError: { _ in
-                MailError.scriptFailed(message: "send state UNKNOWN — check Sent/Outbox before retrying", code: -1)
+    func testDispatch_postDispatchError_surfacesMappedUnknownSendState() {
+        // The sentinel is carried by MailError.scriptFailed's message, not by
+        // any error whose description happens to start with the token —
+        // isPostDispatchError matches the case, then the prefix (#242).
+        XCTAssertThrowsError(try dispatchComposePath(
+            refusal: nil,
+            cleanPath: {
+                throw MailError.scriptFailed(
+                    message: "POSTDISPATCH: window vanished mid-send", code: -1)
+            },
+            mapRuntimeError: { error in
+                isPostDispatchError(error)
+                    ? MailError.scriptFailed(
+                        message: "send state UNKNOWN — check Sent/Outbox before retrying", code: -1)
+                    : error
             })) { error in
             XCTAssertTrue("\(error)".contains("send state UNKNOWN"),
-                          "no-fallback branch must surface the mapped unknown-send-state error")
+                          "a post-dispatch failure must surface as unknown send state")
         }
-        XCTAssertEqual(legacyCalls, 0, "legacy path must NEVER run when fallback is refused")
-        XCTAssertEqual(failedWarns, 0, "the tried-and-failed fallback warn must not fire on the refused branch")
-    }
-
-    func testRouter_shouldFallbackDefaultsTrue_existingBehaviorUnchanged() throws {
-        var legacyCalls = 0
-        let result = try routeWrapperFreeCompose(
-            ineligibilityReason: nil,
-            cleanPath: { throw Boom.post },
-            legacyPath: { legacyCalls += 1; return "Legacy OK" },
-            disclosure: { " [\($0)]" },
-            warnIneligible: { _ in },
-            warnTriedAndFailed: { _ in },
-            fallbackReason: { _ in "reason" })
-        XCTAssertEqual(legacyCalls, 1)
-        XCTAssertTrue(result.hasPrefix("Legacy OK"))
     }
 
     // MARK: production wiring
 
-    func testWiring_composeEmailRefusesPostDispatchFallback() throws {
+    func testWiring_sendCapableSitesConsultTheSentinel() throws {
         // The three send-capable sites (compose_email; reply_email and
         // forward_email since #254) consult isPostDispatchError; create_draft
-        // (⌘S) must NOT — a duplicated draft is visible and harmless.
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift")
-        let source = try String(contentsOf: url, encoding: .utf8)
-        // #301: the compose gate now ALSO refuses fallback on a send-flow
-        // timeout (the deadline can fire on either side of ⇧⌘D) — the sentinel
-        // consultation this guard pins is unchanged, only strengthened.
-        XCTAssertTrue(source.contains("shouldFallback: { !isPostDispatchError($0) && !isTimeoutError($0) }"),
-                      "composeEmail must refuse legacy fallback for post-dispatch send errors (#242) "
-                      + "and send-flow timeouts (#301)")
+        // (⌘S) must NOT — a duplicated draft is visible and harmless, and
+        // gating it would only make draft creation fail more often (#301).
+        let source = try ComposeDispatchTests.mailControllerSource()
         XCTAssertEqual(
-            source.components(separatedBy: "isPostDispatchError").count - 1, 4,
-            "the three send-capable router sites (composeEmail, replyEmail, forwardEmail) "
-            + "plus the #239 strict compose branch consult the sentinel")
+            source.components(separatedBy: "isPostDispatchError").count - 1, 3,
+            "exactly the three send-capable sites (composeEmail, replyEmail, forwardEmail) "
+            + "consult the sentinel")
+        // #301: compose also refuses to present a send-flow TIMEOUT as an
+        // ordinary error — the deadline can fire on either side of ⇧⌘D.
+        XCTAssertTrue(source.contains("isTimeoutError"),
+                      "the send flows must classify timeouts as unknown send state (#301)")
     }
 }
 
@@ -279,7 +250,7 @@ final class ReplyForwardSendStageTests: XCTestCase {
         // Deterministic seam reset (verify #254 DA) — a fire-and-forget Task
         // reset is a detached mutation race on the shared actor whose safety
         // would rest only on incidental test-class ordering.
-        await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil)
+        await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
         try await super.tearDown()
     }
 
@@ -353,7 +324,7 @@ final class ReplyForwardSendStageTests: XCTestCase {
                 calls += 1
                 throw MailError.scriptFailed(message: "POSTDISPATCH: window gone mid-send", code: -1)
             },
-            ineligibility: { nil })
+            refusal: { nil })
         do {
             _ = try await MailController.shared.replyEmail(
                 id: "123", mailbox: "INBOX", accountName: "a@b.c", body: "new text")
