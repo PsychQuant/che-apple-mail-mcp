@@ -147,17 +147,17 @@ final class AttachmentDownloadScriptBuilderTests: XCTestCase {
         _ runner: @escaping (String) throws -> String,
         _ body: () async throws -> Void
     ) async throws {
-        await MailController.shared.setTestSeams(scriptRunner: runner, ineligibility: nil)
+        await MailController.shared.setTestSeams(scriptRunner: runner, refusal: nil)
         // Reset SYNCHRONOUSLY (await) on both paths — a detached `Task{}` reset
         // could run after the NEXT test installs its own seam and clobber it,
         // making the suite order-dependent / flaky.
         do {
             try await body()
         } catch {
-            await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil)
+            await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
             throw error
         }
-        await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil)
+        await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
     }
 
     /// The core best-effort promise: if a later save attempt succeeds (the

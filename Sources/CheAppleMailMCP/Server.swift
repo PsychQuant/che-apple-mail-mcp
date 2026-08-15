@@ -262,27 +262,27 @@ class CheAppleMailMCPServer {
             // Compose Tools
             Tool(
                 name: "compose_email",
-                description: "Compose and send a new email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Wrapper-free clean-body path (#175) is used only when ALL hold: format='plain' + non-empty subject + Accessibility granted (a custom from_address now RIDES the clean path via a verified From-popup selection with read-back, #219 — any popup mismatch falls back to legacy with the correct sender) + CHE_MAIL_DISABLE_MAILTO_COMPOSE not set + ASCII-only attachment paths (non-ASCII paths hang the GUI attach flow, #220 — they route to the legacy path whose native attach handles any path). Otherwise the legacy path runs and Mail wraps the body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#237). If the clean path fails AT the send-keystroke stage, the tool does NOT retry via the legacy path (the mail may already be sent — a retry could send a duplicate): it returns an unknown-send-state error telling you to check Sent/Outbox before re-sending (#242).",
+                description: "Compose and send a new email. The body always comes from Mail's own editor, never from an AppleScript body assignment — that assignment is what makes Mail wrap the whole letter in <blockquote type=\"cite\">, which the sender cannot see locally while Gmail and Outlook show it as quoted text (#304). When the clean path cannot run, the call FAILS with the reason and an alternative and creates/sends nothing. Exactly six reasons: format is not 'plain'; empty subject; Accessibility not granted (grant it, or use open_mailto — zero TCC, no attachments); from_address is not a bare addr-spec; an attachment path contains non-ASCII characters (create the draft without attachments and drag the file in, #220); a cc/bcc recipient carries a display name (use bare addresses; `to` display names are supported on drafts, #277). If the clean path fails AT the send-keystroke stage the tool does NOT retry (the mail may already be sent — a retry could send a duplicate): it returns an unknown-send-state error telling you to check Sent/Outbox before re-sending (#242).",
+
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
-                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipient email addresses. Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); display-name recipients route via the legacy path (mailto carries addr-spec only, RFC 6068) - Mail shows the name natively but the body gets the blockquote wrap + disclosure.")]),
+                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipient email addresses. Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); on create_draft a display-name `to` is filled through the GUI (#277); a display-name cc/bcc is REFUSED, because a mailto URL carries addr-spec only (RFC 6068) and the Cc/Bcc fields can be hidden — use bare addresses there.")]),
                         "subject": .object(["type": .string("string"), "description": .string("Email subject")]),
                         "body": .object(["type": .string("string"), "description": .string("Email body content (interpreted according to 'format')")]),
-                        "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("CC recipients (optional). Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); display-name recipients route via the legacy path (mailto carries addr-spec only, RFC 6068) - Mail shows the name natively but the body gets the blockquote wrap + disclosure.")]),
-                        "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("BCC recipients (optional). Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); display-name recipients route via the legacy path (mailto carries addr-spec only, RFC 6068) - Mail shows the name natively but the body gets the blockquote wrap + disclosure.")]),
+                        "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("CC recipients (optional). Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); on create_draft a display-name `to` is filled through the GUI (#277); a display-name cc/bcc is REFUSED, because a mailto URL carries addr-spec only (RFC 6068) and the Cc/Bcc fields can be hidden — use bare addresses there.")]),
+                        "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("BCC recipients (optional). Accepts bare addresses or RFC 5322 mailbox form (Name <a@b.c>, #251); on create_draft a display-name `to` is filled through the GUI (#277); a display-name cc/bcc is REFUSED, because a mailto URL carries addr-spec only (RFC 6068) and the Cc/Bcc fields can be hidden — use bare addresses there.")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")]),
-                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is and is the only format eligible for the wrapper-free clean-body path (#175); 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML — both route to the legacy path whose body Mail wraps in a quote block on some mobile clients.")]),
-                        "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true AND `format` is `markdown`, link URLs whose scheme is not in {http, https, mailto, tel} are rendered as plain text (no `<a>` wrapper) — defends against `[click](javascript:...)` and `data:`/`file:`/`vbscript:` XSS injection. Default false (preserves backward compat). No effect when `format` is `plain` (no link parsing happens) or `html` (caller-trusted raw HTML — you must sanitize your own anchors). Non-absolute URLs (e.g. `[home](/relative/path)` or empty `[text]()`) also have their anchor dropped under sanitize_links=true since they lack an allowlisted scheme.")]),
-                        "require_wrapper_free": .object(["type": .string("boolean"), "description": .string("Optional, default false. When true: if the wrapper-free mailto path is unavailable (non-plain format / empty subject / no Accessibility — which also blocks the #219 sender popup a custom from_address needs / env hatch), FAIL with the named reason and alternatives — no wrapped-body draft is created and nothing is sent; a clean-path GUI failure also propagates without legacy fallback (#239). When false/omitted: graceful fallback with disclosure, as before.")]),
-                        "from_address": .object(["type": .string("string"), "description": .string("Optional — email address (or 'Name <email>') of the account to send FROM. Must match one of your Mail.app accounts' addresses. Omit to use Mail.app's default account. Use list_accounts to discover available email addresses. Clean path supported (#219): the GUI selects this account via the compose window's From popup and READS BACK the selection — on any mismatch the tool falls back to the legacy path, which sets the sender natively (correct account guaranteed) but wraps the body in <blockquote type=\"cite\">; the result string discloses which happened. Needs Accessibility; without it the legacy path runs directly.")])
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain")]), "description": .string("Body format. \"plain\" is the ONLY supported value and the default when omitted: the body is delivered verbatim through Mail's own editor. \"markdown\" and \"html\" were removed in #304 — rich text can only be delivered by assigning the AppleScript html-content property, and that is what wraps the whole letter in <blockquote type=\"cite\"> (invisible to the sender, shown as quoted text by Gmail and Outlook). Passing either fails with that explanation; see #308 / #309 for rich-text compose.")]),
+                        "from_address": .object(["type": .string("string"), "description": .string("Optional — email address (or 'Name <email>') of the account to send FROM. Must match one of your Mail.app accounts' addresses. Omit to use Mail.app's default account. Use list_accounts to discover available email addresses. Clean path supported (#219): the GUI selects this account via the compose window's From popup and READS BACK the selection, comparing addr-spec exactly — any mismatch aborts the call rather than risk sending from the wrong account. Needs Accessibility, and the address must be a bare addr-spec (a quoted local-part cannot be matched safely, so it is refused).")]),
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
             ),
             Tool(
                 name: "reply_email",
-                description: "Reply to an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). 'plain' embeds the original message as RFC 3676 `> `-prefixed quoted lines (signature + rich text preserved by Mail.app); 'markdown'/'html' wrap the original's PLAIN-TEXT content (HTML-escaped) in a `<blockquote>` — Apple's AppleScript denies read access to the original message's HTML on current macOS, so signature / rich-text formatting is NOT preserved in non-plain modes. Use 'plain' if signature preservation matters. Optionally add extra CC, attach files, and save as draft instead of sending. Clean new-body path (#218) is used only when ALL hold: format='plain' + Accessibility granted + CHE_MAIL_DISABLE_PASTE_REPLY not set; otherwise the legacy path runs and Mail wraps the NEW body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients; the quoted original's cite block is normal) — the result string discloses which path ran and why (#229).",
+                description: "Reply to an email. Mail's native reply verb builds the quoted original (correct threading headers and cite block) and only the NEW body is pasted in at the cursor. The body always comes from Mail's own editor, never from an AppleScript body assignment — that assignment is what makes Mail wrap the whole letter in <blockquote type=\"cite\">, which the sender cannot see locally while Gmail and Outlook show it as quoted text (#304). When the clean path cannot run, the call FAILS with the reason and an alternative and creates/sends nothing. Two reasons apply here: format is not 'plain'; Accessibility not granted. Optionally add extra CC, attach files, and save as draft instead of sending.",
+
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -295,15 +295,15 @@ class CheAppleMailMCPServer {
                         "cc_additional": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Extra CC recipients to add on top of those derived from 'reply_all'. Email addresses (RFC 5322 addr-spec). Also accepts RFC 5322 mailbox form (Name <a@b.c>, #251) - the reply paste path sets recipient names natively (no mailto involved, no path change).")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach to the reply.")]),
                         "save_as_draft": .object(["type": .string("boolean"), "description": .string("If true, save the reply as a draft instead of sending it (default: false). Use when you want a human to review before send.")]),
-                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) prepends the user body to the original message quoted with RFC 3676 `> ` line prefix — preserves signature + rich text; 'markdown'/'html' produce rich text user body but wrap the original's plain-text (HTML-escaped) in a `<blockquote>` because AppleScript denies html-content read on current macOS — signature lost.")]),
-                        "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true AND `format` is `markdown`, link URLs whose scheme is not in {http, https, mailto, tel} are rendered as plain text (no `<a>` wrapper) — defends against `[click](javascript:...)` and `data:`/`file:`/`vbscript:` XSS injection. Default false (preserves backward compat). No effect when `format` is `plain` (no link parsing happens) or `html` (caller-trusted raw HTML — you must sanitize your own anchors). Non-absolute URLs (e.g. `[home](/relative/path)` or empty `[text]()`) also have their anchor dropped under sanitize_links=true since they lack an allowlisted scheme.")])
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain")]), "description": .string("Body format. \"plain\" is the ONLY supported value and the default when omitted: the body is delivered verbatim through Mail's own editor. \"markdown\" and \"html\" were removed in #304 — rich text can only be delivered by assigning the AppleScript html-content property, and that is what wraps the whole letter in <blockquote type=\"cite\"> (invisible to the sender, shown as quoted text by Gmail and Outlook). Passing either fails with that explanation; see #308 / #309 for rich-text compose.")]),
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("body")])
                 ])
             ),
             Tool(
                 name: "forward_email",
-                description: "Forward an email. Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). 'plain' embeds the original message as RFC 3676 `> `-prefixed quoted lines when body is provided (signature + rich text preserved); 'markdown'/'html' wrap the original's PLAIN-TEXT content (HTML-escaped) in a `<blockquote>` — Apple's AppleScript denies read access to the original's HTML on current macOS, so signature / rich-text formatting is NOT preserved in non-plain modes. Body is optional (omit for a bare forward without commentary — a bodyless forward is always wrapper-free). When a body IS provided, the clean new-body path (#218) is used only when ALL hold: format='plain' + Accessibility granted + CHE_MAIL_DISABLE_PASTE_REPLY not set; otherwise the legacy path runs and Mail wraps the NEW body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#229).",
+                description: "Forward an email. Mail's native forward verb builds the quoted original and only the NEW body is pasted in at the cursor. Body is optional — omit it for a bare forward, which assigns nothing at all and therefore needs no Accessibility grant. The body always comes from Mail's own editor, never from an AppleScript body assignment — that assignment is what makes Mail wrap the whole letter in <blockquote type=\"cite\">, which the sender cannot see locally while Gmail and Outlook show it as quoted text (#304). When the clean path cannot run, the call FAILS with the reason and an alternative and creates/sends nothing. When a body IS provided, exactly Two reasons can refuse the call: format is not 'plain'; Accessibility not granted.",
+
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -313,8 +313,7 @@ class CheAppleMailMCPServer {
                         "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
                         "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipients to forward to")]),
                         "body": .object(["type": .string("string"), "description": .string("Optional message to add (interpreted according to 'format')")]),
-                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default), 'markdown', or 'html'.")]),
-                        "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true AND `format` is `markdown`, link URLs whose scheme is not in {http, https, mailto, tel} are rendered as plain text (no `<a>` wrapper) — defends against `[click](javascript:...)` and `data:`/`file:`/`vbscript:` XSS injection. Default false (preserves backward compat). No effect when `format` is `plain` (no link parsing happens) or `html` (caller-trusted raw HTML — you must sanitize your own anchors). Non-absolute URLs (e.g. `[home](/relative/path)` or empty `[text]()`) also have their anchor dropped under sanitize_links=true since they lack an allowlisted scheme.")])
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain")]), "description": .string("Body format. \"plain\" is the ONLY supported value and the default when omitted: the body is delivered verbatim through Mail's own editor. \"markdown\" and \"html\" were removed in #304 — rich text can only be delivered by assigning the AppleScript html-content property, and that is what wraps the whole letter in <blockquote type=\"cite\"> (invisible to the sender, shown as quoted text by Gmail and Outlook). Passing either fails with that explanation; see #308 / #309 for rich-text compose.")]),
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("to")])
                 ])
@@ -335,7 +334,8 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "create_draft",
-                description: "Create a new draft email. Display-name To recipients (Name <email>) can ride the clean path on DRAFTS: the GUI fills the To field via clipboard paste after the window opens (#277, needs Accessibility; TO ONLY — display-name cc/bcc keep the legacy path, so cc/bcc names are set natively; verify To in the saved draft). Body formatting is controlled by the 'format' parameter (default: 'plain'; use 'markdown' or 'html' for rich text). Wrapper-free clean-body path (#175) is used only when ALL hold: format='plain' + non-empty subject + Accessibility granted (a custom from_address now RIDES the clean path via a verified From-popup selection with read-back, #219 — any popup mismatch falls back to legacy with the correct sender) + CHE_MAIL_DISABLE_MAILTO_COMPOSE not set + ASCII-only attachment paths (non-ASCII paths hang the GUI attach flow, #220 — they route to the legacy path whose native attach handles any path). Otherwise the legacy path runs and Mail wraps the body in <blockquote type=\"cite\"> (renders as quoted text on some mobile clients) — the result string discloses which path ran and why (#237).",
+                description: "Create a new draft email. Display-name To recipients (Name <email>) ride the clean path on DRAFTS: the GUI fills the To field via clipboard paste after the window opens (#277, needs Accessibility; TO ONLY — verify To in the saved draft). The body always comes from Mail's own editor, never from an AppleScript body assignment — that assignment is what makes Mail wrap the whole letter in <blockquote type=\"cite\">, which the sender cannot see locally while Gmail and Outlook show it as quoted text (#304). When the clean path cannot run, the call FAILS with the reason and an alternative and creates/sends nothing. Exactly six reasons: format is not 'plain'; empty subject; Accessibility not granted (grant it, or use open_mailto — zero TCC, no attachments); from_address is not a bare addr-spec; an attachment path contains non-ASCII characters (create the draft without attachments and drag the file in, #220); a cc/bcc recipient carries a display name (use bare addresses; `to` display names are supported on drafts, #277).",
+
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -345,17 +345,15 @@ class CheAppleMailMCPServer {
                         "subject": .object(["type": .string("string"), "description": .string("Email subject")]),
                         "body": .object(["type": .string("string"), "description": .string("Email body content (interpreted according to 'format')")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")]),
-                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format. 'plain' (default) passes body as-is and is the only format eligible for the wrapper-free clean-body path (#175); 'markdown' renders bold/italic/code/links/lists; 'html' inserts raw HTML — both route to the legacy path whose body Mail wraps in a quote block on some mobile clients.")]),
-                        "sanitize_links": .object(["type": .string("boolean"), "description": .string("If true AND `format` is `markdown`, link URLs whose scheme is not in {http, https, mailto, tel} are rendered as plain text (no `<a>` wrapper) — defends against `[click](javascript:...)` and `data:`/`file:`/`vbscript:` XSS injection. Default false (preserves backward compat). No effect when `format` is `plain` (no link parsing happens) or `html` (caller-trusted raw HTML — you must sanitize your own anchors). Non-absolute URLs (e.g. `[home](/relative/path)` or empty `[text]()`) also have their anchor dropped under sanitize_links=true since they lack an allowlisted scheme.")]),
-                        "require_wrapper_free": .object(["type": .string("boolean"), "description": .string("Optional, default false. When true: if the wrapper-free mailto path is unavailable (non-plain format / empty subject / no Accessibility — which also blocks the #219 sender popup a custom from_address needs / env hatch), FAIL with the named reason and alternatives — no wrapped-body draft is created and nothing is sent; a clean-path GUI failure also propagates without legacy fallback (#239). When false/omitted: graceful fallback with disclosure, as before.")]),
-                        "from_address": .object(["type": .string("string"), "description": .string("Optional — email address of the account to save the draft UNDER (sender selection). Must match one of your Mail.app accounts' addresses. Omit to use Mail.app's default account. Use list_accounts to discover available email addresses. Clean path supported (#219): the GUI selects this account via the compose window's From popup and READS BACK the selection — on any mismatch the tool falls back to the legacy path, which sets the sender natively (correct account guaranteed) but wraps the body in <blockquote type=\"cite\">; the result string discloses which happened. Needs Accessibility; without it the legacy path runs directly.")])
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain")]), "description": .string("Body format. \"plain\" is the ONLY supported value and the default when omitted: the body is delivered verbatim through Mail's own editor. \"markdown\" and \"html\" were removed in #304 — rich text can only be delivered by assigning the AppleScript html-content property, and that is what wraps the whole letter in <blockquote type=\"cite\"> (invisible to the sender, shown as quoted text by Gmail and Outlook). Passing either fails with that explanation; see #308 / #309 for rich-text compose.")]),
+                        "from_address": .object(["type": .string("string"), "description": .string("Optional — email address of the account to save the draft UNDER (sender selection). Must match one of your Mail.app accounts' addresses. Omit to use Mail.app's default account. Use list_accounts to discover available email addresses. Clean path supported (#219): the GUI selects this account via the compose window's From popup and READS BACK the selection, comparing addr-spec exactly — any mismatch aborts the call rather than risk sending from the wrong account. Needs Accessibility, and the address must be a bare addr-spec (a quoted local-part cannot be matched safely, so it is refused).")]),
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
             ),
             Tool(
                 name: "update_draft",
-                description: "Replace an existing draft (upsert): locate it by draft_id (from list_drafts) or an EXACT subject_match, create the replacement via the same mechanism and eligibility rules as create_draft, then delete the old draft. Order is deliberately create-THEN-delete with a post-create receipt — the failure direction is always toward keeping drafts (worst case both MAY exist, recoverable), never toward losing both; this is the reverse of the naive delete-first flow, chosen for data safety. Ambiguity always refuses: 0 matches (update requires an existing draft — use create_draft for a new one) or >1 matches (candidates {id, subject} are listed; retry with draft_id). Notes: Apple Mail drafts cannot be edited in place, so the replacement is a NEW draft with a NEW id (never reuse the old id); the replacement is created under create_draft's account semantics (default account unless from_address) which may differ from the old draft's account; the body inherits create_draft's wrapper-free eligibility and disclosure (#175/#237/#239) — on a draft, a custom from_address (#219) and display-name To recipients (#277) ride the CLEAN path when Accessibility is granted, while display-name cc/bcc still route via the legacy path (blockquote-wrapped body, disclosed in new_draft). Deletion moves the old draft to Trash (recoverable). The delete is double-gated: (a) a post-create RECEIPT re-lists the drafts and requires a NEW id to appear before the old draft is touched (a GUI-path phantom success keeps the old draft, reported as deleted_old:false / not confirmed); (b) the delete predicate conjoins id AND exact subject, so a cross-account id collision cannot delete another account's draft. If deletion fails after a confirmed create, the result reports deleted_old:false with a note matched to what is known (confirmed absent / state unknown / both MAY exist) — nothing is silently lost or over-claimed.",
+                description: "Replace an existing draft (upsert): locate it by draft_id (from list_drafts) or an EXACT subject_match, create the replacement via the same mechanism and eligibility rules as create_draft, then delete the old draft. Order is deliberately create-THEN-delete with a post-create receipt — the failure direction is always toward keeping drafts (worst case both MAY exist, recoverable), never toward losing both; this is the reverse of the naive delete-first flow, chosen for data safety. Ambiguity always refuses: 0 matches (update requires an existing draft — use create_draft for a new one) or >1 matches (candidates {id, subject} are listed; retry with draft_id). Notes: Apple Mail drafts cannot be edited in place, so the replacement is a NEW draft with a NEW id (never reuse the old id); the replacement is created under create_draft's account semantics (default account unless from_address) which may differ from the old draft's account; the body inherits create_draft's refusal contract (#304) — the replacement is refused, and the OLD DRAFT LEFT UNTOUCHED, for any of the six reasons create_draft lists; on a draft a custom from_address (#219) and display-name To recipients (#277) are supported when Accessibility is granted, while display-name cc/bcc are refused. Deletion moves the old draft to Trash (recoverable). The delete is double-gated: (a) a post-create RECEIPT re-lists the drafts and requires a NEW id to appear before the old draft is touched (a GUI-path phantom success keeps the old draft, reported as deleted_old:false / not confirmed); (b) the delete predicate conjoins id AND exact subject, so a cross-account id collision cannot delete another account's draft. If deletion fails after a confirmed create, the result reports deleted_old:false with a note matched to what is known (confirmed absent / state unknown / both MAY exist) — nothing is silently lost or over-claimed.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -369,10 +367,8 @@ class CheAppleMailMCPServer {
                         "subject": .object(["type": .string("string"), "description": .string("Replacement draft subject.")]),
                         "body": .object(["type": .string("string"), "description": .string("Replacement body content (interpreted according to 'format').")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach to the replacement (optional).")]),
-                        "format": .object(["type": .string("string"), "enum": .array([.string("plain"), .string("markdown"), .string("html")]), "description": .string("Body format — same semantics and clean-path eligibility as create_draft.format.")]),
-                        "sanitize_links": .object(["type": .string("boolean"), "description": .string("Same semantics as create_draft.sanitize_links.")]),
-                        "require_wrapper_free": .object(["type": .string("boolean"), "description": .string("Same semantics as create_draft.require_wrapper_free — when true, an ineligible replacement FAILS with the named reason BEFORE anything is created or deleted.")]),
-                        "from_address": .object(["type": .string("string"), "description": .string("Optional — sender account for the REPLACEMENT draft. Same semantics as create_draft.from_address: clean path supported via the verified From popup (#219, read-back gated — mismatch falls back to legacy with correct sender + wrapped body, disclosed); omit to use the default account.")])
+                        "format": .object(["type": .string("string"), "enum": .array([.string("plain")]), "description": .string("Body format. \"plain\" is the ONLY supported value and the default when omitted: the body is delivered verbatim through Mail's own editor. \"markdown\" and \"html\" were removed in #304 — rich text can only be delivered by assigning the AppleScript html-content property, and that is what wraps the whole letter in <blockquote type=\"cite\"> (invisible to the sender, shown as quoted text by Gmail and Outlook). Passing either fails with that explanation; see #308 / #309 for rich-text compose.")]),
+                        "from_address": .object(["type": .string("string"), "description": .string("Optional — sender account for the REPLACEMENT draft. Same semantics as create_draft.from_address: verified From popup (#219, read-back gated — a mismatch aborts and leaves the old draft untouched); omit to use the default account.")])
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
@@ -1311,11 +1307,9 @@ class CheAppleMailMCPServer {
             let bcc = try optionalStringArray(arguments, key: "bcc")
             let attachments = try optionalStringArray(arguments, key: "attachments")
             let format = try parseBodyFormatArgument(arguments["format"])
-            let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
             // #131: sender account selection. Optional — omit to use Mail.app's default account.
             let fromAddress = arguments["from_address"]?.stringValue
-            let requireWrapperFree = try requireBool(arguments, key: "require_wrapper_free", default: false)
-            return try await mailController.composeEmail(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, sanitizeLinks: sanitizeLinks, fromAddress: fromAddress, requireWrapperFree: requireWrapperFree)
+            return try await mailController.composeEmail(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, fromAddress: fromAddress)
 
         case "reply_email":
             let id = try requireMessageId(arguments)
@@ -1330,8 +1324,7 @@ class CheAppleMailMCPServer {
             let replyAttachments = try optionalStringArray(arguments, key: "attachments")
             let saveAsDraft = try requireBool(arguments, key: "save_as_draft", default: false)
             let format = try parseBodyFormatArgument(arguments["format"])
-            let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
-            return try await mailController.replyEmail(id: id, mailbox: mailbox, accountName: accountName, body: body, replyAll: replyAll, ccAdditional: ccAdditional, attachments: replyAttachments, saveAsDraft: saveAsDraft, format: format, sanitizeLinks: sanitizeLinks, accountId: accountId)
+            return try await mailController.replyEmail(id: id, mailbox: mailbox, accountName: accountName, body: body, replyAll: replyAll, ccAdditional: ccAdditional, attachments: replyAttachments, saveAsDraft: saveAsDraft, format: format, accountId: accountId)
 
         case "forward_email":
             let id = try requireMessageId(arguments)
@@ -1344,8 +1337,7 @@ class CheAppleMailMCPServer {
             let to = toArray.compactMap { $0.stringValue }
             let body = arguments["body"]?.stringValue
             let format = try parseBodyFormatArgument(arguments["format"])
-            let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
-            return try await mailController.forwardEmail(id: id, mailbox: mailbox, accountName: accountName, to: to, body: body, format: format, sanitizeLinks: sanitizeLinks, accountId: accountId)
+            return try await mailController.forwardEmail(id: id, mailbox: mailbox, accountName: accountName, to: to, body: body, format: format, accountId: accountId)
 
         // Draft Tools
         case "list_drafts":
@@ -1368,10 +1360,9 @@ class CheAppleMailMCPServer {
             let bcc = try optionalStringArray(arguments, key: "bcc")
             let attachments = try optionalStringArray(arguments, key: "attachments")
             let format = try parseBodyFormatArgument(arguments["format"])
-            let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
             // #131: sender account selection (see compose_email).
             let fromAddress = arguments["from_address"]?.stringValue
-            return try await mailController.createDraft(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, sanitizeLinks: sanitizeLinks, fromAddress: fromAddress, requireWrapperFree: try requireBool(arguments, key: "require_wrapper_free", default: false))
+            return try await mailController.createDraft(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, fromAddress: fromAddress)
 
         case "update_draft":
             // #276 — upsert: locate existing draft → create replacement →
@@ -1390,16 +1381,14 @@ class CheAppleMailMCPServer {
             let bcc = try optionalStringArray(arguments, key: "bcc")
             let attachments = try optionalStringArray(arguments, key: "attachments")
             let format = try parseBodyFormatArgument(arguments["format"])
-            let sanitizeLinks = try requireBool(arguments, key: "sanitize_links", default: false)
             let fromAddress = arguments["from_address"]?.stringValue
             let accountId = decodeAccountId(arguments, tool: invokedTool)
             let result = try await mailController.updateDraft(
                 draftId: draftId, subjectMatch: subjectMatch,
                 accountName: arguments["account_name"]?.stringValue, accountId: accountId,
                 to: to, subject: subject, body: body, cc: cc, bcc: bcc,
-                attachments: attachments, format: format, sanitizeLinks: sanitizeLinks,
-                fromAddress: fromAddress,
-                requireWrapperFree: try requireBool(arguments, key: "require_wrapper_free", default: false))
+                attachments: attachments, format: format,
+                fromAddress: fromAddress)
             return formatJSON(result)
 
         // Attachment Tools
@@ -2632,11 +2621,22 @@ extension Value {
     }
 }
 
+/// #304 — `plain` is the only format a composing tool acts on.
+///
+/// `markdown` / `html` are still PARSED so they can be refused by name: the
+/// message says what was removed and what to do instead, which a generic
+/// "unknown value" error cannot. The wording comes from `ComposeRefusal` so the
+/// boundary and the pre-flight check can never drift apart. Any other value is
+/// an ordinary validation error naming the one permitted value.
 func parseBodyFormat(_ raw: String?) throws -> BodyFormat {
-    if let format = BodyFormat(rawValueOrNil: raw) {
-        return format
+    guard let format = BodyFormat(rawValueOrNil: raw) else {
+        throw MailError.invalidParameter(
+            "format must be \"plain\" — the only supported body format (got: \(raw ?? "nil"))")
     }
-    throw MailError.invalidParameter("format must be one of: plain, markdown, html (got: \(raw ?? "nil"))")
+    guard format == .plain else {
+        throw MailError.invalidParameter(ComposeRefusal.richTextFormat(format).message)
+    }
+    return format
 }
 
 /// Issue #35: type-strict bool extraction. Returns the bool when key is present
@@ -3029,7 +3029,7 @@ func parseBodyFormatArgument(_ raw: Value?) throws -> BodyFormat {
     guard let raw = raw else { return .plain }
     if case .null = raw { return .plain }
     guard let str = raw.stringValue else {
-        throw MailError.invalidParameter("format must be a string (plain, markdown, or html)")
+        throw MailError.invalidParameter("format must be a string (\"plain\")")
     }
     return try parseBodyFormat(str)
 }

@@ -74,59 +74,6 @@ func buildMailtoURL(
     return url
 }
 
-/// Environment escape hatch: set `CHE_MAIL_DISABLE_MAILTO_COMPOSE=1` to force the
-/// legacy AppleScript injection path (wrapped body) — for users running compose
-/// in heavy/unattended automation where a briefly-visible compose window and GUI
-/// keystrokes are unacceptable. Absence/`0`/empty → mailto path enabled.
-let mailtoComposeDisableEnvKey = "CHE_MAIL_DISABLE_MAILTO_COMPOSE"
-
-func mailtoComposeDisabledByEnv(
-    _ env: [String: String] = ProcessInfo.processInfo.environment
-) -> Bool {
-    guard let raw = env[mailtoComposeDisableEnvKey] else { return false }
-    return raw == "1" || raw.lowercased() == "true" || raw.lowercased() == "yes"
-}
-
-/// Decide whether the wrapper-free mailto path is usable for this compose call.
-///
-/// Returns `false` (→ caller falls back to the legacy AppleScript injection path,
-/// which produces the wrapper but always works) when:
-/// - `format` is `.markdown` / `.html` — mailto carries plain text only;
-/// - Accessibility (`AXIsProcessTrusted`) is not granted — the GUI keystrokes
-///   for save/send/attach/sender would silently fail;
-/// - the env escape hatch disabled it.
-///
-/// Attachments do NOT disqualify the mailto path — they are handled by GUI
-/// automation (File ▸ Attach, driven by the locale-independent ⇧⌘A shortcut).
-///
-/// A custom `from_address` (#131) rides the clean path via a verified From
-/// popup (#219): the GUI selects the account and READS BACK the selection with
-/// EXACT addr-spec equality — any mismatch falls back to the legacy `set sender`
-/// path (correct sender, wrapped body). It still needs Accessibility (the popup
-/// is GUI scripting), so a custom sender without Accessibility routes to legacy.
-///
-/// An EMPTY subject also disqualifies it (#175 verify): the GUI dispatch guard
-/// identifies the compose window by its title (= subject) to guarantee ⌘S/⇧⌘D
-/// fire into OUR window and not one the user opened during the delay. With no
-/// title there is no reliable identity check, so empty-subject compose falls
-/// back to the legacy path.
-func shouldUseMailtoCompose(
-    format: BodyFormat,
-    accessibilityTrusted: Bool,
-    disabledByEnv: Bool,
-    hasCustomSender: Bool,
-    hasSubject: Bool
-) -> Bool {
-    // #237: thin wrapper over the reason-returning variant so the routing
-    // decision and the disclosed reason can never disagree.
-    return mailtoIneligibilityReason(
-        format: format,
-        accessibilityTrusted: accessibilityTrusted,
-        disabledByEnv: disabledByEnv,
-        hasCustomSender: hasCustomSender,
-        hasSubject: hasSubject
-    ) == nil
-}
 
 // MARK: - #218 clean reply/forward (native-verb + paste)
 //
@@ -143,82 +90,10 @@ func shouldUseMailtoCompose(
 // at the cursor via System Events. The native quote stays correct; only the new
 // text avoids the wrapper. Like #175 it is plain-only (clipboard carries plain)
 // and needs Accessibility (the GUI paste/dispatch keystrokes).
-
-/// Environment escape hatch: set `CHE_MAIL_DISABLE_PASTE_REPLY=1` to force the
-/// legacy AppleScript injection path (wrapped new body) for reply/forward — for
-/// users running in heavy/unattended automation where a briefly-visible reply
-/// window and GUI keystrokes are unacceptable. Independent of the compose
-/// (`CHE_MAIL_DISABLE_MAILTO_COMPOSE`) hatch so the two GUI paths can be toggled
-/// separately. Absence/`0`/empty → clean paste path enabled.
-let replyForwardPasteDisableEnvKey = "CHE_MAIL_DISABLE_PASTE_REPLY"
-
-func replyForwardPasteDisabledByEnv(
-    _ env: [String: String] = ProcessInfo.processInfo.environment
-) -> Bool {
-    guard let raw = env[replyForwardPasteDisableEnvKey] else { return false }
-    return raw == "1" || raw.lowercased() == "true" || raw.lowercased() == "yes"
-}
-
-/// Decide whether the wrapper-free native-verb + paste path is usable for this
-/// reply/forward. Returns `false` (→ caller falls back to the legacy AppleScript
-/// injection path, which wraps the new body but always works) when:
-/// - `format` is `.markdown` / `.html` — the clipboard paste carries plain text
-///   only (the legacy path renders rich bodies, at the cost of the wrapper);
-/// - Accessibility (`AXIsProcessTrusted`) is not granted — the GUI paste/dispatch
-///   keystrokes would silently fail;
-/// - the env escape hatch disabled it.
-///
-/// Unlike `shouldUseMailtoCompose`, there is no compile-time subject/sender gate
-/// (a reply has no subject param). The window is identified by **id-delta** in the
-/// Mail model, and `buildReplyForwardPasteScript` gates each keystroke phase on a
-/// RUNTIME front-window-id check (`id of front window` ∈ the id-delta set) — so a
-/// stolen focus degrades to the legacy fallback. The mailto path's title bridge is
-/// NOT reused: reply/forward compose windows expose an empty `name`, so title
-/// matching is unusable here (#218 verify, live-verified).
-func shouldUsePasteReplyForward(
-    format: BodyFormat,
-    accessibilityTrusted: Bool,
-    disabledByEnv: Bool
-) -> Bool {
-    // #229: thin wrapper over the reason-returning variant so the routing
-    // decision and the disclosed reason can never disagree (mirrors #237's
-    // shouldUseMailtoCompose / mailtoIneligibilityReason pair).
-    return pasteReplyForwardIneligibilityReason(
-        format: format,
-        accessibilityTrusted: accessibilityTrusted,
-        disabledByEnv: disabledByEnv
-    ) == nil
-}
-
-// MARK: - #229 legacy-path disclosure (reply/forward family)
-
-/// #229 — why this reply/forward call cannot use the clean native-verb + paste
-/// path (#218). `nil` = eligible. Check order mirrors
-/// `shouldUsePasteReplyForward`'s short-circuit so the two can never disagree
-/// (guarded by the consistency matrix test).
-///
-/// Motivation: the #218 clean path degrades to the legacy injection (which
-/// wraps the NEW body in `<blockquote type="cite">`) for markdown/html, without
-/// Accessibility, or via the env hatch — previously with no result-level
-/// disclosure at all (ineligible calls were fully silent). Same failure shape
-/// as compose's #237; this names the reason for the reply/forward family.
-func pasteReplyForwardIneligibilityReason(
-    format: BodyFormat,
-    accessibilityTrusted: Bool,
-    disabledByEnv: Bool
-) -> String? {
-    if disabledByEnv {
-        return "paste reply/forward disabled via \(replyForwardPasteDisableEnvKey)"
-    }
-    guard format == .plain else {
-        return "format '\(format.rawValue)' — the clipboard paste carries plain text only"
-    }
-    if !accessibilityTrusted {
-        return "Accessibility (AXIsProcessTrusted) not granted — the GUI paste/dispatch "
-            + "keystrokes would silently fail"
-    }
-    return nil
-}
+//
+// #304: the injecting builders this path used to fall back to are gone. When
+// either precondition fails, reply/forward now REFUSES (`ComposeRefusal`) —
+// there is no second path to degrade to.
 
 /// #229 — fold every newline flavor (\n, \r, CRLF, U+2028, U+2029, NEL) and
 /// control character to a single space and cap the length, so an echoed GUI
@@ -231,41 +106,15 @@ func clampedErrorEcho(_ text: String, limit: Int = 200) -> String {
     return String(folded.prefix(limit))
 }
 
-/// #229 — suffix appended to legacy-path reply/forward result strings so the
-/// MCP caller learns the NEW body will render as a quote on some mobile
-/// clients. Scoped to the new body on purpose: the quoted ORIGINAL's cite
-/// blockquote is the legitimate structure Mail builds for a reply (#218).
-/// Append-only: the historical `Reply sent successfully` / `Reply saved as
-/// draft` / `Email forwarded successfully` prefixes stay intact.
-func legacyReplyPathDisclosure(reason: String) -> String {
-    return " [legacy path — the new body is wrapped in <blockquote type=\"cite\">, renders as "
-        + "quoted text on some mobile clients (the quoted original's cite block is normal). "
-        + "Reason: \(reason). Clean-path eligibility: plain format + Accessibility granted + "
-        + "\(replyForwardPasteDisableEnvKey) unset (#218)]"
-}
+// MARK: - #304 pre-flight refusal
 
-// MARK: - #237 legacy-path disclosure
-
-/// #237 — why this compose call cannot use the wrapper-free mailto path.
-/// `nil` = eligible. Check order mirrors `shouldUseMailtoCompose`'s
-/// short-circuit so the two can never disagree (guarded by the
-/// `consistentWithShouldUseMailtoCompose` matrix test).
-///
-/// Motivation (#237 RCA): every 2026-07-09 `create_draft` carried a custom
-/// `from_address`, which at the time silently routed to the legacy injection
-/// path whose body Mail wraps in `<blockquote type="cite">` at MIME
-/// serialization. #219 later let a custom sender RIDE the clean path (verified
-/// From popup with read-back), so from_address is no longer an ineligibility
-/// reason on its own — but the lesson stands: whenever a call DOES fall to
-/// legacy, this function names the reason so the result string, the stderr
-/// warn, and the tool description all surface the same fact rather than
-/// silently wrapping the body.
 /// #220 — true iff every attachment path is pure ASCII. The mailto path
 /// attaches via the GUI go-to-folder sheet (⇧⌘G + paste), which hangs
 /// deterministically on CJK/fullwidth paths (live repro, v2.17.0) — the
 /// panel-closed proxy can't detect a sheet that never accepts its input.
-/// ASCII-only paths are the known-good set; anything else routes to the
-/// legacy path, whose native `POSIX file` attachment handles any path.
+/// ASCII-only paths are the known-good set; anything else is refused (#304)
+/// with the manual-drag recipe — the path that used to absorb them attached
+/// natively but assigned the body, which is what this project no longer does.
 func attachmentPathsGuiSafe(_ paths: [String]?) -> Bool {
     guard let paths, !paths.isEmpty else { return true }
     return paths.allSatisfy { $0.allSatisfy(\.isASCII) }
@@ -454,97 +303,147 @@ func isSimpleAddrSpec(_ addr: String) -> Bool {
     return a.filter { $0 == "@" }.count == 1
 }
 
-func mailtoIneligibilityReason(
+/// #304 — the pre-flight reasons a composing call cannot run.
+///
+/// **This is a closed enumeration.** A seventh case must not be added by
+/// analogy: every case here is decidable BEFORE the operation starts and
+/// therefore carries the guarantee that nothing happened. A failure that
+/// occurs mid-operation (a keystroke that does not land, a paste that does not
+/// take, a send stage that errors) is a different thing and is governed by the
+/// post-dispatch classification in `isPostDispatchError` — it propagates, and
+/// its message must NOT claim the call was a no-op.
+///
+/// Until #304 these same conditions chose a ROUTE rather than a refusal: they
+/// diverted the call to a builder that assigned the body via AppleScript, which
+/// Mail wraps in `<blockquote type="cite">` at MIME serialization. The sender
+/// could not see it (the wrapper's inline style has no border) while Gmail and
+/// Outlook showed the whole letter as quoted text. On 2026-07-29 a formal
+/// meeting notice went out that way to 10 recipients and could not be recalled.
+/// The builders are gone, so these conditions now end the call.
+///
+/// Each case's `message` must name the reason AND an executable alternative —
+/// a refusal that leaves the caller with nothing to do is a worse outcome than
+/// the silent degradation it replaced.
+enum ComposeRefusal: Equatable {
+    /// 1 — `format` is `markdown` or `html`.
+    case richTextFormat(BodyFormat)
+    /// 2 — empty subject.
+    case emptySubject
+    /// 3 — Accessibility (`AXIsProcessTrusted`) not granted.
+    case accessibilityNotGranted
+    /// 4 — `from_address` is not a simple addr-spec.
+    case customSenderNotSimple
+    /// 5 — an attachment path contains non-ASCII characters.
+    case nonASCIIAttachmentPath
+    /// 6 — a recipient carries a display name the clean path cannot fill.
+    ///
+    /// Always for cc/bcc; and for `to` on a SEND, because the GUI fill is
+    /// draft-only (#277 — a fill that fails on a send would dispatch with
+    /// missing recipients). A draft's `to` display name is supported.
+    case displayNameRecipient
+
+    var message: String {
+        switch self {
+        case .richTextFormat(let format):
+            return "format '\(format.rawValue)' is no longer supported. Rich text can only "
+                + "reach a message through the AppleScript html-content property, and "
+                + "assigning a body that way is what wraps the whole letter in "
+                + "<blockquote type=\"cite\"> (#304). Use format 'plain'; a rich-text "
+                + "compose architecture is tracked in #308 / #309."
+        case .emptySubject:
+            return "the subject is empty. The compose path identifies its own window by "
+                + "the window title (= subject) before it fires any keystroke, so an "
+                + "untitled window cannot be told apart from one you opened yourself. "
+                + "Supply a non-empty subject."
+        case .accessibilityNotGranted:
+            return "Accessibility (AXIsProcessTrusted) is not granted, so the GUI "
+                + "keystrokes that save / send / attach cannot be driven. Grant it "
+                + "(see check_accessibility) and retry, or use open_mailto — it needs no "
+                + "TCC grant at all and opens a clean compose window, but it cannot carry "
+                + "attachments and you save or send it yourself."
+        case .customSenderNotSimple:
+            return "from_address is not a simple addr-spec (it contains a quote, an angle "
+                + "bracket, or whitespace). The From popup is verified by exact addr-spec "
+                + "match, which is only spoof-proof for a bare address (#219). Pass a bare "
+                + "addr-spec, or omit from_address and switch the sender in Mail's compose "
+                + "window yourself."
+        case .nonASCIIAttachmentPath:
+            return "an attachment path contains non-ASCII characters. The go-to-folder "
+                + "sheet (⇧⌘G) hangs deterministically on CJK / fullwidth paths (#220). "
+                + "Create the draft WITHOUT the attachments argument and drag the file into "
+                + "the window — do not rename the file to ASCII, because the recipient sees "
+                + "that name."
+        case .displayNameRecipient:
+            return "a recipient carries a display name (Name <addr>) that this path cannot "
+                + "fill. A mailto: URL carries addr-spec only (RFC 6068). The GUI can type a "
+                + "display name into `to`, but only when creating a DRAFT — on a send, a fill "
+                + "that failed would dispatch with missing recipients — and never into Cc/Bcc, "
+                + "which can be hidden via Header Fields (#277). Use bare addresses here, or "
+                + "create a draft (create_draft) where a `to` display name is supported."
+        }
+    }
+}
+
+/// #304 — the pre-flight refusal for a from-scratch compose (`compose_email` /
+/// `create_draft`), or `nil` when the call may proceed.
+///
+/// Evaluation order follows the enumeration: a call that trips several
+/// conditions reports the first, and the caller fixes them one at a time.
+func composeRefusal(
     format: BodyFormat,
     accessibilityTrusted: Bool,
-    disabledByEnv: Bool,
     hasCustomSender: Bool,
     hasSubject: Bool,
     attachmentsGuiSafe: Bool = true,
     recipientsAddrSpecOnly: Bool = true,
     displayNameFillViable: Bool = false,
     customSenderIsSimple: Bool = true
-) -> String? {
-    if disabledByEnv {
-        return "mailto compose disabled via \(mailtoComposeDisableEnvKey)"
-    }
-    // #219: a custom from_address no longer disqualifies the clean path — the
-    // GUI drives the compose window's From popup with mandatory READ-BACK
-    // verification (SENDERPOPUP sentinel → legacy fallback on any mismatch,
-    // never a send from the wrong account). The popup needs GUI scripting, so
-    // the Accessibility gate below still routes unauthorized machines to
-    // legacy (`set sender` there picks the right account, body wrapped).
-    if !hasSubject {
-        return "empty subject — the GUI dispatch guard identifies our compose window "
-            + "by its title (= subject)"
-    }
-    guard format == .plain else {
-        return "format '\(format.rawValue)' — the mailto: URL carries plain text only"
-    }
-    if !accessibilityTrusted {
-        if hasCustomSender {
-            return "custom from_address needs the verified sender-popup (#219), which "
-                + "needs Accessibility (AXIsProcessTrusted) — not granted; the legacy "
-                + "path selects the sender natively instead"
-        }
-        return "Accessibility (AXIsProcessTrusted) not granted — GUI keystrokes for "
-            + "save/send/attach would silently fail"
-    }
-    // #219 verify R2 (Codex): the From-popup match (senderMatches) exact-matches
-    // by addr-spec suffix — spoof-proof only for a SIMPLE address. A custom
-    // from_address carrying a quote / angle bracket / whitespace (exotic quoted
-    // local-part) could let a crafted account label suffix-match the wrong
-    // account, so it is routed to legacy (native set sender, correct account).
-    if hasCustomSender && !customSenderIsSimple {
-        return "custom from_address is not a simple addr-spec (contains a quote, "
-            + "angle bracket, or whitespace) — the verified sender-popup only "
-            + "exact-matches simple addresses safely (#219 verify); the legacy path "
-            + "sets the sender natively (correct account, body wrapped)"
-    }
-    if !attachmentsGuiSafe {
-        return "attachment path contains non-ASCII characters — the GUI go-to-folder "
-            + "attach flow hangs there (#220); the legacy path attaches natively instead"
-    }
-    // #277: display-name recipients can ride the clean path via GUI clipboard
-    // fill — but DRAFT-ONLY (a failed fill on a send would fire with missing
-    // recipients), TO-ONLY, and only when the caller marked the fill viable
-    // (draft mode + no display-name cc/bcc — the Cc/Bcc fields aren't reliably
-    // visible to fill, so a blind paste could silently drop them).
-    if !recipientsAddrSpecOnly && !displayNameFillViable {
-        return "display-name recipients (Name <email>) — the mailto URL carries "
-            + "addr-spec only (RFC 6068); GUI fill is draft-only + To-only with no "
-            + "display-name cc/bcc (#277); the legacy path sets recipient names "
-            + "natively (#251)"
-    }
+) -> ComposeRefusal? {
+    guard format == .plain else { return .richTextFormat(format) }
+    if !hasSubject { return .emptySubject }
+    if !accessibilityTrusted { return .accessibilityNotGranted }
+    if hasCustomSender && !customSenderIsSimple { return .customSenderNotSimple }
+    if !attachmentsGuiSafe { return .nonASCIIAttachmentPath }
+    // #277: display-name recipients ride the clean path via GUI clipboard fill —
+    // but DRAFT-only (a failed fill on a send would fire with missing
+    // recipients), TO-only, and only when the caller marked the fill viable.
+    if !recipientsAddrSpecOnly && !displayNameFillViable { return .displayNameRecipient }
     return nil
 }
 
-/// #237 — suffix appended to legacy-path result strings so the MCP caller
-/// (not just stderr) learns the body will render as a quote on some mobile
-/// clients. Append-only: the historical `Draft created successfully` /
-/// `Email sent successfully` prefixes stay intact for prefix-parsing callers.
-func legacyPathDisclosure(reason: String) -> String {
-    return " [legacy path — body wrapped in <blockquote type=\"cite\"> (quoted on some "
-        + "mobile clients). Reason: \(reason). Wrapper-free eligibility: plain + subject + "
-        + "Accessibility + \(mailtoComposeDisableEnvKey) unset + ASCII attachments (#220); "
-        + "custom sender (#219) and draft display-name To (#277) also need Accessibility.]"
+/// #304 — the pre-flight refusal for `reply_email` / `forward_email`. Only two
+/// of the six conditions can arise here: a reply has no subject, sender,
+/// attachment-path or cc/bcc gate of its own on this path.
+func replyForwardRefusal(
+    format: BodyFormat,
+    accessibilityTrusted: Bool
+) -> ComposeRefusal? {
+    guard format == .plain else { return .richTextFormat(format) }
+    if !accessibilityTrusted { return .accessibilityNotGranted }
+    return nil
 }
 
-/// #241 — the #237/#229 clean-path-or-disclosed-legacy control flow, extracted
-/// from the four `MailController` compose-family sites (compose_email /
-/// create_draft / reply_email / forward_email-with-body) behind injectable
-/// closures so the WIRING itself has a runnable regression lock (the pure
-/// helpers were pinned, but deleting the inline wiring kept the suite green —
-/// the #237 silent-regression pattern one level up).
+/// #304 — run a composing tool's single (non-injecting) path.
 ///
-/// Contract (byte-identical to the previous inline wiring):
-/// - `ineligibilityReason == nil` → try `cleanPath`; its success returns
-///   verbatim (NO suffix). Its failure fires `warnTriedAndFailed` once, then
-///   the legacy result is suffixed with `disclosure(fallbackReason(error))`.
-/// - `ineligibilityReason != nil` → `cleanPath` is never attempted;
-///   `warnIneligible` fires once; the legacy result is suffixed with
-///   `disclosure(reason)`.
-/// - `legacyPath` errors always propagate.
+/// The wiring lives in a helper for the reason #241 gave when it extracted the
+/// previous router: the pure predicates were pinned by tests, but deleting the
+/// inline wiring at a call site kept the suite green. `mapRuntimeError` carries
+/// the #242 / #301 post-dispatch and timeout classification, which stays a
+/// per-site decision (a draft may retry; a send may not).
+func dispatchComposePath(
+    refusal: ComposeRefusal?,
+    cleanPath: () throws -> String,
+    mapRuntimeError: (Error) -> Error = { $0 }
+) throws -> String {
+    if let refusal {
+        throw MailError.invalidParameter(refusal.message)
+    }
+    do {
+        return try cleanPath()
+    } catch {
+        throw mapRuntimeError(error)
+    }
+}
 
 /// #242 — true iff `error` carries the POSTDISPATCH sentinel that
 /// `buildMailtoComposeScript` (send:true) attaches to any error thrown at or
@@ -559,55 +458,6 @@ func isPostDispatchError(_ error: Error) -> Bool {
         return message.hasPrefix("POSTDISPATCH:")
     }
     return false
-}
-
-/// #242 — `shouldFallback` gates the tried-and-failed branch: when it returns
-/// false (a POSTDISPATCH send-stage error), the router rethrows
-/// `mapNoFallbackError(error)` immediately — no fallback warn, no legacy run,
-/// no disclosure. Defaults preserve the pre-#242 behavior for every other site.
-func routeWrapperFreeCompose(
-    ineligibilityReason: String?,
-    cleanPath: () throws -> String,
-    legacyPath: () throws -> String,
-    disclosure: (String) -> String,
-    warnIneligible: (String) -> Void,
-    warnTriedAndFailed: (Error) -> Void,
-    fallbackReason: (Error) -> String,
-    shouldFallback: (Error) -> Bool = { _ in true },
-    mapNoFallbackError: (Error) -> Error = { $0 }
-) throws -> String {
-    var legacyReason = ineligibilityReason
-    if legacyReason == nil {
-        do {
-            return try cleanPath()
-        } catch {
-            guard shouldFallback(error) else {
-                throw mapNoFallbackError(error)
-            }
-            warnTriedAndFailed(error)
-            legacyReason = fallbackReason(error)
-            // fall through to legacy injection
-        }
-    } else {
-        warnIneligible(legacyReason!)
-    }
-    let result = try legacyPath()
-    return result + disclosure(legacyReason ?? "unknown")
-}
-
-/// #239 — the `require_wrapper_free: true` refusal message: names the
-/// ineligibility reason and every actionable alternative, so the caller can
-/// fix the call instead of receiving a silently wrapped draft.
-func requireWrapperFreeRefusal(reason: String) -> String {
-    return "require_wrapper_free is set but the wrapper-free mailto path is not available — "
-        + "reason: \(reason). No draft was created and nothing was sent. Alternatives: "
-        + "grant Accessibility (check_accessibility) — it now also enables a custom "
-        + "from_address (verified From popup, #219) and a draft's display-name To fill (#277); "
-        + "use format 'plain'; provide a non-empty subject; "
-        + "use ASCII-only attachment paths (#220); for a SEND (not a draft) use bare-address "
-        + "recipients (display names ride the clean path on drafts only, #277); "
-        + "unset \(mailtoComposeDisableEnvKey). Or drop require_wrapper_free to accept the "
-        + "legacy path (body wrapped in <blockquote type=\"cite\"> on some mobile clients)."
 }
 
 /// #301 — true when the error is the script-deadline timeout. On a SENDING

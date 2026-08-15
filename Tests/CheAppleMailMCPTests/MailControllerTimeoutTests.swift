@@ -14,7 +14,7 @@ final class MailControllerTimeoutTests: XCTestCase {
 
     override func tearDown() async throws {
         // Shared singleton actor — reset the seams so other suites are unaffected.
-        await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil)
+        await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
         try await super.tearDown()
     }
 
@@ -25,7 +25,7 @@ final class MailControllerTimeoutTests: XCTestCase {
                 Thread.sleep(forTimeInterval: 5.0)   // >> the 0.5s deadline below
                 return "should never be returned"
             },
-            ineligibility: nil,
+            refusal: nil,
             scriptTimeout: 0.5
         )
 
@@ -52,7 +52,7 @@ final class MailControllerTimeoutTests: XCTestCase {
         let controller = MailController.shared
         await controller.setTestSeams(
             scriptRunner: { _ in "ok" },
-            ineligibility: nil,
+            refusal: nil,
             scriptTimeout: 5.0
         )
         let value = try await controller.runScript("dummy")
@@ -64,7 +64,7 @@ final class MailControllerTimeoutTests: XCTestCase {
         let controller = MailController.shared
         await controller.setTestSeams(
             scriptRunner: { _ in throw Boom() },
-            ineligibility: nil,
+            refusal: nil,
             scriptTimeout: 5.0
         )
         do {

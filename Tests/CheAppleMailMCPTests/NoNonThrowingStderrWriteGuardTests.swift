@@ -110,7 +110,12 @@ final class NoNonThrowingStderrWriteGuardTests: XCTestCase {
         // Stated plainly: this is a smoke check against bulk deletion, NOT a
         // completeness proof. Nothing here can tell that a specific diagnostic
         // still fires; the ban above is the invariant that actually holds.
-        let floors = [("Server.swift", 15), ("MailController.swift", 5),
+        // MailController's floor dropped 5 → 4 with #304. The four diagnostics
+        // removed there all announced the same thing — "falling back to the
+        // legacy AppleScript injection path" — and that path no longer exists.
+        // A refusal reaches the caller as an error, so it needs no stderr echo;
+        // the silent fallback those warns existed to expose is what was deleted.
+        let floors = [("Server.swift", 15), ("MailController.swift", 4),
                       ("ExportEmailsMarkdown.swift", 1)]
         for (name, floor) in floors {
             let hits = try swiftFiles()

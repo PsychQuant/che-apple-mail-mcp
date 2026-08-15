@@ -16,10 +16,10 @@ actor MailController {
     /// NSAppleScript — lets production-site behavioral tests drive the real
     /// compose/reply/forward methods with a fake script runner (no live Mail).
     private var scriptRunnerOverride: ((String) throws -> String)?
-    /// When set, both wrapper-free eligibility probes return this closure's
-    /// value (nil = eligible) instead of probing Accessibility/env — lets
-    /// tests select the branch deterministically.
-    private var ineligibilityOverride: (() -> String?)?
+    /// When set, both pre-flight refusal probes return this closure's value
+    /// (nil = proceed) instead of probing Accessibility — lets tests select the
+    /// branch deterministically.
+    private var refusalOverride: (() -> ComposeRefusal?)?
 
     /// #287: when set, `openMailtoURL` calls this instead of
     /// `NSWorkspace.shared.open` — lets tests exercise the LaunchServices
@@ -33,12 +33,12 @@ actor MailController {
 
     func setTestSeams(
         scriptRunner: ((String) throws -> String)?,
-        ineligibility: (() -> String?)?,
+        refusal: (() -> ComposeRefusal?)?,
         openURL: ((URL) -> Bool)? = nil,
         scriptTimeout: TimeInterval? = nil
     ) {
         scriptRunnerOverride = scriptRunner
-        ineligibilityOverride = ineligibility
+        refusalOverride = refusal
         openURLOverride = openURL
         scriptTimeoutOverride = scriptTimeout
     }
@@ -1525,7 +1525,7 @@ actor MailController {
     }
 
     /// Compose and send a new email
-    func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false, fromAddress: String? = nil, requireWrapperFree: Bool = false) throws -> String {
+    func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, fromAddress: String? = nil) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41: validate every recipient field (to / cc / bcc) at the boundary.
         try validateEmailAddresses(to, field: "to")
@@ -1544,42 +1544,14 @@ actor MailController {
         // for backward compat with any Swift caller still passing it; no
         // production caller does so.
 
-        // #175: prefer the wrapper-free mailto path (native compose pipeline →
-        // no Apple-Mail-URLShare/blockquote-cite wrapper). Falls back to the
-        // legacy AppleScript injection (which wraps the body) on any failure,
-        // for markdown/html, without Accessibility, for a NON-simple custom
-        // sender (quoted local-part, #219 verify R2), or when disabled via env.
-        // A simple custom from_address now RIDES the clean path via the verified
-        // From popup (#219). See MailtoCompose.swift.
-        // #237: the fallback is no longer silent — the named reason goes to
-        // stderr AND onto the returned result string.
-        // #239: strict mode — a caller that requires a wrapper-free body gets a
-        // clean failure (named reason + alternatives) instead of a silently
-        // wrapped draft; a clean-path error propagates with NO legacy fallback.
-        if requireWrapperFree {
-            if let reason = mailtoIneligibilityReasonForCall(
-                format: format, fromAddress: fromAddress, subject: subject,
-                attachments: attachments,
-                recipients: to + (cc ?? []) + (bcc ?? [])) {
-                throw MailError.invalidParameter(requireWrapperFreeRefusal(reason: reason))
-            }
-            do {
-                return try composeViaMailto(
-                    to: to, subject: subject, body: body, cc: cc, bcc: bcc,
-                    attachments: attachments, send: true, fromAddress: fromAddress)
-            } catch where isPostDispatchError(error) {
-                // #239 verify REQUIRED: same friendly guardrail as the default
-                // path — a raw POSTDISPATCH token invites an auto-retrying
-                // caller to re-send. Still no legacy fallback.
-                throw unknownSendStateError(error)
-            }
-        }
-        // #241: the clean-or-disclosed-legacy control flow lives in the tested
-        // routeWrapperFreeCompose router; this site only supplies the real
-        // closures (WrapperFreeRouteTests locks both the router behavior and,
-        // via source scan, this wiring).
-        return try routeWrapperFreeCompose(
-            ineligibilityReason: mailtoIneligibilityReasonForCall(
+        // #175/#304: the mailto hand-off is the ONLY body path (native compose
+        // pipeline → no Apple-Mail-URLShare/blockquote-cite wrapper). The legacy
+        // AppleScript injection it used to fall back to is gone, so an ineligible
+        // call now fails with a named reason instead of quietly producing a
+        // wrapped body. A simple custom from_address rides the clean path via the
+        // verified From popup (#219). See MailtoCompose.swift.
+        return try dispatchComposePath(
+            refusal: composeRefusalForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
                 attachments: attachments,
                 recipients: to + (cc ?? []) + (bcc ?? [])),
@@ -1588,47 +1560,29 @@ actor MailController {
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
                     attachments: attachments, send: true, fromAddress: fromAddress)
             },
-            legacyPath: {
-                let script = try buildComposeEmailScript(
-                    to: to,
-                    subject: subject,
-                    body: body,
-                    cc: cc,
-                    bcc: bcc,
-                    attachments: attachments,
-                    format: format,
-                    sanitizeLinks: sanitizeLinks,
-                    fromAddress: fromAddress
-                )
-                return try runScript(script)
-            },
-            disclosure: { legacyPathDisclosure(reason: $0) },
-            warnIneligible: { warnMailtoIneligible($0) },
-            warnTriedAndFailed: { warnMailtoFallback($0) },
-            fallbackReason: { "mailto GUI path failed: \(clampedErrorEcho($0.localizedDescription))" },
             // #242: once the send keystroke has been dispatched the send state
-            // is UNKNOWN — refuse the legacy re-send (duplicate outbound risk)
-            // and tell the caller what to check instead. #301: a TIMEOUT on
-            // this (always-sending) flow is unknown-send-state too — the ONE
-            // script spans ⇧⌘D, so the deadline can fire on either side of it
-            // and the terminated interpreter cannot say which (verify P0).
-            shouldFallback: { !isPostDispatchError($0) && !isTimeoutError($0) },
-            mapNoFallbackError: { unknownSendStateError($0) })
+            // is UNKNOWN — say so rather than letting a raw POSTDISPATCH token
+            // invite an auto-retrying caller to re-send. #301: a TIMEOUT on this
+            // (always-sending) flow is unknown-send-state too — the ONE script
+            // spans ⇧⌘D, so the deadline can fire on either side of it and the
+            // terminated interpreter cannot say which (verify P0).
+            mapRuntimeError: { error in
+                (isPostDispatchError(error) || isTimeoutError(error))
+                    ? unknownSendStateError(error)
+                    : error
+            })
     }
 
-    /// #175/#237/#219 — nil iff this compose call should use the wrapper-free
-    /// mailto path; otherwise the named reason for routing to the legacy path.
-    /// Probes Accessibility + the env escape hatch at call time. A custom sender
-    /// (`fromAddress`) now RIDES the clean path via the verified From-popup
-    /// (#219) when Accessibility is granted — it forces legacy only WITHOUT
-    /// Accessibility. An empty subject still forces legacy (the GUI dispatch
+    /// #175/#219/#304 — the pre-flight refusal for this compose call, or nil to
+    /// proceed. Probes Accessibility at call time. A custom sender
+    /// (`fromAddress`) rides the clean path via the verified From-popup (#219)
+    /// when Accessibility is granted. An empty subject refuses (the GUI dispatch
     /// guard identifies our compose window by its title = subject).
-    private func mailtoIneligibilityReasonForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, recipients: [String] = [], draftMode: Bool = false, cc: [String] = [], bcc: [String] = []) -> String? {
-        if let override = ineligibilityOverride { return override() }
-        return mailtoIneligibilityReason(
+    private func composeRefusalForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, recipients: [String] = [], draftMode: Bool = false, cc: [String] = [], bcc: [String] = []) -> ComposeRefusal? {
+        if let override = refusalOverride { return override() }
+        return composeRefusal(
             format: format,
             accessibilityTrusted: AccessibilityStatus.isTrusted,
-            disabledByEnv: mailtoComposeDisabledByEnv(),
             hasCustomSender: (fromAddress?.isEmpty == false),
             hasSubject: !subject.isEmpty,
             attachmentsGuiSafe: attachmentPathsGuiSafe(attachments),
@@ -1637,31 +1591,17 @@ actor MailController {
             // would fire with missing recipients) and TO-ONLY — the To field
             // is always visible + default-focused; Cc/Bcc can be hidden via
             // Header Fields (#277 verify, Codex: a hidden Cc would silently
-            // drop names), so display-name cc/bcc keep the legacy path.
+            // drop names), so display-name cc/bcc are refused.
             displayNameFillViable: draftMode
                 && !anyRecipientHasDisplayName(cc)
                 && !anyRecipientHasDisplayName(bcc),
             // #219 verify R2 (Codex): only a simple addr-spec is safe to drive
-            // the exact From-popup match; an exotic quoted local-part routes to
-            // legacy. Check the popup address (the same value the GUI matches).
+            // the exact From-popup match; an exotic quoted local-part is
+            // refused. Check the popup address (the value the GUI matches).
             customSenderIsSimple: fromAddress.map {
                 isSimpleAddrSpec(parseRecipient($0).address)
             } ?? true
         )
-    }
-
-    /// #237 — surface (never swallow) that a compose call never even attempted
-    /// the wrapper-free mailto path. Sibling of `warnMailtoFallback`: that one
-    /// fires when mailto was TRIED and failed; this one fires when the call was
-    /// ineligible from the start (non-simple custom sender / format / no subject
-    /// / no Accessibility / env hatch — a simple custom sender rides the clean
-    /// path, #219). The 2026-07-09 #237 regression report came from exactly this
-    /// silent branch.
-    private func warnMailtoIneligible(_ reason: String) {
-        let msg = "mailto clean-compose path skipped (#237): \(reason); "
-            + "using legacy AppleScript injection — body will be wrapped in "
-            + "<blockquote type=\"cite\"> (looks quoted on some mobile clients)\n"
-        Diagnostics.emit(msg)
     }
 
     /// #175 — run the wrapper-free mailto compose path. Builds the percent-encoded
@@ -1756,53 +1696,19 @@ actor MailController {
         return try body()
     }
 
-    /// #175 — surface (never swallow) a mailto-path failure before falling back
-    /// to the legacy injection path. Mirrors the save_attachment fast-path
-    /// fallback logging precedent (the `r-must-direct-db` observability rule).
-    private func warnMailtoFallback(_ error: Error) {
-        let msg = "mailto clean-compose path failed (#175): "
-            + "\(error.localizedDescription); falling back to AppleScript injection "
-            + "— body will be wrapped in <blockquote type=\"cite\"> (looks quoted on some mobile clients)\n"
-        Diagnostics.emit(msg)
-    }
-
-    /// #218 — surface (never swallow) a reply/forward clean-paste failure before
-    /// falling back to the legacy injection path. Mirrors `warnMailtoFallback`
-    /// (the `r-must-direct-db` observability rule): a silent fallback would hide
-    /// the wrapper regression returning.
-    private func warnReplyForwardPasteFallback(_ error: Error) {
-        let msg = "reply/forward clean-paste path failed (#218): "
-            + "\(error.localizedDescription); falling back to AppleScript injection "
-            + "— new body will be wrapped in <blockquote type=\"cite\"> (looks quoted on some mobile clients)\n"
-        Diagnostics.emit(msg)
-    }
-
-    /// #218/#229 — nil iff this reply/forward call should use the clean
-    /// native-verb + paste path; otherwise the named reason for the legacy
-    /// route. Probes Accessibility + the env escape hatch at call time.
-    private func pasteReplyForwardIneligibilityReasonForCall(format: BodyFormat) -> String? {
-        if let override = ineligibilityOverride { return override() }
-        return pasteReplyForwardIneligibilityReason(
+    /// #218/#304 — the pre-flight refusal for this reply/forward call, or nil to
+    /// proceed on the clean native-verb + paste path. Probes Accessibility at
+    /// call time.
+    private func replyForwardRefusalForCall(format: BodyFormat) -> ComposeRefusal? {
+        if let override = refusalOverride { return override() }
+        return replyForwardRefusal(
             format: format,
-            accessibilityTrusted: AccessibilityStatus.isTrusted,
-            disabledByEnv: replyForwardPasteDisabledByEnv()
+            accessibilityTrusted: AccessibilityStatus.isTrusted
         )
     }
 
-    /// #229 — surface (never swallow) that a reply/forward call never even
-    /// attempted the clean paste path. Sibling of `warnReplyForwardPasteFallback`:
-    /// that one fires when the paste path was TRIED and failed; this one fires
-    /// when the call was ineligible from the start (format / no Accessibility /
-    /// env hatch) — previously a fully silent branch.
-    private func warnPasteReplyIneligible(_ reason: String) {
-        let msg = "reply/forward clean-paste path skipped (#229): \(reason); "
-            + "using legacy AppleScript injection — the NEW body will be wrapped in "
-            + "<blockquote type=\"cite\"> (looks quoted on some mobile clients)\n"
-        Diagnostics.emit(msg)
-    }
-
     /// Reply to an email. Optionally add extra CC, attach files, and/or save as draft instead of sending.
-    func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]? = nil, saveAsDraft: Bool = false, format: BodyFormat = .plain, sanitizeLinks: Bool = false, accountId: String? = nil) throws -> String {
+    func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]? = nil, saveAsDraft: Bool = false, format: BodyFormat = .plain, accountId: String? = nil) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41 + #34: validate cc_additional then dedup case-insensitively
         // (within the user-supplied list; cross-list dedup vs reply_all-derived
@@ -1816,70 +1722,17 @@ actor MailController {
         }
         let ref = resolveMsgRef(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName)
 
-        // #218: prefer the wrapper-free native-verb + paste path. Mail's native
-        // `reply` builds the quoted original itself (correct cite-blockquote +
-        // threading headers) and we paste ONLY the new body at the cursor — never
+        // #218/#304: the native-verb + paste path is the ONLY reply path. Mail's
+        // native `reply` builds the quoted original itself (correct cite-blockquote
+        // + threading headers) and we paste ONLY the new body at the cursor — never
         // `set content`/`set html content`, so the user's new text is not wrapped
         // in the URLShare/cite wrapper. The clean path needs NO #43 pre-fetch
-        // (Mail quotes the original). Falls back to the legacy injection path
-        // (wrapped new body) for markdown/html, without Accessibility, when
-        // disabled via env (CHE_MAIL_DISABLE_PASTE_REPLY), or on any GUI failure.
-        // #229: the fallback is no longer silent — the named reason goes to
-        // stderr AND onto the returned result string (mirrors #237 compose).
-        // #241: control flow lives in the tested router (see composeEmail).
-        // The legacy closure keeps the #43 pre-fetch + build + run sequence.
-        func runLegacyReply() throws -> String {
-            // Issue #43: pre-fetch unconditionally — plain mode also needs originalPlain
-            // so composeReplyPlainText can build RFC 3676 quoted body. AppleScript's
-            // `& content` against a freshly-created outgoing message reads as empty
-            // before Mail.app's GUI populates it, which silently dropped the quoted
-            // original from every plain reply since b8a4a89 (initial release).
-            //
-            // Round-1 hardening (#43 verify Logic #4 / DA-3): pre-fetch failure
-            // (sandbox -1743, message deleted, ICloud server-side body) must not
-            // hard-fail the whole reply. Fall back to "no quote" so the user's
-            // body is still preserved and the reply can still be sent/saved.
-            let originalHTML: String?
-            let originalPlain: String
-            do {
-                let fetched = try runScript(buildFetchOriginalContentScript(messageRef: ref))
-                let parsed = parseFetchedOriginalContent(fetched)
-                originalHTML = parsed.html
-                originalPlain = parsed.plain
-            } catch {
-                originalHTML = nil
-                originalPlain = ""
-            }
-
-            // #134: use the (id:mailbox:accountId:accountName:) overload — the
-            // resolveMsgRef call is internalized there, so ComposeScriptBuilderTests
-            // locks the wiring (reverting resolveMsgRef→msgRef inside the overload
-            // would now fail the unit test). Pre-fetch path still computes `ref`
-            // inline because it threads through buildFetchOriginalContentScript;
-            // wiring lock for the fetch path is out of #134's scope.
-            let script = try buildReplyEmailScript(
-                id: id,
-                mailbox: mailbox,
-                accountId: accountId,
-                accountName: accountName,
-                userBody: body,
-                userFormat: format,
-                replyAll: replyAll,
-                ccAdditional: dedupedCC,
-                attachments: attachments,
-                saveAsDraft: saveAsDraft,
-                originalHTML: originalHTML,
-                originalPlain: originalPlain,
-                sanitizeLinks: sanitizeLinks
-            )
-            return try runScript(script)
-        }
-
-        // #229: a reply always injects a new body on the legacy path → always disclose.
+        // (Mail quotes the original). The injecting builder it used to fall back
+        // to is gone: markdown/html and a missing Accessibility grant now refuse.
         // #301: reply sends unless saved as draft — the timeout gate keys on this.
         let sendFlow = !saveAsDraft
-        return try routeWrapperFreeCompose(
-            ineligibilityReason: pasteReplyForwardIneligibilityReasonForCall(format: format),
+        return try dispatchComposePath(
+            refusal: replyForwardRefusalForCall(format: format),
             cleanPath: {
                 let pasteScript = buildReplyEmailPasteScript(
                     messageRef: ref,
@@ -1893,125 +1746,64 @@ actor MailController {
                 // the new body for the ⌘V (full-fidelity restore, like #175 attach).
                 return try withClipboardPreserved { try runGuiScript(pasteScript, timeout: Self.guiScriptTimeout) }
             },
-            legacyPath: { try runLegacyReply() },
-            disclosure: { legacyReplyPathDisclosure(reason: $0) },
-            warnIneligible: { warnPasteReplyIneligible($0) },
-            warnTriedAndFailed: { warnReplyForwardPasteFallback($0) },
-            fallbackReason: { "paste GUI path failed: \(clampedErrorEcho($0.localizedDescription))" },
             // #254: once the send keystroke has been dispatched (or the
-            // success-path tail errored — mail definitely sent), refuse the
-            // legacy re-send and surface unknown-send-state (#242 pattern).
-            shouldFallback: { !isPostDispatchError($0) && !(sendFlow && isTimeoutError($0)) },
-            mapNoFallbackError: {
-                MailError.scriptFailed(
+            // success-path tail errored — mail definitely sent), the send state
+            // is UNKNOWN and must be reported as such (#242 pattern). Every
+            // other runtime failure propagates verbatim (#304: there is no
+            // second path to retry on).
+            mapRuntimeError: { error in
+                guard isPostDispatchError(error) || (sendFlow && isTimeoutError(error)) else {
+                    return error
+                }
+                return MailError.scriptFailed(
                     message: "the send keystroke was already dispatched but a GUI step failed "
                         + "afterwards — the send state is UNKNOWN and the reply/forward may already "
-                        + "be on the wire. NOT retrying via the legacy path (that could send a "
-                        + "duplicate). Check Mail's Sent mailbox / Outbox and the original thread "
+                        + "be on the wire. Check Mail's Sent mailbox / Outbox and the original thread "
                         + "before re-sending. The compose window (if still open) was left untouched "
                         + "for inspection. Original error: "
-                        + clampedErrorEcho($0.localizedDescription),
+                        + clampedErrorEcho(error.localizedDescription),
                     code: -1)
             })
     }
 
     /// Forward an email
-    func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false, accountId: String? = nil) throws -> String {
+    func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil, format: BodyFormat = .plain, accountId: String? = nil) throws -> String {
         // Issue #41: validate forward recipients at the boundary.
         try validateEmailAddresses(to, field: "to")
         let ref = resolveMsgRef(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName)
 
-        // #218: prefer the wrapper-free native-verb + paste path — but ONLY when a
-        // NEW body is provided. A forward with no body injects nothing, so the
-        // legacy path is already wrapper-free (`buildForwardEmailScript` with
-        // userBody: nil omits the content mutation). Mail's native `forward` builds
-        // the quoted original; we paste only the new note at the cursor — never
-        // `set content`/`set html content`. Falls back to legacy injection for
-        // markdown/html, without Accessibility, when disabled via env, or on any
-        // GUI failure.
-        // #229: when a NEW body is present, the fallback is no longer silent —
-        // the named reason goes to stderr AND onto the returned result string.
-        // A forward with NO body never gets a disclosure suffix: the legacy
-        // path injects nothing there and is already wrapper-free.
-        // #241: control flow lives in the tested router (see composeEmail).
-        // The legacy closure is shared with the bodyless path below.
-        func runLegacyForward() throws -> String {
-            // Issue #44 (mirrors #43): pre-fetch unconditionally when body is provided.
-            // Plain mode also needs originalPlain so composeReplyPlainText can build
-            // RFC 3676 quoted body — same root cause as #43 (AppleScript `& content`
-            // against fresh outgoing message returns empty before GUI populates it).
-            // Wrap in try/catch for graceful degrade (mirror #43 round-1 hardening):
-            // pre-fetch failure (sandbox -1743, deleted message) must not hard-fail
-            // the whole forward.
-            let originalHTML: String?
-            let originalPlain: String
-            if body != nil {
-                do {
-                    let fetched = try runScript(buildFetchOriginalContentScript(messageRef: ref))
-                    let parsed = parseFetchedOriginalContent(fetched)
-                    originalHTML = parsed.html
-                    originalPlain = parsed.plain
-                } catch {
-                    originalHTML = nil
-                    originalPlain = ""
-                }
-            } else {
-                originalHTML = nil
-                originalPlain = ""
-            }
-
-            // #134: use the (id:mailbox:accountId:accountName:) overload — see
-            // the matching note in replyEmail above.
-            let script = try buildForwardEmailScript(
-                id: id,
-                mailbox: mailbox,
-                accountId: accountId,
-                accountName: accountName,
-                to: to,
-                userBody: body,
-                userFormat: format,
-                originalHTML: originalHTML,
-                originalPlain: originalPlain,
-                sanitizeLinks: sanitizeLinks
-            )
-            return try runScript(script)
+        // #218/#304: with a NEW body, the native-verb + paste path is the only
+        // path — Mail's native `forward` builds the quoted original and we paste
+        // only the new note at the cursor, never `set content`/`set html content`.
+        // With NO body there is nothing to inject at all, so the plain native
+        // `forward` script runs directly: it needs no Accessibility grant and
+        // cannot produce a wrapper (#304 — this is why the bodyless case is not
+        // one of the six refusals).
+        guard let newBody = body else {
+            return try runScript(buildForwardNoBodyScript(messageRef: ref, to: to))
         }
-
-        // #229: disclose only when a new body would be injected by the legacy
-        // path — a bodyless forward injects nothing (already wrapper-free), so
-        // it bypasses the router entirely and never gets a suffix.
-        if let newBody = body {
-            // #301: the with-body forward paste path always dispatches a send.
-            let sendFlow = true
-            return try routeWrapperFreeCompose(
-                ineligibilityReason: pasteReplyForwardIneligibilityReasonForCall(format: format),
-                cleanPath: {
-                    let pasteScript = buildForwardEmailPasteScript(
-                        messageRef: ref, to: to, newBody: newBody)
-                    return try withClipboardPreserved { try runGuiScript(pasteScript, timeout: Self.guiScriptTimeout) }
-                },
-                legacyPath: { try runLegacyForward() },
-                disclosure: { legacyReplyPathDisclosure(reason: $0) },
-                warnIneligible: { warnPasteReplyIneligible($0) },
-                warnTriedAndFailed: { warnReplyForwardPasteFallback($0) },
-                fallbackReason: { "paste GUI path failed: \(clampedErrorEcho($0.localizedDescription))" },
-            // #254: once the send keystroke has been dispatched (or the
-            // success-path tail errored — mail definitely sent), refuse the
-            // legacy re-send and surface unknown-send-state (#242 pattern).
-            shouldFallback: { !isPostDispatchError($0) && !(sendFlow && isTimeoutError($0)) },
-            mapNoFallbackError: {
-                MailError.scriptFailed(
+        // #301: the with-body forward paste path always dispatches a send.
+        return try dispatchComposePath(
+            refusal: replyForwardRefusalForCall(format: format),
+            cleanPath: {
+                let pasteScript = buildForwardEmailPasteScript(
+                    messageRef: ref, to: to, newBody: newBody)
+                return try withClipboardPreserved { try runGuiScript(pasteScript, timeout: Self.guiScriptTimeout) }
+            },
+            // #254/#304: a post-dispatch (or timeout) failure leaves the send
+            // state UNKNOWN — report that rather than a bare GUI error. Every
+            // other runtime failure propagates verbatim.
+            mapRuntimeError: { error in
+                guard isPostDispatchError(error) || isTimeoutError(error) else { return error }
+                return MailError.scriptFailed(
                     message: "the send keystroke was already dispatched but a GUI step failed "
-                        + "afterwards — the send state is UNKNOWN and the reply/forward may already "
-                        + "be on the wire. NOT retrying via the legacy path (that could send a "
-                        + "duplicate). Check Mail's Sent mailbox / Outbox and the original thread "
+                        + "afterwards — the send state is UNKNOWN and the forward may already "
+                        + "be on the wire. Check Mail's Sent mailbox / Outbox and the original thread "
                         + "before re-sending. The compose window (if still open) was left untouched "
                         + "for inspection. Original error: "
-                        + clampedErrorEcho($0.localizedDescription),
+                        + clampedErrorEcho(error.localizedDescription),
                     code: -1)
             })
-        }
-        return try runLegacyForward()
     }
 
     // MARK: - Draft Operations
@@ -2061,8 +1853,8 @@ actor MailController {
     func updateDraft(
         draftId: String?, subjectMatch: String?, accountName: String?, accountId: String?,
         to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil,
-        attachments: [String]? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false,
-        fromAddress: String? = nil, requireWrapperFree: Bool = false
+        attachments: [String]? = nil, format: BodyFormat = .plain,
+        fromAddress: String? = nil
     ) throws -> [String: Any] {
         // Verify R2 (Codex): presence = key PROVIDED — an explicitly-empty
         // value is validated as a provided-but-invalid value, never silently
@@ -2158,8 +1950,7 @@ actor MailController {
         let createResult = try createDraft(
             to: to, subject: subject, body: body, cc: cc, bcc: bcc,
             attachments: attachments, accountName: nil, format: format,
-            sanitizeLinks: sanitizeLinks, fromAddress: fromAddress,
-            requireWrapperFree: requireWrapperFree)
+            fromAddress: fromAddress)
 
         // 2.5 RECEIPT (verify R3, DA-2): the GUI mailto create path can
         //     report success after firing keystrokes without the draft
@@ -2241,7 +2032,7 @@ actor MailController {
     }
 
     /// Create a draft
-    func createDraft(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, sanitizeLinks: Bool = false, fromAddress: String? = nil, requireWrapperFree: Bool = false) throws -> String {
+    func createDraft(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, fromAddress: String? = nil) throws -> String {
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41: validate every recipient field (to / cc / bcc) at the boundary (#107).
         try validateEmailAddresses(to, field: "to")
@@ -2252,27 +2043,11 @@ actor MailController {
             try validateEmailAddresses([from], field: "from_address")
         }
 
-        // #239: strict mode (see composeEmail above).
-        if requireWrapperFree {
-            if let reason = mailtoIneligibilityReasonForCall(
-                format: format, fromAddress: fromAddress, subject: subject,
-                attachments: attachments,
-                recipients: to + (cc ?? []) + (bcc ?? []),
-                draftMode: true, cc: cc ?? [], bcc: bcc ?? []) {
-                throw MailError.invalidParameter(requireWrapperFreeRefusal(reason: reason))
-            }
-            return try composeViaMailto(
-                to: to, subject: subject, body: body, cc: cc, bcc: bcc,
-                attachments: attachments, send: false, fromAddress: fromAddress)
-        }
-
-        // #175: prefer the wrapper-free mailto path (save draft via ⌘S);
-        // graceful fallback to legacy injection. See composeEmail above.
-        // #237: the fallback is no longer silent — the named reason goes to
-        // stderr AND onto the returned result string.
-        // #241: control flow lives in the tested router (see composeEmail).
-        return try routeWrapperFreeCompose(
-            ineligibilityReason: mailtoIneligibilityReasonForCall(
+        // #175/#304: the mailto path (save draft via ⌘S) is the only body path;
+        // an ineligible call refuses rather than falling back to the injecting
+        // builder that used to sit behind it. See composeEmail above.
+        return try dispatchComposePath(
+            refusal: composeRefusalForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
                 attachments: attachments,
                 recipients: to + (cc ?? []) + (bcc ?? []),
@@ -2281,25 +2056,10 @@ actor MailController {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
                     attachments: attachments, send: false, fromAddress: fromAddress)
-            },
-            legacyPath: {
-                let script = try buildCreateDraftScript(
-                    to: to,
-                    subject: subject,
-                    body: body,
-                    cc: cc,
-                    bcc: bcc,
-                    attachments: attachments,
-                    format: format,
-                    sanitizeLinks: sanitizeLinks,
-                    fromAddress: fromAddress
-                )
-                return try runScript(script)
-            },
-            disclosure: { legacyPathDisclosure(reason: $0) },
-            warnIneligible: { warnMailtoIneligible($0) },
-            warnTriedAndFailed: { warnMailtoFallback($0) },
-            fallbackReason: { "mailto GUI path failed: \(clampedErrorEcho($0.localizedDescription))" })
+            })
+        // A draft flow deliberately does NOT map timeouts to unknown-send-state:
+        // nothing is sent, and a duplicated draft is visible and recoverable
+        // (#301). Any runtime failure propagates as-is.
     }
 
     // MARK: - Attachment Operations

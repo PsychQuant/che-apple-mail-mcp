@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed — BREAKING
+
+- **The legacy compose path is gone: no code in this project assigns a message
+  body through AppleScript any more**
+  ([#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)).
+  Mail wraps any AppleScript-assigned body in `<blockquote type="cite">` at MIME
+  serialization. The sender cannot see it — the wrapper's inline style has no
+  border, so Apple Mail renders the letter normally — while Gmail's web UI and
+  Outlook show the whole thing as quoted text. On 2026-07-29 a formal meeting
+  notice went out that way to 10 recipients and could not be recalled; the
+  trigger was a cc carrying a Chinese display name, a choice with no visible
+  relationship to body rendering. `require_wrapper_free` already existed and
+  already defaulted to false — a default can be flipped back, forgotten, or
+  bypassed by the next ineligibility dimension nobody thought of. What changed
+  is structural: the eight injection points across four builders were deleted,
+  and `NoBodyInjectionGuardTests` fails the suite if any of the three forms
+  (`set content`, `set html content`, `content:` in an outgoing-message
+  construction) reappears anywhere under `Sources/`.
+
+  Removed from the public tool schemas:
+  - **`format: "markdown"` and `format: "html"`** on all four composing tools.
+    The enum is now `["plain"]`. Rich text is only expressible by assigning
+    `html content`, which is the injection this change eliminates. Both values
+    are still *parsed*, so a caller passing them gets an error naming the
+    removal and pointing at
+    [#308](https://github.com/PsychQuant/che-apple-mail-mcp/issues/308) /
+    [#309](https://github.com/PsychQuant/che-apple-mail-mcp/issues/309) rather
+    than a generic "unknown value".
+  - **`require_wrapper_free`** (`compose_email`, `create_draft`, `update_draft`).
+    Its `true` behavior — fail with a named reason instead of producing a
+    wrapped body — is now unconditional, so a flag that is permanently true
+    would only imply a control the caller no longer has.
+  - **`sanitize_links`**. It governed link rendering during markdown-to-HTML
+    conversion, which only the composing tools' markdown mode performed. The
+    export path is unaffected: `batch_export_emails_markdown` uses
+    `EmailMarkdownRenderer`, a different module.
+  - **`CHE_MAIL_DISABLE_MAILTO_COMPOSE` and `CHE_MAIL_DISABLE_PASTE_REPLY`**.
+    Both forced the legacy path; there is nothing left to force.
+
+  `Sources/CheAppleMailMCP/MarkdownRendering.swift` was deleted with them
+  (`BodyFormat` moved to its own file so `format` can still be parsed and
+  refused by name).
+
+### Changed — BREAKING
+
+- **A composing call that cannot use the clean path now FAILS instead of
+  silently producing a wrapped body.** This is the intended behavior change, not
+  a regression: calls that previously "succeeded" while quietly degrading will
+  now return an error. Failures carry a named reason and an executable
+  alternative, and have **no side effects** — no draft created, nothing sent,
+  and (for `update_draft`) the existing draft left untouched. The set of reasons
+  is closed at six and must not be extended by analogy, because every one of
+  them is decidable *before* any side effect: a non-`plain` `format`; an empty
+  subject; Accessibility not granted (the error names `open_mailto`, which needs
+  no TCC grant but cannot carry attachments); a `from_address` that is not a
+  bare addr-spec; an attachment path containing non-ASCII characters (create the
+  draft without `attachments` and drag the file in — do **not** rename it to
+  ASCII, since the recipient sees that name); and a recipient carrying a display
+  name this path cannot fill. Mid-operation failures are a separate contract:
+  they propagate, keep their post-dispatch classification
+  ([#242](https://github.com/PsychQuant/che-apple-mail-mcp/issues/242)), and
+  never claim that nothing happened.
+
+### Capability losses (recorded, not worked around)
+
+Removing the legacy path costs two things that have **no replacement**:
+
+- **Composing without a visible window.** The legacy path was the only way to
+  build a message without a compose window appearing; that was the stated reason
+  `CHE_MAIL_DISABLE_MAILTO_COMPOSE` existed ("heavy/unattended automation where
+  a briefly-visible compose window is unacceptable", v2.17.0). The `mailto:`
+  hand-off necessarily opens one. If this becomes a real blocker, the route is
+  [#308](https://github.com/PsychQuant/che-apple-mail-mcp/issues/308) (IMAP
+  APPEND) — not reviving the injection.
+- **`compose_email` sending to `Name <addr>`.** Display-name recipients used to
+  work by routing to the legacy builder, which set the name natively at the cost
+  of the wrapper. The clean path's GUI fill is draft-only
+  ([#277](https://github.com/PsychQuant/che-apple-mail-mcp/issues/277)) — a fill
+  that failed on a send would dispatch with missing recipients — so a
+  display-name **send** is now refused. Use `create_draft`, check the To field,
+  and send the draft yourself.
+
 ### Fixed
 - Attachments added via `create_draft` / `compose_email` landed at the **start**
   of the body instead of the end

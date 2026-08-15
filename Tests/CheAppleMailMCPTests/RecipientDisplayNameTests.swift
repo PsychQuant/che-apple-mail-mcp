@@ -68,10 +68,10 @@ final class RecipientDisplayNameTests: XCTestCase {
     }
 
     func testValidation_multiAngleInput_rejectedAtBoundary() async throws {
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
-            ineligibility: nil)
+            refusal: { nil })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.composeEmail(
                 to: ["Alice <alice@example.com> <bob@example.net>"], subject: "s", body: "b"))
@@ -93,10 +93,10 @@ final class RecipientDisplayNameTests: XCTestCase {
         // A name==nil fallback that still carries a matched <...> pair is a
         // malformed mailbox form → reject (would otherwise land whole in the
         // script as {address:"Alice <not-an-email> <bob@x>"}).
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
-            ineligibility: nil)
+            refusal: { nil })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.composeEmail(
                 to: ["Alice <not-an-email> <bob@example.net>"], subject: "s", body: "b"))
@@ -105,10 +105,10 @@ final class RecipientDisplayNameTests: XCTestCase {
     func testValidation_bareAngleTrailingText_rejectedAtBoundary() async throws {
         // `<bob@x> extra` has no `>` suffix → (nil, whole); whole carries a
         // matched <...> pair → malformed, reject.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
-            ineligibility: nil)
+            refusal: { nil })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.composeEmail(
                 to: ["<bob@example.net> extra"], subject: "s", body: "b"))
@@ -119,9 +119,9 @@ final class RecipientDisplayNameTests: XCTestCase {
         // (no angles) and a bare-angle form (normalized to the inner addr-spec,
         // angles stripped) must both still pass — neither carries a matched
         // <...> pair after parseRecipient.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
+            scriptRunner: { _ in "Email sent successfully" }, refusal: { nil })
         let r1 = try await MailController.shared.composeEmail(
             to: ["plain@example.com"], subject: "s", body: "b")
         XCTAssertTrue(r1.hasPrefix("Email sent successfully"))
@@ -136,10 +136,10 @@ final class RecipientDisplayNameTests: XCTestCase {
         // #270: `<a@x` — no `>` suffix → parseRecipient returns (nil, "<a@x");
         // the #265 guard required a MATCHED pair (contains both < and >) so a
         // single stray `<` slipped through atCount==1 and landed in the script.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
-            ineligibility: nil)
+            refusal: { nil })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.composeEmail(
                 to: ["<a@example.net"], subject: "s", body: "b"))
@@ -148,10 +148,10 @@ final class RecipientDisplayNameTests: XCTestCase {
     func testValidation_unpairedTrailingAngle_rejectedAtBoundary() async throws {
         // #270: `a@x>` — has `>` suffix but no `<` → (nil, "a@x>") with the
         // stray `>` kept; same single-bracket bypass as above.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
-            ineligibility: nil)
+            refusal: { nil })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.composeEmail(
                 to: ["a@example.net>"], subject: "s", body: "b"))
@@ -161,9 +161,9 @@ final class RecipientDisplayNameTests: XCTestCase {
         // #270 over-reject guard: `"a<b"@x` is a legal RFC 5322 quoted
         // local-part — the angle lives INSIDE the quoted string and must not
         // trip the unquoted-angle scan (a naive contains-OR gate would).
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
+            scriptRunner: { _ in "Email sent successfully" }, refusal: { nil })
         let r1 = try await MailController.shared.composeEmail(
             to: ["\"a<b\"@example.net"], subject: "s", body: "b")
         XCTAssertTrue(r1.hasPrefix("Email sent successfully"))
@@ -177,9 +177,9 @@ final class RecipientDisplayNameTests: XCTestCase {
         // inside a quoted local-part) was rejected by the #265 paired-contains
         // guard (documented as unsupported). The quote-aware scan makes it
         // legal again — RFC 5322 allows specials inside quoted strings.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
+            scriptRunner: { _ in "Email sent successfully" }, refusal: { nil })
         let r = try await MailController.shared.composeEmail(
             to: ["\"a<b>\"@example.net"], subject: "s", body: "b")
         XCTAssertTrue(r.hasPrefix("Email sent successfully"))
@@ -229,10 +229,10 @@ final class RecipientDisplayNameTests: XCTestCase {
     func testValidation_untermQuoteEscapedAngles_rejectedAtBoundary() async throws {
         // #270 verify R2 (Codex): boundary-level lock for the escaped-angle
         // unterminated-quote bypass.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
-            ineligibility: nil)
+            refusal: { nil })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.composeEmail(
                 to: ["\"a\\<b\\>@example.net"], subject: "s", body: "b"))
@@ -242,10 +242,10 @@ final class RecipientDisplayNameTests: XCTestCase {
         // #270 verify R1 (Codex blocking): `"a<b>@x` — old #265 guard rejected
         // (contains < and >); the R0 quote scan swallowed both angles into the
         // unterminated quote and passed it. Must reject at the boundary.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
-            ineligibility: nil)
+            refusal: { nil })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.composeEmail(
                 to: ["\"a<b>@example.net"], subject: "s", body: "b"))
@@ -275,10 +275,10 @@ final class RecipientDisplayNameTests: XCTestCase {
         // atCount==1 with the stray `>` intact. The scan is now unconditional:
         // an extracted addr-spec that carries an unquoted angle is malformed
         // regardless of whether a display name parsed.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
-            ineligibility: nil)
+            refusal: { nil })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.composeEmail(
                 to: ["Name <a>b@example.net>"], subject: "s", body: "b"))
@@ -288,12 +288,15 @@ final class RecipientDisplayNameTests: XCTestCase {
         // #280 over-reject guard: making the angle scan unconditional must NOT
         // reject the legitimate mailbox form — a display name over a clean
         // addr-spec (no unquoted angles) still passes to the legacy path.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
-        let r = try await MailController.shared.composeEmail(
+            scriptRunner: { _ in "Draft created successfully" }, refusal: { nil })
+        // #304: driven through create_draft — a display-name `to` rides the
+        // clean path on drafts (#277). What is under test is the ADDRESS
+        // PARSER, not the tool; compose_email now refuses display-name sends.
+        let r = try await MailController.shared.createDraft(
             to: ["王小明 <ming@example.com>"], subject: "s", body: "b")
-        XCTAssertTrue(r.hasPrefix("Email sent successfully"))
+        XCTAssertTrue(r.hasPrefix("Draft created successfully"))
     }
 
     func testValidation_displayNameQuotedAngleAddr_stillPasses() async throws {
@@ -308,12 +311,12 @@ final class RecipientDisplayNameTests: XCTestCase {
         // (The mirror shape `Name <"a<b"@x>` is NOT reachable here: its inner
         // '<' becomes the lastIndex split point, collapsing to the name==nil
         // path already covered by the #270 tests.)
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
-        let r = try await MailController.shared.composeEmail(
+            scriptRunner: { _ in "Draft created successfully" }, refusal: { nil })
+        let r = try await MailController.shared.createDraft(
             to: ["王小明 <\"a>b\"@example.net>"], subject: "s", body: "b")
-        XCTAssertTrue(r.hasPrefix("Email sent successfully"))
+        XCTAssertTrue(r.hasPrefix("Draft created successfully"))
     }
 
     func testValidation_quotedNameQuotedAngleLeadingAddr_nowLegal() async throws {
@@ -324,12 +327,12 @@ final class RecipientDisplayNameTests: XCTestCase {
         // addr=`a>"@x`); the quote-aware split now finds the real addr opener,
         // the extraction is clean, and the #280 quote-aware angle scan exempts
         // the quoted angles — so the mailbox composes normally.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
-        let r = try await MailController.shared.composeEmail(
+            scriptRunner: { _ in "Draft created successfully" }, refusal: { nil })
+        let r = try await MailController.shared.createDraft(
             to: ["\"Foo\" <\"<a>\"@x.example>"], subject: "s", body: "b")
-        XCTAssertTrue(r.hasPrefix("Email sent successfully"))
+        XCTAssertTrue(r.hasPrefix("Draft created successfully"))
     }
 
     // MARK: #286 — quote-aware parseRecipient split
@@ -365,10 +368,10 @@ final class RecipientDisplayNameTests: XCTestCase {
 
     func testValidation_untermQuoteBeforeAngle_rejectedAtBoundary() async throws {
         // Boundary lock for the deliberate change above.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
-            ineligibility: nil)
+            refusal: { nil })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.composeEmail(
                 to: ["\"Foo <a@x.example>"], subject: "s", body: "b"))
@@ -424,10 +427,10 @@ final class RecipientDisplayNameTests: XCTestCase {
     func testValidation_graphemeMaskedAngle_rejectedAtBoundary() async throws {
         // #280 verify (Codex): boundary lock for the scalar-level scan — the
         // masked stray '>' must reject, not land in the AppleScript address.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
-            ineligibility: nil)
+            refusal: { nil })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.composeEmail(
                 to: ["Name <a>\u{FE0F}b@example.net>"], subject: "s", body: "b"))
@@ -444,10 +447,10 @@ final class RecipientDisplayNameTests: XCTestCase {
         // consistent with that bare-path precedent instead of silently
         // exempting it. Comment-aware scanning is full-parser territory —
         // out of lite-validator scope (#270 diagnosis Residue).
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
-            ineligibility: nil)
+            refusal: { nil })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.composeEmail(
                 to: ["Name <user@example.net(>)>"], subject: "s", body: "b"))
@@ -460,10 +463,10 @@ final class RecipientDisplayNameTests: XCTestCase {
         // grapheme cluster != "@" under Character counting — `a@\u{FE0F}b@c`
         // counted atCount==1 and passed with the masked `@` intact. Scalar
         // counting sees both U+0040 scalars → atCount==2 → reject.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
-            ineligibility: nil)
+            refusal: { nil })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.composeEmail(
                 to: ["a@\u{FE0F}b@example.net"], subject: "s", body: "b"))
@@ -475,10 +478,10 @@ final class RecipientDisplayNameTests: XCTestCase {
         // (fusion → count 0); scalar atCount counts it (1), so the boundary
         // check must ALSO be scalar-level or the shape flips to accept with an
         // empty local part.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in XCTFail("must reject before any script"); return "" },
-            ineligibility: nil)
+            refusal: { nil })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.composeEmail(
                 to: ["@\u{FE0F}example.net"], subject: "s", body: "b"))
@@ -491,9 +494,9 @@ final class RecipientDisplayNameTests: XCTestCase {
         // mis-send — same class as `a@-`). The OLD rejection here was an
         // accident of the grapheme-fusion bug itself; domain grammar
         // validation is out of lite-validator scope. Pinned deliberately.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
+            scriptRunner: { _ in "Email sent successfully" }, refusal: { nil })
         let r = try await MailController.shared.composeEmail(
             to: ["user@\u{FE0F}"], subject: "s", body: "b")
         XCTAssertTrue(r.hasPrefix("Email sent successfully"))
@@ -502,9 +505,9 @@ final class RecipientDisplayNameTests: XCTestCase {
     func testValidation_combiningScalarsElsewhere_stillPass() async throws {
         // Over-reject guard: combining scalars NOT adjacent to '@' must not
         // perturb the count — café (e + U+0301) has exactly one @ scalar.
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Email sent successfully" }, ineligibility: nil)
+            scriptRunner: { _ in "Email sent successfully" }, refusal: { nil })
         let r = try await MailController.shared.composeEmail(
             to: ["cafe\u{301}@example.net"], subject: "s", body: "b")
         XCTAssertTrue(r.hasPrefix("Email sent successfully"))
@@ -576,22 +579,24 @@ final class RecipientDisplayNameTests: XCTestCase {
                        "embedded quotes in the name must be AppleScript-escaped: \(fragment)")
     }
 
-    // MARK: mailto ineligibility dimension
+    // MARK: pre-flight refusal dimension (#304 — was a routing dimension)
 
-    func testIneligibility_displayNameRecipient_namedReason() {
-        let reason = mailtoIneligibilityReason(
-            format: .plain, accessibilityTrusted: true, disabledByEnv: false,
+    func testRefusal_displayNameCcBcc_namedWithRecipe() {
+        let refusal = composeRefusal(
+            format: .plain, accessibilityTrusted: true,
             hasCustomSender: false, hasSubject: true,
             attachmentsGuiSafe: true,
             recipientsAddrSpecOnly: false)
-        XCTAssertNotNil(reason)
-        XCTAssertTrue(reason!.contains("display-name"), reason!)
-        XCTAssertTrue(reason!.contains("RFC 6068"), reason!)
+        XCTAssertEqual(refusal, .displayNameRecipient)
+        let message = refusal!.message
+        XCTAssertTrue(message.contains("display name"), message)
+        XCTAssertTrue(message.contains("RFC 6068"), message)
+        XCTAssertTrue(message.contains("bare addresses"), "must state the recipe: \(message)")
     }
 
-    func testIneligibility_bareRecipients_stillEligible() {
-        XCTAssertNil(mailtoIneligibilityReason(
-            format: .plain, accessibilityTrusted: true, disabledByEnv: false,
+    func testRefusal_bareRecipients_proceed() {
+        XCTAssertNil(composeRefusal(
+            format: .plain, accessibilityTrusted: true,
             hasCustomSender: false, hasSubject: true,
             attachmentsGuiSafe: true,
             recipientsAddrSpecOnly: true))
@@ -599,29 +604,36 @@ final class RecipientDisplayNameTests: XCTestCase {
 
     // MARK: production site via the #254 seams
 
-    func testComposeEmail_displayNameRecipient_routesLegacy_withNativeName() async throws {
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+    func testComposeEmail_displayNameRecipient_refusesOnSend() async throws {
+        // #304 CAPABILITY CHANGE, recorded deliberately: sending to
+        // `Name <addr>` used to work by routing to the legacy builder, which
+        // set the recipient's name natively — at the cost of the body being
+        // wrapped in <blockquote type="cite">. The clean path has always
+        // refused a display-name SEND (the GUI fill is draft-only, #277:
+        // a fill that failed would dispatch with missing recipients), so with
+        // the legacy builder gone the send now fails instead of degrading.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         var scripts: [String] = []
         await MailController.shared.setTestSeams(
             scriptRunner: { script in scripts.append(script); return "Email sent successfully" },
-            ineligibility: nil)   // real probe — display-name recipient must trip it
-        let result = try await MailController.shared.composeEmail(
-            to: ["王小明 <ming@example.com>"], subject: "s", body: "b")
-        XCTAssertTrue(result.hasPrefix("Email sent successfully"))
-        XCTAssertTrue(result.contains("[legacy path"),
-                      "display-name recipients must route to the legacy path with disclosure: \(result)")
-        let legacyScript = try XCTUnwrap(scripts.last)
-        XCTAssertTrue(legacyScript.contains("name:\"王小明\""),
-                      "the legacy script must set the recipient's native name: \(legacyScript.prefix(300))")
-        XCTAssertFalse(scripts.contains { $0.contains("mailto ") },
-                       "the mailto GUI path must never be attempted with display-name recipients")
+            refusal: nil)   // real probe — the display-name recipient must trip it
+        do {
+            _ = try await MailController.shared.composeEmail(
+                to: ["王小明 <ming@example.com>"], subject: "s", body: "b")
+            XCTFail("a display-name recipient on a SEND must be refused")
+        } catch {
+            XCTAssertTrue("\(error)".contains("display name"), "\(error)")
+            XCTAssertTrue("\(error)".contains("create_draft"),
+                          "the refusal must point at the path that still supports it: \(error)")
+        }
+        XCTAssertTrue(scripts.isEmpty, "nothing may be sent: \(scripts.count) script(s) ran")
     }
 
     func testValidation_nameWithAt_noLongerMisRejected() async throws {
-        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil) }
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         await MailController.shared.setTestSeams(
             scriptRunner: { _ in "Draft created successfully" },
-            ineligibility: nil)
+            refusal: { nil })
         // Previously atCount==2 rejected this legal RFC 5322 mailbox outright.
         let result = try await MailController.shared.createDraft(
             to: ["ming@lab <ming@example.com>"], subject: "s", body: "b")

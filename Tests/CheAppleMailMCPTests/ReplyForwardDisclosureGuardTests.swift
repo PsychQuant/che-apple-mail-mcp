@@ -1,10 +1,10 @@
 import XCTest
 
-/// #229 — source-invariant guard: the reply_email / forward_email tool schemas
-/// must DISCLOSE the clean new-body path (#218) eligibility conditions and the
-/// legacy-path consequence (NEW body wrapped in `<blockquote type="cite">`,
-/// renders quoted on some mobile clients; the quoted ORIGINAL's cite block is
-/// the legitimate structure Mail builds).
+/// #229/#304 — source-invariant guard: the reply_email / forward_email tool
+/// schemas must state the conditions under which the call is REFUSED, so a
+/// calling agent can fix the call before it fails. #229 installed this to
+/// disclose a silent degradation; #304 removed the path that degraded, so the
+/// same guard now pins the refusal contract.
 ///
 /// Sibling of PR #240's ComposeDisclosureGuardTests (compose family) — kept as
 /// a separate file so the two branches don't conflict; consolidation after both
@@ -34,30 +34,31 @@ final class ReplyForwardDisclosureGuardTests: XCTestCase {
                 continue
             }
             let window = lines[nameIdx..<min(nameIdx + 3, lines.count)].joined(separator: "\n")
-            for condition in ["plain", "Accessibility", "CHE_MAIL_DISABLE_PASTE_REPLY", "legacy"] {
+            for condition in ["'plain'", "Accessibility"] {
                 XCTAssertTrue(window.contains(condition),
-                    "\(tool) tool description must state clean-path condition/consequence '\(condition)': \(window.prefix(240))")
+                    "\(tool) description must state refusal condition '\(condition)': \(window.prefix(240))")
             }
-            // #229 verify round: pin the conjunction phrasing too, so a rewrite
-            // can't keep the keywords but drop the "all conditions required"
-            // semantics (or the env-unset direction).
-            XCTAssertTrue(window.contains("ALL hold"),
-                "\(tool) description must state the ALL-hold conjunction: \(window.prefix(240))")
-            XCTAssertTrue(window.contains("not set"),
-                "\(tool) description must state the env-unset direction: \(window.prefix(240))")
+            XCTAssertTrue(window.contains("Two reasons"),
+                "\(tool) description must state that exactly two reasons apply here: \(window.prefix(240))")
+            XCTAssertFalse(window.contains("CHE_MAIL_DISABLE_PASTE_REPLY"),
+                "#304: the env hatch is gone: \(window.prefix(240))")
         }
     }
 
-    /// forward_email must additionally disclose that a forward WITHOUT a body
-    /// is always wrapper-free (no disclosure suffix will ever be appended).
-    func testForwardDescription_notesBodylessForwardIsWrapperFree() throws {
+    /// forward_email must additionally state that a forward WITHOUT a body
+    /// assigns nothing and therefore needs no Accessibility grant — otherwise a
+    /// calling agent reading "Accessibility required" would wrongly conclude the
+    /// bare forward is unavailable to it.
+    func testForwardDescription_notesBodylessForwardNeedsNoGrant() throws {
         let source = try serverSwiftSource()
         let lines = source.components(separatedBy: "\n")
         guard let nameIdx = lines.firstIndex(where: { $0.contains("name: \"forward_email\"") }) else {
             XCTFail("forward_email not found"); return
         }
         let window = lines[nameIdx..<min(nameIdx + 3, lines.count)].joined(separator: "\n")
-        XCTAssertTrue(window.contains("wrapper-free"),
-            "forward_email description must note the bodyless forward is wrapper-free: \(window.prefix(240))")
+        XCTAssertTrue(window.contains("assigns nothing"),
+            "forward_email description must note the bodyless forward assigns nothing: \(window.prefix(240))")
+        XCTAssertTrue(window.contains("needs no Accessibility"),
+            "forward_email description must note it needs no grant: \(window.prefix(240))")
     }
 }

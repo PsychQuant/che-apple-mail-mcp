@@ -3,8 +3,13 @@ import XCTest
 
 /// #276 — `update_draft` upsert orchestration (draft-update spec) driven
 /// through the real `MailController` methods with a fake script runner:
-/// locate (list script) → create (legacy path forced via the ineligibility
-/// seam) → delete-by-id, plus the refuse paths. No live Mail.
+/// locate (list script) → create → delete-by-id, plus the refuse paths.
+/// No live Mail.
+///
+/// #304: the create step is the mailto GUI script (the legacy injection path
+/// this used to force through the eligibility seam no longer exists), so the
+/// dispatcher recognizes the create by the mailto hand-off rather than by
+/// `make new outgoing message`.
 final class UpdateDraftTests: XCTestCase {
 
     private let RS = "\u{001E}", GS = "\u{001D}"
@@ -27,8 +32,7 @@ final class UpdateDraftTests: XCTestCase {
                     if let deleteError { throw deleteError }
                     return "Draft deleted"
                 }
-                if script.contains("make new outgoing message") || script.contains("save theMessage")
-                    || script.contains("outgoing message") {
+                if script.contains("mailto:") || script.contains("make new outgoing message") {
                     if createThrows { throw MailError.scriptFailed(message: "create boom", code: -1) }
                     return "Draft created successfully"
                 }
@@ -37,7 +41,7 @@ final class UpdateDraftTests: XCTestCase {
                 }
                 return ""
             },
-            ineligibility: { "test forced legacy" })
+            refusal: { nil })
     }
 
     private func installSeam(
@@ -51,7 +55,7 @@ final class UpdateDraftTests: XCTestCase {
     }
 
     private func teardownSeam() async {
-        await MailController.shared.setTestSeams(scriptRunner: nil, ineligibility: nil)
+        await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
     }
 
     // MARK: - listDrafts zip (spec: list_drafts returns draft ids)
@@ -78,13 +82,12 @@ final class UpdateDraftTests: XCTestCase {
                            "101\(RS)102\(RS)999\(GS)A\(RS)B\(RS)s"],
             log: { s in
                 if s.contains("whose id is") { order.append("delete") }
-                else if s.contains("outgoing message") { order.append("create") }
+                else if s.contains("mailto:") { order.append("create") }
             })
         let result = try await MailController.shared.updateDraft(
             draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
             to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-            attachments: nil, format: .plain, sanitizeLinks: false,
-            fromAddress: nil, requireWrapperFree: false)
+            attachments: nil, format: .plain, fromAddress: nil)
         XCTAssertEqual(result["deleted_old"] as? Bool, true)
         XCTAssertEqual(result["old_draft_id"] as? String, "101")
         XCTAssertTrue((result["new_draft"] as? String ?? "").contains("Draft created"))
@@ -105,8 +108,7 @@ final class UpdateDraftTests: XCTestCase {
             _ = try await MailController.shared.updateDraft(
                 draftId: nil, subjectMatch: "Same", accountName: "Google", accountId: nil,
                 to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-                attachments: nil, format: .plain, sanitizeLinks: false,
-                fromAddress: nil, requireWrapperFree: false)
+                attachments: nil, format: .plain, fromAddress: nil)
             XCTFail("ambiguous subject_match must refuse")
         } catch {
             let msg = "\(error)"
@@ -127,8 +129,7 @@ final class UpdateDraftTests: XCTestCase {
             _ = try await MailController.shared.updateDraft(
                 draftId: nil, subjectMatch: "NoSuch", accountName: "Google", accountId: nil,
                 to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-                attachments: nil, format: .plain, sanitizeLinks: false,
-                fromAddress: nil, requireWrapperFree: false)
+                attachments: nil, format: .plain, fromAddress: nil)
             XCTFail("zero-match must refuse (update requires an existing draft)")
         } catch { }
         XCTAssertTrue(order.entries.isEmpty, "zero-match refuse must not create anything")
@@ -144,22 +145,19 @@ final class UpdateDraftTests: XCTestCase {
             try await MailController.shared.updateDraft(
                 draftId: "101", subjectMatch: "A", accountName: nil, accountId: nil,
                 to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-                attachments: nil, format: .plain, sanitizeLinks: false,
-                fromAddress: nil, requireWrapperFree: false))
+                attachments: nil, format: .plain, fromAddress: nil))
         // neither selector → invalidParameter
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.updateDraft(
                 draftId: nil, subjectMatch: nil, accountName: nil, accountId: nil,
                 to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-                attachments: nil, format: .plain, sanitizeLinks: false,
-                fromAddress: nil, requireWrapperFree: false))
+                attachments: nil, format: .plain, fromAddress: nil))
         // non-ASCII Unicode digits (Character.isNumber would accept ١٢٣) → reject
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.updateDraft(
                 draftId: "١٢٣", subjectMatch: nil, accountName: nil, accountId: nil,
                 to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-                attachments: nil, format: .plain, sanitizeLinks: false,
-                fromAddress: nil, requireWrapperFree: false))
+                attachments: nil, format: .plain, fromAddress: nil))
     }
 
     func testUpdateDraft_emptySelectorValues_neverTreatedAsAbsent() async throws {
@@ -179,22 +177,19 @@ final class UpdateDraftTests: XCTestCase {
             try await MailController.shared.updateDraft(
                 draftId: "101", subjectMatch: "", accountName: nil, accountId: nil,
                 to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-                attachments: nil, format: .plain, sanitizeLinks: false,
-                fromAddress: nil, requireWrapperFree: false))
+                attachments: nil, format: .plain, fromAddress: nil))
         // empty draft_id + valid subject_match → invalid draft_id, reject
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.updateDraft(
                 draftId: "", subjectMatch: "A", accountName: nil, accountId: nil,
                 to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-                attachments: nil, format: .plain, sanitizeLinks: false,
-                fromAddress: nil, requireWrapperFree: false))
+                attachments: nil, format: .plain, fromAddress: nil))
         // sole empty subject_match → the DEDICATED empty-subject error
         do {
             _ = try await MailController.shared.updateDraft(
                 draftId: nil, subjectMatch: "", accountName: nil, accountId: nil,
                 to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-                attachments: nil, format: .plain, sanitizeLinks: false,
-                fromAddress: nil, requireWrapperFree: false)
+                attachments: nil, format: .plain, fromAddress: nil)
             XCTFail("sole empty subject_match must throw its dedicated error")
         } catch {
             XCTAssertTrue("\(error)".contains("non-empty"),
@@ -221,8 +216,7 @@ final class UpdateDraftTests: XCTestCase {
         let result = try await MailController.shared.updateDraft(
             draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
             to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-            attachments: nil, format: .plain, sanitizeLinks: false,
-            fromAddress: nil, requireWrapperFree: false)
+            attachments: nil, format: .plain, fromAddress: nil)
         XCTAssertEqual(result["deleted_old"] as? Bool, false)
         XCTAssertTrue(((result["note"] as? String) ?? "").contains("not confirmed"),
                       "must disclose the unconfirmed replacement; got: \(result["note"] ?? "")")
@@ -242,8 +236,7 @@ final class UpdateDraftTests: XCTestCase {
             _ = try await MailController.shared.updateDraft(
                 draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
                 to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-                attachments: nil, format: .plain, sanitizeLinks: false,
-                fromAddress: nil, requireWrapperFree: false)
+                attachments: nil, format: .plain, fromAddress: nil)
             XCTFail("create failure must propagate")
         } catch { }
         XCTAssertTrue(order.entries.isEmpty, "create failure must NOT delete the old draft")
@@ -257,8 +250,7 @@ final class UpdateDraftTests: XCTestCase {
         let result = try await MailController.shared.updateDraft(
             draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
             to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-            attachments: nil, format: .plain, sanitizeLinks: false,
-            fromAddress: nil, requireWrapperFree: false)
+            attachments: nil, format: .plain, fromAddress: nil)
         XCTAssertEqual(result["deleted_old"] as? Bool, false,
                        "delete failure after successful create must not throw (design D5)")
         XCTAssertTrue((result["new_draft"] as? String ?? "").contains("Draft created"))
@@ -287,8 +279,7 @@ extension UpdateDraftTests {
         let result = try await MailController.shared.updateDraft(
             draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
             to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-            attachments: nil, format: .plain, sanitizeLinks: false,
-            fromAddress: nil, requireWrapperFree: false)
+            attachments: nil, format: .plain, fromAddress: nil)
         XCTAssertEqual(result["deleted_old"] as? Bool, true)
         XCTAssertEqual(order.entries, ["delete"])
     }
@@ -307,8 +298,7 @@ extension UpdateDraftTests {
         let result = try await MailController.shared.updateDraft(
             draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
             to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-            attachments: nil, format: .plain, sanitizeLinks: false,
-            fromAddress: nil, requireWrapperFree: false)
+            attachments: nil, format: .plain, fromAddress: nil)
         XCTAssertEqual(result["deleted_old"] as? Bool, false)
         XCTAssertTrue(((result["note"] as? String) ?? "").contains("not confirmed"))
         XCTAssertTrue(order.entries.isEmpty)
@@ -324,8 +314,7 @@ extension UpdateDraftTests {
         let result = try await MailController.shared.updateDraft(
             draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
             to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-            attachments: nil, format: .plain, sanitizeLinks: false,
-            fromAddress: nil, requireWrapperFree: false)
+            attachments: nil, format: .plain, fromAddress: nil)
         XCTAssertEqual(result["deleted_old"] as? Bool, false)
         let note = (result["note"] as? String) ?? ""
         XCTAssertTrue(note.contains("confirmed absent") || note.contains("no longer present"),
@@ -342,8 +331,7 @@ extension UpdateDraftTests {
         let result = try await MailController.shared.updateDraft(
             draftId: "101", subjectMatch: nil, accountName: "Google", accountId: nil,
             to: ["a@x.co"], subject: "s", body: "b", cc: nil, bcc: nil,
-            attachments: nil, format: .plain, sanitizeLinks: false,
-            fromAddress: nil, requireWrapperFree: false)
+            attachments: nil, format: .plain, fromAddress: nil)
         XCTAssertEqual(result["deleted_old"] as? Bool, false)
         let note = (result["note"] as? String) ?? ""
         XCTAssertTrue(note.contains("unknown") || note.contains("could not be verified"),

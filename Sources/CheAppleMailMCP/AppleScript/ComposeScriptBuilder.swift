@@ -560,363 +560,45 @@ func buildMailtoComposeScript(
     return s
 }
 
-func buildComposeEmailScript(
-    to: [String],
-    subject: String,
-    body: String,
-    cc: [String]? = nil,
-    bcc: [String]? = nil,
-    attachments: [String]? = nil,
-    format: BodyFormat = .plain,
-    sanitizeLinks: Bool = false,
-    fromAddress: String? = nil
-) throws -> String {
-    let composed = try renderBody(body, format: format, sanitizeLinks: sanitizeLinks)
-    let plainFallback = composed.plainContent
-
-    var script = """
-    tell application "Mail"
-        set newMessage to make new outgoing message with properties {subject:"\(appleScriptEscape(subject))", content:"\(appleScriptEscape(plainFallback))", visible:true}
-        tell newMessage
-    """
-
-    // #131: sender account selection. Mail.app's outgoing-message `sender`
-    // property is a STRING matching one of the user's configured email
-    // addresses (RFC 5322 addr-spec, optionally with display name —
-    // `"Name <email@example.com>"`). NOT an `account id` selector — Mail.app
-    // routes outgoing messages by matching `sender` against configured
-    // accounts. Omitted: Mail.app uses the default account (backward compat
-    // — script remains byte-identical to pre-#131 output).
-    if let from = fromAddress, !from.isEmpty {
-        script += "\n        set sender to \"\(appleScriptEscape(from))\""
-    }
-
-    if let html = composed.htmlContent {
-        script += "\n        set html content to \"\(appleScriptEscape(html))\""
-    }
-
-    script += "\n" + recipientFragment(to, kind: "to")
-    if let cc = cc { script += "\n" + recipientFragment(cc, kind: "cc") }
-    if let bcc = bcc { script += "\n" + recipientFragment(bcc, kind: "bcc") }
-    if let attachments = attachments { script += "\n" + attachmentFragment(for: attachments) }
-
-    script += "\n" + """
-        end tell
-        send newMessage
-        return "Email sent successfully"
-    end tell
-    """
-
-    return script
-}
-
-func buildCreateDraftScript(
-    to: [String],
-    subject: String,
-    body: String,
-    cc: [String]? = nil,
-    bcc: [String]? = nil,
-    attachments: [String]? = nil,
-    format: BodyFormat = .plain,
-    sanitizeLinks: Bool = false,
-    fromAddress: String? = nil
-) throws -> String {
-    let composed = try renderBody(body, format: format, sanitizeLinks: sanitizeLinks)
-    let plainFallback = composed.plainContent
-
-    var script = """
-    tell application "Mail"
-        set newMessage to make new outgoing message with properties {subject:"\(appleScriptEscape(subject))", content:"\(appleScriptEscape(plainFallback))", visible:true}
-        tell newMessage
-    """
-
-    // #131: sender account selection — see buildComposeEmailScript above.
-    if let from = fromAddress, !from.isEmpty {
-        script += "\n        set sender to \"\(appleScriptEscape(from))\""
-    }
-
-    if let html = composed.htmlContent {
-        script += "\n        set html content to \"\(appleScriptEscape(html))\""
-    }
-
-    script += "\n" + recipientFragment(to, kind: "to")
-    // cc / bcc emission order mirrors buildComposeEmailScript (#107).
-    if let cc = cc { script += "\n" + recipientFragment(cc, kind: "cc") }
-    if let bcc = bcc { script += "\n" + recipientFragment(bcc, kind: "bcc") }
-    if let attachments = attachments { script += "\n" + attachmentFragment(for: attachments) }
-
-    script += "\n" + """
-        end tell
-        save newMessage
-        return "Draft created successfully"
-    end tell
-    """
-
-    return script
-}
-
-func composeReplyHTML(userBody: String, userFormat: BodyFormat, originalHTML: String?, originalPlain: String, sanitizeLinks: Bool = false) throws -> String {
-    let composed = try renderBody(userBody, format: userFormat, sanitizeLinks: sanitizeLinks)
-    let userPart = composed.htmlContent ?? htmlEscape(userBody)
-
-    let quoted: String
-    if let html = originalHTML, !html.isEmpty {
-        quoted = html
-    } else {
-        quoted = htmlEscape(originalPlain).replacingOccurrences(of: "\n", with: "<br>\n")
-    }
-
-    return "\(userPart)\n<hr>\n<blockquote>\n\(quoted)\n</blockquote>"
-}
-
-// Issue #43: AppleScript `& content` against a freshly-created outgoing message
-// returns empty before the GUI compose pipeline materializes the quoted body.
-// We pre-fetch the original plain text and Swift-side compose RFC 3676 quoted
-// reply body so the result is deterministic regardless of window state.
-//
-// Round-1 hardening (#43 verify findings — Logic #1/2/3/5, Codex P1/P3):
-// - Normalize CRLF/CR → LF before splitting (Mail.app IMAP/Exchange messages
-//   sometimes return CRLF line endings).
-// - Strip trailing newlines (Mail.app commonly appends a trailing newline,
-//   which would emit a stray `> ` line at the end).
-// - For empty quoted lines, emit `>` (no trailing space) per RFC 3676 §4.5;
-//   only non-empty lines get the `> ` stuffing space.
-// - After normalization, if there is no quotable content (e.g. originalPlain
-//   was just whitespace/newlines), return userBody alone.
-func composeReplyPlainText(userBody: String, originalPlain: String) -> String {
-    let normalized = originalPlain
-        .replacingOccurrences(of: "\r\n", with: "\n")
-        .replacingOccurrences(of: "\r", with: "\n")
-    var trimmed = Substring(normalized)
-    while let last = trimmed.last, last == "\n" {
-        trimmed = trimmed.dropLast()
-    }
-    if trimmed.isEmpty {
-        return userBody
-    }
-    let quoted = trimmed
-        .split(separator: "\n", omittingEmptySubsequences: false)
-        .map { $0.isEmpty ? ">" : "> \($0)" }
-        .joined(separator: "\n")
-    return "\(userBody)\n\n\(quoted)"
-}
-
-func buildReplyEmailScript(
-    messageRef: String,
-    userBody: String,
-    userFormat: BodyFormat,
-    replyAll: Bool,
-    ccAdditional: [String]? = nil,
-    attachments: [String]? = nil,
-    saveAsDraft: Bool = false,
-    originalHTML: String?,
-    originalPlain: String,
-    sanitizeLinks: Bool = false
-) throws -> String {
-    let replyType = replyAll ? "reply all" : "reply"
-    let dispatchVerb = saveAsDraft ? "save" : "send"
-    let returnMessage = saveAsDraft ? "Reply saved as draft" : "Reply sent successfully"
-    // saveAsDraft=true: don't open Mail.app GUI window. The user wanted a quiet
-    // draft for later review; popping a window invites them to edit it directly
-    // and lose the saved snapshot. saveAsDraft=false: keep the existing
-    // send-path behavior (window briefly opens during send, backward compat).
-    let windowClause = saveAsDraft ? "without opening window" : "with opening window"
-
-    let extraTellLines: String = {
-        var lines: [String] = []
-        if let cc = ccAdditional, !cc.isEmpty {
-            lines.append(recipientFragment(cc, kind: "cc"))
-        }
-        if let atts = attachments, !atts.isEmpty {
-            lines.append(attachmentFragment(for: atts))
-        }
-        return lines.isEmpty ? "" : "\n" + lines.joined(separator: "\n")
-    }()
-
-    if userFormat == .plain {
-        let composedPlain = composeReplyPlainText(userBody: userBody, originalPlain: originalPlain)
-        return """
-        tell application "Mail"
-            set originalMsg to \(messageRef)
-            set replyMsg to \(replyType) originalMsg \(windowClause)
-            tell replyMsg
-                set content to "\(appleScriptEscape(composedPlain))"\(extraTellLines)
-            end tell
-            \(dispatchVerb) replyMsg
-            return "\(returnMessage)"
-        end tell
-        """
-    }
-
-    let finalHTML = try composeReplyHTML(
-        userBody: userBody,
-        userFormat: userFormat,
-        originalHTML: originalHTML,
-        originalPlain: originalPlain,
-        sanitizeLinks: sanitizeLinks
-    )
-
+/// #304 — forward with NO new body: the native `forward` verb plus the
+/// recipient fragment, and nothing else. This is the one composing script that
+/// never had a body to assign, so it survives the removal of the injecting
+/// builders unchanged — and unlike the paste path it needs no Accessibility
+/// grant, because it drives no keystrokes.
+///
+/// Mail builds the quoted original itself; the user adds no note. Extracted
+/// from the former `buildForwardEmailScript(userBody: nil)` branch so the
+/// deletion of that builder does not take a wrapper-free capability with it.
+func buildForwardNoBodyScript(messageRef: String, to: [String]) -> String {
     return """
-    tell application "Mail"
-        set originalMsg to \(messageRef)
-        set replyMsg to \(replyType) originalMsg \(windowClause)
-        tell replyMsg
-            set html content to "\(appleScriptEscape(finalHTML))"\(extraTellLines)
-        end tell
-        \(dispatchVerb) replyMsg
-        return "\(returnMessage)"
-    end tell
-    """
-}
-
-func buildForwardEmailScript(
-    messageRef: String,
-    to: [String],
-    userBody: String?,
-    userFormat: BodyFormat,
-    originalHTML: String?,
-    originalPlain: String?,
-    sanitizeLinks: Bool = false
-) throws -> String {
-    var script = """
     tell application "Mail"
         set originalMsg to \(messageRef)
         set fwdMsg to forward originalMsg with opening window
         tell fwdMsg
-    """
-
-    script += "\n" + recipientFragment(to, kind: "to")
-
-    if let body = userBody {
-        if userFormat == .plain {
-            // Issue #44 (mirrors #43): use Swift-side composeReplyPlainText helper
-            // instead of broken `& content` AppleScript. The pre-fix pattern read
-            // outgoing message's `content` as empty before Mail.app's GUI populated
-            // the quoted body — every plain forward since b8a4a89 silently dropped
-            // the quoted original.
-            let composedPlain = composeReplyPlainText(userBody: body, originalPlain: originalPlain ?? "")
-            script += "\n" + """
-                set content to "\(appleScriptEscape(composedPlain))"
-            """
-        } else {
-            let finalHTML = try composeReplyHTML(
-                userBody: body,
-                userFormat: userFormat,
-                originalHTML: originalHTML,
-                originalPlain: originalPlain ?? "",
-                sanitizeLinks: sanitizeLinks
-            )
-            script += "\n" + """
-                set html content to "\(appleScriptEscape(finalHTML))"
-            """
-        }
-    }
-
-    script += "\n" + """
+    \(recipientFragment(to, kind: "to"))
         end tell
         send fwdMsg
         return "Email forwarded successfully"
     end tell
     """
-
-    return script
-}
-
-/// #134 — testable seam for reply_email's resolveMsgRef wiring.
-///
-/// Pre-#134 `MailController.replyEmail` computed `ref = resolveMsgRef(...)`
-/// inline and threaded `ref` into the `(messageRef:)` builder. That overload
-/// is byte-identical to what the actor produces, but the wiring step (the
-/// literal `resolveMsgRef` call that #104 PR-C added for account_id
-/// disambiguation) had **no automated regression lock** — reverting it to
-/// the legacy `msgRef(...)` helper would leave `swift test` green and
-/// silently bring back the #104 display_name-collision bug.
-///
-/// This overload internalizes the `resolveMsgRef` call so the wiring IS
-/// unit-testable: `buildReplyEmailScript(id:..., accountId: uuid, ...)`
-/// must emit `(account id "<UUID>")`, and the existing
-/// `buildReplyEmailScript(messageRef:...)` overload stays intact for the
-/// 25 legacy tests that pre-build the ref themselves.
-///
-/// `MailController.replyEmail` MUST use this overload (not the `messageRef:`
-/// one with an inline `msgRef(...)` call) — that's the discipline this seam
-/// codifies. Pre-fetch path still computes `ref` inline because it threads
-/// through `buildFetchOriginalContentScript`; #134's scope is the main
-/// reply script wiring (sibling issue can extend to the fetch path).
-func buildReplyEmailScript(
-    id: String,
-    mailbox: String,
-    accountId: String?,
-    accountName: String,
-    userBody: String,
-    userFormat: BodyFormat,
-    replyAll: Bool,
-    ccAdditional: [String]? = nil,
-    attachments: [String]? = nil,
-    saveAsDraft: Bool = false,
-    originalHTML: String?,
-    originalPlain: String,
-    sanitizeLinks: Bool = false
-) throws -> String {
-    let ref = resolveMsgRef(id: id, mailbox: mailbox,
-                            accountId: accountId, accountName: accountName)
-    return try buildReplyEmailScript(
-        messageRef: ref,
-        userBody: userBody,
-        userFormat: userFormat,
-        replyAll: replyAll,
-        ccAdditional: ccAdditional,
-        attachments: attachments,
-        saveAsDraft: saveAsDraft,
-        originalHTML: originalHTML,
-        originalPlain: originalPlain,
-        sanitizeLinks: sanitizeLinks
-    )
-}
-
-/// #134 — testable seam for forward_email's resolveMsgRef wiring.
-/// See `buildReplyEmailScript(id:mailbox:accountId:accountName:...)` for
-/// the rationale; mirrors that pattern for forward.
-func buildForwardEmailScript(
-    id: String,
-    mailbox: String,
-    accountId: String?,
-    accountName: String,
-    to: [String],
-    userBody: String?,
-    userFormat: BodyFormat,
-    originalHTML: String?,
-    originalPlain: String?,
-    sanitizeLinks: Bool = false
-) throws -> String {
-    let ref = resolveMsgRef(id: id, mailbox: mailbox,
-                            accountId: accountId, accountName: accountName)
-    return try buildForwardEmailScript(
-        messageRef: ref,
-        to: to,
-        userBody: userBody,
-        userFormat: userFormat,
-        originalHTML: originalHTML,
-        originalPlain: originalPlain,
-        sanitizeLinks: sanitizeLinks
-    )
 }
 
 // MARK: - #218 native-verb + paste reply/forward (wrapper-free new body)
 //
-// The legacy `buildReplyEmailScript` / `buildForwardEmailScript` above open the
-// reply/forward window with the native verb but then OVERWRITE Mail's content
-// with a self-composed body via `set content` / `set html content` — which Mail
-// wraps in `Apple-Mail-URLShareWrapperClass` / `blockquote type="cite"` (the
-// #218 bug, same mechanism as #175 compose).
+// Until #304 there were also `buildReplyEmailScript` / `buildForwardEmailScript`
+// here: they opened the reply/forward window with the native verb but then
+// OVERWROTE Mail's content with a self-composed body via `set content` /
+// `set html content` — which Mail wraps in `Apple-Mail-URLShareWrapperClass` /
+// `blockquote type="cite"` (the #218 bug, same mechanism as #175 compose). They
+// are gone; these builders are now the ONLY reply/forward path.
 //
 // These builders keep Mail's NATIVE quote (the `reply`/`forward` verb builds it,
 // correctly, in its own cite-blockquote + sets threading headers) and inject the
 // NEW body ONLY via a System Events clipboard paste at the cursor — never `set
 // content`/`set html content`. So the quoted original stays a proper quote and
-// the user's new text is clean. Plain-only + Accessibility-gated (see
-// `shouldUsePasteReplyForward`); the caller falls back to the legacy builders
-// for markdown/html, no Accessibility, or any GUI failure.
+// the user's new text is clean. Plain-only + Accessibility-gated; when either
+// precondition fails the caller now REFUSES with a named reason (#304) rather
+// than falling back to a body-assigning builder.
 //
 // Window identity = id-delta (the `Re:`/`Fwd:` title prefix is LOCALIZED, so it
 // is never matched). We capture window ids before the verb, diff to find the new
@@ -1174,28 +856,3 @@ func buildForwardEmailPasteScript(
     )
 }
 
-func buildFetchOriginalContentScript(messageRef: String) -> String {
-    return """
-    tell application "Mail"
-        set originalMsg to \(messageRef)
-        try
-            set originalHTML to html content of originalMsg
-        on error
-            set originalHTML to ""
-        end try
-        set originalPlain to content of originalMsg
-        return originalHTML & "\u{001E}\u{001E}\u{001E}" & originalPlain
-    end tell
-    """
-}
-
-func parseFetchedOriginalContent(_ raw: String) -> (html: String?, plain: String) {
-    let sep = "\u{001E}\u{001E}\u{001E}"
-    let parts = raw.components(separatedBy: sep)
-    if parts.count >= 2 {
-        let html = parts[0]
-        let plain = parts[1...].joined(separator: sep)
-        return (html.isEmpty ? nil : html, plain)
-    }
-    return (nil, raw)
-}
