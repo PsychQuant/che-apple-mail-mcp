@@ -30,7 +30,7 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 
 | # | 原因 | 處置 |
 |---|---|---|
-| 1 | `format` 是 `markdown` / `html` | 改 `plain`。rich text 需要注入路徑，結構上已不存在（見 #308 / #309）|
+| 1 | `format` 是 `markdown` / `html` | 改 `plain`。**目前沒有任何已出貨路徑**能在不注入 body 的前提下送 rich text —— 這是「現況」不是「不可能」（#310）：paste path（#218）是第二條 wrapper-free 路徑、`NSPasteboard` 也能承載 rich flavor，但它產出的 MIME 沒人驗過，由 #306 定案。替代架構見 #308 / #309 |
 | 2 | subject 為空 | 給一個 subject（乾淨路徑靠視窗標題辨識自己的視窗）|
 | 3 | Accessibility 未授權 | 去授權；或改用 `open_mailto`（零 TCC、**不能帶附件**、需自己存檔／寄出）|
 | 4 | `from_address` 非 bare addr-spec | 給純位址；或省略後在 Mail 手動切寄件人 |

@@ -345,11 +345,12 @@ enum ComposeRefusal: Equatable {
     var message: String {
         switch self {
         case .richTextFormat(let format):
-            return "format '\(format.rawValue)' is no longer supported. Rich text can only "
-                + "reach a message through the AppleScript html-content property, and "
-                + "assigning a body that way is what wraps the whole letter in "
-                + "<blockquote type=\"cite\"> (#304). Use format 'plain'; a rich-text "
-                + "compose architecture is tracked in #308 / #309."
+            return "format '\(format.rawValue)' is no longer supported. No path this "
+                + "project ships today can deliver rich text without assigning the body via "
+                + "AppleScript, and assigning it that way is what wraps the whole letter in "
+                + "<blockquote type=\"cite\"> (#304). Whether a clipboard paste could carry "
+                + "rich text AND stay wrapper-free is UNVERIFIED, not impossible — #306 is "
+                + "settling it. Use format 'plain'; alternative architectures are #308 / #309."
         case .emptySubject:
             return "the subject is empty. The compose path identifies its own window by "
                 + "the window title (= subject) before it fires any keystroke, so an "

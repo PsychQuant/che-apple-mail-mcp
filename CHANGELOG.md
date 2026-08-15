@@ -28,10 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Removed from the public tool schemas:
   - **`format: "markdown"` and `format: "html"`** on all four composing tools.
-    The enum is now `["plain"]`. Rich text is only expressible by assigning
-    `html content`, which is the injection this change eliminates. Both values
-    are still *parsed*, so a caller passing them gets an error naming the
-    removal and pointing at
+    The enum is now `["plain"]`. No path this project ships delivers rich text
+    without assigning `html content`, which is the injection this change
+    eliminates. That is a statement about what exists, **not** a proof of
+    impossibility
+    ([#310](https://github.com/PsychQuant/che-apple-mail-mcp/issues/310)): the
+    clipboard paste path (#218) is a second wrapper-free route already in
+    production and `NSPasteboard` can carry `public.rtf` / `public.html`, but
+    nobody has checked the MIME such a paste produces —
+    [#306](https://github.com/PsychQuant/che-apple-mail-mcp/issues/306) is
+    settling it. Both values are still *parsed*, so a caller passing them gets
+    an error naming the removal and pointing at #306 and at
     [#308](https://github.com/PsychQuant/che-apple-mail-mcp/issues/308) /
     [#309](https://github.com/PsychQuant/che-apple-mail-mcp/issues/309) rather
     than a generic "unknown value".
