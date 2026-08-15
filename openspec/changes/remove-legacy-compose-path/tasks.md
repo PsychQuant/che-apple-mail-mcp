@@ -36,17 +36,20 @@
 - [x] 5.2 [P] `format: markdown` / `html` 被拒且訊息具名
 - [x] 5.3 [P] schema 測試（→ Requirement: From-scratch composing tools accept cc and bcc recipients — cc/bcc 顯示名應被拒）：`format` enum 為 `["plain"]`；`require_wrapper_free` 與 `sanitize_links` 皆不存在
 - [x] 5.4 [P] 移除或改寫既有斷言 legacy 行為的測試——**逐一判斷**每個失敗的既有測試是「它在釘住被移除的行為」還是「我們弄壞了別的東西」，不可整批刪除
-- [ ] 5.5 **KNOWN GATE — 未執行，不得宣稱 verified**。live GUI 驗證（比照 #341/#321）：clean path 建出的草稿，其 source **不含**包住 body 的 `<blockquote type="cite">` （→ Requirement: Plain mode preserves existing behavior — 驗證 body 未被注入）
+- [x] 5.5 live GUI 驗證（比照 #341/#321）：clean path 建出的草稿，其 source **不含**包住 body 的 `<blockquote type="cite">` （→ Requirement: Plain mode preserves existing behavior — 驗證 body 未被注入）
 
-  **2026-08-15 嘗試結果**：`CHE_MAIL_LIVE_TEST=1 swift test --filter MailtoComposeLiveTests` 在本 session 執行 → 失敗於 `mailto compose window not found (title)`，**非** wrapper 斷言失敗。判定為環境限制而非程式缺陷：Mail 的 scripting model 有 `LIVEMAILTO_*` 視窗，但 System Events **看不到對應的 AX window**（`no matching AX window`），亦即這個背景 session 沒有可用的 GUI surface，AX 找不到視窗自然逾時。副作用已確認為零：無草稿存檔、無寄出、mailboxes 乾淨。
+  **2026-08-15 11:32–11:35 已執行並通過**（使用者的前景終端機，有 GUI session）：
 
-  **依 `.claude/rules/deferred-live-verification.md` 採 (b)**：本項保持未勾、#304 保持 OPEN 並貼 `blocked-on-setup`。在有 GUI session 的前景終端機執行下列指令即可清償：
-
-  ```bash
-  CHE_MAIL_LIVE_TEST=1 swift test --filter MailtoComposeLiveTests
+  ```
+  $ CHE_MAIL_LIVE_TEST=1 swift test --filter MailtoComposeLiveTests
+  Test Case '-[CheAppleMailMCPTests.MailtoComposeLiveTests
+             testLive_createDraft_mailtoPath_producesWrapperFreeBody]' passed (201.599 seconds).
+  Executed 1 test, with 0 failures (0 unexpected)
   ```
 
-  **誠實邊界**：本變更的核心主張（注入點不存在）已由 `NoBodyInjectionGuardTests` 的整檔掃描驗證，那比 live spot-check 更強；本 gate 要補的是 clean path 端到端仍產生 unwrapped body —— 那是 #175 引入時已 live 驗證過、且本次未更動的既有行為。
+  測試走完 mailto hand-off → ⌘S 存草稿 → 讀該草稿 `.emlx` → 斷言 body 未被 `<blockquote type="cite">` 包住 → 刪除草稿收尾。中途截圖確認 compose 視窗標題 = subject（`LIVEMAILTO_1786764742`）、body 兩行完整、收件人與預設寄件人正確。事後確認 **0 筆 `LIVEMAILTO_` 草稿殘留**。
+
+  **先前失敗的那次是環境問題、非程式問題**（已排除）：背景 session 中 System Events 對 `process "Mail"` 回報 **0 個 AX window**（即使 Mail frontmost、Accessibility 已授權、Mail 自己的 scripting model 有視窗），GUI 驅動不可用。同一份 code 在有 GUI session 的終端機一次就過。
 
 ## 6. 文件（兩份規則必須一起改）
 
