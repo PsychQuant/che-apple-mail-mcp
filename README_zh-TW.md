@@ -35,8 +35,8 @@
 staleness hook 當成一整包帶進來：
 
 ```bash
-claude plugin marketplace add PsychQuant/psychquant-claude-plugins
-claude plugin install che-apple-mail-mcp@psychquant-claude-plugins
+claude plugin marketplace add PsychQuant/che-apple-mail-mcp
+claude plugin install che-apple-mail-mcp@che-apple-mail-mcp
 ```
 
 接著授予權限——設定視窗會顯示即時狀態，並直接帶你到對的系統設定頁面：
@@ -69,7 +69,7 @@ claude plugin install che-apple-mail-mcp@psychquant-claude-plugins
 <summary><strong>進階：只註冊 MCP server</strong>（開發用，或你不想裝 plugin）</summary>
 
 ```bash
-git clone https://github.com/kiki830621/che-apple-mail-mcp.git
+git clone https://github.com/PsychQuant/che-apple-mail-mcp.git
 cd che-apple-mail-mcp
 swift build -c release
 
@@ -296,7 +296,7 @@ OneDrive）——同步活動會造成 MCP 連線逾時。
 ### 步驟 1：編譯
 
 ```bash
-git clone https://github.com/kiki830621/che-apple-mail-mcp.git
+git clone https://github.com/PsychQuant/che-apple-mail-mcp.git
 cd che-apple-mail-mcp
 swift build -c release
 ```
