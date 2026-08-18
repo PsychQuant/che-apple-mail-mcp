@@ -35,8 +35,8 @@ Install the **plugin**. It brings the signed binary, the `/archive-mail` command
 family, the safety rules, and the staleness hook as one unit:
 
 ```bash
-claude plugin marketplace add PsychQuant/psychquant-claude-plugins
-claude plugin install che-apple-mail-mcp@psychquant-claude-plugins
+claude plugin marketplace add PsychQuant/che-apple-mail-mcp
+claude plugin install che-apple-mail-mcp@che-apple-mail-mcp
 ```
 
 Then grant permissions — the setup window shows live status and links straight
@@ -73,7 +73,7 @@ you these are missing (#353):
 <summary><strong>Advanced: register the MCP server only</strong> (development, or you want no plugin)</summary>
 
 ```bash
-git clone https://github.com/kiki830621/che-apple-mail-mcp.git
+git clone https://github.com/PsychQuant/che-apple-mail-mcp.git
 cd che-apple-mail-mcp
 swift build -c release
 
@@ -353,7 +353,7 @@ Both tools return an **envelope object** `{ results, returned, limit, truncated 
 ### Step 1: Build
 
 ```bash
-git clone https://github.com/kiki830621/che-apple-mail-mcp.git
+git clone https://github.com/PsychQuant/che-apple-mail-mcp.git
 cd che-apple-mail-mcp
 swift build -c release
 ```
