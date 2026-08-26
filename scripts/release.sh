@@ -208,7 +208,8 @@ fi
 # a predictable name, and the redirect would then follow it and truncate the
 # target with the release runner's privileges.
 MANIFEST_GATE_LOG="$(mktemp -t che-mail-manifest-tools-gate)"
-trap 'rm -f "$MANIFEST_GATE_LOG"' EXIT
+REPO_GUARD_LOG="$(mktemp -t che-mail-repo-guards)"
+trap 'rm -f "$MANIFEST_GATE_LOG" "$REPO_GUARD_LOG"' EXIT
 if ! swift test --filter 'ManifestToolsSetEqualityTests' > "$MANIFEST_GATE_LOG" 2>&1; then
     grep -E "ABSENT from|NOT registered|duplicate tool names|descriptions differ|error:" \
         "$MANIFEST_GATE_LOG" >&2 || true
@@ -216,6 +217,20 @@ if ! swift test --filter 'ManifestToolsSetEqualityTests' > "$MANIFEST_GATE_LOG" 
   Full output was shown above.
   Reproduce:   swift test --filter ManifestToolsSetEqualityTests
   Regenerate:  REGENERATE_MCPB_MANIFEST=1 swift test --filter ManifestToolsSetEqualityTests"
+fi
+
+# Same shape, different subject: guards that protect the REPOSITORY rather than
+# the manifest. #397 verify made the gap explicit — there is no CI here, so
+# before this line `NoTrackedBuildArtifactsTests` ran only when a human typed
+# `swift test`, and #391 is precisely the failure of that arrangement: two build
+# artifacts sat tracked across ~21 releases with nobody noticing. A guard with no
+# automatic trigger protects nothing.
+if ! swift test --filter 'NoTrackedBuildArtifactsTests|ManifestVersionTests' > "$REPO_GUARD_LOG" 2>&1; then
+    grep -E "unexpected tracked|MISSING from the index|newest released header|error:" \
+        "$REPO_GUARD_LOG" >&2 || true
+    die "repository guards failed — refusing to tag a release (#391/#396).
+  Full output was shown above.
+  Reproduce:   swift test --filter 'NoTrackedBuildArtifactsTests|ManifestVersionTests'"
 fi
 
 # AppVersion.current (the server's self-reported version) MUST match the tag (#303).
