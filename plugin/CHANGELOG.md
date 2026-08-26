@@ -11,6 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The binary download chain verifies what it installs — and degraded states
+  stop fighting the staleness hook**
+  ([#392](https://github.com/PsychQuant/che-apple-mail-mcp/issues/392),
+  [#393](https://github.com/PsychQuant/che-apple-mail-mcp/issues/393)).
+  Downloads are sha256-verified against the release's own asset list (absence
+  of a published digest is the only unverified path; a failed digest fetch is a
+  verification failure, not a downgrade), land in unique mktemp temps (no
+  shared-.tmp TOCTOU), and a definitive pinned-tag 404 falls back to latest
+  exactly once — a `.fallback-tried` marker with a 24h TTL suppresses the
+  former every-spawn re-download loop, while transient API failures (403
+  rate-limits, timeouts, 5xx) keep the installed binary and simply retry next
+  spawn. Runtime state now records the ACTUAL installed version (sidecar-read;
+  `unknown` when the sidecar is missing — never the wishful pin), so a failed
+  download that keeps an old binary is finally visible to the session-start
+  staleness hook; a new `degraded_pin` field tells that hook when the mismatch
+  is a deliberate degraded state so it stops killing a live server it can
+  never fix. Legacy plugins without `binary_version` keep the old semantics
+  (the #73 spurious-kill trap stays closed). Test suite: 55 asserts across 12
+  mock-curl scenarios including hook integration with a negative control.
+
 ### Changed
 
 - `binary_version` 2.27.0 → **2.28.0**，讓 v2.46.0 的 first-run FDA assist（mail#355）真正生效。該 hook 從落地起就是 **no-op**：它以版本閘擋住 2.28.0 以前的 binary，因為更舊的版本會把 `--check-fda --quiet` 當成普通 `--check-fda` 解析、印出訊息並打開系統設定 —— 正是它要避免的騷擾。binary v2.28.0 已發布（signed + notarized），閘門現在開了。
