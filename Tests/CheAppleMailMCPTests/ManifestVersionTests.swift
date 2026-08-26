@@ -67,4 +67,32 @@ final class ManifestVersionTests: XCTestCase {
             "the marketplace entry must NOT declare binary_version — plugin.json is the "
             + "single source for the binary pin (#335's design decision).")
     }
+
+    func testDescriptionsCarryNoVersionNarrative() throws {
+        // #396: the 18.8KB description-as-changelog convention is dead — the
+        // narrative lives in CHANGELOG.md, and a description that names versions
+        // starts lying the release after it was written (observed: "Shell v2.43.0
+        // ... binary stays v2.25.0" shipping beside version 2.46.1 / pin 2.28.0).
+        // Guard both manifests that carry a description.
+        let root = repoRoot()
+        for rel in ["plugin/.claude-plugin/plugin.json", ".claude-plugin/marketplace.json"] {
+            let data = try Data(contentsOf: root.appendingPathComponent(rel))
+            let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let descriptions: [String]
+            if let plugins = obj["plugins"] as? [[String: Any]] {
+                descriptions = plugins.compactMap { $0["description"] as? String }
+            } else {
+                descriptions = [obj["description"] as? String].compactMap { $0 }
+            }
+            for desc in descriptions {
+                XCTAssertLessThan(desc.count, 1000,
+                    "\(rel): description is \(desc.count) chars — the changelog-in-a-field "
+                    + "convention is dead (#396); narrative belongs in CHANGELOG.md")
+                for banned in ["Shell v", "binary stays", "ships binary"] {
+                    XCTAssertFalse(desc.contains(banned),
+                        "\(rel): description contains version-narrative marker '\(banned)' (#396)")
+                }
+            }
+        }
+    }
 }

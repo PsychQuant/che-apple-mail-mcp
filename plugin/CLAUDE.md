@@ -276,7 +276,21 @@ v2.8.0+ 的 `archive-mail` / `view` / `rebuild-threads` **每次跑都會 silent
 
 如果想一次 batch migrate 所有 archive targets,跑 `/archive-mail-migrate`(支援 `--dry-run` 預覽)。
 
-## Version History
+## 版本敘事 Convention（#396）
+
+| 表面 | 角色 |
+|---|---|
+| plugin.json `version` / `binary_version` | 機器可讀的現行版本（唯一 authoritative；ManifestVersionTests 鎖 marketplace entry 等式）|
+| `plugin/CHANGELOG.md` | **shell 敘事單源**（Keep a Changelog）|
+| repo 根 `CHANGELOG.md` | binary/server 敘事單源 |
+| plugin.json `description` | 短敘述，**禁止版本敘事**（guard test 鎖 <1KB 且無 "Shell v"/"binary stays" 模式）|
+| `plugin/README.md` | 用法文件；版本沿革一律指向 CHANGELOG |
+
+Release 時的 bump 清單見 repo 根 `CLAUDE.md`「Publishing a new release」。此 convention 的
+成因：description-as-changelog 是 aggregator 時代（marketplace 列表只顯示 description）的
+產物，自營 marketplace 後只剩漂移成本 —— 四個表面曾同時各說各話（#396 diagnosis 有對照表）。
+
+## Version History（凍結 — 歷史里程碑；新沿革一律進 CHANGELOG.md，#396）
 
 - **v2.9.0**(2026-05-01)— **Task enforcement**:學 IDD 的 Step 0 Bootstrap Stage Task List 鐵律。`/archive-mail` 開工前強制 `TaskCreate` 10 個 stage tasks,`confirmation-protocol` skill 強制 4 個 phase tasks,完成立即 `TaskUpdate`,靜默 skip = 違規。把 v2.7.0 spec-level confirmation 升級到 enforce-level
 - **v2.8.0**(2026-05-01)— **`.claude/.mail/` namespace**:學 IDD 的 `.claude/.idd/` 收斂 config + state。新增 `/archive-mail-migrate`。archive-mail / view / rebuild-threads 都加 auto-migrate。Backward compatible:legacy paths 自動 detect 並搬遷
