@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Marketplace clones stop shipping 22.9 MB of v2.7.1-era build artifacts**
+  ([#391](https://github.com/PsychQuant/che-apple-mail-mcp/issues/391)). Two
+  files were committed before `.gitignore` grew its mcpb rules — rules cannot
+  untrack — and froze ~21 releases behind: the 4.6 MB `.mcpb` bundle (inner
+  manifest said 2.7.1 while the sibling `mcpb/manifest.json` said the current
+  release — a double-click install trap for Claude Desktop) and the 18 MB
+  ad-hoc-signed server binary (macOS 26 TCC kills ad-hoc binaries outright).
+  Both are now untracked (`git rm --cached`; disk copies untouched), the
+  `.gitignore` gains the previously unmatched `mcpb/*.mcpb.sha256` packaging
+  sidecar, and `NoTrackedBuildArtifactsTests` pins the exact tracked set under
+  `mcpb/` in both directions — a re-added artifact and a removed
+  release-critical file (manifest.json) both fail the suite. Honest scope
+  notes: existing clones lose their local copy of the stale bundle on the next
+  `marketplace update` (that is the fix working, not data loss — the disk file
+  in THIS repo's checkouts stays); the historical blobs remain in git history
+  by deliberate choice (no history rewrite), so a full clone's `.git` pack does
+  not shrink — the working-tree payload does (~22.9 MB).
+
 ### Added
 
 - **Self-hosted plugin marketplace — the plugin shell now lives beside its binary** ([#335](https://github.com/PsychQuant/che-apple-mail-mcp/issues/335)). The commands / skills / rules / hooks / wrapper previously lived in the `psychquant-claude-plugins` aggregator while the Swift source lived here, splitting one product across two repos: archive-mail SOP issues accumulated in the aggregator (#104/#107/#109/#110/#112) while binary issues stayed here (#232/#261), each "split from" the other — and the two manifests drifted (`marketplace.json` said `binary_version: 2.24.0`, `plugin.json` said `2.25.0`, while the newest release was v2.26.0, so the v2.44.0 shell shipped an SOP that documents "binary v2.26.0+" against a pin that fetched 2.25.0). Layout follows the `che-ical-mcp` pilot: a root `.claude-plugin/marketplace.json` with `source: "./plugin"`, plus a `plugin/` subtree carrying the 20 files verbatim (md5-identical, 20/20). The new manifest **deliberately omits `binary_version`** so `plugin/.claude-plugin/plugin.json` is the single source for the binary pin and that axis of the two-manifest drift is structurally impossible rather than merely corrected once. (The shell `version` is still declared in both manifests — the schema wants one per entry — so `ManifestVersionTests` pins the pair equal, and the marketplace entry's description deliberately carries no version narrative at all; both guards added at #335 verify.) Cross-references updated in `CLAUDE.md` and `scripts/release.sh`; the plugin's own hook suite passes unchanged in its new path (22/22).
