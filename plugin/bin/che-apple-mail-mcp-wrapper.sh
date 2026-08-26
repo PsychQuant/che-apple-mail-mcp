@@ -7,17 +7,33 @@
 # - Re-downloads when plugin has been updated but binary is stale
 # - Atomic file swap (unique mktemp + mv) so partial or concurrent downloads
 #   never break things (#392: fixed-name .tmp was a TOCTOU window)
-# - Downloads are sha256-verified against the release's own asset list (#392);
-#   only a release that genuinely publishes no .sha256 installs unverified
+# - Downloads are sha256-verified against the release's own asset list (#392).
+#   Verification fails CLOSED: the only unverified install is a release that
+#   genuinely publishes no .sha256 asset. Being unable to COMPUTE a digest is a
+#   refusal, not a downgrade (#398 round 2).
 # - Falls back to releases/latest ONLY on a definitive pinned-tag 404; a
 #   transient API failure keeps the installed binary and retries next spawn
-# - State files in ~/bin (all prefixed .CheAppleMailMCP.):
+#
+# THE degraded_pin INVARIANT (#398 round 2). `degraded_pin` is written to
+# runtime state if and only if a `.fallback-tried` marker was written for the
+# same pin. It means "this pin is known-bad upstream and re-downloading it is
+# pointless until the TTL lapses" — the session-start hook reads it (and
+# re-validates the marker itself) to suppress a kill it could never fix.
+# Every OTHER degraded outcome — transient API failure, download error, digest
+# fetch failure, rename failure — deliberately leaves it EMPTY, because for
+# those the hook's kill IS the retry trigger: it makes Claude Code respawn us,
+# and the next spawn re-attempts the download. Round 1 stamped degraded_pin on
+# the transient path too, which suppressed the only respawn trigger and turned
+# "retries next spawn" into "never retries".
+#
+# State files in ~/bin (all prefixed .CheAppleMailMCP.):
 #     .version         — sidecar: ACTUAL installed binary tag (#77)
 #     .runtime.json    — pid/started_at/version_at_spawn (+degraded_pin) for the
 #                        session-start staleness hook (#76/#393)
-#     .fallback-tried  — "<pin> <epoch>": a pin found definitively missing (or
-#                        failing verification) upstream; suppresses re-download
-#                        for RETRY_TTL seconds or until the pin changes (#392).
+#     .fallback-tried  — "<pin> <epoch> <miss|verify>": a pin found definitively
+#                        missing (miss) or failing digest verification (verify)
+#                        upstream; suppresses re-download for RETRY_TTL seconds
+#                        or until the pin changes (#392).
 #                        Deleting the file forces an immediate retry.
 
 set -u
@@ -29,7 +45,30 @@ BINARY="$INSTALL_DIR/$BINARY_NAME"
 VERSION_FILE="$INSTALL_DIR/.${BINARY_NAME}.version"
 FALLBACK_MARKER="$INSTALL_DIR/.${BINARY_NAME}.fallback-tried"
 RUNTIME_FILE="$INSTALL_DIR/.${BINARY_NAME}.runtime.json"
-RETRY_TTL=86400   # retry a marked-unavailable pin at most once a day
+RETRY_TTL=86400        # retry a marked-unavailable pin at most once a day
+META_TIMEOUT=30        # API / digest calls: small bodies, fail fast
+BINARY_TIMEOUT=300     # the binary is ~18 MB — 30s hard-fails slow links (#398 R2)
+
+# Every temp this script makes, removed on any exit path. Unique names (#392)
+# closed a TOCTOU window but gave up the old fixed-name file's one virtue: it
+# could not accumulate. Without this trap an interrupted spawn leaks ~18 MB
+# into ~/bin, unbounded (#398 round 2).
+TEMPS=()
+cleanup_temps() {
+    [[ ${#TEMPS[@]} -gt 0 ]] && rm -f "${TEMPS[@]}" 2>/dev/null
+    return 0
+}
+trap cleanup_temps EXIT INT TERM
+# Result lands in $NEW_TEMP rather than on stdout: `X=$(new_temp ...)` would run
+# the function in a SUBSHELL, so the registration would be discarded and the
+# trap would have nothing to clean — the leak this exists to prevent, hidden
+# behind a function that looks like it is doing the job.
+NEW_TEMP=""
+new_temp() {
+    NEW_TEMP=$(mktemp "$1") || return 1
+    TEMPS+=("$NEW_TEMP")
+    return 0
+}
 
 # Locate plugin root via wrapper's own path (more reliable than $CLAUDE_PLUGIN_ROOT
 # which isn't guaranteed in MCP spawn env). Wrapper lives at PLUGIN_ROOT/bin/*.sh.
@@ -60,58 +99,132 @@ INSTALLED_VERSION=""
 
 # --- helpers ------------------------------------------------------------------
 
-# GET $1, body to $2. Echoes the HTTP status code ("000" on transport failure).
+# GET $1, body to $2, with a $3-second ceiling (default META_TIMEOUT).
+# Echoes the HTTP status code ("000" on transport failure).
 # Deliberately NOT -f: distinguishing a definitive 404 from rate-limits /
 # timeouts / 5xx is the whole point (#392 round 1: conflating them let one
 # transient outage pin the user to the wrong binary permanently).
 http_get() {
     local code
-    code=$(curl -sL --proto '=https' --max-redirs 3 --max-time 30 \
+    code=$(curl -sL --proto '=https' --max-redirs 3 --max-time "${3:-$META_TIMEOUT}" \
         -o "$2" -w '%{http_code}' "$1" 2>/dev/null) || code="000"
     printf '%s' "${code:-000}"
 }
 
-# Extract the browser_download_url ending in /$1 from the API body $2.
+# The download URL for the asset named exactly $1, from the API body $2.
+#
+# Every browser_download_url is put on its own line FIRST, so correctness no
+# longer depends on the API pretty-printing one asset per line — against a
+# minified response the old greedy sed returned the LAST url on the line, i.e.
+# the wrong asset (#398 round 2). Selection is an exact basename comparison,
+# not a regex, so the `.` in `.sha256` cannot act as a wildcard. The host and
+# path are pinned to this repo's own release downloads, so a spoofed or
+# tampered API body cannot redirect the install to an arbitrary host.
 asset_url() {
-    grep '"browser_download_url"' "$2" 2>/dev/null \
-        | grep "/$1\"" | head -1 \
-        | sed 's/.*"\(https[^"]*\)".*/\1/'
+    local prefix="https://github.com/$REPO/releases/download/"
+    grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' "$2" 2>/dev/null \
+        | cut -d'"' -f4 \
+        | while IFS= read -r u; do
+            [[ "$u" == "$prefix"* ]] || continue
+            [[ "${u##*/}" == "$1" ]] && printf '%s\n' "$u"
+          done \
+        | head -1
 }
 
+# Echoes a lowercase 64-hex digest, or nothing if no tool could produce one.
+# Round 1 dispatched on `command -v shasum` alone, so a shasum that EXISTS but
+# fails (Apple is sunsetting its perl runtime) skipped the openssl fallback
+# entirely, and the caller then reported "no sha256 tool available" and
+# installed anyway (#398 round 2).
 sha256_of() {
+    local out
     if command -v shasum >/dev/null 2>&1; then
-        shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
-    elif command -v openssl >/dev/null 2>&1; then
-        openssl dgst -sha256 -r "$1" 2>/dev/null | awk '{print $1}'
+        out=$(shasum -a 256 "$1" 2>/dev/null | awk '{print $1}' | tr 'A-F' 'a-f')
+        [[ "$out" =~ ^[0-9a-f]{64}$ ]] && { printf '%s' "$out"; return 0; }
     fi
+    if command -v openssl >/dev/null 2>&1; then
+        out=$(openssl dgst -sha256 -r "$1" 2>/dev/null | awk '{print $1}' | tr 'A-F' 'a-f')
+        [[ "$out" =~ ^[0-9a-f]{64}$ ]] && { printf '%s' "$out"; return 0; }
+    fi
+    return 1
 }
 
-# JSON-safe version token (#398 round 1: URL/sidecar-derived strings were
-# interpolated into runtime.json unescaped).
-sanitize_token() { printf '%s' "$1" | tr -cd 'A-Za-z0-9._-'; }
+# Whether this machine can hash at all — "this release has no digest" and
+# "this machine cannot verify" are different trust decisions and must not
+# share a code path.
+have_hash_tool() { command -v shasum >/dev/null 2>&1 || command -v openssl >/dev/null 2>&1; }
+
+# A 200 response can still carry an error page. sha256 is the real gate; this
+# is a shape check for the one path where no digest is published, so an HTML
+# body cannot be chmod'd and exec'd (#398 round 2).
+looks_like_html() {
+    local head
+    head=$(head -c 512 "$1" 2>/dev/null | tr -d '\000')
+    case "$head" in
+        '<'*|*'<!DOCTYPE'*|*'<html'*|*'<HTML'*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# JSON string escaping — NOT character deletion. Round 1 ran `tr -cd` over the
+# version token, which silently DROPPED legal SemVer build metadata (`+build`);
+# the hook then compared that mangled value against the raw plugin.json value,
+# so the two could never match again (#398 round 2).
+json_escape() {
+    printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
 
 # --- decide whether to download ----------------------------------------------
 
 NEED_DOWNLOAD=false
 REASON=""
-DEGRADED_PIN=""   # set when we knowingly run a non-pinned binary (see hook)
+DEGRADED_PIN=""   # see THE degraded_pin INVARIANT above
+
+# Read the marker defensively. An epoch that is not all-digits used to reach
+# bash arithmetic directly, where `a[$(...)]` is evaluated as a command; a
+# corrupt file also aborted the whole wrapper under `set -u` (#398 round 2).
+MARKER_PIN=""
+MARKER_EPOCH=0
+MARKER_REASON=""
+if [[ -f "$FALLBACK_MARKER" ]]; then
+    read -r MARKER_PIN MARKER_EPOCH MARKER_REASON _ < "$FALLBACK_MARKER" 2>/dev/null || true
+    MARKER_PIN=${MARKER_PIN:-}
+    MARKER_REASON=${MARKER_REASON:-}
+    if [[ ! "${MARKER_EPOCH:-}" =~ ^[0-9]{1,19}$ ]]; then
+        MARKER_PIN=""   # unparseable marker == no marker
+        MARKER_EPOCH=0
+    fi
+fi
+NOW=$(date +%s)
+# A future-dated epoch (clock skew, hand-edit) would otherwise suppress retries
+# for as long as the skew lasts — years, in the pathological case.
+if (( MARKER_EPOCH > NOW + 300 )); then
+    MARKER_PIN=""
+    MARKER_EPOCH=0
+fi
+# A marker for a pin we are no longer asking for is dead weight: without this
+# it survives until its TTL and misleads the next diagnosis (#398 round 2).
+if [[ -n "$MARKER_PIN" ]] && [[ -n "$DESIRED_VERSION" ]] && [[ "$MARKER_PIN" != "$DESIRED_VERSION" ]]; then
+    rm -f "$FALLBACK_MARKER" 2>/dev/null
+    MARKER_PIN=""
+    MARKER_EPOCH=0
+fi
+
 if [[ ! -x "$BINARY" ]]; then
     NEED_DOWNLOAD=true
     REASON="binary not installed"
 elif [[ -n "$DESIRED_VERSION" ]] && [[ "$INSTALLED_VERSION" != "$DESIRED_VERSION" ]]; then
-    MARKER_PIN=""
-    MARKER_EPOCH=0
-    if [[ -f "$FALLBACK_MARKER" ]]; then
-        read -r MARKER_PIN MARKER_EPOCH _ < "$FALLBACK_MARKER" 2>/dev/null || true
-        MARKER_EPOCH=${MARKER_EPOCH:-0}
-    fi
-    NOW=$(date +%s)
-    if [[ "$MARKER_PIN" == "$DESIRED_VERSION" ]] \
-       && (( NOW - MARKER_EPOCH < RETRY_TTL )); then
-        # #392: this pin was definitively missing (or failed verification)
+    if [[ "$MARKER_PIN" == "$DESIRED_VERSION" ]] && (( NOW - MARKER_EPOCH < RETRY_TTL )); then
+        # #392: this pin was definitively missing, or failed verification,
         # upstream within the TTL. Run what is installed; retry when the pin
         # changes, the TTL lapses, or the marker file is deleted by hand.
-        echo "$BINARY_NAME: pinned v${DESIRED_VERSION} was unavailable upstream — running installed v${INSTALLED_VERSION:-unknown}; retrying after $(( (MARKER_EPOCH + RETRY_TTL - NOW) / 3600 + 1 ))h or when the pin changes (rm $FALLBACK_MARKER to force)" >&2
+        # The marker's third field was written but never read, so a tampering
+        # signal was reported as "unavailable upstream" (#398 round 2).
+        case "$MARKER_REASON" in
+            verify) WHY="failed sha256 verification" ;;
+            *)      WHY="was unavailable upstream" ;;
+        esac
+        echo "$BINARY_NAME: pinned v${DESIRED_VERSION} ${WHY} — running installed v${INSTALLED_VERSION:-unknown}; retrying after $(( (MARKER_EPOCH + RETRY_TTL - NOW) / 3600 + 1 ))h or when the pin changes (rm $FALLBACK_MARKER to force)" >&2
         DEGRADED_PIN="$DESIRED_VERSION"
     else
         NEED_DOWNLOAD=true
@@ -123,19 +236,21 @@ if $NEED_DOWNLOAD; then
     echo "$BINARY_NAME: $REASON — downloading from $REPO..." >&2
     mkdir -p "$INSTALL_DIR"
 
-    META=$(mktemp "${INSTALL_DIR}/.${BINARY_NAME}.meta.XXXXXX")
+    new_temp "${INSTALL_DIR}/.${BINARY_NAME}.meta.XXXXXX"
+        META="$NEW_TEMP"
     URL=""
     SHA_URL=""
     PIN_DEFINITIVE_MISS=false
     PIN_TRANSIENT=false
+    CODE=""
 
     if [[ -n "$DESIRED_VERSION" ]]; then
         CODE=$(http_get "https://api.github.com/repos/$REPO/releases/tags/v$DESIRED_VERSION" "$META")
         if [[ "$CODE" == "200" ]]; then
             URL=$(asset_url "$BINARY_NAME" "$META")
             SHA_URL=$(asset_url "$BINARY_NAME.sha256" "$META")
-            # Tag exists but carries no binary asset: a broken release —
-            # definitive for marker purposes (TTL still bounds it).
+            # Tag exists but carries no binary asset. Not a 404, but equally
+            # definitive: no retry changes a published release's asset list.
             [[ -z "$URL" ]] && PIN_DEFINITIVE_MISS=true
         elif [[ "$CODE" == "404" ]]; then
             PIN_DEFINITIVE_MISS=true
@@ -148,12 +263,17 @@ if $NEED_DOWNLOAD; then
         :   # pinned resolution succeeded
     elif [[ "$PIN_TRANSIENT" == true ]] && [[ -x "$BINARY" ]]; then
         # #392 round 1 (reproduced finding): a transient API failure must NOT
-        # churn the install to latest or write a marker — keep what we have,
-        # retry next spawn.
+        # churn the install to latest or write a marker — keep what we have.
+        # No degraded_pin: the hook's kill is what makes the retry happen
+        # (see THE degraded_pin INVARIANT).
         echo "$BINARY_NAME: transient failure resolving pinned v${DESIRED_VERSION} (HTTP ${CODE:-000}) — keeping installed v${INSTALLED_VERSION:-unknown}, will retry next spawn" >&2
-        DEGRADED_PIN="$DESIRED_VERSION"
         NEED_DOWNLOAD=false
     else
+        if [[ "$PIN_TRANSIENT" == true ]]; then
+            # Fresh install + transient failure: substituting `latest` for the
+            # pin is a real deviation, not a detail. Say so (#398 round 2).
+            echo "$BINARY_NAME: WARNING — could not resolve pinned v${DESIRED_VERSION} (HTTP ${CODE:-000}) and no binary is installed; falling back to the latest release" >&2
+        fi
         CODE2=$(http_get "https://api.github.com/repos/$REPO/releases/latest" "$META")
         if [[ "$CODE2" == "200" ]]; then
             URL=$(asset_url "$BINARY_NAME" "$META")
@@ -166,28 +286,40 @@ if $NEED_DOWNLOAD; then
         if [[ -x "$BINARY" ]]; then
             echo "$BINARY_NAME: WARNING — no download URL found, keeping existing binary" >&2
         else
-            rm -f "$META"
             echo "$BINARY_NAME: ERROR — no download URL found at $REPO. Install manually: https://github.com/$REPO/releases" >&2
             exit 1
         fi
     else
         # Unique temp per process (#392 round 1: a shared fixed .tmp let a
         # concurrent spawn swap content between verification and mv).
-        TMP=$(mktemp "${BINARY}.tmp.XXXXXX")
-        DL_CODE=$(http_get "$URL" "$TMP")
+        new_temp "${BINARY}.tmp.XXXXXX"
+        TMP="$NEW_TEMP"
+        DL_CODE=$(http_get "$URL" "$TMP" "$BINARY_TIMEOUT")
         if [[ "$DL_CODE" == "200" ]] && [[ -s "$TMP" ]]; then
             # ---- sha256 verification (#392) --------------------------------
             INSTALL_OK=true
+            VERIFIED=false
             if [[ -z "$SHA_URL" ]]; then
                 # Definitively absent from the release's own asset list — the
                 # one approved unverified path (old releases never shipped one).
-                echo "$BINARY_NAME: note — this release publishes no .sha256 asset; installing unverified" >&2
+                if looks_like_html "$TMP"; then
+                    INSTALL_OK=false
+                    echo "$BINARY_NAME: ERROR — the download returned an HTML page, not a binary, and this release publishes no .sha256 to check it against; refusing install" >&2
+                else
+                    echo "$BINARY_NAME: note — this release publishes no .sha256 asset; installing unverified" >&2
+                fi
+            elif ! have_hash_tool; then
+                # A digest EXISTS and this machine cannot check it. Round 1
+                # installed anyway; that is the fail-open #392 exists to close.
+                INSTALL_OK=false
+                echo "$BINARY_NAME: ERROR — this release publishes a .sha256 but no sha256 tool (shasum/openssl) is available to verify it; refusing unverified install" >&2
             else
-                SHA_TMP=$(mktemp "${INSTALL_DIR}/.${BINARY_NAME}.sha.XXXXXX")
+                new_temp "${INSTALL_DIR}/.${BINARY_NAME}.sha.XXXXXX"
+        SHA_TMP="$NEW_TEMP"
                 SHA_CODE=$(http_get "$SHA_URL" "$SHA_TMP")
                 EXPECTED_SHA=$(head -1 "$SHA_TMP" 2>/dev/null | awk '{print $1}' | tr 'A-F' 'a-f')
                 rm -f "$SHA_TMP"
-                ACTUAL_SHA=$(sha256_of "$TMP" | tr 'A-F' 'a-f')
+                ACTUAL_SHA=$(sha256_of "$TMP" || true)
                 if [[ "$SHA_CODE" != "200" ]] || [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{64}$ ]]; then
                     # The asset exists but we could not obtain a usable digest:
                     # that is a verification FAILURE, not "no asset" (#392
@@ -196,34 +328,53 @@ if $NEED_DOWNLOAD; then
                     INSTALL_OK=false
                     echo "$BINARY_NAME: ERROR — could not fetch a usable .sha256 (HTTP ${SHA_CODE}); refusing unverified install" >&2
                 elif [[ -z "$ACTUAL_SHA" ]]; then
-                    # No hash tool on this machine (shasum is a perl script
-                    # Apple is sunsetting; openssl fallback also absent) —
-                    # same trust posture as a release without a digest.
-                    echo "$BINARY_NAME: note — no sha256 tool available (shasum/openssl); installing unverified" >&2
+                    # A hash tool is present but produced nothing usable. Fail
+                    # closed: the digest exists, so "cannot verify" is a
+                    # refusal, not a downgrade (#398 round 2).
+                    INSTALL_OK=false
+                    echo "$BINARY_NAME: ERROR — sha256 tool present but produced no usable digest; refusing unverified install" >&2
                 elif [[ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]]; then
                     INSTALL_OK=false
-                    echo "$BINARY_NAME: ERROR — sha256 mismatch on downloaded binary (expected ${EXPECTED_SHA}, got ${ACTUAL_SHA}); refusing install" >&2
+                    echo "$BINARY_NAME: ERROR — sha256 MISMATCH on downloaded binary (expected ${EXPECTED_SHA}, got ${ACTUAL_SHA}); refusing install. If this persists the release asset may have been tampered with — verify at https://github.com/$REPO/releases before forcing a retry." >&2
                     # Persistent-mismatch guard: without a marker every spawn
                     # re-downloads 18 MB of the same rejected bytes (#398 R1).
                     if [[ -x "$BINARY" ]] && [[ -n "$DESIRED_VERSION" ]]; then
-                        printf '%s %s verify\n' "$DESIRED_VERSION" "$(date +%s)" > "$FALLBACK_MARKER" 2>/dev/null || true
+                        printf '%s %s verify\n' "$DESIRED_VERSION" "$NOW" > "$FALLBACK_MARKER" 2>/dev/null || true
                         DEGRADED_PIN="$DESIRED_VERSION"
                     fi
+                else
+                    VERIFIED=true
                 fi
             fi
             if [[ "$INSTALL_OK" == true ]]; then
-                chmod +x "$TMP"
+                # Explicit mode, and checked: mktemp creates 0600, so relying
+                # on `chmod +x` alone silently changed the installed file's
+                # permissions (#398 round 2). A failed chmod must not install.
+                if ! chmod 755 "$TMP" 2>/dev/null; then
+                    INSTALL_OK=false
+                    echo "$BINARY_NAME: ERROR — could not make the downloaded file executable; refusing install" >&2
+                fi
+            fi
+            if [[ "$INSTALL_OK" == true ]]; then
                 if mv "$TMP" "$BINARY" 2>/dev/null; then
                     # Sidecar records the ACTUAL downloaded binary tag, parsed
                     # from the release URL — keeps the sidecar honest (#77).
-                    ACTUAL_VERSION=$(echo "$URL" | sed -nE 's|.*/releases/download/v?([^/]+)/.*|\1|p')
-                    echo "${ACTUAL_VERSION:-${DESIRED_VERSION:-unknown}}" > "$VERSION_FILE"
-                    echo "$BINARY_NAME: installed v${ACTUAL_VERSION:-${DESIRED_VERSION:-latest}}" >&2
+                    # On a parse failure the honest value is "unknown": writing
+                    # DESIRED here is exactly the #393 lie this file fixes.
+                    ACTUAL_VERSION=$(printf '%s' "$URL" | sed -nE 's|.*/releases/download/v?([^/]+)/.*|\1|p')
+                    new_temp "${VERSION_FILE}.XXXXXX"
+        SC_TMP="$NEW_TEMP"
+                    printf '%s\n' "${ACTUAL_VERSION:-unknown}" > "$SC_TMP" && mv "$SC_TMP" "$VERSION_FILE"
+                    if [[ "$VERIFIED" == true ]]; then
+                        echo "$BINARY_NAME: installed v${ACTUAL_VERSION:-unknown} (sha256 verified)" >&2
+                    else
+                        echo "$BINARY_NAME: installed v${ACTUAL_VERSION:-unknown} (unverified — no published digest)" >&2
+                    fi
                     if [[ "$PIN_DEFINITIVE_MISS" == true ]] && [[ -n "$DESIRED_VERSION" ]]; then
                         # Definitive miss + successful fallback: remember it so
                         # the next spawns don't re-download; TTL + pin-change
                         # + manual rm all clear it (#392).
-                        printf '%s %s miss\n' "$DESIRED_VERSION" "$(date +%s)" > "$FALLBACK_MARKER" 2>/dev/null || true
+                        printf '%s %s miss\n' "$DESIRED_VERSION" "$NOW" > "$FALLBACK_MARKER" 2>/dev/null || true
                         DEGRADED_PIN="$DESIRED_VERSION"
                     else
                         rm -f "$FALLBACK_MARKER" 2>/dev/null
@@ -233,7 +384,6 @@ if $NEED_DOWNLOAD; then
                     if [[ -x "$BINARY" ]]; then
                         echo "$BINARY_NAME: WARNING — install rename failed, keeping existing binary" >&2
                     else
-                        rm -f "$META"
                         echo "$BINARY_NAME: ERROR — install rename failed" >&2
                         exit 1
                     fi
@@ -241,7 +391,6 @@ if $NEED_DOWNLOAD; then
             else
                 rm -f "$TMP"
                 if [[ ! -x "$BINARY" ]]; then
-                    rm -f "$META"
                     echo "$BINARY_NAME: ERROR — verification failed and no existing binary to fall back to. Install manually: https://github.com/$REPO/releases" >&2
                     exit 1
                 fi
@@ -251,14 +400,12 @@ if $NEED_DOWNLOAD; then
             if [[ -x "$BINARY" ]]; then
                 echo "$BINARY_NAME: WARNING — download failed (HTTP ${DL_CODE}), keeping existing binary" >&2
             else
-                rm -f "$META"
                 echo "$BINARY_NAME: ERROR — download failed (HTTP ${DL_CODE})" >&2
                 exit 1
             fi
         fi
     fi
     fi
-    rm -f "$META" 2>/dev/null
 fi
 
 # Write runtime state (per #76 — let session-start hook detect mid-session staleness).
@@ -281,14 +428,13 @@ if [[ "$HAS_BINARY_VERSION" == true ]]; then
 else
     RUNTIME_VERSION="${DESIRED_VERSION:-unknown}"
 fi
-RUNTIME_VERSION=$(sanitize_token "$RUNTIME_VERSION")
-DEGRADED_PIN=$(sanitize_token "$DEGRADED_PIN")
 {
     RT_TMP=$(mktemp "${RUNTIME_FILE}.XXXXXX") \
         && printf '{"pid":%d,"started_at":%d,"version_at_spawn":"%s","degraded_pin":"%s"}\n' \
-            "$$" "$(date +%s)" "${RUNTIME_VERSION:-unknown}" "$DEGRADED_PIN" \
+            "$$" "$NOW" "$(json_escape "${RUNTIME_VERSION:-unknown}")" "$(json_escape "$DEGRADED_PIN")" \
             > "$RT_TMP" \
         && mv "$RT_TMP" "$RUNTIME_FILE"
 } 2>/dev/null || true
 
+cleanup_temps
 exec "$BINARY" "$@"

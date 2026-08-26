@@ -13,25 +13,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **The binary download chain verifies what it installs — and degraded states
-  stop fighting the staleness hook**
+- **The binary download chain verifies what it installs — and a degraded state
+  can now end**
   ([#392](https://github.com/PsychQuant/che-apple-mail-mcp/issues/392),
   [#393](https://github.com/PsychQuant/che-apple-mail-mcp/issues/393)).
-  Downloads are sha256-verified against the release's own asset list (absence
-  of a published digest is the only unverified path; a failed digest fetch is a
-  verification failure, not a downgrade), land in unique mktemp temps (no
-  shared-.tmp TOCTOU), and a definitive pinned-tag 404 falls back to latest
-  exactly once — a `.fallback-tried` marker with a 24h TTL suppresses the
-  former every-spawn re-download loop, while transient API failures (403
-  rate-limits, timeouts, 5xx) keep the installed binary and simply retry next
-  spawn. Runtime state now records the ACTUAL installed version (sidecar-read;
-  `unknown` when the sidecar is missing — never the wishful pin), so a failed
-  download that keeps an old binary is finally visible to the session-start
-  staleness hook; a new `degraded_pin` field tells that hook when the mismatch
-  is a deliberate degraded state so it stops killing a live server it can
-  never fix. Legacy plugins without `binary_version` keep the old semantics
-  (the #73 spurious-kill trap stays closed). Test suite: 55 asserts across 12
-  mock-curl scenarios including hook integration with a negative control.
+  Downloads are sha256-verified against the release's own asset list, and
+  verification **fails closed**: the only unverified install is a release that
+  genuinely publishes no digest. Being unable to *compute* one — no hash tool,
+  or a `shasum` that exists but is broken — is a refusal, not a downgrade, and
+  the `openssl` fallback is now actually reachable in that case. The asset is
+  selected by exact basename from a URL list pinned to this repo's own release
+  downloads, so neither a minified API response nor a spoofed body can install
+  the wrong file or point elsewhere. Temps are unique (no shared-`.tmp` TOCTOU)
+  and now removed by a trap, so an interrupted spawn no longer leaks ~18 MB
+  into `~/bin`. The installed mode is set explicitly, and a failed `chmod` does
+  not install.
+
+  **The retry story, which round 1 got backwards.** A definitive pinned-tag 404
+  falls back to latest exactly once and records a marker with a 24h TTL;
+  transient failures (403 rate-limits, timeouts, 5xx) keep the installed binary
+  untouched. Runtime state records the version ACTUALLY installed (read from the
+  sidecar; `unknown` when it is missing — never the wishful pin), so the
+  session-start hook can finally see a failed download. `degraded_pin` tells
+  that hook when a mismatch is deliberate — but **only when a marker backs it**,
+  and the hook now re-validates that marker (existence, pin, TTL, clock skew)
+  instead of trusting the field. Round 1 trusted it blindly, which made the
+  degraded state permanent: the TTL is only ever evaluated by the wrapper, and
+  the wrapper cannot run again until a kill respawns it, so at TTL+1h the hook
+  was still suppressing the kill and the pin was never retried — deleting the
+  marker by hand did not help either, because nothing consulted it. Round 1 also
+  stamped `degraded_pin` on transient failures, suppressing the one thing that
+  triggers a retry. The invariant is now stated in the wrapper and locked by
+  tests: `degraded_pin` is set **if and only if** a marker was written.
+
+  Binary downloads get a 300-second budget again — unifying the curl calls
+  behind one helper had put the 18 MB binary on the metadata call's 30 seconds,
+  which hard-fails a fresh install on any normal-but-slow link. Legacy plugins
+  without `binary_version` keep the old semantics (the #73 spurious-kill trap
+  stays closed). A corrupt or hand-edited marker is ignored rather than fatal,
+  and its epoch can no longer reach bash arithmetic, where a crafted value is
+  executed as a command. The marker's reason field is finally read, so a digest
+  mismatch is reported as a possible tampering signal instead of "unavailable
+  upstream".
+
+  Test suite: **76 asserts across 19 mock-curl scenarios** — including a
+  minified API body, a foreign-host asset URL, a digest published on a machine
+  with no hash tool, an injection payload in the marker, temp-leak and
+  file-mode checks, and hook integration with its negative control. Every fix
+  above was **mutation-tested**: nine deliberate regressions were re-introduced
+  one at a time and all nine turned the suite red. That exercise is also how
+  the corrupt-marker case was caught testing nothing — its payload contained
+  whitespace, so `read` split it into three fields and it never reached the
+  arithmetic it claimed to exercise.
 
 ### Changed
 

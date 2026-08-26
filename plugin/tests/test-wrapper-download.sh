@@ -62,6 +62,13 @@ case "$url" in
     *"/releases/latest"*) ep="api_latest" ;;
     *.sha256)             ep="sha" ;;
 esac
+# Record the timeout the wrapper asked for. Without this the mock silently
+# accepts any --max-time, and #398 R2's verified regression (the 18 MB binary
+# download collapsed onto the metadata call's 30s budget, so a slow link could
+# never finish a fresh install) is invisible to the entire suite.
+mt=""; prev2=""
+for a in "$@"; do [ "$prev2" = "--max-time" ] && mt="$a"; prev2="$a"; done
+[ -n "${WRAPPER_TEST_TIMEOUT_LOG:-}" ] && printf '%s %s\n' "$ep" "$mt" >> "$WRAPPER_TEST_TIMEOUT_LOG"
 body="$SCEN/$ep.body"
 codef="$SCEN/$ep.code"
 if [ -f "$codef" ]; then code=$(cat "$codef"); elif [ -f "$body" ]; then code=200; else code=404; fi
@@ -92,16 +99,33 @@ write_plugin_json_legacy() {
     printf '{"name":"test","version":"%s"}\n' "$1" \
         > "$FAKE_PLUGIN/.claude-plugin/plugin.json"
 }
+DL_PREFIX="https://github.com/PsychQuant/che-apple-mail-mcp/releases/download"
+
 write_api() {
     # $1 endpoint (api_pinned/api_latest), $2 version tag, $3 with_sha (yes/no)
-    # ONE asset per line — the wrapper's line-based grep+sed matches GitHub's
-    # pretty-printed API; a single-line mock made the greedy sed grab the LAST
-    # URL on the line (the .sha256 one) and hash text got installed as binary.
+    # $4 (optional) "compact" — emit MINIFIED JSON, one line, no whitespace.
+    #
+    # Round 1's mock was reshaped to one-asset-per-line to accommodate a
+    # line-based parser; #398 round 2 hardened the parser instead, so the
+    # fixture is free to look like the real thing. URLs carry the real
+    # release-download prefix because the wrapper now pins host+path — a
+    # fixture on a made-up host would test a code path users never hit.
+    if [ "${4:-}" = "compact" ]; then
+        {
+            printf '{"tag_name":"v%s","assets":[' "$2"
+            printf '{"name":"CheAppleMailMCP","browser_download_url":"%s/v%s/CheAppleMailMCP"}' "$DL_PREFIX" "$2"
+            if [ "$3" = "yes" ]; then
+                printf ',{"name":"CheAppleMailMCP.sha256","browser_download_url":"%s/v%s/CheAppleMailMCP.sha256"}' "$DL_PREFIX" "$2"
+            fi
+            printf '],"tarball_url":"https://api.github.com/repos/PsychQuant/che-apple-mail-mcp/tarball/v%s","zipball_url":"https://api.github.com/repos/PsychQuant/che-apple-mail-mcp/zipball/v%s"}\n' "$2" "$2"
+        } > "$SCEN/$1.body"
+        return
+    fi
     {
         printf '{"assets": [\n'
-        printf '  {"name": "CheAppleMailMCP", "browser_download_url": "https://dl.test/repos/releases/download/v%s/CheAppleMailMCP"},\n' "$2"
+        printf '  {"name": "CheAppleMailMCP", "browser_download_url": "%s/v%s/CheAppleMailMCP"},\n' "$DL_PREFIX" "$2"
         if [ "$3" = "yes" ]; then
-            printf '  {"name": "CheAppleMailMCP.sha256", "browser_download_url": "https://dl.test/repos/releases/download/v%s/CheAppleMailMCP.sha256"},\n' "$2"
+            printf '  {"name": "CheAppleMailMCP.sha256", "browser_download_url": "%s/v%s/CheAppleMailMCP.sha256"},\n' "$DL_PREFIX" "$2"
         fi
         printf ']}\n'
     } > "$SCEN/$1.body"
@@ -120,11 +144,13 @@ seed_installed() {
 }
 run_wrapper() {
     HOME="$TEST_HOME" PATH="$RUN_PATH" WRAPPER_TEST_SCEN="$SCEN" \
+        WRAPPER_TEST_TIMEOUT_LOG="$TEST_DIR/curl-timeouts.log" \
         bash "$FAKE_PLUGIN/bin/che-apple-mail-mcp-wrapper.sh" \
         > "$TEST_DIR/out.txt" 2> "$TEST_DIR/err.txt"
     echo $? > "$TEST_DIR/exit_code"
 }
 reset_state() {
+    : > "$TEST_DIR/curl-timeouts.log"
     rm -rf "$TEST_HOME" "$SCEN"
     mkdir -p "$TEST_HOME" "$SCEN"
     : > "$TEST_DIR/out.txt"; : > "$TEST_DIR/err.txt"
@@ -155,6 +181,13 @@ assert "runtime = actual" "grep -q '\"version_at_spawn\":\"2.99.0\"' $RUNTIME"
 assert "degraded_pin empty" "grep -q '\"degraded_pin\":\"\"' $RUNTIME"
 assert "no marker" "[ ! -f $MARKER ]"
 assert "no unverified note" "! grep -q unverified $TEST_DIR/err.txt"
+# #398 R2 (verified regression): unifying the curl calls behind one helper put
+# the 18 MB binary on the metadata call's 30-second budget, so a
+# normal-but-slow link could never finish a fresh install — it hard-failed
+# with exit 1 and no MCP server at all. The mock ignores timeouts, so without
+# these two asserts the whole suite is blind to it.
+assert "binary download gets the long timeout, not the metadata one" "grep -q '^binary 300$' $TEST_DIR/curl-timeouts.log"
+assert "metadata calls keep the short timeout" "grep -q '^api_pinned 30$' $TEST_DIR/curl-timeouts.log"
 
 # ============================================================
 echo "Case 2: sha mismatch — refuse, keep old, marker guards re-download"
@@ -166,7 +199,8 @@ write_api api_pinned "2.99.0" yes
 write_mock_binary_content "EVIL-RUN"
 printf '0000000000000000000000000000000000000000000000000000000000000000\n' > "$SCEN/sha.body"
 run_wrapper
-assert "mismatch named" "grep -q 'sha256 mismatch' $TEST_DIR/err.txt"
+assert "mismatch named" "grep -q 'sha256 MISMATCH' $TEST_DIR/err.txt"
+assert "tampering is named as such, not as a generic failure" "grep -q 'may have been tampered with' $TEST_DIR/err.txt"
 assert "old binary runs" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
 assert "sidecar untouched" "[ \"\$(cat $SIDECAR)\" = 2.98.0 ]"
 assert "runtime = old actual (#393)" "grep -q '\"version_at_spawn\":\"2.98.0\"' $RUNTIME"
@@ -177,7 +211,10 @@ assert "no stray tmp files" "! ls $TEST_HOME/bin/CheAppleMailMCP.tmp.* 2>/dev/nu
 rm -rf "$SCEN"; mkdir -p "$SCEN"
 : > "$TEST_DIR/out.txt"; : > "$TEST_DIR/err.txt"
 run_wrapper
-assert "spawn2: no re-download (marker guard)" "grep -q 'unavailable upstream' $TEST_DIR/err.txt"
+# The marker's third field (miss|verify) was written but never read, so a
+# verification failure was reported as "unavailable upstream" (#398 R2).
+assert "spawn2: no re-download (marker guard)" "grep -q 'failed sha256 verification' $TEST_DIR/err.txt"
+assert "spawn2: does NOT misreport tampering as an upstream outage" "! grep -q 'was unavailable upstream' $TEST_DIR/err.txt"
 assert "spawn2: old binary still runs" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
 
 # ============================================================
@@ -259,7 +296,11 @@ run_wrapper
 assert "transient disclosed" "grep -q 'transient failure resolving pinned' $TEST_DIR/err.txt"
 assert "keeps installed" "grep -q OLD-RUN-300 $TEST_DIR/out.txt"
 assert "NO marker written" "[ ! -f $MARKER ]"
-assert "degraded_pin set for hook" "grep -q '\"degraded_pin\":\"2.99.0\"' $RUNTIME"
+# #398 R2 (reproduced): stamping degraded_pin here made the hook suppress the
+# kill, and the kill is the ONLY thing that makes Claude Code respawn us — so
+# "will retry next spawn" became "never retries". Transient degradation must
+# leave the field empty. See THE degraded_pin INVARIANT in the wrapper.
+assert "degraded_pin EMPTY so the hook's kill can trigger the retry" "grep -q '\"degraded_pin\":\"\"' $RUNTIME"
 # spawn 2: pinned healthy again -> converges to the pin (pre-patch parity)
 rm -f "$SCEN/api_pinned.code"
 write_api api_pinned "2.99.0" yes
@@ -334,6 +375,11 @@ echo "$MOCK_PID" >> "$TEST_DIR/mock_pids"
 sleep 0.2
 write_plugin_json "2.99.0"
 printf '{"pid":%d,"started_at":1,"version_at_spawn":"3.0.0","degraded_pin":"2.99.0"}\n' "$MOCK_PID" > "$RUNTIME"
+# The runtime field alone is no longer sufficient evidence: the hook re-derives
+# the decision from the marker, because the TTL that ends the degraded state is
+# only ever evaluated by the wrapper — which cannot run again until a kill
+# respawns it (#398 R2).
+printf '2.99.0 %s miss\n' "$(date +%s)" > "$MARKER"
 HOME="$TEST_HOME" "$FAKE_PLUGIN/hooks/session-start.sh" 2> "$TEST_DIR/err.txt"
 HOOK_EXIT=$?
 assert "hook exits 0" "[ \"\$HOOK_EXIT\" = 0 ]"
@@ -347,6 +393,150 @@ HOME="$TEST_HOME" "$FAKE_PLUGIN/hooks/session-start.sh" 2> "$TEST_DIR/err.txt"
 sleep 0.5
 assert "control: kill fires without degraded_pin" "grep -q 'Killing stale' $TEST_DIR/err.txt"
 assert "control: PID killed" "! ps -p $MOCK_PID -o pid= >/dev/null 2>&1"
+
+# ============================================================
+echo "Case 13 (#398 R2): an EXPIRED marker lifts the hook's suppression"
+# ============================================================
+# Codex R2 HIGH: the hook trusted degraded_pin unconditionally, so at TTL+1h it
+# still suppressed the kill -> the wrapper never re-ran -> the TTL it was
+# waiting for was never evaluated. Permanently degraded, and deleting the
+# marker by hand did not help either because nothing consulted it.
+reset_state
+mkdir -p "$TEST_HOME/bin"
+( exec -a CheAppleMailMCP-mock sleep 1000 ) >/dev/null 2>&1 &
+MOCK_PID=$!
+echo "$MOCK_PID" >> "$TEST_DIR/mock_pids"
+sleep 0.2
+write_plugin_json "2.99.0"
+printf '{"pid":%d,"started_at":1,"version_at_spawn":"3.0.0","degraded_pin":"2.99.0"}\n' "$MOCK_PID" > "$RUNTIME"
+printf '2.99.0 %s miss\n' "$(( $(date +%s) - 172800 ))" > "$MARKER"   # 48h old
+: > "$TEST_DIR/err.txt"
+HOME="$TEST_HOME" "$FAKE_PLUGIN/hooks/session-start.sh" 2> "$TEST_DIR/err.txt"
+sleep 0.5
+assert "expired marker: kill fires so the pin gets retried" "grep -q 'Killing stale' $TEST_DIR/err.txt"
+assert "expired marker: no degraded note" "! grep -q 'degraded mode' $TEST_DIR/err.txt"
+kill -KILL "$MOCK_PID" 2>/dev/null || true
+
+# ============================================================
+echo "Case 14 (#398 R2): a hand-deleted marker lifts the suppression immediately"
+# ============================================================
+reset_state
+mkdir -p "$TEST_HOME/bin"
+( exec -a CheAppleMailMCP-mock sleep 1000 ) >/dev/null 2>&1 &
+MOCK_PID=$!
+echo "$MOCK_PID" >> "$TEST_DIR/mock_pids"
+sleep 0.2
+write_plugin_json "2.99.0"
+printf '{"pid":%d,"started_at":1,"version_at_spawn":"3.0.0","degraded_pin":"2.99.0"}\n' "$MOCK_PID" > "$RUNTIME"
+rm -f "$MARKER"     # the escape hatch the message advertises
+: > "$TEST_DIR/err.txt"
+HOME="$TEST_HOME" "$FAKE_PLUGIN/hooks/session-start.sh" 2> "$TEST_DIR/err.txt"
+sleep 0.5
+assert "rm marker: the documented escape hatch actually works" "grep -q 'Killing stale' $TEST_DIR/err.txt"
+kill -KILL "$MOCK_PID" 2>/dev/null || true
+
+# ============================================================
+echo "Case 15 (#398 R2): MINIFIED API JSON still selects the right asset"
+# ============================================================
+# The old parser was line-based with a greedy sed, so a single-line response
+# returned the LAST url on the line. Nothing in the GitHub API contract
+# promises pretty-printing; round 1 reshaped the FIXTURE to fit the parser
+# instead of hardening it.
+reset_state
+write_plugin_json "2.99.0"
+write_api api_pinned "2.99.0" yes compact
+write_mock_binary_content "MOCK-RUN-COMPACT"
+write_matching_sha
+run_wrapper
+assert "compact JSON: the BINARY asset was installed, not the .sha256 or the zipball" "grep -q MOCK-RUN-COMPACT $TEST_DIR/out.txt"
+assert "compact JSON: verified, not silently unverified" "grep -q 'sha256 verified' $TEST_DIR/err.txt"
+assert "compact JSON: sidecar = pin" "[ \"\$(cat $SIDECAR)\" = 2.99.0 ]"
+
+# ============================================================
+echo "Case 16 (#398 R2): an asset URL on a foreign host is refused"
+# ============================================================
+# asset_url pins host+path to this repo's own release downloads, so a spoofed
+# or tampered API body cannot redirect the install elsewhere.
+reset_state
+write_plugin_json "2.99.0"
+{
+    printf '{"assets": [\n'
+    printf '  {"name": "CheAppleMailMCP", "browser_download_url": "https://evil.example.com/releases/download/v2.99.0/CheAppleMailMCP"}\n'
+    printf ']}\n'
+} > "$SCEN/api_pinned.body"
+write_mock_binary_content "EVIL-HOST-RUN"
+run_wrapper
+assert "foreign host: nothing installed" "! grep -q EVIL-HOST-RUN $TEST_DIR/out.txt"
+assert "foreign host: refused with a reason" "grep -q 'no download URL found' $TEST_DIR/err.txt"
+
+# ============================================================
+echo "Case 17 (#398 R2): digest published + no hash tool = refuse, not install"
+# ============================================================
+# #392's whole point. Round 1 treated "this machine cannot hash" the same as
+# "this release has no digest" and installed anyway.
+reset_state
+NOHASH="$TEST_DIR/nohash-shim"
+mkdir -p "$NOHASH"
+ln -sf "$SHIM/curl" "$NOHASH/curl"
+# cp is used by the mock curl itself — omitting it made the shim silently
+# thinner than intended and the wrapper failed for the WRONG reason (it could
+# not read the API body at all), which would have passed this case's negative
+# asserts while testing nothing. Same shape as #399's make_shim_without gap.
+for tool in grep sed awk mktemp date tr head cut cp mv rm chmod mkdir cat ls dirname printf sleep; do
+    src=$(command -v "$tool" 2>/dev/null) || continue
+    case "$src" in /*) ln -sf "$src" "$NOHASH/$tool" 2>/dev/null ;; esac
+done
+if ( PATH="$NOHASH"; command -v shasum >/dev/null 2>&1 || command -v openssl >/dev/null 2>&1 )    || ! ( PATH="$NOHASH"; command -v curl >/dev/null 2>&1 && command -v cp >/dev/null 2>&1 ); then
+    echo "  SKIP  Case 17: could not build a usable hash-tool-free PATH" >&2
+else
+    write_plugin_json "2.99.0"
+    write_api api_pinned "2.99.0" yes
+    write_mock_binary_content "MOCK-NOHASH"
+    printf '%064d\n' 0 > "$SCEN/sha.body"
+    : > "$TEST_DIR/out.txt"; : > "$TEST_DIR/err.txt"
+    HOME="$TEST_HOME" WRAPPER_TEST_SCEN="$SCEN" PATH="$NOHASH" \
+        "$FAKE_PLUGIN/bin/che-apple-mail-mcp-wrapper.sh" \
+        > "$TEST_DIR/out.txt" 2> "$TEST_DIR/err.txt" || true
+    assert "no hash tool: refused" "grep -q 'no sha256 tool' $TEST_DIR/err.txt"
+    assert "no hash tool: nothing installed" "! grep -q MOCK-NOHASH $TEST_DIR/out.txt"
+    assert "no hash tool: did NOT claim an unverified install" "! grep -q 'installing unverified' $TEST_DIR/err.txt"
+fi
+
+# ============================================================
+echo "Case 18 (#398 R2): a corrupt marker is ignored, not fatal"
+# ============================================================
+# The epoch went straight into bash arithmetic, where `a[\$(cmd)]` is evaluated
+# as a command, and a non-numeric value aborted the wrapper under set -u.
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+write_api api_pinned "2.99.0" yes
+write_mock_binary_content "MOCK-RUN-299"
+write_matching_sha
+# The payload must contain NO whitespace and no backslash escape: `read -r a b c`
+# splits the line on whitespace, so a spaced payload lands in three fields and
+# never reaches arithmetic at all — which is how the first version of this case
+# passed while testing nothing (caught by mutation-testing this suite against a
+# wrapper with its epoch validation removed). ${IFS} is literal text to `read`
+# and becomes a space only when the arithmetic evaluator runs the substitution.
+printf '2.99.0 a[$(touch${IFS}%s/PWNED)] miss\n' "$TEST_DIR" > "$MARKER"
+run_wrapper
+assert "corrupt marker: no command executed from it" "[ ! -f $TEST_DIR/PWNED ]"
+assert "corrupt marker: no raw bash arithmetic error leaked" "! grep -qiE 'syntax error|arithmetic' $TEST_DIR/err.txt"
+assert "corrupt marker: wrapper still converges" "grep -q MOCK-RUN-299 $TEST_DIR/out.txt"
+
+# ============================================================
+echo "Case 19 (#398 R2): temps do not leak, and the installed mode is 755"
+# ============================================================
+reset_state
+write_plugin_json "2.99.0"
+write_api api_pinned "2.99.0" yes
+write_mock_binary_content "MOCK-RUN-299"
+write_matching_sha
+run_wrapper
+assert "no leaked binary temps" "! ls $TEST_HOME/bin/CheAppleMailMCP.tmp.* 2>/dev/null | grep -q ."
+assert "no leaked meta/sha temps" "! ls $TEST_HOME/bin/.CheAppleMailMCP.meta.* $TEST_HOME/bin/.CheAppleMailMCP.sha.* 2>/dev/null | grep -q ."
+assert "installed mode is 755" "[ \"\$(stat -f '%Lp' $TEST_HOME/bin/CheAppleMailMCP)\" = 755 ]"
 
 # ============================================================
 echo ""
