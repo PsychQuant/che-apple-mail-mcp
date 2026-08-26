@@ -126,8 +126,52 @@ assert() {
 reset_state() {
     rm -f "$TEST_DIR/bin/.CheAppleMailMCP.runtime.json"
     rm -f "$FAKE_PLUGIN/.claude-plugin/plugin.json"
+    # #394: FDA-assist state — mock binary, once-only marker, setup probe.
+    rm -f "$TEST_DIR/bin/CheAppleMailMCP"
+    rm -rf "$TEST_DIR/.local"
+    rm -f "$TEST_DIR/setup-called"
     : > "$TEST_DIR/hook.stderr"
 }
+
+# #394 helpers ---------------------------------------------------------------
+# Symlink-farm shim: PATH containing every tool the hook touches EXCEPT the one
+# under test — isolates a single missing dependency (the old /sbin:/usr/sbin
+# trick removed jq AND ps at once, so the "jq missing" case also passed when
+# only the ps gate worked).
+make_shim_without() {
+    local excluded="$1"
+    local dir="$TEST_DIR/shim-no-$excluded"
+    mkdir -p "$dir"
+    local tool src
+    # dirname is needed by the hook's PLUGIN_ROOT resolution, which now runs
+    # BEFORE the dependency gates (#394). Builtins (printf etc.) resolve to a
+    # bare name from `command -v` — skip anything that is not an absolute path.
+    for tool in jq ps sleep tr sort head mkdir cat rm date printf grep sed cut dirname; do
+        [ "$tool" = "$excluded" ] && continue
+        src=$(command -v "$tool" 2>/dev/null) || continue
+        case "$src" in /*) ;; *) continue ;; esac
+        [ -e "$dir/$tool" ] || ln -s "$src" "$dir/$tool" 2>/dev/null
+    done
+    echo "$dir"
+}
+
+# Mock MCP binary supporting the three flags the FDA assist calls.
+write_mock_mcp_binary() {
+    local version="$1" fda_exit="$2"
+    mkdir -p "$TEST_DIR/bin"
+    cat > "$TEST_DIR/bin/CheAppleMailMCP" <<MOCKEOF
+#!/bin/bash
+case "\${1:-}" in
+    --version) echo "$version" ;;
+    --check-fda) exit $fda_exit ;;
+    --setup) : > "$TEST_DIR/setup-called"; exit 0 ;;
+esac
+exit 0
+MOCKEOF
+    chmod +x "$TEST_DIR/bin/CheAppleMailMCP"
+}
+
+FDA_MARKER="$TEST_DIR/.local/state/che-apple-mail-mcp/fda-setup-offered"
 
 # ============================================================
 # Case 1: no runtime state file → exit 0, no-op
@@ -193,8 +237,9 @@ reset_state
 start_mock_pid; PID=$LAST_MOCK_PID
 write_plugin_json "2.18.0"
 write_runtime_file "$PID" "2.17.0"
-# Mock missing jq by overriding PATH to exclude it.
-MINIMAL_PATH="/sbin:/usr/sbin"  # neither contains jq
+# #394: isolate jq specifically — the old PATH (/sbin:/usr/sbin) removed BOTH
+# jq and ps, so this case also passed when only the ps gate worked.
+MINIMAL_PATH="$(make_shim_without jq)"
 EXISTING_HOME="$HOME"
 HOME="$TEST_DIR" PATH="$MINIMAL_PATH" "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
 EXIT=$?
@@ -257,6 +302,104 @@ EXIT=$?
 assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "no warning emitted" "[ ! -s $TEST_DIR/hook.stderr ]"
 assert "mock PID still alive (legacy fallback works)" "ps -p $PID -o pid= >/dev/null 2>&1"
+kill -KILL "$PID" 2>/dev/null || true
+
+
+# ============================================================
+# Case 9 (#394): FDA missing + new binary -> assist offers once
+# ============================================================
+echo "Case 9: FDA assist fires when FDA missing"
+reset_state
+write_plugin_json "2.18.0"
+write_mock_mcp_binary "2.28.0" 1
+run_hook
+EXIT=$?
+sleep 0.5   # --setup is launched detached
+assert "exit 0" "[ $EXIT -eq 0 ]"
+assert "offer message on stderr" "grep -q 'Full Disk Access is not granted' $TEST_DIR/hook.stderr"
+assert "once-only marker written" "[ -f $FDA_MARKER ]"
+assert "setup window launched (mock touched probe)" "[ -f $TEST_DIR/setup-called ]"
+
+# ============================================================
+# Case 10 (#394): marker exists -> no re-offer
+# ============================================================
+echo "Case 10: FDA assist offered once only"
+reset_state
+write_plugin_json "2.18.0"
+write_mock_mcp_binary "2.28.0" 1
+mkdir -p "$(dirname "$FDA_MARKER")"
+: > "$FDA_MARKER"
+run_hook
+EXIT=$?
+assert "exit 0" "[ $EXIT -eq 0 ]"
+assert "no offer message" "! grep -q 'Full Disk Access' $TEST_DIR/hook.stderr"
+assert "setup not launched" "[ ! -f $TEST_DIR/setup-called ]"
+
+# ============================================================
+# Case 11 (#394): FDA already granted -> no offer, no marker
+# ============================================================
+echo "Case 11: FDA granted, nothing to offer"
+reset_state
+write_plugin_json "2.18.0"
+write_mock_mcp_binary "2.28.0" 0
+run_hook
+EXIT=$?
+assert "exit 0" "[ $EXIT -eq 0 ]"
+assert "no offer message" "! grep -q 'Full Disk Access' $TEST_DIR/hook.stderr"
+assert "no marker" "[ ! -f $FDA_MARKER ]"
+
+# ============================================================
+# Case 12 (#394): old binary (< 2.28.0) -> version-gated skip
+# ============================================================
+echo "Case 12: old binary skipped by version gate"
+reset_state
+write_plugin_json "2.18.0"
+write_mock_mcp_binary "2.27.0" 1
+run_hook
+EXIT=$?
+assert "exit 0" "[ $EXIT -eq 0 ]"
+assert "no offer message" "! grep -q 'Full Disk Access' $TEST_DIR/hook.stderr"
+assert "no marker" "[ ! -f $FDA_MARKER ]"
+
+# ============================================================
+# Case 13 (#394 core regression): jq missing must NOT kill the FDA assist
+# ============================================================
+echo "Case 13: FDA assist survives a jq-less machine"
+reset_state
+start_mock_pid; PID=$LAST_MOCK_PID
+write_plugin_json "2.18.0"
+write_runtime_file "$PID" "2.17.0"
+write_mock_mcp_binary "2.28.0" 1
+NOJQ_PATH="$(make_shim_without jq)"
+EXISTING_HOME="$HOME"
+HOME="$TEST_DIR" PATH="$NOJQ_PATH" "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
+EXIT=$?
+HOME="$EXISTING_HOME"
+sleep 0.5
+assert "exit 0" "[ $EXIT -eq 0 ]"
+assert "FDA assist still offered without jq (#394)" "grep -q 'Full Disk Access is not granted' $TEST_DIR/hook.stderr"
+assert "staleness block still skipped (no kill without jq)" "ps -p $PID -o pid= >/dev/null 2>&1"
+assert "no kill warning" "! grep -q 'Killing stale' $TEST_DIR/hook.stderr"
+kill -KILL "$PID" 2>/dev/null || true
+
+# ============================================================
+# Case 14 (#394): ps missing (jq present) — symmetric isolation
+# ============================================================
+echo "Case 14: ps missing skips staleness, FDA assist unaffected"
+reset_state
+start_mock_pid; PID=$LAST_MOCK_PID
+write_plugin_json "2.18.0"
+write_runtime_file "$PID" "2.17.0"
+write_mock_mcp_binary "2.28.0" 1
+NOPS_PATH="$(make_shim_without ps)"
+EXISTING_HOME="$HOME"
+HOME="$TEST_DIR" PATH="$NOPS_PATH" "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
+EXIT=$?
+HOME="$EXISTING_HOME"
+sleep 0.5
+assert "exit 0" "[ $EXIT -eq 0 ]"
+assert "FDA assist offered without ps" "grep -q 'Full Disk Access is not granted' $TEST_DIR/hook.stderr"
+assert "mock PID untouched" "ps -p $PID -o pid= >/dev/null 2>&1"
 kill -KILL "$PID" 2>/dev/null || true
 
 # ============================================================

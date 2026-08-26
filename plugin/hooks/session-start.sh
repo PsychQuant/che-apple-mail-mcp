@@ -12,10 +12,6 @@
 
 set -u
 
-# Dependencies — graceful skip if missing.
-command -v jq >/dev/null 2>&1 || exit 0
-command -v ps >/dev/null 2>&1 || exit 0
-
 BINARY_NAME="CheAppleMailMCP"
 INSTALL_DIR="$HOME/bin"
 RUNTIME_FILE="$INSTALL_DIR/.${BINARY_NAME}.runtime.json"
@@ -78,6 +74,14 @@ first_run_fda_assist() {
     return 0
 }
 first_run_fda_assist
+
+# ---- Staleness detection below needs jq (runtime JSON) + ps (PID probe) ------
+# #394: these gates used to sit at the very top of the file, BEFORE the FDA
+# assist — which needs neither tool — so a jq-less machine (exactly the
+# fresh-install audience the assist exists for) silently lost the assist too.
+# Graceful-skip semantics are unchanged for the staleness block itself.
+command -v jq >/dev/null 2>&1 || exit 0
+command -v ps >/dev/null 2>&1 || exit 0
 
 # Both files required.
 [ -f "$RUNTIME_FILE" ] || exit 0
