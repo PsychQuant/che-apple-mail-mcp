@@ -281,12 +281,14 @@ v2.8.0+ 的 `archive-mail` / `view` / `rebuild-threads` **每次跑都會 silent
 | 表面 | 角色 |
 |---|---|
 | plugin.json `version` / `binary_version` | 機器可讀的現行版本（唯一 authoritative；ManifestVersionTests 鎖 marketplace entry 等式）|
-| `plugin/CHANGELOG.md` | **shell 敘事單源**（Keep a Changelog）|
+| `plugin/CHANGELOG.md` | **shell 敘事單源**（Keep a Changelog）；**最新 released header 必須等於 plugin.json `version`**（guard 鎖定 —— 這給了單源一個 owner）|
 | repo 根 `CHANGELOG.md` | binary/server 敘事單源 |
-| plugin.json `description` | 短敘述，**禁止版本敘事**（guard test 鎖 <1KB 且無 "Shell v"/"binary stays" 模式）|
-| `plugin/README.md` | 用法文件；版本沿革一律指向 CHANGELOG |
+| plugin.json `description` | 短敘述（guard 鎖 <1000 字元、必須存在、且不得含任何 semver 樣式 token）|
+| marketplace.json 頂層與 entry 的 `description` | 同上 guard；entry 版本另有等式鎖 |
+| `plugin/README.md` | 用法文件；版本沿革一律指向 plugin/CHANGELOG.md |
 
-Release 時的 bump 清單見 repo 根 `CLAUDE.md`「Publishing a new release」。此 convention 的
+Release 時的 bump 清單見 repo 根 `CLAUDE.md`「Publishing a new release」——自 #396 起**加一步**：
+在 `plugin/CHANGELOG.md` 寫該版條目並讓 newest header 對齊新 `version`（不寫 guard 會紅）。此 convention 的
 成因：description-as-changelog 是 aggregator 時代（marketplace 列表只顯示 description）的
 產物，自營 marketplace 後只剩漂移成本 —— 四個表面曾同時各說各話（#396 diagnosis 有對照表）。
 

@@ -10,7 +10,7 @@
     {
       "name": "che-apple-mail-mcp",
       "version": "2.46.1",
-      "description": "Apple Mail MCP server plugin — archive-mail SOP commands, compose/confirmation rules, and the signed-binary wrapper. Versions and the release narrative live in plugin/.claude-plugin/plugin.json and CHANGELOG.md; this entry deliberately carries no binary_version (#335), and its version is pinned equal to plugin.json by ManifestVersionTests.",
+      "description": "Apple Mail MCP server plugin — archive-mail SOP commands, compose/confirmation rules, and the signed-binary wrapper. Current versions live in plugin/.claude-plugin/plugin.json; the release narrative lives in plugin/CHANGELOG.md (#396). This entry deliberately carries no binary_version (#335), and its version is pinned equal to plugin.json by ManifestVersionTests.",
       "author": {
         "name": "Che Cheng"
       },

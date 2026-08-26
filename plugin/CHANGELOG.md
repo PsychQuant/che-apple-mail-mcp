@@ -5,17 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-> ⚠ This file was bootstrapped by `changelog-tools:changelog-init` from the
-> `plugin.json` description field. Section categorization is best-effort —
-> review and refine `Added` / `Changed` / `Fixed` etc. as needed.
+> **本檔是 plugin shell 敘事的單一 source（#396 起）。** 每次 shell release 必須在此新增
+> 條目，且最新 released header 必須等於 plugin.json 的 `version`（`ManifestVersionTests`
+> 鎖定）。歷史備註：本檔最初由 `changelog-tools:changelog-init` 自已廢除的
+> description-as-changelog 欄位 bootstrap；2.42.0–2.34.0 的逐版明細未回填（見下方缺口宣告）。
 
 ## [Unreleased]
+
+## [2.46.1] - 2026-08-13
 
 ### Changed
 
 - `binary_version` 2.27.0 → **2.28.0**，讓 v2.46.0 的 first-run FDA assist（mail#355）真正生效。該 hook 從落地起就是 **no-op**：它以版本閘擋住 2.28.0 以前的 binary，因為更舊的版本會把 `--check-fda --quiet` 當成普通 `--check-fda` 解析、印出訊息並打開系統設定 —— 正是它要避免的騷擾。binary v2.28.0 已發布（signed + notarized），閘門現在開了。
 
   同版本一併到位的 binary 修復：QP 內文解碼（mail#339，19/28 封信曾寫成不可讀）、`list_attachments` 對自寄信件回 `[]` 的靜默漏抓（mail#365）、`.mcpb` 改由簽章 universal binary 打包（mail#323 —— 在此之前 Desktop 安裝拿到的是 ad-hoc binary，**結構上無法**被授予 Full Disk Access）。
+
+## [2.46.0] - 2026-08-13
+
+### Added
+
+- **First-run Full Disk Access assist**（session-start hook，mail#355）—— `--setup` 視窗自 mail#213/#214 就做好了（live FDA 狀態、開啟對的系統設定頁面、複製 binary 路徑），但**安裝路徑上沒有任何一個環節會打開它**：wrapper 只比對版本、本 hook 只殺 stale process、README 只在深處的參考章節提過 `--setup`。等於那顆「方便按」的按鈕只有已經知道它在哪的人按得到。
+
+  hook 現在在第一次啟動時，若 FDA 未授權就替使用者打開該視窗。刻意的四個限制：**每台機器只提一次**（marker，不做重複騷擾）；**只在真的缺授權時**；視窗以 **detached** 方式啟動（它跑 GUI runloop，否則會把 session start 卡死）；marker 在啟動**之前**寫入，所以失敗不會變成迴圈。
+
+  這段必須放在 staleness 區塊**之前** —— 那個區塊在 `$RUNTIME_FILE` 不存在時就 early exit，而那正是全新安裝的狀態，也就是本功能唯一在意的那一次。
+
+  舊 binary 以版本閘跳過（需 binary **2.28.0+**）：更舊的版本會把 `--check-fda --quiet` 當成普通 `--check-fda` 解析，那會**印出訊息並打開系統設定** —— 正是本功能要避免的騷擾。在 2.28.0 發布前，這段一律 no-op。
+
+## [2.45.0] - 2026-08-13
 
 ### Added
 
@@ -24,13 +41,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   根因是分母的來源：8a 比對已歸檔信的附件、8b 比對已歸檔 subject 的兄弟，**兩軸的分母都來自 archive 內部已有的東西**，沒有任何一軸能看見「應該存在但從未被搜到」的一整邊。方向分布是唯一從 archive 內部就看得出「搜尋策略漏了一邊」的訊號 —— 它不問「這封信完整嗎」，問「這批信的形狀對嗎」。
 
   8d 純讀磁碟 frontmatter，封閉列舉三條判定：零寄件且 ≥10 封 → 警告；同上且 corpus 內有回覆串證據（`in_reply_to` 非空或 `Re:`/`Fwd:` 主旨）→ 升級為強訊號；有 `direction_inferred: true` 的封數 → 註明該數不可當方向統計的可信基礎（mail#351）。**單向本身可以是正確的**（純電子報／公告訂閱），所以門檻以下與 `sent > 0` 都明確不發話，且三條都只報告、不阻擋 run。警告一併輸出可直接複製的補救指令。
-- **First-run Full Disk Access assist**（session-start hook，mail#355）—— `--setup` 視窗自 mail#213/#214 就做好了（live FDA 狀態、開啟對的系統設定頁面、複製 binary 路徑），但**安裝路徑上沒有任何一個環節會打開它**：wrapper 只比對版本、本 hook 只殺 stale process、README 只在深處的參考章節提過 `--setup`。等於那顆「方便按」的按鈕只有已經知道它在哪的人按得到。
 
-  hook 現在在第一次啟動時，若 FDA 未授權就替使用者打開該視窗。刻意的四個限制：**每台機器只提一次**（marker，不做重複騷擾）；**只在真的缺授權時**；視窗以 **detached** 方式啟動（它跑 GUI runloop，否則會把 session start 卡死）；marker 在啟動**之前**寫入，所以失敗不會變成迴圈。
+## [2.44.2] - 2026-08-10
 
-  這段必須放在 staleness 區塊**之前** —— 那個區塊在 `$RUNTIME_FILE` 不存在時就 early exit，而那正是全新安裝的狀態，也就是本功能唯一在意的那一次。
+### Changed
 
-  舊 binary 以版本閘跳過（需 binary **2.28.0+**）：更舊的版本會把 `--check-fda --quiet` 當成普通 `--check-fda` 解析，那會**印出訊息並打開系統設定** —— 正是本功能要避免的騷擾。在 2.28.0 發布前，這段一律 no-op。
+- `binary_version` 2.26.0 → **2.27.0**（correctness batch，每案跨模型 adversarial verify）：
+  匯出碰撞鍵改用 APFS 的 case-folding、寫入改由檔案系統以 exclusive rename 裁決（mail#342）；
+  mailbox filter 逐 path component 比對、`INBOX` 只在路徑根折疊、查無結果具名 near-miss
+  （mail#344）；附件寫入驗證跟隨 symlink 並要求 regular file、typed error 接上
+  `download_if_missing` 重試、新增 `allow_empty`（mail#347）；26 個 stderr writer 收斂到單一
+  throwing sink + source guard（mail#346）；測試套件不再驅動使用者真實 Mail.app（mail#362）；
+  stale-binary 自檢 + MCP handshake 回報真實版本（mail#303）。套件 1171 tests。
+  （回填自 #396 前的 README Version History —— #396 verify 揭露該條目原本無 CHANGELOG 對應。）
 
 ## [2.44.1] - 2026-08-05
 
@@ -61,6 +84,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **archive-mail `last_updated` 計算對 RFC822 entry date 失效**（[mail#275](https://github.com/PsychQuant/che-apple-mail-mcp/issues/275)）。Step 6 / Step 8.5 的 max(date) 原以 `date[:10]` 字典序比較，只涵蓋 ISO 兩變體 — RFC822（`Thu, 25 Jun …`）切片後星期縮寫字典序恆大於數字，任一 RFC822 entry 都會贏過全部 ISO entry，`last_updated` 被寫成 `Wed, 01 Ju` 類無效值（並汙染 `dedup_strategy: last_archived` 的增量搜尋 date_from）。兩處計算改為 robust `to_ymd()`（ISO 快篩 + `email.utils.parsedate_to_datetime`，parse 失敗排除於 max 並在 reconcile 摘要揭露）；上游 enforcement：Step 5.1 明文 RFC822 Date header 必先轉 ISO 再寫 frontmatter，Step 8.5 Phase 1 孤兒補寫時將非 ISO date 正規化（歷史汙染的收斂點）。
+
+> **回填缺口宣告（#396 verify）**：`[2.42.0]`–`[2.34.0]` 的逐版明細未回填 —— 該時代的 shell
+> 敘事只存在於當時 plugin.json description 的歷史快照與 aggregator commit log
+> （`psychquant-claude-plugins`，`git log -- plugins/che-apple-mail-mcp`）；binary 側內容在
+> repo 根 `CHANGELOG.md` 的對應版本都有家。主要節點：2.39.0–2.42.0 陸續 ship binary
+> v2.23.0–v2.25.0（sender-popup live-fix 三部曲、AppleScript timeout guard #297、draft-creation
+> unhang）。以下 `[2.33.0]`–`[2.21.0]` 為自 #396 所刪敘事回填的 compact 條目。
+
+## [2.33.0] - 2026-07-19
+
+### Added
+- （shell-only，binary 停留 v2.19.0）archive-mail Step 8.5 manifest-driven reconcile + atomic
+  index write（plugins#110，疊在 plugins#107 上）：run 尾端的 Index Reconcile Gate 以匯出
+  manifest 機械填入本 run 的 batch 寫入，`${INDEX_FILE}` 改 temp+rename 原子寫。
+
+## [2.32.0] - 2026-07-18
+
+### Changed
+- （shell-only）archive-mail Step 5 批次匯出遷移（plugins#107 / mail#232 SOP 側落地）：Step 5.0
+  以 server-side `batch_export_emails_markdown` 為主路徑（≥5 封），混合 corpus 依各 id 自身
+  mailbox 分 direction 批；`opts.filenames` 依 SOP 檔名規則傳入。
+
+## [2.31.0] - 2026-07-18
+
+### Fixed
+- （shell-only）archive-mail Step 8b 稽核分母硬化（plugins#112）：thread-completeness 分母改
+  `projection:summary + dedup:logical` 並套 Step 3 mailbox drop-set，Gmail 雙存 row 不再虛報
+  「missing siblings」。
+
+## [2.30.0] - 2026-07-17
+
+### Changed
+- （shell-only）archive-mail Step 3 搜尋機械化（plugins#109）：sent-mail 偵測改 scoped
+  `search_emails`（per-account Sent 實名 + `field: recipient`），received/subject 搜尋強制
+  Drafts/Trash post-filter。
+
+## [2.29.0] - 2026-07-16
+
+### Added
+- （shell-only）archive-mail SOP 硬化（mail#261）：強制 run 尾端 Index Reconcile Gate（孤兒
+  md → 修復 index、`last_updated = max(date)`、unparseable 必 surface）+ All-Mail superset
+  紀律（Sent 匣偵測寄件、排除 drafts、Message-ID dedup）。
+
+## [2.28.0] - 2026-07-15
+
+### Changed
+- `binary_version` → **2.19.0**（10-issue batch，每 PR 6-AI verify；套件 882 tests）：
+  reply/forward 送信段 POSTDISPATCH 保護（mail#254）、`require_wrapper_free` opt-in fail-fast
+  （mail#239）、非 ASCII 附件路徑改走原生附件不再卡 GUI（mail#220）、附件 `savable`
+  false-negative 修復（mail#183）、not-downloaded 具名訊號（mail#238）、per-account inbox 解析
+  （mail#249）、doc census guard（mail#248）、export date 保留原時區（mail#244）、compose 揭露
+  regression lock（mail#241）、mailto 拒絕重送（mail#242）。
+
+## [2.27.0] - 2026-07-14
+
+### Changed
+- `binary_version` → **2.18.0**（14-issue 大版；套件 815 tests、工具 51）：
+  `batch_export_emails_markdown` 成為 canonical 主名（mail#233，修 #232 discoverability 事故）、
+  compose 與 reply/forward 不再靜默降級 wrapped-body（mail#237/#229 三層揭露）、同目錄併發匯出
+  flock fail-fast（mail#236）、wrapper-free reply/forward 乾淨路徑（mail#218）、export 路徑
+  denylist + TOCTOU race-free 寫入（mail#197/#200）、dedup-aware 歸檔原語（mail#177）、
+  `whose content contains` O(corpus) 掃描 guard（mail#221）。
+
+> **回填缺口宣告（#396 verify）**：`[2.26.2]`–`[2.22.0]` 未逐版回填 —— 主要內容：帳號解析
+> completeness sweep（mail#176/#180）、`export_emails_markdown` 誕生（mail#193）與 truncation
+> envelope（mail#204）、`projection`/`dedup`（mail#208）、FDA onboarding `--setup` 視窗
+> （mail#213/#214）、Developer ID signing + notarization（mail#211）。binary 側明細見 root
+> `CHANGELOG.md` 的 [2.12.0]–[2.17.0]。
+
+## [2.21.0] - 2026-06-12
+
+### Changed
+- `binary_version` → **2.11.0**（Gmail mailbox-resolution pair，mail#173/#174）：巢狀 Gmail
+  mailbox 路徑經 container chain 於 `resolveMailboxRef` chokepoint 解析（~14 寫入工具受惠）；
+  `list_drafts` 移除硬編 `Drafts` 改 unified-children 反查；`save_attachment` email→UUID 帳號
+  正規化 + per-object-class actionable hints。測試 +36。
 
 ## [2.20.0] - 2026-05-18
 

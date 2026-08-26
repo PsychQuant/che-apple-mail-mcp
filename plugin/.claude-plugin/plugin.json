@@ -2,7 +2,7 @@
   "name": "che-apple-mail-mcp",
   "version": "2.46.1",
   "binary_version": "2.28.0",
-  "description": "Apple Mail MCP server plugin for macOS — 53-tool mail automation (search/read/export/compose with Foresay confirmation protocol), the /archive-mail Markdown archiving SOP, compose-discipline rules, and a signed-binary auto-download wrapper. Current versions live in this file's version/binary_version fields; the release narrative lives in CHANGELOG.md (single source since #396 — this field deliberately carries none).",
+  "description": "Apple Mail MCP server plugin for macOS — mail automation (search/read/export/compose with the Foresay confirmation protocol), the /archive-mail Markdown archiving SOP, compose-discipline rules, and a signed-binary auto-download wrapper. Current versions live in this file's version/binary_version fields; the release narrative lives in the adjacent plugin CHANGELOG (single source since #396 — this field deliberately carries none).",
   "author": {
     "name": "Che Cheng"
   },

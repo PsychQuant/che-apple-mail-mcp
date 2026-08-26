@@ -26,8 +26,6 @@ macOS Apple Mail MCP server with native AppleScript integration.
 /archive-mail some@example.com communications
 ```
 
-版本沿革自 #396 起收斂於 [CHANGELOG.md](CHANGELOG.md)（shell 敘事單源）。
-
 #### Workspace Patterns (v2.17.0+)
 
 archive-mail 不假設一個 canonical layout——adapt 到 user 的既有 folder 配置。三種主要 pattern:

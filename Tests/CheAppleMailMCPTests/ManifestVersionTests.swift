@@ -69,30 +69,61 @@ final class ManifestVersionTests: XCTestCase {
     }
 
     func testDescriptionsCarryNoVersionNarrative() throws {
-        // #396: the 18.8KB description-as-changelog convention is dead — the
-        // narrative lives in CHANGELOG.md, and a description that names versions
-        // starts lying the release after it was written (observed: "Shell v2.43.0
-        // ... binary stays v2.25.0" shipping beside version 2.46.1 / pin 2.28.0).
-        // Guard both manifests that carry a description.
+        // #396: the 18.8KB description-as-changelog convention is dead — narrative
+        // lives in plugin/CHANGELOG.md. Round-2 hardening (#400 verify): every
+        // description-carrying surface must EXIST (a deleted key must not pass
+        // vacuously), stay short, and carry no semver-shaped token at all — the
+        // round-1 literal markers ("Shell v", "binary stays") only locked the
+        // last incident's exact strings, not the class.
         let root = repoRoot()
-        for rel in ["plugin/.claude-plugin/plugin.json", ".claude-plugin/marketplace.json"] {
-            let data = try Data(contentsOf: root.appendingPathComponent(rel))
-            let obj = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
-            let descriptions: [String]
-            if let plugins = obj["plugins"] as? [[String: Any]] {
-                descriptions = plugins.compactMap { $0["description"] as? String }
-            } else {
-                descriptions = [obj["description"] as? String].compactMap { $0 }
-            }
-            for desc in descriptions {
-                XCTAssertLessThan(desc.count, 1000,
-                    "\(rel): description is \(desc.count) chars — the changelog-in-a-field "
-                    + "convention is dead (#396); narrative belongs in CHANGELOG.md")
-                for banned in ["Shell v", "binary stays", "ships binary"] {
-                    XCTAssertFalse(desc.contains(banned),
-                        "\(rel): description contains version-narrative marker '\(banned)' (#396)")
-                }
-            }
+        var inspected = 0
+
+        func check(_ desc: String, at label: String) {
+            inspected += 1
+            XCTAssertFalse(desc.trimmingCharacters(in: .whitespaces).isEmpty,
+                "\(label): description is empty")
+            XCTAssertLessThan(desc.count, 1000,
+                "\(label): description is \(desc.count) chars — narrative belongs in plugin/CHANGELOG.md (#396)")
+            XCTAssertNil(desc.range(of: #"v?[0-9]+\.[0-9]+\.[0-9]+"#, options: .regularExpression),
+                "\(label): description contains a semver-shaped token — any version claim here "
+                + "starts lying the release after it was written (#396)")
         }
+
+        let pjData = try Data(contentsOf: root.appendingPathComponent("plugin/.claude-plugin/plugin.json"))
+        let pj = try XCTUnwrap(try JSONSerialization.jsonObject(with: pjData) as? [String: Any])
+        check(try XCTUnwrap(pj["description"] as? String, "plugin.json must declare a description"),
+              at: "plugin.json")
+
+        let mktData = try Data(contentsOf: root.appendingPathComponent(".claude-plugin/marketplace.json"))
+        let mkt = try XCTUnwrap(try JSONSerialization.jsonObject(with: mktData) as? [String: Any])
+        check(try XCTUnwrap(mkt["description"] as? String, "marketplace.json must declare a top-level description"),
+              at: "marketplace.json (top-level)")
+        let plugins = try XCTUnwrap(mkt["plugins"] as? [[String: Any]])
+        let entry = try XCTUnwrap(plugins.first)
+        check(try XCTUnwrap(entry["description"] as? String, "marketplace entry must declare a description"),
+              at: "marketplace.json (entry)")
+
+        XCTAssertEqual(inspected, 3, "all three description surfaces must be inspected")
+    }
+
+    func testPluginChangelogNewestMatchesPluginVersion() throws {
+        // #396 round 2: plugin/CHANGELOG.md is the anointed single shell-narrative
+        // source, but a single source with no owner rots (this repo's #311 lesson;
+        // at anointing time it was already two minor versions behind). Pin its
+        // newest released header to plugin.json's `version` — a shell release that
+        // forgets its changelog entry now fails the suite.
+        let probe = try ChangelogParserTests.run(
+            ["newest"], changelog: repoRoot().appendingPathComponent("plugin/CHANGELOG.md").path)
+        guard probe.status == 0, !probe.out.isEmpty else {
+            XCTFail("no released ## [x.y.z] header found in plugin/CHANGELOG.md")
+            return
+        }
+        let pjData = try Data(contentsOf: repoRoot().appendingPathComponent("plugin/.claude-plugin/plugin.json"))
+        let pj = try XCTUnwrap(try JSONSerialization.jsonObject(with: pjData) as? [String: Any])
+        let shellVersion = try XCTUnwrap(pj["version"] as? String)
+        XCTAssertEqual(probe.out, shellVersion,
+            "plugin/CHANGELOG.md newest released header ('\(probe.out)') must match plugin.json "
+            + "version ('\(shellVersion)') — the single narrative source needs an owner (#396); "
+            + "write the release entry alongside the version bump.")
     }
 }
