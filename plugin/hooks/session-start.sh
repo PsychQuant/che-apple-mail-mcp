@@ -98,6 +98,17 @@ PLUGIN_VERSION=$(jq -r '.binary_version // .version // ""' "$PLUGIN_JSON" 2>/dev
 # Match → no-op.
 [ "$RUNTIME_VERSION" = "$PLUGIN_VERSION" ] && exit 0
 
+# Mismatch — but a wrapper running in a DELIBERATE degraded state records the
+# pin it could not honor (#392: pinned tag definitively missing upstream, or
+# its download failed verification). Killing would only respawn into the same
+# degraded state — an unbounded kill-at-every-session-start loop (#398 verify
+# round 1). Leave it running; the wrapper retries on its own TTL / pin change.
+DEGRADED_PIN=$(jq -r '.degraded_pin // ""' "$RUNTIME_FILE" 2>/dev/null)
+if [ -n "$DEGRADED_PIN" ] && [ "$DEGRADED_PIN" = "$PLUGIN_VERSION" ]; then
+    echo "che-apple-mail-mcp: running v${RUNTIME_VERSION} in degraded mode — pinned v${PLUGIN_VERSION} unavailable/unverifiable upstream; not killing (wrapper retries on TTL, or rm ~/bin/.CheAppleMailMCP.fallback-tried to force)" >&2
+    exit 0
+fi
+
 # Mismatch — check if recorded PID is still alive.
 PID=$(jq -r '.pid // empty' "$RUNTIME_FILE" 2>/dev/null)
 [ -z "$PID" ] && exit 0

@@ -1,13 +1,18 @@
 #!/bin/bash
 # Tests for bin/che-apple-mail-mcp-wrapper.sh download-chain integrity (#392, #393).
+# Round-2 suite (#398 verify round 1): HTTP-code-aware mock, definitive-404-only
+# marker with TTL, transient-keeps-installed, degraded_pin runtime field + hook
+# suppression, sidecar-absent honesty, legacy no-binary_version semantics.
 #
-# Mock strategy (mirrors test-session-start-hook.sh):
-# - PATH shim: a fake `curl` routes by URL against per-case scenario files;
-#   a missing scenario file simulates `curl -f` failing on an HTTP error (exit 22).
+# Mock strategy:
+# - PATH-shim `curl` routes by URL against per-case scenario files:
+#     $SCEN/<ep>.body  — response body (ep: api_pinned / api_latest / sha / binary)
+#     $SCEN/<ep>.code  — HTTP status (default: 200 if body exists, else 404;
+#                        "000" simulates a transport failure: prints 000, exit 6)
+#   The wrapper reads status via `-w '%{http_code}'`, exactly like real curl.
 # - HOME override puts INSTALL_DIR / sidecar / runtime / marker under $TEST_DIR.
-# - The wrapper is copied into a fake plugin tree so BASH_SOURCE resolution works.
-# - The "binary" the wrapper installs/execs is a tiny sh script printing a token,
-#   so `exec "$BINARY"` terminates the subshell run cleanly.
+# - The installed "binary" is a tiny sh script printing a token, so
+#   `exec "$BINARY"` terminates the subshell run cleanly.
 
 set -u
 
@@ -16,49 +21,58 @@ PASS=0
 FAIL=0
 FAIL_DETAIL=""
 
-cleanup() { rm -rf "$TEST_DIR"; }
+cleanup() {
+    for pid in $(cat "$TEST_DIR/mock_pids" 2>/dev/null); do
+        kill -KILL "$pid" 2>/dev/null || true
+    done
+    rm -rf "$TEST_DIR"
+}
 trap cleanup EXIT
 
-REAL_WRAPPER="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)/che-apple-mail-mcp-wrapper.sh"
-if [ ! -f "$REAL_WRAPPER" ]; then
-    echo "ERROR: wrapper not found at $REAL_WRAPPER" >&2
-    exit 2
-fi
+BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../bin" && pwd)"
+REAL_WRAPPER="$BIN_DIR/che-apple-mail-mcp-wrapper.sh"
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../hooks" && pwd)"
+REAL_HOOK="$HOOK_DIR/session-start.sh"
+[ -f "$REAL_WRAPPER" ] || { echo "ERROR: wrapper not found" >&2; exit 2; }
+[ -f "$REAL_HOOK" ] || { echo "ERROR: hook not found" >&2; exit 2; }
 
 FAKE_PLUGIN="$TEST_DIR/fake-plugin"
-mkdir -p "$FAKE_PLUGIN/bin" "$FAKE_PLUGIN/.claude-plugin"
+mkdir -p "$FAKE_PLUGIN/bin" "$FAKE_PLUGIN/hooks" "$FAKE_PLUGIN/.claude-plugin"
 cp "$REAL_WRAPPER" "$FAKE_PLUGIN/bin/che-apple-mail-mcp-wrapper.sh"
-chmod +x "$FAKE_PLUGIN/bin/che-apple-mail-mcp-wrapper.sh"
+cp "$REAL_HOOK" "$FAKE_PLUGIN/hooks/session-start.sh"
+chmod +x "$FAKE_PLUGIN/bin/che-apple-mail-mcp-wrapper.sh" "$FAKE_PLUGIN/hooks/session-start.sh"
 
 SCEN="$TEST_DIR/scenario"
 SHIM="$TEST_DIR/shim"
 mkdir -p "$SCEN" "$SHIM"
 
-# --- curl shim: routes by URL, honors -o, missing scenario file => exit 22 (-f) ---
 cat > "$SHIM/curl" <<'SHIMEOF'
 #!/bin/bash
 SCEN="${WRAPPER_TEST_SCEN:?}"
-url=""
-out=""
-prev=""
+url=""; out=""; want_code=""; prev=""
 for a in "$@"; do
-    case "$prev" in
-        -o) out="$a" ;;
-    esac
-    case "$a" in
-        https://*) url="$a" ;;
-    esac
+    [ "$prev" = "-o" ] && out="$a"
+    [ "$prev" = "-w" ] && want_code="yes"
+    case "$a" in https://*) url="$a" ;; esac
     prev="$a"
 done
-src=""
+ep="binary"
 case "$url" in
-    *"/releases/tags/"*)  src="$SCEN/api_pinned_response" ;;
-    *"/releases/latest"*) src="$SCEN/api_latest_response" ;;
-    *.sha256)             src="$SCEN/sha256_content" ;;
-    *)                    src="$SCEN/binary_content" ;;
+    *"/releases/tags/"*)  ep="api_pinned" ;;
+    *"/releases/latest"*) ep="api_latest" ;;
+    *.sha256)             ep="sha" ;;
 esac
-[ -f "$src" ] || exit 22
-if [ -n "$out" ]; then cp "$src" "$out"; else cat "$src"; fi
+body="$SCEN/$ep.body"
+codef="$SCEN/$ep.code"
+if [ -f "$codef" ]; then code=$(cat "$codef"); elif [ -f "$body" ]; then code=200; else code=404; fi
+if [ "$code" = "000" ]; then
+    [ -n "$want_code" ] && printf '000'
+    exit 6
+fi
+if [ -f "$body" ]; then
+    if [ -n "$out" ]; then cp "$body" "$out"; else cat "$body"; fi
+fi
+[ -n "$want_code" ] && printf '%s' "$code"
 exit 0
 SHIMEOF
 chmod +x "$SHIM/curl"
@@ -66,46 +80,55 @@ chmod +x "$SHIM/curl"
 RUN_PATH="$SHIM:/usr/bin:/bin"
 TEST_HOME="$TEST_DIR/home"
 
+RUNTIME="$TEST_HOME/bin/.CheAppleMailMCP.runtime.json"
+SIDECAR="$TEST_HOME/bin/.CheAppleMailMCP.version"
+MARKER="$TEST_HOME/bin/.CheAppleMailMCP.fallback-tried"
+
 write_plugin_json() {
     printf '{"name":"test","version":"9.9.9","binary_version":"%s"}\n' "$1" \
         > "$FAKE_PLUGIN/.claude-plugin/plugin.json"
 }
-
-write_api_response() {
-    # $1 = scenario file, $2 = version tag in the download URL
-    printf '{"assets":[{"name":"CheAppleMailMCP","browser_download_url":"https://dl.test/repos/releases/download/v%s/CheAppleMailMCP"}]}\n' "$2" > "$1"
+write_plugin_json_legacy() {
+    printf '{"name":"test","version":"%s"}\n' "$1" \
+        > "$FAKE_PLUGIN/.claude-plugin/plugin.json"
 }
-
+write_api() {
+    # $1 endpoint (api_pinned/api_latest), $2 version tag, $3 with_sha (yes/no)
+    # ONE asset per line — the wrapper's line-based grep+sed matches GitHub's
+    # pretty-printed API; a single-line mock made the greedy sed grab the LAST
+    # URL on the line (the .sha256 one) and hash text got installed as binary.
+    {
+        printf '{"assets": [\n'
+        printf '  {"name": "CheAppleMailMCP", "browser_download_url": "https://dl.test/repos/releases/download/v%s/CheAppleMailMCP"},\n' "$2"
+        if [ "$3" = "yes" ]; then
+            printf '  {"name": "CheAppleMailMCP.sha256", "browser_download_url": "https://dl.test/repos/releases/download/v%s/CheAppleMailMCP.sha256"},\n' "$2"
+        fi
+        printf ']}\n'
+    } > "$SCEN/$1.body"
+}
 write_mock_binary_content() {
-    # $1 = token the fake binary prints when exec'd
-    printf '#!/bin/sh\necho %s\nexit 0\n' "$1" > "$SCEN/binary_content"
+    printf '#!/bin/sh\necho %s\nexit 0\n' "$1" > "$SCEN/binary.body"
 }
-
 write_matching_sha() {
-    shasum -a 256 "$SCEN/binary_content" | awk '{print $1}' > "$SCEN/sha256_content"
+    shasum -a 256 "$SCEN/binary.body" | awk '{print $1}' > "$SCEN/sha.body"
 }
-
 seed_installed() {
-    # $1 = token, $2 = sidecar version — simulate an existing good install
     mkdir -p "$TEST_HOME/bin"
     printf '#!/bin/sh\necho %s\nexit 0\n' "$1" > "$TEST_HOME/bin/CheAppleMailMCP"
     chmod +x "$TEST_HOME/bin/CheAppleMailMCP"
-    printf '%s\n' "$2" > "$TEST_HOME/bin/.CheAppleMailMCP.version"
+    if [ "$2" != "NONE" ]; then printf '%s\n' "$2" > "$SIDECAR"; fi
 }
-
 run_wrapper() {
     HOME="$TEST_HOME" PATH="$RUN_PATH" WRAPPER_TEST_SCEN="$SCEN" \
         bash "$FAKE_PLUGIN/bin/che-apple-mail-mcp-wrapper.sh" \
         > "$TEST_DIR/out.txt" 2> "$TEST_DIR/err.txt"
     echo $? > "$TEST_DIR/exit_code"
 }
-
 reset_state() {
     rm -rf "$TEST_HOME" "$SCEN"
     mkdir -p "$TEST_HOME" "$SCEN"
     : > "$TEST_DIR/out.txt"; : > "$TEST_DIR/err.txt"
 }
-
 assert() {
     local name="$1" condition="$2"
     if eval "$condition"; then
@@ -117,104 +140,213 @@ assert() {
     fi
 }
 
-RUNTIME="$TEST_HOME/bin/.CheAppleMailMCP.runtime.json"
-SIDECAR="$TEST_HOME/bin/.CheAppleMailMCP.version"
-MARKER="$TEST_HOME/bin/.CheAppleMailMCP.fallback-tried"
-
 # ============================================================
-echo "Case 1: fresh install, pinned tag found, sha256 verified"
+echo "Case 1: fresh install, pinned tag found, sha256 verified (asset-list URL)"
 # ============================================================
 reset_state
 write_plugin_json "2.99.0"
-write_api_response "$SCEN/api_pinned_response" "2.99.0"
+write_api api_pinned "2.99.0" yes
 write_mock_binary_content "MOCK-RUN-299"
 write_matching_sha
 run_wrapper
-assert "exec'd the installed binary" "grep -q MOCK-RUN-299 $TEST_DIR/out.txt"
-assert "sidecar records actual tag"  "[ \"\$(cat $SIDECAR)\" = 2.99.0 ]"
-assert "runtime records actual (=sidecar) version" "grep -q '\"version_at_spawn\":\"2.99.0\"' $RUNTIME"
-assert "no fallback marker" "[ ! -f $MARKER ]"
+assert "exec'd installed binary" "grep -q MOCK-RUN-299 $TEST_DIR/out.txt"
+assert "sidecar = actual tag" "[ \"\$(cat $SIDECAR)\" = 2.99.0 ]"
+assert "runtime = actual" "grep -q '\"version_at_spawn\":\"2.99.0\"' $RUNTIME"
+assert "degraded_pin empty" "grep -q '\"degraded_pin\":\"\"' $RUNTIME"
+assert "no marker" "[ ! -f $MARKER ]"
 assert "no unverified note" "! grep -q unverified $TEST_DIR/err.txt"
 
 # ============================================================
-echo "Case 2: sha256 mismatch — reject download, keep old binary (#392/#393)"
+echo "Case 2: sha mismatch — refuse, keep old, marker guards re-download"
 # ============================================================
 reset_state
 seed_installed "OLD-RUN-298" "2.98.0"
 write_plugin_json "2.99.0"
-write_api_response "$SCEN/api_pinned_response" "2.99.0"
+write_api api_pinned "2.99.0" yes
 write_mock_binary_content "EVIL-RUN"
-echo "0000000000000000000000000000000000000000000000000000000000000000" > "$SCEN/sha256_content"
+printf '0000000000000000000000000000000000000000000000000000000000000000\n' > "$SCEN/sha.body"
 run_wrapper
-assert "sha mismatch named on stderr" "grep -q 'sha256 mismatch' $TEST_DIR/err.txt"
-assert "old binary still runs" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
-assert "sidecar untouched (old version)" "[ \"\$(cat $SIDECAR)\" = 2.98.0 ]"
-assert "runtime records OLD version, not desired (#393)" "grep -q '\"version_at_spawn\":\"2.98.0\"' $RUNTIME"
-assert "tmp cleaned up" "[ ! -f $TEST_HOME/bin/CheAppleMailMCP.tmp ]"
+assert "mismatch named" "grep -q 'sha256 mismatch' $TEST_DIR/err.txt"
+assert "old binary runs" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
+assert "sidecar untouched" "[ \"\$(cat $SIDECAR)\" = 2.98.0 ]"
+assert "runtime = old actual (#393)" "grep -q '\"version_at_spawn\":\"2.98.0\"' $RUNTIME"
+assert "verify marker written" "grep -q '^2.99.0 .* verify' $MARKER"
+assert "degraded_pin recorded" "grep -q '\"degraded_pin\":\"2.99.0\"' $RUNTIME"
+assert "no stray tmp files" "! ls $TEST_HOME/bin/CheAppleMailMCP.tmp.* 2>/dev/null | grep -q ."
+# spawn 2: marker suppresses the 18MB re-download loop
+rm -rf "$SCEN"; mkdir -p "$SCEN"
+: > "$TEST_DIR/out.txt"; : > "$TEST_DIR/err.txt"
+run_wrapper
+assert "spawn2: no re-download (marker guard)" "grep -q 'unavailable upstream' $TEST_DIR/err.txt"
+assert "spawn2: old binary still runs" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
 
 # ============================================================
-echo "Case 3: no .sha256 asset — disclose, install anyway (backward compat)"
+echo "Case 3: release publishes no .sha256 (absent from asset list) — approved unverified path"
 # ============================================================
 reset_state
 write_plugin_json "2.99.0"
-write_api_response "$SCEN/api_pinned_response" "2.99.0"
+write_api api_pinned "2.99.0" no
 write_mock_binary_content "MOCK-RUN-299"
-# no sha256_content file => curl -f fails on the .sha256 URL
 run_wrapper
-assert "unverified note on stderr" "grep -q 'installing unverified' $TEST_DIR/err.txt"
-assert "binary installed and exec'd" "grep -q MOCK-RUN-299 $TEST_DIR/out.txt"
-assert "sidecar records tag" "[ \"\$(cat $SIDECAR)\" = 2.99.0 ]"
+assert "unverified disclosed" "grep -q 'publishes no .sha256' $TEST_DIR/err.txt"
+assert "installed + runs" "grep -q MOCK-RUN-299 $TEST_DIR/out.txt"
+assert "sidecar recorded" "[ \"\$(cat $SIDECAR)\" = 2.99.0 ]"
 
 # ============================================================
-echo "Case 4: binary download fails entirely — keep old, runtime honest (#393)"
+echo "Case 4: sha asset EXISTS but fetch fails — verification failure, NOT unverified install"
 # ============================================================
 reset_state
 seed_installed "OLD-RUN-298" "2.98.0"
 write_plugin_json "2.99.0"
-write_api_response "$SCEN/api_pinned_response" "2.99.0"
-# no binary_content file => download curl fails (exit 22)
+write_api api_pinned "2.99.0" yes
+write_mock_binary_content "MOCK-RUN-299"
+printf '500\n' > "$SCEN/sha.code"
 run_wrapper
-assert "download-failed warning" "grep -q 'download failed, keeping existing binary' $TEST_DIR/err.txt"
-assert "old binary still runs" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
-assert "runtime records OLD installed version (#393 core)" "grep -q '\"version_at_spawn\":\"2.98.0\"' $RUNTIME"
+assert "refuses unverified install" "grep -q 'refusing unverified install' $TEST_DIR/err.txt"
+assert "old binary kept + runs" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
+assert "NO marker (transient)" "[ ! -f $MARKER ]"
+# spawn 2 with sha healthy: retry succeeds
+rm -f "$SCEN/sha.code"; write_matching_sha
+: > "$TEST_DIR/out.txt"; : > "$TEST_DIR/err.txt"
+run_wrapper
+assert "spawn2 retry installs" "grep -q MOCK-RUN-299 $TEST_DIR/out.txt"
+assert "spawn2 sidecar updated" "[ \"\$(cat $SIDECAR)\" = 2.99.0 ]"
 
 # ============================================================
-echo "Case 5: pinned tag missing — fallback to latest once, then guard the loop (#392)"
+echo "Case 5: binary download fails — keep old, runtime honest (#393)"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+write_api api_pinned "2.99.0" yes
+printf '404\n' > "$SCEN/binary.code"
+write_matching_sha 2>/dev/null || printf 'deadbeef\n' > "$SCEN/sha.body"
+run_wrapper
+assert "download-failed warning" "grep -q 'download failed' $TEST_DIR/err.txt"
+assert "old binary runs" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
+assert "runtime = old actual (#393 core)" "grep -q '\"version_at_spawn\":\"2.98.0\"' $RUNTIME"
+
+# ============================================================
+echo "Case 6: pin definitively 404 — fallback to latest ONCE, marker + degraded_pin"
 # ============================================================
 reset_state
 write_plugin_json "2.99.0"
-# no api_pinned_response => pinned lookup fails => PIN_MISS
-write_api_response "$SCEN/api_latest_response" "3.0.0"
+printf '404\n' > "$SCEN/api_pinned.code"
+write_api api_latest "3.0.0" yes
 write_mock_binary_content "MOCK-RUN-300"
 write_matching_sha
 run_wrapper
-assert "run1: latest installed" "grep -q MOCK-RUN-300 $TEST_DIR/out.txt"
-assert "run1: sidecar records latest tag" "[ \"\$(cat $SIDECAR)\" = 3.0.0 ]"
-assert "run1: fallback marker holds the missing pin" "[ \"\$(cat $MARKER)\" = 2.99.0 ]"
-# second spawn, same pin: must NOT re-download (marker guard) — remove scenario
-# files so any curl attempt would fail loudly
-rm -f "$SCEN/api_latest_response" "$SCEN/binary_content" "$SCEN/sha256_content"
+assert "latest installed" "grep -q MOCK-RUN-300 $TEST_DIR/out.txt"
+assert "sidecar = latest tag" "[ \"\$(cat $SIDECAR)\" = 3.0.0 ]"
+assert "miss marker with epoch" "grep -q '^2.99.0 [0-9]* miss' $MARKER"
+assert "degraded_pin = missing pin" "grep -q '\"degraded_pin\":\"2.99.0\"' $RUNTIME"
+# spawn 2: zero network, guard message
+rm -rf "$SCEN"; mkdir -p "$SCEN"
 : > "$TEST_DIR/out.txt"; : > "$TEST_DIR/err.txt"
 run_wrapper
-assert "run2: guard note printed" "grep -q 'unavailable on a previous spawn' $TEST_DIR/err.txt"
-assert "run2: installed binary runs without re-download" "grep -q MOCK-RUN-300 $TEST_DIR/out.txt"
-assert "run2: runtime records installed 3.0.0 (#393)" "grep -q '\"version_at_spawn\":\"3.0.0\"' $RUNTIME"
+assert "spawn2 guard note" "grep -q 'unavailable upstream' $TEST_DIR/err.txt"
+assert "spawn2 runs installed" "grep -q MOCK-RUN-300 $TEST_DIR/out.txt"
+assert "spawn2 degraded_pin persists" "grep -q '\"degraded_pin\":\"2.99.0\"' $RUNTIME"
 
 # ============================================================
-echo "Case 6: pin changed — stale marker ignored and cleared on successful pinned fetch"
+echo "Case 7: pin TRANSIENTLY unreachable + binary installed — keep installed, no marker, converge later (H1)"
 # ============================================================
 reset_state
 seed_installed "OLD-RUN-300" "3.0.0"
-mkdir -p "$TEST_HOME/bin"
-printf '2.99.0\n' > "$MARKER"
-write_plugin_json "3.1.0"
-write_api_response "$SCEN/api_pinned_response" "3.1.0"
-write_mock_binary_content "MOCK-RUN-310"
+write_plugin_json "2.99.0"
+printf '503\n' > "$SCEN/api_pinned.code"
+run_wrapper
+assert "transient disclosed" "grep -q 'transient failure resolving pinned' $TEST_DIR/err.txt"
+assert "keeps installed" "grep -q OLD-RUN-300 $TEST_DIR/out.txt"
+assert "NO marker written" "[ ! -f $MARKER ]"
+assert "degraded_pin set for hook" "grep -q '\"degraded_pin\":\"2.99.0\"' $RUNTIME"
+# spawn 2: pinned healthy again -> converges to the pin (pre-patch parity)
+rm -f "$SCEN/api_pinned.code"
+write_api api_pinned "2.99.0" yes
+write_mock_binary_content "MOCK-RUN-299"
+write_matching_sha
+: > "$TEST_DIR/out.txt"; : > "$TEST_DIR/err.txt"
+run_wrapper
+assert "spawn2 converges to pin (H1 fixed)" "grep -q MOCK-RUN-299 $TEST_DIR/out.txt"
+assert "spawn2 sidecar = pin" "[ \"\$(cat $SIDECAR)\" = 2.99.0 ]"
+assert "spawn2 degraded cleared" "grep -q '\"degraded_pin\":\"\"' $RUNTIME"
+
+# ============================================================
+echo "Case 8: pin transient + NO binary — latest fallback installs, no marker"
+# ============================================================
+reset_state
+write_plugin_json "2.99.0"
+printf '000\n' > "$SCEN/api_pinned.code"
+write_api api_latest "3.0.0" yes
+write_mock_binary_content "MOCK-RUN-300"
 write_matching_sha
 run_wrapper
-assert "new pin downloads despite old marker" "grep -q MOCK-RUN-310 $TEST_DIR/out.txt"
-assert "sidecar records new tag" "[ \"\$(cat $SIDECAR)\" = 3.1.0 ]"
-assert "marker cleared after successful pinned fetch" "[ ! -f $MARKER ]"
+assert "latest installed (must run something)" "grep -q MOCK-RUN-300 $TEST_DIR/out.txt"
+assert "no marker on transient" "[ ! -f $MARKER ]"
+
+# ============================================================
+echo "Case 9: marker TTL expired — retry fires and converges, marker cleared"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-300" "3.0.0"
+write_plugin_json "2.99.0"
+printf '2.99.0 %s miss\n' "$(( $(date +%s) - 172800 ))" > "$MARKER"
+write_api api_pinned "2.99.0" yes
+write_mock_binary_content "MOCK-RUN-299"
+write_matching_sha
+run_wrapper
+assert "TTL-expired retry downloads pin" "grep -q MOCK-RUN-299 $TEST_DIR/out.txt"
+assert "marker cleared on success" "[ ! -f $MARKER ]"
+assert "sidecar = pin" "[ \"\$(cat $SIDECAR)\" = 2.99.0 ]"
+
+# ============================================================
+echo "Case 10: sidecar ABSENT + download fails — runtime says unknown, not the pin"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-XXX" "NONE"
+write_plugin_json "2.99.0"
+write_api api_pinned "2.99.0" yes
+printf '404\n' > "$SCEN/binary.code"
+run_wrapper
+assert "old binary still runs" "grep -q OLD-RUN-XXX $TEST_DIR/out.txt"
+assert "runtime = unknown (not desired)" "grep -q '\"version_at_spawn\":\"unknown\"' $RUNTIME"
+
+# ============================================================
+echo "Case 11: legacy plugin.json without binary_version keeps DESIRED semantics (#73 trap)"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-LEG" "1.0.0"
+write_plugin_json_legacy "9.9.9"
+printf '404\n' > "$SCEN/api_pinned.code"
+printf '404\n' > "$SCEN/api_latest.code"
+run_wrapper
+assert "legacy: old binary runs" "grep -q OLD-RUN-LEG $TEST_DIR/out.txt"
+assert "legacy: runtime = shell version (old semantics)" "grep -q '\"version_at_spawn\":\"9.9.9\"' $RUNTIME"
+
+# ============================================================
+echo "Case 12: hook honors degraded_pin — no kill loop; negative control still kills"
+# ============================================================
+reset_state
+mkdir -p "$TEST_HOME/bin"
+( exec -a CheAppleMailMCP-mock sleep 1000 ) >/dev/null 2>&1 &
+MOCK_PID=$!
+echo "$MOCK_PID" >> "$TEST_DIR/mock_pids"
+sleep 0.2
+write_plugin_json "2.99.0"
+printf '{"pid":%d,"started_at":1,"version_at_spawn":"3.0.0","degraded_pin":"2.99.0"}\n' "$MOCK_PID" > "$RUNTIME"
+HOME="$TEST_HOME" "$FAKE_PLUGIN/hooks/session-start.sh" 2> "$TEST_DIR/err.txt"
+HOOK_EXIT=$?
+assert "hook exits 0" "[ \"\$HOOK_EXIT\" = 0 ]"
+assert "degraded note printed" "grep -q 'degraded mode' $TEST_DIR/err.txt"
+assert "no kill message" "! grep -q 'Killing stale' $TEST_DIR/err.txt"
+assert "PID survives" "ps -p $MOCK_PID -o pid= >/dev/null 2>&1"
+# negative control: same mismatch WITHOUT degraded_pin -> kill fires
+printf '{"pid":%d,"started_at":1,"version_at_spawn":"3.0.0","degraded_pin":""}\n' "$MOCK_PID" > "$RUNTIME"
+: > "$TEST_DIR/err.txt"
+HOME="$TEST_HOME" "$FAKE_PLUGIN/hooks/session-start.sh" 2> "$TEST_DIR/err.txt"
+sleep 0.5
+assert "control: kill fires without degraded_pin" "grep -q 'Killing stale' $TEST_DIR/err.txt"
+assert "control: PID killed" "! ps -p $MOCK_PID -o pid= >/dev/null 2>&1"
 
 # ============================================================
 echo ""
