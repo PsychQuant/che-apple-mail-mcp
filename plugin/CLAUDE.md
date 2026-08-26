@@ -286,21 +286,19 @@ v2.8.0+ 的 `archive-mail` / `view` / `rebuild-threads` **每次跑都會 silent
 | plugin.json `description` | 短敘述（guard 鎖 <1000 字元、必須存在、且不得含任何 semver 樣式 token）|
 | marketplace.json 頂層與 entry 的 `description` | 同上 guard；entry 版本另有等式鎖 |
 | `plugin/README.md` | 用法文件；版本沿革一律指向 plugin/CHANGELOG.md |
+| **本檔（`plugin/CLAUDE.md`）** | 架構與 convention；**不得攜帶版本沿革**（#396 verify：漏列自己，於是自己成了第五個敘事表面）|
 
 Release 時的 bump 清單見 repo 根 `CLAUDE.md`「Publishing a new release」——自 #396 起**加一步**：
 在 `plugin/CHANGELOG.md` 寫該版條目並讓 newest header 對齊新 `version`（不寫 guard 會紅）。此 convention 的
 成因：description-as-changelog 是 aggregator 時代（marketplace 列表只顯示 description）的
 產物，自營 marketplace 後只剩漂移成本 —— 四個表面曾同時各說各話（#396 diagnosis 有對照表）。
 
-## Version History（凍結 — 歷史里程碑；新沿革一律進 CHANGELOG.md，#396）
+## Version History
 
-- **v2.9.0**(2026-05-01)— **Task enforcement**:學 IDD 的 Step 0 Bootstrap Stage Task List 鐵律。`/archive-mail` 開工前強制 `TaskCreate` 10 個 stage tasks,`confirmation-protocol` skill 強制 4 個 phase tasks,完成立即 `TaskUpdate`,靜默 skip = 違規。把 v2.7.0 spec-level confirmation 升級到 enforce-level
-- **v2.8.0**(2026-05-01)— **`.claude/.mail/` namespace**:學 IDD 的 `.claude/.idd/` 收斂 config + state。新增 `/archive-mail-migrate`。archive-mail / view / rebuild-threads 都加 auto-migrate。Backward compatible:legacy paths 自動 detect 並搬遷
-- **v2.7.0**(2026-05-01)— **NSQL confirmation protocol**:加 3 skills + 2 rules + CLAUDE.md。archive-mail 預設套用 4-phase confirmation workflow。Backward compatible:精確 filter 仍可直接執行
-- v2.6.0 — archive-mail YAML frontmatter + .threads.json + view/rebuild commands
-- v2.5.0 — composing tools format 參數
-- v2.4.0 — search expansion + Coverage Audit
-- v2.3.0 — attachment auto-download + 分流
+**已移除（#396 verify）。** 這裡曾保留一份「凍結」的里程碑清單，但凍結只擋得住新增，擋不住
+既有條目日後被修正而與單源分岔——而 CLAUDE.md 會直接成為後續 agent 的工作 context，分岔時
+影響的是 release 操作本身。清單中的每一條（v2.9.0 / v2.8.0 / v2.7.0 / v2.6.0 / v2.5.0 /
+v2.4.0 / v2.3.0）都已存在於 `plugin/CHANGELOG.md`，該檔是 shell 敘事的**唯一** source。
 
 ## MCP Tool 命名 prefix
 

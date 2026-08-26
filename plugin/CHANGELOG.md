@@ -7,12 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > **本檔是 plugin shell 敘事的單一 source（#396 起）。** 每次 shell release 必須在此新增
 > 條目，且最新 released header 必須等於 plugin.json 的 `version`（`ManifestVersionTests`
-> 鎖定）。歷史備註：本檔最初由 `changelog-tools:changelog-init` 自已廢除的
-> description-as-changelog 欄位 bootstrap；2.42.0–2.34.0 的逐版明細未回填（見下方缺口宣告）。
+> 鎖定）。本檔最初由 `changelog-tools:changelog-init` 自已廢除的 description-as-changelog
+> 欄位 bootstrap。
+>
+> **回填缺口宣告（#396；屬於本檔，不屬於任何單一 release）。** 下列版本區間**沒有**逐版
+> 條目——不是「這些版本沒有變更」，而是敘事來源已不存在或未回填。放在檔首而非夾在某個
+> release 之後，是因為夾著會讓解析工具把它算成前一個 release 的內容（#396 verify）。
+>
+> - `[2.42.0]`–`[2.34.0]`：該時代的 shell 敘事只存在於當時 plugin.json description 的歷史
+>   快照與 aggregator commit log（`psychquant-claude-plugins`，
+>   `git log -- plugins/che-apple-mail-mcp`）。主要節點：2.39.0–2.42.0 陸續 ship binary
+>   v2.23.0–v2.25.0（sender-popup live-fix 三部曲、AppleScript timeout guard #297、
+>   draft-creation unhang）。
+> - `[2.26.2]`–`[2.22.0]`：主要內容為帳號解析 completeness sweep（mail#176/#180）、
+>   `export_emails_markdown` 誕生（mail#193）與 truncation envelope（mail#204）、
+>   `projection`/`dedup`（mail#208）、FDA onboarding `--setup` 視窗（mail#213/#214）、
+>   Developer ID signing + notarization（mail#211）。binary 側明細見 repo 根 `CHANGELOG.md`
+>   的 `[2.12.0]`–`[2.17.0]`。
+>
+> 兩段缺口以外的所有版本都有條目。binary 側敘事一律在 repo 根 `CHANGELOG.md`。
 
 ## [Unreleased]
 
-## [2.46.1] - 2026-08-13
+## [2.46.1] - 2026-08-14
 
 ### Changed
 
@@ -47,7 +64,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `binary_version` 2.26.0 → **2.27.0**（correctness batch，每案跨模型 adversarial verify）：
-  匯出碰撞鍵改用 APFS 的 case-folding、寫入改由檔案系統以 exclusive rename 裁決（mail#342）；
+  匯出碰撞鍵改用 APFS 的 case-folding、寫入改由檔案系統以 exclusive rename 裁決而非事前預測
+  ——**volume 不支援時降級 linkat → 非原子的 check-then-rename**（mail#342，此限制在 #396 的
+  第一版回填中被壓縮掉，語意反而變成無條件保證）；
   mailbox filter 逐 path component 比對、`INBOX` 只在路徑根折疊、查無結果具名 near-miss
   （mail#344）；附件寫入驗證跟隨 symlink 並要求 regular file、typed error 接上
   `download_if_missing` 重試、新增 `allow_empty`（mail#347）；26 個 stderr writer 收斂到單一
@@ -84,13 +103,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **archive-mail `last_updated` 計算對 RFC822 entry date 失效**（[mail#275](https://github.com/PsychQuant/che-apple-mail-mcp/issues/275)）。Step 6 / Step 8.5 的 max(date) 原以 `date[:10]` 字典序比較，只涵蓋 ISO 兩變體 — RFC822（`Thu, 25 Jun …`）切片後星期縮寫字典序恆大於數字，任一 RFC822 entry 都會贏過全部 ISO entry，`last_updated` 被寫成 `Wed, 01 Ju` 類無效值（並汙染 `dedup_strategy: last_archived` 的增量搜尋 date_from）。兩處計算改為 robust `to_ymd()`（ISO 快篩 + `email.utils.parsedate_to_datetime`，parse 失敗排除於 max 並在 reconcile 摘要揭露）；上游 enforcement：Step 5.1 明文 RFC822 Date header 必先轉 ISO 再寫 frontmatter，Step 8.5 Phase 1 孤兒補寫時將非 ISO date 正規化（歷史汙染的收斂點）。
-
-> **回填缺口宣告（#396 verify）**：`[2.42.0]`–`[2.34.0]` 的逐版明細未回填 —— 該時代的 shell
-> 敘事只存在於當時 plugin.json description 的歷史快照與 aggregator commit log
-> （`psychquant-claude-plugins`，`git log -- plugins/che-apple-mail-mcp`）；binary 側內容在
-> repo 根 `CHANGELOG.md` 的對應版本都有家。主要節點：2.39.0–2.42.0 陸續 ship binary
-> v2.23.0–v2.25.0（sender-popup live-fix 三部曲、AppleScript timeout guard #297、draft-creation
-> unhang）。以下 `[2.33.0]`–`[2.21.0]` 為自 #396 所刪敘事回填的 compact 條目。
 
 ## [2.33.0] - 2026-07-19
 
@@ -147,12 +159,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   denylist + TOCTOU race-free 寫入（mail#197/#200）、dedup-aware 歸檔原語（mail#177）、
   `whose content contains` O(corpus) 掃描 guard（mail#221）。
 
-> **回填缺口宣告（#396 verify）**：`[2.26.2]`–`[2.22.0]` 未逐版回填 —— 主要內容：帳號解析
-> completeness sweep（mail#176/#180）、`export_emails_markdown` 誕生（mail#193）與 truncation
-> envelope（mail#204）、`projection`/`dedup`（mail#208）、FDA onboarding `--setup` 視窗
-> （mail#213/#214）、Developer ID signing + notarization（mail#211）。binary 側明細見 root
-> `CHANGELOG.md` 的 [2.12.0]–[2.17.0]。
-
 ## [2.21.0] - 2026-06-12
 
 ### Changed
@@ -160,6 +166,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mailbox 路徑經 container chain 於 `resolveMailboxRef` chokepoint 解析（~14 寫入工具受惠）；
   `list_drafts` 移除硬編 `Drafts` 改 unified-children 反查；`save_attachment` email→UUID 帳號
   正規化 + per-object-class actionable hints。測試 +36。
+
+## [2.20.1] - 2026-05-20
+
+### Changed
+
+- `binary_version` → **2.10.0**（11-issue marathon）：closes mail#126, #128, #129, #130,
+  #131, #133, #134, #135, #137, #138, #139。
+  （回填自 #396 前的 plugin.json description —— #396 verify 揭露此版本連同其 binary pin
+  被刪除且無缺口宣告，而它夾在兩個相鄰 header 之間，讀起來像從未存在。）
+
+## [2.19.7] - 2026-05-18
+
+### Fixed
+
+- `binary_version` → **2.9.0**（MCP-tool layer bug-fix cluster）：mail#99、#101、
+  #104 PR-A、#106。
+  （回填自 #396 前的 README Version History 與 plugin.json description —— 同上。）
 
 ## [2.20.0] - 2026-05-18
 
@@ -413,3 +436,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Apple Mail MCP server — 44+ tools, IDD-style task enforcement + NSQL confirmation + .claude/.mail/ namespace (v2.9.0)。v2.9.0: archive-mail 與 confirmation-protocol skill Step 0 強制 TaskCreate bootstrap,靜默 skip = 違規。疊加 v2.8.0 namespace、v2.7.0 NSQL confirmation、v2.6.0 thread index、v2.5.0 composing format、v2.4.0 搜尋擴展。
+
+## [2.6.0] - 2026-04-30
+
+### Added
+
+- archive-mail YAML frontmatter + `.threads.json` thread index + `/archive-mail-view`
+  與 `/archive-mail-rebuild-threads` 兩個 command。
+
+## [2.5.0] - 2026-04-29
+
+### Added
+
+- composing tools 的 `format` 參數。
+
+## [2.4.0] - 2026-04-28
+
+### Added
+
+- search expansion + Coverage Audit。
+
+## [2.3.0] - 2026-04-27
+
+### Added
+
+- attachment auto-download + 依副檔名分流。

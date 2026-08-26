@@ -80,11 +80,17 @@ final class ManifestVersionTests: XCTestCase {
 
         func check(_ desc: String, at label: String) {
             inspected += 1
-            XCTAssertFalse(desc.trimmingCharacters(in: .whitespaces).isEmpty,
+            XCTAssertFalse(desc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                 "\(label): description is empty")
             XCTAssertLessThan(desc.count, 1000,
                 "\(label): description is \(desc.count) chars — narrative belongs in plugin/CHANGELOG.md (#396)")
-            XCTAssertNil(desc.range(of: #"v?[0-9]+\.[0-9]+\.[0-9]+"#, options: .regularExpression),
+            // Token-bounded so an IP address is not mistaken for a version.
+            // The lookahead is (?!\.?[0-9A-Za-z]), NOT (?![0-9A-Za-z.]): the
+            // latter let a version at the end of a sentence ("ships v2.28.0.")
+            // escape the ban, because the trailing period satisfied it. Found
+            // by mutation-testing this guard.
+            XCTAssertNil(desc.range(of: #"(?<![0-9A-Za-z.])v?[0-9]+\.[0-9]+\.[0-9]+(?!\.?[0-9A-Za-z])"#,
+                                    options: .regularExpression),
                 "\(label): description contains a semver-shaped token — any version claim here "
                 + "starts lying the release after it was written (#396)")
         }
@@ -98,12 +104,21 @@ final class ManifestVersionTests: XCTestCase {
         let mkt = try XCTUnwrap(try JSONSerialization.jsonObject(with: mktData) as? [String: Any])
         check(try XCTUnwrap(mkt["description"] as? String, "marketplace.json must declare a top-level description"),
               at: "marketplace.json (top-level)")
+        // By NAME, not `plugins.first`: the moment this manifest lists a second
+        // plugin, position stops identifying anything and the guard silently
+        // moves to whichever entry happens to be first (#396 verify).
+        let pluginName = try XCTUnwrap(pj["name"] as? String)
         let plugins = try XCTUnwrap(mkt["plugins"] as? [[String: Any]])
-        let entry = try XCTUnwrap(plugins.first)
+        let entry = try XCTUnwrap(plugins.first { ($0["name"] as? String) == pluginName },
+            "marketplace.json lists no entry named '\(pluginName)'")
         check(try XCTUnwrap(entry["description"] as? String, "marketplace entry must declare a description"),
               at: "marketplace.json (entry)")
 
-        XCTAssertEqual(inspected, 3, "all three description surfaces must be inspected")
+        // Not `== 3`, which would be true however few surfaces existed: assert
+        // each named surface was reached.
+        XCTAssertEqual(inspected, 3,
+            "expected plugin.json + marketplace top-level + marketplace entry '\(pluginName)' "
+            + "to be inspected; got \(inspected)")
     }
 
     func testPluginChangelogNewestMatchesPluginVersion() throws {
@@ -125,5 +140,63 @@ final class ManifestVersionTests: XCTestCase {
             "plugin/CHANGELOG.md newest released header ('\(probe.out)') must match plugin.json "
             + "version ('\(shellVersion)') — the single narrative source needs an owner (#396); "
             + "write the release entry alongside the version bump.")
+
+        // Owning the header string alone is not owning the narrative: an empty
+        // `## [x.y.z]` section satisfies the equality above while saying
+        // nothing (#396 verify). Require prose under the newest header.
+        let changelog = try String(
+            contentsOf: repoRoot().appendingPathComponent("plugin/CHANGELOG.md"), encoding: .utf8)
+        let lines = changelog.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard let headerIndex = lines.firstIndex(where: { $0.hasPrefix("## [\(probe.out)]") }) else {
+            XCTFail("could not locate the '## [\(probe.out)]' section body")
+            return
+        }
+        var body: [String] = []
+        for line in lines[(headerIndex + 1)...] {
+            if line.hasPrefix("## ") { break }
+            body.append(line)
+        }
+        let substantive = body.filter {
+            let s = $0.trimmingCharacters(in: .whitespaces)
+            return !s.isEmpty && !s.hasPrefix("###")
+        }
+        XCTAssertFalse(substantive.isEmpty,
+            "plugin/CHANGELOG.md's newest section '[\(probe.out)]' has a header and no content — "
+            + "the guard owns the version string, but the point is owning the narrative (#396).")
+    }
+
+    func testBinaryPinNamesAShippedBinary() throws {
+        // #396 verify: `binary_version` is the field that decides which binary
+        // users actually download, and NOTHING owned it. This PR deletes the
+        // surfaces that used to cross-check it by eye (README's "shell vX +
+        // binary vY" pairs, and the description narrative), so without a
+        // mechanical check the redundancy is removed and nothing replaces it.
+        //
+        // The repo has already paid for this once — plugin/CHANGELOG [2.44.1]
+        // records v2.44.0 shipping an SOP documented against binary v2.26.0+
+        // while plugin.json still pinned 2.25.0 and marketplace.json 2.24.0.
+        // Users ran a binary without the fix; 24 self-sent messages were
+        // mislabelled. The failure was silent.
+        //
+        // A pin can never legitimately name a binary that was never released,
+        // so pin it to the ROOT changelog — the binary's own single source.
+        let pjData = try Data(contentsOf: repoRoot().appendingPathComponent("plugin/.claude-plugin/plugin.json"))
+        let pj = try XCTUnwrap(try JSONSerialization.jsonObject(with: pjData) as? [String: Any])
+        let binaryPin = try XCTUnwrap(pj["binary_version"] as? String,
+            "plugin.json must declare binary_version — the wrapper downloads whatever it names")
+
+        let rootChangelog = try String(
+            contentsOf: repoRoot().appendingPathComponent("CHANGELOG.md"), encoding: .utf8)
+        let released = rootChangelog
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .compactMap { line -> String? in
+                guard line.hasPrefix("## ["), let close = line.firstIndex(of: "]") else { return nil }
+                let v = String(line[line.index(line.startIndex, offsetBy: 4)..<close])
+                return v == "Unreleased" ? nil : v
+            }
+        XCTAssertTrue(released.contains(binaryPin),
+            "plugin.json pins binary_version '\(binaryPin)', which has no released section in the "
+            + "root CHANGELOG.md — the wrapper would download a tag that was never shipped, or the "
+            + "pin is a typo. Released binary versions: \(released.prefix(5).joined(separator: ", "))…")
     }
 }
