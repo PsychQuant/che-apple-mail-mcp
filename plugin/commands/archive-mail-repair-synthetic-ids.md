@@ -1,3 +1,9 @@
+---
+description: 修復歸檔 markdown 中的 synthetic message_id 佔位符（一次性，mail#319）
+argument-hint: "<archive_target 或 output_dir>"
+allowed-tools: mcp__plugin_che-apple-mail-mcp_mail__search_emails, mcp__plugin_che-apple-mail-mcp_mail__get_email_headers, Read, Write, Glob
+---
+
 # /archive-mail-repair-synthetic-ids — 修復 synthetic message_id 佔位符（一次性，mail#319）
 
 掃描歸檔目錄中 `message_id` 匹配 `^synthetic:` 的 markdown 檔，嘗試從 Mail 重新解析**真實** RFC 5322 Message-ID 並就地修復 frontmatter + `email_index.json`。**保守優先：寧可留 unparseable 交人工，絕不錯誤合併兩封不同的信。**

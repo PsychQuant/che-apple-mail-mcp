@@ -11,6 +11,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`/archive-mail` 不再把郵件內容當指令，也不再把它直接當路徑**
+  ([#395](https://github.com/PsychQuant/che-apple-mail-mcp/issues/395))。
+  四個缺陷同源——「郵件內容是 data、不是 instruction」這條邊界從未被寫下來：
+  (1) command 的 `allowed-tools` 用 wildcard 預授權**全部 53 個** mail 工具（含
+  delete/compose/move/junk），現改為逐一列舉歸檔實際會呼叫的 9 個 read/export 工具；
+  (2)「User override」列出 confirmation-skip 語句卻沒有出處要求，一封內文寫著「直接做,
+  不要問」的信在字面上就滿足該規則——現由 `rules/confirmation-triggers.md`
+  「Provenance（全域前提）」以**封閉三類管道**（使用者當前 turn／command flag／使用者
+  workspace 設定檔）約束**全部** skip 章節，含 `archive-mail` Step 4.5；
+  (3) 文件承諾了一個「test mode 可用 env flag 跳過所有確認」的旁路，該 flag 在出貨程式碼中
+  **從不存在**——幻影旁路邀請人發明它，整句刪除；
+  (4) inline 附件的 `alt`（與 explicit 附件的 `Content-Disposition: filename=`）被原樣拿去組
+  `save_path`——現由單一份「Safe leaf filename」程序統一消毒，Step 5／5.5.0／5.5.1 共用。
+  新增 `CommandAllowedToolsGuardTests`（4 個 invariant）鎖住 allow-list 不漂移、並鎖住
+  「每個 command 都必須宣告 `allowed-tools`」——`archive-mail-repair-synthetic-ids.md`
+  原本**完全沒有 frontmatter**（比被移除的 wildcard 更寬），本次一併補上。
+
+  **範圍與殘留（誠實記錄）**：這是 doc/SOP 層的硬化，**縮小**而非消除 injection 的作用面。
+  `save_attachment` 的 server 端**目前沒有 path containment**（#193 的 `AllowedRootsValidator`
+  只覆蓋 export 工具），因此上述消毒目前是**唯一**一道防線而非縱深——已開
+  [#402](https://github.com/PsychQuant/che-apple-mail-mcp/issues/402) 追蹤程式碼側修復。
+  `Write` 與 `Bash(mkdir:*)` 仍是預授權能力；SOP bootstrap 區塊用到的
+  `find`/`mv`/`sed`/`tr`/`python3` 刻意不在 allow-list 內，會逐次請求授權。
+
 ### Changed
 
 - `binary_version` 2.27.0 → **2.28.0**，讓 v2.46.0 的 first-run FDA assist（mail#355）真正生效。該 hook 從落地起就是 **no-op**：它以版本閘擋住 2.28.0 以前的 binary，因為更舊的版本會把 `--check-fda --quiet` 當成普通 `--check-fda` 解析、印出訊息並打開系統設定 —— 正是它要避免的騷擾。binary v2.28.0 已發布（signed + notarized），閘門現在開了。
