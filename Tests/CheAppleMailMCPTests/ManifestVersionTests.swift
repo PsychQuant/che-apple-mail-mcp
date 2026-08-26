@@ -165,6 +165,75 @@ final class ManifestVersionTests: XCTestCase {
             + "the guard owns the version string, but the point is owning the narrative (#396).")
     }
 
+    func testPluginChangelogIsOrderedAndComplete() throws {
+        // #396 verify round 3. The round-2 backfill shipped three defects that
+        // NOTHING in this suite could see, because every guard here checked the
+        // newest entry only:
+        //   1. `[2.19.7]` was inserted ABOVE `[2.20.0]` — the version ordering
+        //      silently broke;
+        //   2. nine dates were an invented one-per-day descending sequence
+        //      rather than looked-up values (2.29.0–2.33.0 all shipped on the
+        //      SAME day, ~8 hours apart);
+        //   3. `2.11.0` / `2.8.0` / `2.7.0` / `2.5.1` had no entry AND sat
+        //      outside both declared gaps, while the file carried a sentence
+        //      certifying that no such version existed.
+        //
+        // Dates cannot be re-derived offline — they live in another repo's
+        // commit history. What CAN be enforced locally is the structure that
+        // makes a fabricated or misfiled entry visible: strictly descending
+        // versions, non-increasing dates, and no skipped minor. All three were
+        // violated by the round-2 file and all three are cheap to check.
+        let text = try String(
+            contentsOf: repoRoot().appendingPathComponent("plugin/CHANGELOG.md"), encoding: .utf8)
+
+        let re = try NSRegularExpression(
+            pattern: #"^## \[(\d+)\.(\d+)\.(\d+)\] - (\d{4}-\d{2}-\d{2})$"#,
+            options: [.anchorsMatchLines])
+        var entries: [(v: [Int], date: String, raw: String)] = []
+        let range = NSRange(text.startIndex..., in: text)
+        re.enumerateMatches(in: text, range: range) { match, _, _ in
+            guard let match,
+                  let r1 = Range(match.range(at: 1), in: text),
+                  let r2 = Range(match.range(at: 2), in: text),
+                  let r3 = Range(match.range(at: 3), in: text),
+                  let r4 = Range(match.range(at: 4), in: text) else { return }
+            let v = [Int(text[r1])!, Int(text[r2])!, Int(text[r3])!]
+            entries.append((v, String(text[r4]), "\(v[0]).\(v[1]).\(v[2])"))
+        }
+        XCTAssertGreaterThan(entries.count, 40,
+            "expected the full release history in plugin/CHANGELOG.md, found \(entries.count) entries")
+
+        // 1. strictly descending versions
+        for i in 0..<(entries.count - 1) {
+            let a = entries[i], b = entries[i + 1]
+            XCTAssertTrue(a.v.lexicographicallyPrecedes(b.v) == false && a.v != b.v,
+                "plugin/CHANGELOG.md: [\(a.raw)] appears before [\(b.raw)] — release headers "
+                + "must strictly descend. An entry inserted at the wrong place reads as a "
+                + "different release history than the one that happened (#396 round 3).")
+        }
+
+        // 2. non-increasing dates (an older release cannot post-date a newer one)
+        for i in 0..<(entries.count - 1) {
+            let a = entries[i], b = entries[i + 1]
+            XCTAssertTrue(a.date >= b.date,
+                "plugin/CHANGELOG.md: [\(a.raw)] is dated \(a.date) but the older [\(b.raw)] "
+                + "is dated \(b.date) — dates must not increase going down the file.")
+        }
+
+        // 3. no skipped minor between the oldest and newest entry. The file
+        //    claims completeness from its floor upward, so a hole is either a
+        //    missing entry or an unpublished version that must be named here.
+        let knownAbsentMinors: Set<Int> = []   // none as of 2.46.1; add with a reason
+        let minors = Set(entries.map { $0.v[1] })
+        let lo = entries.map { $0.v[1] }.min()!, hi = entries.map { $0.v[1] }.max()!
+        for minor in lo...hi where !minors.contains(minor) && !knownAbsentMinors.contains(minor) {
+            XCTFail("plugin/CHANGELOG.md skips 2.\(minor).x with no entry and no declared "
+                + "absence — either backfill it (version/date/binary pin are recoverable from "
+                + "the aggregator's plugin.json history) or add it to knownAbsentMinors with a "
+                + "reason (#396 round 3).")
+        }
+    }
+
     func testBinaryPinNamesAShippedBinary() throws {
         // #396 verify: `binary_version` is the field that decides which binary
         // users actually download, and NOTHING owned it. This PR deletes the

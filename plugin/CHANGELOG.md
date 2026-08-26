@@ -10,26 +10,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > 鎖定）。本檔最初由 `changelog-tools:changelog-init` 自已廢除的 description-as-changelog
 > 欄位 bootstrap。
 >
-> **回填缺口宣告（#396；屬於本檔，不屬於任何單一 release）。** 下列版本區間**沒有**逐版
-> 條目——不是「這些版本沒有變更」，而是敘事來源已不存在或未回填。放在檔首而非夾在某個
-> release 之後，是因為夾著會讓解析工具把它算成前一個 release 的內容（#396 verify）。
+> **完整性（#396 verify round 3 起）。** 自 `[2.3.0]` 起的**每一個** shell 版本都有條目，
+> 且每個條目的日期與 binary pin 都取自 aggregator（`psychquant-claude-plugins`）
+> `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 該版首次出現的 commit —— 不是推估、
+> 不是等距編排。前一版曾以「兩段缺口宣告」處理 `[2.42.0]`–`[2.34.0]` 與 `[2.26.2]`–`[2.22.0]`，
+> 並附一句「兩段缺口以外的所有版本都有條目」；**那句話當時是假的**（`2.11.0` / `2.8.0` /
+> `2.7.0` / `2.5.1` 四個版本既無條目也不在缺口內），而缺口本身也非必要 —— 版本、日期與
+> binary pin 全部可從 aggregator 機械復原。現已全數補齊，缺口宣告隨之移除。
 >
-> - `[2.42.0]`–`[2.34.0]`：該時代的 shell 敘事只存在於當時 plugin.json description 的歷史
->   快照與 aggregator commit log（`psychquant-claude-plugins`，
->   `git log -- plugins/che-apple-mail-mcp`）。主要節點：2.39.0–2.42.0 陸續 ship binary
->   v2.23.0–v2.25.0（sender-popup live-fix 三部曲、AppleScript timeout guard #297、
->   draft-creation unhang）。
-> - `[2.26.2]`–`[2.22.0]`：主要內容為帳號解析 completeness sweep（mail#176/#180）、
->   `export_emails_markdown` 誕生（mail#193）與 truncation envelope（mail#204）、
->   `projection`/`dedup`（mail#208）、FDA onboarding `--setup` 視窗（mail#213/#214）、
->   Developer ID signing + notarization（mail#211）。binary 側明細見 repo 根 `CHANGELOG.md`
->   的 `[2.12.0]`–`[2.17.0]`。
+> 標有「機械重建」引言的條目，其**版本／日期／binary pin 為一手事實**，逐項散文敘事則已
+> 隨舊 description 消失 —— 該引言正是為了不讓讀者把前者的可靠度誤讀到後者身上。
 >
-> 兩段缺口以外的所有版本都有條目。binary 側敘事一律在 repo 根 `CHANGELOG.md`。
+> **地板**：本檔最舊條目為 `[2.3.0]`（2026-04-17）。更早的 `2.1.1` / `2.0.1` / `2.0.0` /
+> `1.1.0` / `0.8.0` 存在於 aggregator 歷史但不在本檔範圍內。
 
 ## [Unreleased]
 
+
 ## [2.46.1] - 2026-08-14
+
 
 ### Changed
 
@@ -38,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   同版本一併到位的 binary 修復：QP 內文解碼（mail#339，19/28 封信曾寫成不可讀）、`list_attachments` 對自寄信件回 `[]` 的靜默漏抓（mail#365）、`.mcpb` 改由簽章 universal binary 打包（mail#323 —— 在此之前 Desktop 安裝拿到的是 ad-hoc binary，**結構上無法**被授予 Full Disk Access）。
 
 ## [2.46.0] - 2026-08-13
+
 
 ### Added
 
@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.45.0] - 2026-08-13
 
+
 ### Added
 
 - **Coverage Audit 新增 8d 方向覆蓋（direction balance）** —— 稽核查得出「已知的信有沒有完整落地」，卻查不出「整批只有一半的對話」（mail#350）。實證：四個學會的歸檔庫 **266 封全部 `direction: received`、零寄件**，8a/8b 每次報綠燈；對其中一個補跑 Step 3 recipe (2) 的 Sent-scoped recipient 搜尋，撈出 **10 封從未歸檔的寄件**，最早回溯 2024-07 —— 「來回協商」的 thread 裡只剩對方講的話。
@@ -60,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   8d 純讀磁碟 frontmatter，封閉列舉三條判定：零寄件且 ≥10 封 → 警告；同上且 corpus 內有回覆串證據（`in_reply_to` 非空或 `Re:`/`Fwd:` 主旨）→ 升級為強訊號；有 `direction_inferred: true` 的封數 → 註明該數不可當方向統計的可信基礎（mail#351）。**單向本身可以是正確的**（純電子報／公告訂閱），所以門檻以下與 `sent > 0` 都明確不發話，且三條都只報告、不阻擋 run。警告一併輸出可直接複製的補救指令。
 
 ## [2.44.2] - 2026-08-10
+
 
 ### Changed
 
@@ -76,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.44.1] - 2026-08-05
 
+
 ### Fixed
 - **`binary_version` pin 與 v2.44.0 自身的 CHANGELOG 相矛盾** —— v2.44.0 的 archive-mail Step 5.0 條目明載該 SOP 需要 **binary v2.26.0+**（伺服器端依 sender identity 逐信判定 `direction`，mail#316），但同一個 release 的 `plugin.json` 仍 pin `binary_version: 2.25.0`，`marketplace.json` 更落後到 `2.24.0`（三方不一致）。wrapper 依 pin 下載，使用者實際跑的是**沒有該修復**的 binary：照新 SOP 走（整批送、不傳 `mailbox`）會讓整批 `direction` 全標成 `received` —— 2026-08-05 一次 51 封的實跑中 24 封自寄信被誤標，需事後逐檔更正。失效是安靜的：manifest `errors: 0`、無 `direction_inferred` 訊號（那是 v2.26.0 才有的負向欄位），SOP 的版本邊界判準因此也無從觸發。
 
@@ -85,12 +88,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.44.0] - 2026-08-02
 
+
 ### Fixed
 - **archive-mail: Step 5.0 no longer partitions the corpus into direction batches — the server derives `direction` per email from sender identity** (mail#316, binary v2.26.0+). The old discipline derived direction from "which mailbox the message lives in" (a whole-batch `mailbox`-substring label plus a client-side two-batch split), which is structurally wrong for Gmail: sent mail lives in `[Gmail]/全部郵件`, a bidirectional superset that carries no direction information — self-sent messages archived from All Mail were persisted as `direction: received`. Step 5.0 is now a single whole-corpus call (no `mailbox` param, no partition, no `mailbox: "Sent"` literal trick); the SOP documents the `direction_inferred: true` fail-open disclosure (EWS-only setups) with a Step 7 reporting rule and a version boundary for pre-v2.26.0 binaries. Step 5.1's frontmatter spec gains the explicit sender-identity rule (sender ∈ union of all accounts' own addresses → `sent`), replacing the removed — and false — claim that the per-email path could recover direction from the message's own mailbox; the mail#261 All-Mail warning now names the direction consequence too.
 - **archive-mail: synthetic `message_id` placeholders are now forbidden, detected, and repairable** (mail#319). The frontmatter spec's `message_id` was the only frozen field with no missing-value rule, and a past session improvised `synthetic:<timestamp>` placeholders — whose run-time timestamps made every re-run see the same email as new (84 placeholder files, 12 silent duplicates in one run, every gate green). Now: missing Message-ID → refetch via `get_email_headers`, else `message_id: ""` + `message_id_missing: true` (surfaces via Step 8.5's unparseable branch); placeholders explicitly forbidden; Step 8.5 Phase 1 gains a `synthetic_placeholder` classification (own report line, never folded into verified/repaired); all dates must carry a timezone offset (naive-local-as-UTC was 8h off in the same cohort). New one-off `/archive-mail-repair-synthetic-ids` command re-keys existing placeholder files conservatively (exact-match ladder, never merges on ambiguity, quarantines duplicates instead of deleting).
 - **archive-mail: Step 8a attachment audit is content-aware** (mail#314). The audit compared file COUNTS only, so 0-byte attachments passed as 100% complete for ~11 weeks. 8a.1/8a.2 now stat every file and flag `0-byte attachment (download appears to have failed silently)` alongside the existing count warnings; the 8c report lists them; a one-off `find … -size 0` remediation sweep is documented. Pairs with the server-side fix (mail PR #330): `save_attachment` now stat-verifies its own successes and reports `(N bytes)`.
 
 ## [2.43.0] - 2026-08-01
+
 
 ### Added
 - Imported `rules/compose-wrapper-free.md` from the server repo (canonical copy lives there): the formal-mail cite-block discipline — wrapper-free eligibility for `compose_email`/`create_draft`, the mandatory `[legacy path — …]` disclosure, custom-sender / display-name-recipient / attachment recipes, and the TCC fallback ladder (`open_mailto` on -1743, never a silent wrapped body). Plugin users previously got none of this guidance.
@@ -104,35 +109,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **archive-mail `last_updated` 計算對 RFC822 entry date 失效**（[mail#275](https://github.com/PsychQuant/che-apple-mail-mcp/issues/275)）。Step 6 / Step 8.5 的 max(date) 原以 `date[:10]` 字典序比較，只涵蓋 ISO 兩變體 — RFC822（`Thu, 25 Jun …`）切片後星期縮寫字典序恆大於數字，任一 RFC822 entry 都會贏過全部 ISO entry，`last_updated` 被寫成 `Wed, 01 Ju` 類無效值（並汙染 `dedup_strategy: last_archived` 的增量搜尋 date_from）。兩處計算改為 robust `to_ymd()`（ISO 快篩 + `email.utils.parsedate_to_datetime`，parse 失敗排除於 max 並在 reconcile 摘要揭露）；上游 enforcement：Step 5.1 明文 RFC822 Date header 必先轉 ISO 再寫 frontmatter，Step 8.5 Phase 1 孤兒補寫時將非 ISO date 正規化（歷史汙染的收斂點）。
 
-## [2.33.0] - 2026-07-19
+## [2.42.0] - 2026-07-27
+
+### Changed
+
+- shell v2.42.0 —— `binary_version` **2.25.0**。sender-popup live-fix 三部曲、AppleScript timeout guard（mail#297）、draft-creation unhang 這一段時期的 shell 迭代。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `1b9ae3c` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.41.0] - 2026-07-26
+
+### Changed
+
+- shell v2.41.0 —— `binary_version` **2.24.0**。同上一段時期的 shell 迭代（sender-popup / timeout guard 家族）。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `3b81495` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.40.0] - 2026-07-22
+
+### Changed
+
+- shell v2.40.0 —— `binary_version` **2.23.1**。同上一段時期的 shell 迭代。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `2c7d604` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.39.0] - 2026-07-22
+
+### Changed
+
+- shell v2.39.0 —— `binary_version` **2.23.0**。同上一段時期的 shell 迭代。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `f3ef828` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.38.0] - 2026-07-22
+
+### Changed
+
+- shell v2.38.0 —— `binary_version` **2.22.0**。`distributed_archives` 支援 capture-then-distribute 工作流（mail#285）。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `27a4e34` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.37.0] - 2026-07-20
+
+### Changed
+
+- shell v2.37.0 —— `binary_version` **2.22.0**。同一段時期的 shell 迭代。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `e9c7ff3` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.36.0] - 2026-07-19
+
+### Changed
+
+- shell v2.36.0 —— `binary_version` **2.21.0**。Date-header RFC822 正規化紀律（mail#275）。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `e6bcdfa` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.35.0] - 2026-07-16
+
+### Changed
+
+- shell v2.35.0 —— `binary_version` **2.21.0**。同一段時期的 shell 迭代。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `a6275ef` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.34.0] - 2026-07-16
+
+### Changed
+
+- shell v2.34.0 —— `binary_version` **2.20.0**。同一段時期的 shell 迭代。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `00a9f4f` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.33.0] - 2026-07-15
+
 
 ### Added
 - （shell-only，binary 停留 v2.19.0）archive-mail Step 8.5 manifest-driven reconcile + atomic
   index write（plugins#110，疊在 plugins#107 上）：run 尾端的 Index Reconcile Gate 以匯出
   manifest 機械填入本 run 的 batch 寫入，`${INDEX_FILE}` 改 temp+rename 原子寫。
 
-## [2.32.0] - 2026-07-18
+## [2.32.0] - 2026-07-15
+
 
 ### Changed
 - （shell-only）archive-mail Step 5 批次匯出遷移（plugins#107 / mail#232 SOP 側落地）：Step 5.0
   以 server-side `batch_export_emails_markdown` 為主路徑（≥5 封），混合 corpus 依各 id 自身
   mailbox 分 direction 批；`opts.filenames` 依 SOP 檔名規則傳入。
 
-## [2.31.0] - 2026-07-18
+## [2.31.0] - 2026-07-15
+
 
 ### Fixed
 - （shell-only）archive-mail Step 8b 稽核分母硬化（plugins#112）：thread-completeness 分母改
   `projection:summary + dedup:logical` 並套 Step 3 mailbox drop-set，Gmail 雙存 row 不再虛報
   「missing siblings」。
 
-## [2.30.0] - 2026-07-17
+## [2.30.0] - 2026-07-15
+
 
 ### Changed
 - （shell-only）archive-mail Step 3 搜尋機械化（plugins#109）：sent-mail 偵測改 scoped
   `search_emails`（per-account Sent 實名 + `field: recipient`），received/subject 搜尋強制
   Drafts/Trash post-filter。
 
-## [2.29.0] - 2026-07-16
+## [2.29.0] - 2026-07-15
+
 
 ### Added
 - （shell-only）archive-mail SOP 硬化（mail#261）：強制 run 尾端 Index Reconcile Gate（孤兒
@@ -140,6 +222,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   紀律（Sent 匣偵測寄件、排除 drafts、Message-ID dedup）。
 
 ## [2.28.0] - 2026-07-15
+
 
 ### Changed
 - `binary_version` → **2.19.0**（10-issue batch，每 PR 6-AI verify；套件 882 tests）：
@@ -151,6 +234,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.27.0] - 2026-07-14
 
+
 ### Changed
 - `binary_version` → **2.18.0**（14-issue 大版；套件 815 tests、工具 51）：
   `batch_export_emails_markdown` 成為 canonical 主名（mail#233，修 #232 discoverability 事故）、
@@ -159,7 +243,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   denylist + TOCTOU race-free 寫入（mail#197/#200）、dedup-aware 歸檔原語（mail#177）、
   `whose content contains` O(corpus) 掃描 guard（mail#221）。
 
+## [2.26.2] - 2026-07-03
+
+### Changed
+
+- shell v2.26.2 —— `binary_version` **2.17.0**。帳號解析 completeness sweep 一段（mail#176/#180）家族的收尾。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `9870e2e` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.26.1] - 2026-06-24
+
+### Changed
+
+- shell v2.26.1 —— `binary_version` **2.17.0**。同一段時期的 shell 迭代。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `187eada` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.26.0] - 2026-06-19
+
+### Changed
+
+- shell v2.26.0 —— `binary_version` **2.16.0**。`projection` / `dedup` 投影與去重（mail#208）。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `bd1693a` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.25.0] - 2026-06-16
+
+### Changed
+
+- shell v2.25.0 —— `binary_version` **2.15.0**。FDA onboarding `--setup` 視窗（mail#213/#214）、Developer ID signing + notarization（mail#211）落地期。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `5182904` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.24.0] - 2026-06-16
+
+### Changed
+
+- shell v2.24.0 —— `binary_version` **2.14.0**。`export_emails_markdown` 的 truncation envelope（mail#204）。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `afe082c` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.23.0] - 2026-06-16
+
+### Changed
+
+- shell v2.23.0 —— `binary_version` **2.13.0**。`export_emails_markdown` 誕生（mail#193）。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `a7efe79` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.22.0] - 2026-06-13
+
+### Changed
+
+- shell v2.22.0 —— `binary_version` **2.12.0**。帳號解析 completeness sweep（mail#176/#180）。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `07e8e39` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
 ## [2.21.0] - 2026-06-12
+
 
 ### Changed
 - `binary_version` → **2.11.0**（Gmail mailbox-resolution pair，mail#173/#174）：巢狀 Gmail
@@ -169,6 +310,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.20.1] - 2026-05-20
 
+
 ### Changed
 
 - `binary_version` → **2.10.0**（11-issue marathon）：closes mail#126, #128, #129, #130,
@@ -176,15 +318,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   （回填自 #396 前的 plugin.json description —— #396 verify 揭露此版本連同其 binary pin
   被刪除且無缺口宣告，而它夾在兩個相鄰 header 之間，讀起來像從未存在。）
 
-## [2.19.7] - 2026-05-18
-
-### Fixed
-
-- `binary_version` → **2.9.0**（MCP-tool layer bug-fix cluster）：mail#99、#101、
-  #104 PR-A、#106。
-  （回填自 #396 前的 README Version History 與 plugin.json description —— 同上。）
-
 ## [2.20.0] - 2026-05-18
+
 
 ### Added
 - **#76 + #84 Layer 2 corpus refinement** — six opt-in config fields for `/archive-mail` (`sender_includes` / `sender_excludes` / `recipient_includes` / `recipient_excludes` / `subject_includes` / `subject_excludes`) implementing a two-layer corpus model: `filters` defines Layer 1 search-time corpus; the six new fields are Layer 2 post-fetch refinement applied after Step 3 fetch and before Step 4 dedup. Thread-coherent (any message matching includes keeps the whole thread; any matching excludes drops it), case-insensitive substring matching with bare-value normalization (display name stripped for sender / recipient, `Re:` / `RE:` / `Fwd:` / `FW:` / `转发:` / `轉寄:` prefixes stripped for subject), excludes-precedence on the same axis (blacklist wins when both lists match the same email). New spec `openspec/specs/archive-mail-corpus-refinement/spec.md`. Step 4.5 Phase 2 preview gains a refinement statistics block (kept / dropped totals + per-category breakdown) when at least one field is non-empty; omitted entirely when all six unset. 100% backward compatible — unset and empty lists behave identically to v2.19.7. Closes #76 + #84.
@@ -193,7 +328,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **plugin.json description** — narrative re-led with the v2.20.0 corpus-refinement story; pre-v2.20.0 release history preserved verbatim.
 
+## [2.19.7] - 2026-05-18
+
+
+### Fixed
+
+- `binary_version` → **2.9.0**（MCP-tool layer bug-fix cluster）：mail#99、#101、
+  #104 PR-A、#106。
+  （回填自 #396 前的 README Version History 與 plugin.json description —— 同上。）
+
 ## [2.19.6] - 2026-05-12
+
 
 ### Fixed
 - **#73 hook compare prefers `.binary_version` over `.version`** — `hooks/session-start.sh` jq query 改 `'.binary_version // .version // ""'`,prefer binary tag(post-#77 two-field schema),fallback shell version 維持 backward compat。修掉 v2.18.0 ~ v2.19.5 期間每次 session start spurious SIGTERM(runtime `version_at_spawn` 是 binary tag e.g. `2.8.5`,但 hook 比對 `plugin.json.version` shell `2.19.5` 永遠 mismatch → kill MCP PID → respawn → +5s grace delay + `⚠ Killing stale CheAppleMailMCP PID ...` audit noise per session)。
@@ -207,6 +352,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refs PsychQuant/psychquant-claude-plugins#73 #74
 
 ## [2.19.5] - 2026-05-11
+
 
 ### Added
 - **#16 nested markdown lists** — depth-aware `<ul>`/`<ol>` rendering for nested list structures
@@ -222,6 +368,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.19.4] - 2026-05-11
 
+
 ### Added
 - **#28 `crossValidateAttachments` helper** — extracted from inline filter closure shared between `list_attachments` and `list_attachments_batch`;6 unit tests covering filter behavior (matching / empty / missing-name / non-String-name / all-fields-preserved)
 - **#22 Item D — code fence language hint** — emits `class="language-<hint>"` on `<pre><code>` per CommonMark recommended pattern
@@ -235,6 +382,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.19.3] - 2026-05-11
 
+
 ### Removed
 - **#82** — 4 dead AppleScript `script` variable declarations
 - **#83** — 3 deprecated `text(_:metadata:)` MCP SDK calls migrated to current API
@@ -247,6 +395,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refs PsychQuant/che-apple-mail-mcp#82 #83 #84
 
 ## [2.19.2] - 2026-05-11
+
 
 ### Added
 - **#87 `sanitize_links` hardening grab-bag** — 5 hygiene items:
@@ -262,6 +411,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.19.1] - 2026-05-11
 
+
 ### Documentation
 - **#86 `sanitize_links` schema description consistency** — XSS rationale + mode-restriction qualifier repeated across `create_draft` / `reply_email` / `forward_email` / `compose_email` (fixes tool-selecting LLM blindspot from cluster A)
 
@@ -270,6 +420,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refs PsychQuant/che-apple-mail-mcp#86
 
 ## [2.19.0] - 2026-05-11
+
 
 ### Added
 - **#19 `sanitize_links` opt-in URL scheme allowlist for markdown mode** — defends against `[click](javascript:alert('xss'))` and `data:`/`file:`/`vbscript:` URLs via closed allowlist `{http, https, mailto, tel}`;default `false` preserves backwards compat
@@ -288,6 +439,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.18.1] - 2026-05-10
 
+
 ### Fixed
 - **#77 wrapper sidecar tracks actual binary tag** (not plugin shell version) — two-part fix:
   1. `plugin.json` adds explicit `binary_version` field (e.g. `"2.7.2"`),disambiguating from plugin shell's own `version` (e.g. `"2.18.1"`)。Wrapper reads it preferentially;falls back to `version` for plugins that haven't migrated。
@@ -298,6 +450,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refs PsychQuant/che-apple-mail-mcp#77
 
 ## [2.18.0] - 2026-05-10
+
 
 ### Added
 - **Staleness Detection (Refs PsychQuant/che-apple-mail-mcp#76)**:wrapper 在 `exec binary` 前 atomic-write `~/bin/.CheAppleMailMCP.runtime.json` 紀錄 `{pid, started_at, version_at_spawn}`;新增 `hooks/session-start.sh`,Claude Code session 啟動時偵測 runtime state 與 `plugin.json` 的 version drift。Drift + PID alive + `command` field 含 `CheAppleMailMCP` 三條件成立 → SIGTERM(+5s grace,SIGKILL fallback)stale PID,讓 host respawn 取新 binary。
@@ -313,7 +466,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sister issue split:[`PsychQuant/psychquant-claude-plugins#58`](https://github.com/PsychQuant/psychquant-claude-plugins/issues/58)— `plugin-tools:plugin-update` 結尾應主動警告 user(sender-side 補強),獨立 PR。
 - Out-of-scope:**#77**(sidecar tracks shell version not binary version)、**#78**(server-side markdown export API)獨立評估。
 
-## [2.17.0] - 2026-05-09
+## [2.17.0] - 2026-05-10
+
 
 ### Added
 - **Workspace Layout Detection (#49)**:當 `output_dir` 既無 `$ARGUMENTS[1]` 也無 `${CONFIG_FILE}` 的 `output_dir:` 欄位給定時,probe 工作目錄按 `communications/email/` → `correspondence/emails/` → baseline default `communication/emails` 順序解析。Detection-first not prescriptive — adapt 到 user 既有 layout,不 push canonical convention。Existing user 有 explicit config 的 100% backward-compat(detection 不 fire)。
@@ -329,6 +483,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.16.1] - 2026-05-09
 
+
 ### Notes
 - **Bump-only release** to ship binary v2.7.1 + catch up tool count drift in `plugin.json` / `marketplace.json` descriptions (44 → 47)。Shell 邏輯 v2.16.0 不變,本版本只更新 wrapper 拉取的 binary tag。Backfilled per **#52** (sister concern from #49) — original v2.16.1 commit `8089765` 漏寫此 entry,KAC invariant 要求 every released version 有 entry。
 - Binary v2.7.1 ships:
@@ -338,6 +493,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tool count drift catch-up (44 → 47): commit `8089765` 只 touched `plugin.json` + `marketplace.json` description fields(README 未變動)。per `tool-readme-sync` audit pattern,後續 release 應補做 README 同步檢查。
 
 ## [2.16.0] - 2026-05-07
+
 
 ### Changed
 - **Config schema rename `.md` → `.yaml` (#47)**:`.claude/.mail/config.md` (v2.8.0–v2.15.0) 改名 `.claude/.mail/config.yaml`。原因:副檔名語意 ↔ 實際內容(YAML)一致;IDE 接 yaml-lsp;新 user 不被 `.md` 暗示「要寫 markdown body」誤導。
@@ -358,6 +514,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.15.0] - 2026-05-07
 
+
 ### Added
 - **Inline `cid:` image preservation in `/archive-mail` (#45)**:resolves dogfood gap where 「Solution? (affine repre + Iverson's law of similarity)」 thread 11 封信中 1 張 CleanShot screenshot inline-embedded via `cid:` 完全 miss(因 `list_attachments` 不回 `Content-Disposition: inline` images)。
 - **Step 5.5.0** (new) parses HTML body via regex `<img\s+...src="cid:..."...alt="...">` → extracts `(cid, alt_filename)` pairs → tries `save_attachment(attachment_name=alt, save_path=<stem>/inline/<alt>)`
@@ -374,6 +531,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.14.0] - 2026-05-07
 
+
 ### Added
 - **Opt-in `dedup_strategy` for `/archive-mail` (#18)**:resolves real-world observation that `.email_index.json` is rarely built / used — tatsuma project ran archive-mail for 3 years without producing one. New `.claude/.mail/config.md` field `dedup_strategy` with three values:
   - `index` (default,backward compat) — load + write `email_index.json` as before
@@ -387,6 +545,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.13.0] - 2026-05-07
 
+
 ### Changed
 - **BEHAVIOR CHANGE — `/archive-mail` Step 5 markdown template default simplified (#17)**: previously every archived email got a 4-section template (元數據表 + 信件內容 + 重點摘要 + 待辦事項). Real-world usage (tatsuma project, 50 historical archives) showed the elaborate sections are unused noise — AI summaries are unreliable and require manual review, breaking batch processing consistency. Default is now a simple template (frontmatter + 4-line `Subject/From/To/Date` header + body), matching the historical convention. Existing archives are NOT reprocessed (Message-ID dedup prevents). Users wanting the old elaborate template can opt in via `.claude/.mail/config.md` frontmatter `enrichment: summary+todos`.
 - Plugin version bumped 2.12.0 → 2.13.0 (after #13 PR #39 landed at 2.12.0). Frontmatter still includes all 6 fields (`message_id` / `thread_key` / `in_reply_to` / `date` / `sender` / `direction`) — thread index reconstruction depends on these.
@@ -396,11 +555,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.12.0] - 2026-05-07
 
+
 ### Added
 - `/archive-mail` 零參數模式 (#13):當 `$ARGUMENTS` 為空時,從 `.claude/.mail/config.md` frontmatter 讀 `filters` / `output_dir` / `last_archived` / `exclude_mailboxes` 自動執行。命令列參數覆寫 config 維持 backward compat。空 config + 零參數會 fail-fast 提示而非靜默 archive 全 inbox(危險預防)。
 - `argument-hint` frontmatter 改 `[email-filter] [output-dir]`,UI 正確標示 v2.12.0+ filter 為可選 (#21)。
 
+## [2.11.0] - 2026-05-03
+
+### Changed
+
+- `binary_version` → **2.7.0**：multi-attachment race fix（mail#60）。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `33e5e0d` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
 ## [2.10.3] - 2026-05-03
+
 
 ### Changed
 - **Plugin shell bumped to notify binary v2.6.0** ([release notes](https://github.com/PsychQuant/che-apple-mail-mcp/releases/tag/v2.6.0)). Marathon release: 16 issues across 8 PRs landed in binary repo. Plugin shell version-aware wrapper auto-downloads new binary on next session start.
@@ -413,6 +582,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.10.2] - 2026-05-03
 
+
 ### Changed
 - **Plugin shell bumped to notify binary v2.5.0** ([release notes](https://github.com/PsychQuant/che-apple-mail-mcp/releases/tag/v2.5.0)).
 
@@ -420,6 +590,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Binary v2.5.0 ships: `reply_email` plain mode embeds quoted original ([#43](https://github.com/PsychQuant/che-apple-mail-mcp/issues/43)) via Swift-side `composeReplyPlainText` helper. RFC 3676 `> ` prefix + CRLF normalization + empty-line `>` stuffing + pre-fetch graceful degrade. Pre-fix every plain-format `reply_email` call since `b8a4a89` (initial release) silently dropped the quoted original.
 
 ## [2.10.1] - 2026-05-02
+
 
 ### Changed
 - **Plugin shell bumped to notify binary v2.4.1** ([release notes](https://github.com/PsychQuant/che-apple-mail-mcp/releases/tag/v2.4.1)).
@@ -429,34 +600,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.10.0] - 2026-05-02
 
+
 ### Added
 - **Plugin shell bumped to notify binary v2.4.0 reply-as-draft mode** ([issue #33](https://github.com/PsychQuant/che-apple-mail-mcp/issues/33)). `reply_email` gains 3 optional params: `cc_additional`, `attachments`, `save_as_draft`. Unblocks workflow: reply to existing thread + add CC + attach files + save as draft for human review before sending.
 
 ## [2.9.0] - 2026-05-01
 
+
 ### Changed
 - Apple Mail MCP server — 44+ tools, IDD-style task enforcement + NSQL confirmation + .claude/.mail/ namespace (v2.9.0)。v2.9.0: archive-mail 與 confirmation-protocol skill Step 0 強制 TaskCreate bootstrap,靜默 skip = 違規。疊加 v2.8.0 namespace、v2.7.0 NSQL confirmation、v2.6.0 thread index、v2.5.0 composing format、v2.4.0 搜尋擴展。
 
-## [2.6.0] - 2026-04-30
+## [2.8.0] - 2026-05-01
+
+### Added
+
+- **`.claude/.mail/` namespace**：學 IDD 的 `.claude/.idd/` 收斂 config + state。新增 `/archive-mail-migrate`；archive-mail / view / rebuild-threads 都加 auto-migrate。Backward compatible —— legacy path 自動偵測並搬遷。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `bd52ed7` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.7.0] - 2026-05-01
+
+### Added
+
+- **NSQL confirmation protocol**：加 3 skills（`confirmation-protocol` / `email-search-disambiguation` / `bulk-operation-preview`）+ 2 rules + CLAUDE.md。archive-mail 預設套用 4-phase confirmation workflow。Backward compatible —— 精確 filter 仍可直接執行。
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `9746086` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.6.0] - 2026-04-22
+
 
 ### Added
 
 - archive-mail YAML frontmatter + `.threads.json` thread index + `/archive-mail-view`
   與 `/archive-mail-rebuild-threads` 兩個 command。
 
-## [2.5.0] - 2026-04-29
+## [2.5.1] - 2026-04-22
+
+### Changed
+
+- shell v2.5.1 —— （此版早於 `binary_version` 欄位存在）。（無可考的散文敘事）
+
+  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `afc3321` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+
+## [2.5.0] - 2026-04-17
+
 
 ### Added
 
 - composing tools 的 `format` 參數。
 
-## [2.4.0] - 2026-04-28
+## [2.4.0] - 2026-04-17
+
 
 ### Added
 
 - search expansion + Coverage Audit。
 
-## [2.3.0] - 2026-04-27
+## [2.3.0] - 2026-04-17
+
 
 ### Added
 
