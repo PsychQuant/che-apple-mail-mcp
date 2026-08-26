@@ -75,7 +75,11 @@ run_hook() {
     # override a developer's real XDG_STATE_HOME both breaks the FDA cases AND
     # lets the once-only marker escape into their actual state dir (#399 R1).
     HOME="$TEST_DIR" mkdir -p "$TEST_DIR/bin"
-    HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" \
+    # CHE_MAIL_HOOK_DEBUG is neutralized here, not merely left unset: a
+    # developer (or CI) with it exported would otherwise get debug lines in
+    # every case that asserts stderr is empty. Same escape class as the
+    # XDG_STATE_HOME leak above (#399 R2).
+    HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" CHE_MAIL_HOOK_DEBUG= \
         "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
     return $?
 }
@@ -128,6 +132,8 @@ assert() {
 }
 
 reset_state() {
+    # An empty TEST_DIR would turn the rm -rf below into an absolute path.
+    [ -n "${TEST_DIR:-}" ] || { echo "reset_state: TEST_DIR is empty — refusing to delete" >&2; exit 2; }
     rm -f "$TEST_DIR/bin/.CheAppleMailMCP.runtime.json"
     rm -f "$FAKE_PLUGIN/.claude-plugin/plugin.json"
     # #394: FDA-assist state — mock binary, once-only marker, setup probe.
@@ -135,6 +141,7 @@ reset_state() {
     rm -rf "$TEST_DIR/.local"
     rm -f "$TEST_DIR/setup-called"
     rm -f "$TEST_DIR/binary-calls.log"
+    rm -f "$TEST_DIR/bad-argv.log"
     : > "$TEST_DIR/hook.stderr"
 }
 
@@ -160,6 +167,19 @@ make_shim_without() {
         [ -e "$dir/$tool" ] || ln -s "$src" "$dir/$tool" 2>/dev/null
         [ -e "$dir/$tool" ] || { echo "SHIM-ERROR: could not link '$tool'" >&2; return 1; }
     done
+
+    # Post-check the invariant the helper NAMES: exactly one tool missing.
+    # Without this the `continue` above (builtins resolve to a bare name) could
+    # silently thin the shim back toward the both-missing state Case 5 exists
+    # to rule out — the helper would still return a path and the caller would
+    # never know (#399 R2).
+    ( PATH="$dir"; command -v "$excluded" >/dev/null 2>&1 ) \
+        && { echo "SHIM-ERROR: '$excluded' is still reachable — shim excludes nothing" >&2; return 1; }
+    for tool in jq ps sleep tr sort head mkdir cat rm date printf grep sed cut dirname; do
+        [ "$tool" = "$excluded" ] && continue
+        ( PATH="$dir"; command -v "$tool" >/dev/null 2>&1 ) \
+            || { echo "SHIM-ERROR: '$tool' unreachable under the shim — more than one tool missing" >&2; return 1; }
+    done
     echo "$dir"
 }
 
@@ -172,7 +192,17 @@ write_mock_mcp_binary() {
 echo "\$@" >> "$TEST_DIR/binary-calls.log"
 case "\${1:-}" in
     --version) echo "$version" ;;
-    --check-fda) exit $fda_exit ;;
+    --check-fda)
+        # The version gate exists because OLD binaries parse
+        # \`--check-fda --quiet\` as plain \`--check-fda\` (prints, opens the
+        # pane). Matching on \$1 alone would accept --quietly, --quiet=1, or a
+        # missing second flag and still return the granted/denied answer, so
+        # the suite would green-light a hook that lost the contract (#399 R2).
+        if [ "\$#" -ne 2 ] || [ "\${2:-}" != "--quiet" ]; then
+            echo "\$@" >> "$TEST_DIR/bad-argv.log"
+            exit 99
+        fi
+        exit $fda_exit ;;
     --setup) : > "$TEST_DIR/setup-called"; exit 0 ;;
 esac
 exit 0
@@ -339,7 +369,8 @@ assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "offer message on stderr" "grep -q 'Full Disk Access is not granted' $TEST_DIR/hook.stderr"
 assert "once-only marker written" "[ -f $FDA_MARKER ]"
 assert "setup window launched (mock touched probe)" "[ -f $TEST_DIR/setup-called ]"
-assert "probe used --check-fda --quiet (the contract the version gate protects)" "grep -q -- '--check-fda --quiet' $TEST_DIR/binary-calls.log"
+assert "probe used --check-fda --quiet (the contract the version gate protects)" "grep -Fxq -- '--check-fda --quiet' $TEST_DIR/binary-calls.log"
+assert "no malformed probe argv reached the binary" "[ ! -f $TEST_DIR/bad-argv.log ]"
 
 # ============================================================
 # Case 10 (#394): marker exists -> no re-offer
@@ -382,6 +413,11 @@ EXIT=$?
 assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "no offer message" "! grep -q 'Full Disk Access' $TEST_DIR/hook.stderr"
 assert "no marker" "[ ! -f $FDA_MARKER ]"
+# The harm the gate exists to prevent is not a missing message — it is TOUCHING
+# an old binary at all, because it would print and open System Settings. Assert
+# the absence of the probe itself, not just of its consequences (#399 R2).
+assert "old binary was never probed (only --version)" "! grep -q -- '--check-fda' $TEST_DIR/binary-calls.log"
+assert "old binary setup window never launched" "! grep -q -- '--setup' $TEST_DIR/binary-calls.log"
 
 # ============================================================
 # Case 13 (#394 core regression): jq missing must NOT kill the FDA assist
@@ -396,10 +432,19 @@ NOJQ_PATH="$(make_shim_without jq)" || exit 2
 HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" CHE_MAIL_HOOK_DEBUG=1 \
     PATH="$NOJQ_PATH" "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
 EXIT=$?
-wait_for_file "$TEST_DIR/setup-called" || true
+if wait_for_file "$TEST_DIR/setup-called"; then SETUP_SEEN=1; else SETUP_SEEN=0; fi
 assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "FDA assist still offered without jq (#394)" "grep -q 'Full Disk Access is not granted' $TEST_DIR/hook.stderr"
+# The assist's PRODUCT is the setup window, not the three stderr lines. Round 1
+# asserted only the text, so making the launch conditional on jq — #394's exact
+# regression — kept the suite green (#399 R2 reproduced it).
+assert "setup window launched WITHOUT jq (the point of #394)" "[ $SETUP_SEEN -eq 1 ]"
+assert "once-only marker written without jq" "[ -f $FDA_MARKER ]"
 assert "jq gate itself fired (deleting it goes red here)" "grep -q 'jq missing, skipping' $TEST_DIR/hook.stderr"
+# Gate-EFFECT lock: the seam below the gates must NOT have been reached.
+# Asserting only the message above locks the diagnostic, not the guard —
+# replacing both `return 0` with `:` left the suite 46/0 green (#399 R2).
+assert "staleness gates actually gated (seam not reached)" "! grep -q 'staleness gates passed' $TEST_DIR/hook.stderr"
 assert "staleness block still skipped (no kill without jq)" "ps -p $PID -o pid= >/dev/null 2>&1"
 assert "no kill warning" "! grep -q 'Killing stale' $TEST_DIR/hook.stderr"
 kill -KILL "$PID" 2>/dev/null || true
@@ -417,13 +462,54 @@ NOPS_PATH="$(make_shim_without ps)" || exit 2
 HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" CHE_MAIL_HOOK_DEBUG=1 \
     PATH="$NOPS_PATH" "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
 EXIT=$?
-wait_for_file "$TEST_DIR/setup-called" || true
+if wait_for_file "$TEST_DIR/setup-called"; then SETUP_SEEN=1; else SETUP_SEEN=0; fi
 assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "FDA assist offered without ps" "grep -q 'Full Disk Access is not granted' $TEST_DIR/hook.stderr"
+assert "setup window launched WITHOUT ps" "[ $SETUP_SEEN -eq 1 ]"
+assert "once-only marker written without ps" "[ -f $FDA_MARKER ]"
 assert "ps gate itself fired (deleting it goes red here)" "grep -q 'ps missing, skipping' $TEST_DIR/hook.stderr"
+assert "staleness gates actually gated (seam not reached)" "! grep -q 'staleness gates passed' $TEST_DIR/hook.stderr"
 assert "mock PID untouched" "ps -p $PID -o pid= >/dev/null 2>&1"
 assert "no kill warning" "! grep -q 'Killing stale' $TEST_DIR/hook.stderr"
 kill -KILL "$PID" 2>/dev/null || true
+
+# ============================================================
+# Case 15 (#399 R2): POSITIVE control for the gate seam.
+#
+# Cases 13/14 assert the seam is ABSENT. On their own that is vacuous — delete
+# the seam entirely and both stay green. This case proves the seam fires when
+# both tools ARE present, so the absence asserted above means "the gate
+# returned", not "the seam never existed".
+# ============================================================
+echo "Case 15: staleness gates pass when jq+ps present (seam positive control)"
+reset_state
+write_plugin_json "2.18.0"
+write_runtime_file "0" "2.18.0"          # versions MATCH -> no-op after the seam
+write_mock_mcp_binary "2.28.0" 0          # FDA granted -> assist stays quiet
+HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" CHE_MAIL_HOOK_DEBUG=1 \
+    "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
+EXIT=$?
+assert "exit 0" "[ $EXIT -eq 0 ]"
+assert "seam fired: gates passed" "grep -q 'staleness gates passed' $TEST_DIR/hook.stderr"
+assert "no gate-skip message" "! grep -q 'missing, skipping' $TEST_DIR/hook.stderr"
+
+# ============================================================
+# Case 16 (#399 R2): the debug seam is opt-IN, and "0" means off.
+#
+# The first implementation used `[ -n "$CHE_MAIL_HOOK_DEBUG" ]`, so the value
+# "0" — which every reader takes to mean disabled — turned the output ON, and
+# leaked debug lines into real Claude sessions that merely had the variable set.
+# ============================================================
+echo "Case 16: CHE_MAIL_HOOK_DEBUG=0 keeps the hook silent"
+reset_state
+write_plugin_json "2.18.0"
+write_runtime_file "0" "2.18.0"
+write_mock_mcp_binary "2.28.0" 0
+HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" CHE_MAIL_HOOK_DEBUG=0 \
+    "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
+EXIT=$?
+assert "exit 0" "[ $EXIT -eq 0 ]"
+assert "stderr silent with CHE_MAIL_HOOK_DEBUG=0" "[ ! -s $TEST_DIR/hook.stderr ]"
 
 # ============================================================
 # Summary

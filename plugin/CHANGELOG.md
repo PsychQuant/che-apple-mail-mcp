@@ -18,15 +18,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `jq`/`ps` dependency gates in `hooks/session-start.sh` sat above
   `first_run_fda_assist`, which needs neither tool — so the machines the assist
   exists for (fresh installs, often without jq) silently never saw it. The
-  gates now sit directly above the staleness block they actually guard, and
-  `CHE_MAIL_HOOK_DEBUG=1` makes gate skips say so (test seam). The test suite
-  grows 22 → 46 asserts: the FDA branch gets real coverage (mock binary with
-  an argv log pinning the `--check-fda --quiet` contract), the "jq missing"
-  case isolates exactly one tool via a fail-loud symlink-farm shim, the
-  jq-less/ps-less regression locks also assert the gates THEMSELVES fired, and
-  the harness pins `XDG_STATE_HOME` inside the sandbox — without that, a
-  developer's real state dir both broke three cases and received an escaped
-  once-only marker that would suppress their genuine FDA assist.
+  staleness block now lives in `run_staleness_detection()` and its gates
+  `return` rather than `exit`, so the scoping is **structural**: a feature added
+  after it still runs without jq/ps. (Ordering alone was the original root
+  cause; leaving the gates as bare `exit 0` would have left the next feature to
+  re-inherit it.) The harness pins `XDG_STATE_HOME` inside the sandbox —
+  without that, a developer's real state dir both broke three cases and
+  received an escaped once-only marker that would suppress their genuine FDA
+  assist — and neutralizes `CHE_MAIL_HOOK_DEBUG`, which is now read as exactly
+  `"1"` (as `-n`, the value `0` turned debug output ON, in real sessions too).
+
+  Test suite 22 → **60 asserts across 16 cases**, and — the part that matters —
+  **every claim is mutation-tested**. Round 2 of the cross-model verify proved
+  the round-1 locks were assertion theater: replacing both gate `exit 0` with
+  `:` kept the suite fully green (the diagnostic still printed), and making the
+  `--setup` launch jq-dependent — #394's exact regression — also kept it green,
+  because the cases asserted the assist's three stderr lines but never its
+  actual product, the setup window. Both now fail, verified by re-running each
+  mutation: the cases assert the launched window and the once-only marker, and
+  a `CHE_MAIL_HOOK_DEBUG` seam below the gates (`staleness gates passed`) locks
+  the gates' *effect*, with Case 15 as its positive control so its absence in
+  the skip cases cannot pass vacuously. Five mutations, five caught.
+
+  Also from that round: the probe's mock validates full argv (`--quietly` no
+  longer satisfies the `--check-fda --quiet` contract the version gate exists
+  to protect), Case 12 asserts an old binary is **never probed** rather than
+  merely staying quiet, and `make_shim_without` post-checks that exactly one
+  tool is missing. Known gap left open, deliberately out of scope and tracked:
+  `--check-fda --quiet` is a four-value contract that the hook collapses to a
+  boolean, so `noMailData` reports "not granted" and burns the once-only marker
+  ([#403](https://github.com/PsychQuant/che-apple-mail-mcp/issues/403)).
 
 ### Changed
 
