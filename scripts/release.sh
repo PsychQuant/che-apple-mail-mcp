@@ -507,6 +507,9 @@ echo
 echo "View at: https://github.com/$REPO/releases/tag/$VERSION"
 echo
 echo "Next steps:"
-echo "    - Bump binary_version in plugin/.claude-plugin/plugin.json (single source)"
+echo "    - Bump version AND binary_version in plugin/.claude-plugin/plugin.json"
+echo "      (the installed-plugin cache is keyed by version — bumping only binary_version ships nothing)"
+echo "    - Mirror the new version into .claude-plugin/marketplace.json plugins[0].version"
+echo "      (ManifestVersionTests pins the two equal)"
 echo "    - /plugin marketplace update che-apple-mail-mcp"
 echo "    - /plugin update che-apple-mail-mcp@che-apple-mail-mcp"

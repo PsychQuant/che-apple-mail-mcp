@@ -40,4 +40,31 @@ final class ManifestVersionTests: XCTestCase {
             + "CHANGELOG header ('\(newest)') — it froze at 2.7.2 for ~18 releases because "
             + "nothing owned it (#311). Bump it alongside the CHANGELOG at release prep.")
     }
+
+    func testMarketplaceEntryVersionMatchesPluginManifest() throws {
+        // #335 verify: the self-hosted marketplace re-declares the shell `version`
+        // (the marketplace schema wants one per entry), so the pair can drift exactly
+        // the way marketplace/plugin `binary_version` did in the aggregator era.
+        // Pin them equal — and pin the deliberate ABSENCE of `binary_version` in the
+        // marketplace entry, which is #335's load-bearing single-source decision.
+        let root = repoRoot()
+        let mktData = try Data(contentsOf: root.appendingPathComponent(".claude-plugin/marketplace.json"))
+        let mkt = try XCTUnwrap(try JSONSerialization.jsonObject(with: mktData) as? [String: Any])
+        let plugins = try XCTUnwrap(mkt["plugins"] as? [[String: Any]])
+        let entry = try XCTUnwrap(plugins.first, "marketplace.json must list the plugin entry")
+        let entryVersion = try XCTUnwrap(entry["version"] as? String)
+
+        let pjData = try Data(contentsOf: root.appendingPathComponent("plugin/.claude-plugin/plugin.json"))
+        let pj = try XCTUnwrap(try JSONSerialization.jsonObject(with: pjData) as? [String: Any])
+        let pluginVersion = try XCTUnwrap(pj["version"] as? String)
+
+        XCTAssertEqual(entryVersion, pluginVersion,
+            "marketplace entry version ('\(entryVersion)') must equal plugin.json version "
+            + "('\(pluginVersion)') — the shell version is declared in both manifests, and "
+            + "an unowned duplicated field is exactly how the aggregator-era binary_version "
+            + "drift happened (#335 verify).")
+        XCTAssertNil(entry["binary_version"],
+            "the marketplace entry must NOT declare binary_version — plugin.json is the "
+            + "single source for the binary pin (#335's design decision).")
+    }
 }
