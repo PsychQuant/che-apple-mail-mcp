@@ -70,9 +70,13 @@ start_mock_pid() {
 }
 
 run_hook() {
-    # Override HOME so RUNTIME_FILE in hook resolves inside TEST_DIR.
+    # Override HOME so RUNTIME_FILE in hook resolves inside TEST_DIR, and pin
+    # XDG_STATE_HOME inside the sandbox — the hook honors it, and without the
+    # override a developer's real XDG_STATE_HOME both breaks the FDA cases AND
+    # lets the once-only marker escape into their actual state dir (#399 R1).
     HOME="$TEST_DIR" mkdir -p "$TEST_DIR/bin"
-    HOME="$TEST_DIR" "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
+    HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" \
+        "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
     return $?
 }
 
@@ -130,6 +134,7 @@ reset_state() {
     rm -f "$TEST_DIR/bin/CheAppleMailMCP"
     rm -rf "$TEST_DIR/.local"
     rm -f "$TEST_DIR/setup-called"
+    rm -f "$TEST_DIR/binary-calls.log"
     : > "$TEST_DIR/hook.stderr"
 }
 
@@ -145,12 +150,15 @@ make_shim_without() {
     local tool src
     # dirname is needed by the hook's PLUGIN_ROOT resolution, which now runs
     # BEFORE the dependency gates (#394). Builtins (printf etc.) resolve to a
-    # bare name from `command -v` — skip anything that is not an absolute path.
+    # bare name from `command -v` — those are skipped (bash uses the builtin).
+    # Anything else that fails to resolve is a HARD error: a silently thinner
+    # shim degrades back to the old both-missing state Case 5 was fixed for.
     for tool in jq ps sleep tr sort head mkdir cat rm date printf grep sed cut dirname; do
         [ "$tool" = "$excluded" ] && continue
-        src=$(command -v "$tool" 2>/dev/null) || continue
+        src=$(command -v "$tool" 2>/dev/null) || { echo "SHIM-ERROR: cannot resolve required tool '$tool'" >&2; return 1; }
         case "$src" in /*) ;; *) continue ;; esac
         [ -e "$dir/$tool" ] || ln -s "$src" "$dir/$tool" 2>/dev/null
+        [ -e "$dir/$tool" ] || { echo "SHIM-ERROR: could not link '$tool'" >&2; return 1; }
     done
     echo "$dir"
 }
@@ -161,6 +169,7 @@ write_mock_mcp_binary() {
     mkdir -p "$TEST_DIR/bin"
     cat > "$TEST_DIR/bin/CheAppleMailMCP" <<MOCKEOF
 #!/bin/bash
+echo "\$@" >> "$TEST_DIR/binary-calls.log"
 case "\${1:-}" in
     --version) echo "$version" ;;
     --check-fda) exit $fda_exit ;;
@@ -172,6 +181,18 @@ MOCKEOF
 }
 
 FDA_MARKER="$TEST_DIR/.local/state/che-apple-mail-mcp/fda-setup-offered"
+
+# Poll for a file produced by the DETACHED --setup launch (up to 2s) instead of
+# a fixed sleep — removes the wall-clock race #399 R1 flagged. Negative asserts
+# still need a settle window; wait_for_file returning 1 after 2s is that window.
+wait_for_file() {
+    local f="$1" i
+    for i in $(seq 1 20); do
+        [ -e "$f" ] && return 0
+        sleep 0.1
+    done
+    return 1
+}
 
 # ============================================================
 # Case 1: no runtime state file → exit 0, no-op
@@ -239,11 +260,10 @@ write_plugin_json "2.18.0"
 write_runtime_file "$PID" "2.17.0"
 # #394: isolate jq specifically — the old PATH (/sbin:/usr/sbin) removed BOTH
 # jq and ps, so this case also passed when only the ps gate worked.
-MINIMAL_PATH="$(make_shim_without jq)"
-EXISTING_HOME="$HOME"
-HOME="$TEST_DIR" PATH="$MINIMAL_PATH" "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
+MINIMAL_PATH="$(make_shim_without jq)" || exit 2
+HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" \
+    PATH="$MINIMAL_PATH" "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
 EXIT=$?
-HOME="$EXISTING_HOME"
 assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "no warning emitted" "[ ! -s $TEST_DIR/hook.stderr ]"
 assert "mock PID still alive (hook should not have killed without jq)" "ps -p $PID -o pid= >/dev/null 2>&1"
@@ -314,11 +334,12 @@ write_plugin_json "2.18.0"
 write_mock_mcp_binary "2.28.0" 1
 run_hook
 EXIT=$?
-sleep 0.5   # --setup is launched detached
+wait_for_file "$TEST_DIR/setup-called"
 assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "offer message on stderr" "grep -q 'Full Disk Access is not granted' $TEST_DIR/hook.stderr"
 assert "once-only marker written" "[ -f $FDA_MARKER ]"
 assert "setup window launched (mock touched probe)" "[ -f $TEST_DIR/setup-called ]"
+assert "probe used --check-fda --quiet (the contract the version gate protects)" "grep -q -- '--check-fda --quiet' $TEST_DIR/binary-calls.log"
 
 # ============================================================
 # Case 10 (#394): marker exists -> no re-offer
@@ -331,6 +352,7 @@ mkdir -p "$(dirname "$FDA_MARKER")"
 : > "$FDA_MARKER"
 run_hook
 EXIT=$?
+wait_for_file "$TEST_DIR/setup-called" || true   # settle window for the negative assert
 assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "no offer message" "! grep -q 'Full Disk Access' $TEST_DIR/hook.stderr"
 assert "setup not launched" "[ ! -f $TEST_DIR/setup-called ]"
@@ -370,14 +392,14 @@ start_mock_pid; PID=$LAST_MOCK_PID
 write_plugin_json "2.18.0"
 write_runtime_file "$PID" "2.17.0"
 write_mock_mcp_binary "2.28.0" 1
-NOJQ_PATH="$(make_shim_without jq)"
-EXISTING_HOME="$HOME"
-HOME="$TEST_DIR" PATH="$NOJQ_PATH" "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
+NOJQ_PATH="$(make_shim_without jq)" || exit 2
+HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" CHE_MAIL_HOOK_DEBUG=1 \
+    PATH="$NOJQ_PATH" "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
 EXIT=$?
-HOME="$EXISTING_HOME"
-sleep 0.5
+wait_for_file "$TEST_DIR/setup-called" || true
 assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "FDA assist still offered without jq (#394)" "grep -q 'Full Disk Access is not granted' $TEST_DIR/hook.stderr"
+assert "jq gate itself fired (deleting it goes red here)" "grep -q 'jq missing, skipping' $TEST_DIR/hook.stderr"
 assert "staleness block still skipped (no kill without jq)" "ps -p $PID -o pid= >/dev/null 2>&1"
 assert "no kill warning" "! grep -q 'Killing stale' $TEST_DIR/hook.stderr"
 kill -KILL "$PID" 2>/dev/null || true
@@ -391,15 +413,16 @@ start_mock_pid; PID=$LAST_MOCK_PID
 write_plugin_json "2.18.0"
 write_runtime_file "$PID" "2.17.0"
 write_mock_mcp_binary "2.28.0" 1
-NOPS_PATH="$(make_shim_without ps)"
-EXISTING_HOME="$HOME"
-HOME="$TEST_DIR" PATH="$NOPS_PATH" "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
+NOPS_PATH="$(make_shim_without ps)" || exit 2
+HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" CHE_MAIL_HOOK_DEBUG=1 \
+    PATH="$NOPS_PATH" "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
 EXIT=$?
-HOME="$EXISTING_HOME"
-sleep 0.5
+wait_for_file "$TEST_DIR/setup-called" || true
 assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "FDA assist offered without ps" "grep -q 'Full Disk Access is not granted' $TEST_DIR/hook.stderr"
+assert "ps gate itself fired (deleting it goes red here)" "grep -q 'ps missing, skipping' $TEST_DIR/hook.stderr"
 assert "mock PID untouched" "ps -p $PID -o pid= >/dev/null 2>&1"
+assert "no kill warning" "! grep -q 'Killing stale' $TEST_DIR/hook.stderr"
 kill -KILL "$PID" 2>/dev/null || true
 
 # ============================================================

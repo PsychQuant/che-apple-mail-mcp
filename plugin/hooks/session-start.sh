@@ -7,8 +7,13 @@
 # the recorded PID is alive, SIGTERM (then SIGKILL after grace) so Claude Code
 # respawns MCP via wrapper, picking up the new binary.
 #
-# Failure mode: every dependency missing or unexpected → silent exit 0. Worst
-# case is no-op (current pre-fix behavior); never break session start.
+# Failure mode: silent exit 0 on missing dependencies, scoped PER FEATURE (#394):
+# the FDA assist needs no external tool beyond the binary itself; the staleness
+# block needs jq + ps and gates on them right before it runs. Worst case is a
+# no-op; never break session start. A future tool-independent feature belongs
+# ABOVE the staleness gates, or it re-inherits the trap #394 fixed.
+# CHE_MAIL_HOOK_DEBUG=1 makes gate skips say so on stderr (test seam — the
+# suite uses it to prove the gates exist; default stays silent).
 
 set -u
 
@@ -80,8 +85,14 @@ first_run_fda_assist
 # assist — which needs neither tool — so a jq-less machine (exactly the
 # fresh-install audience the assist exists for) silently lost the assist too.
 # Graceful-skip semantics are unchanged for the staleness block itself.
-command -v jq >/dev/null 2>&1 || exit 0
-command -v ps >/dev/null 2>&1 || exit 0
+command -v jq >/dev/null 2>&1 || {
+    [ -n "${CHE_MAIL_HOOK_DEBUG:-}" ] && echo "hook: staleness gate — jq missing, skipping" >&2
+    exit 0
+}
+command -v ps >/dev/null 2>&1 || {
+    [ -n "${CHE_MAIL_HOOK_DEBUG:-}" ] && echo "hook: staleness gate — ps missing, skipping" >&2
+    exit 0
+}
 
 # Both files required.
 [ -f "$RUNTIME_FILE" ] || exit 0

@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **First-run FDA assist survives a jq-less machine**
+  ([#394](https://github.com/PsychQuant/che-apple-mail-mcp/issues/394)). The
+  `jq`/`ps` dependency gates in `hooks/session-start.sh` sat above
+  `first_run_fda_assist`, which needs neither tool — so the machines the assist
+  exists for (fresh installs, often without jq) silently never saw it. The
+  gates now sit directly above the staleness block they actually guard, and
+  `CHE_MAIL_HOOK_DEBUG=1` makes gate skips say so (test seam). The test suite
+  grows 22 → 46 asserts: the FDA branch gets real coverage (mock binary with
+  an argv log pinning the `--check-fda --quiet` contract), the "jq missing"
+  case isolates exactly one tool via a fail-loud symlink-farm shim, the
+  jq-less/ps-less regression locks also assert the gates THEMSELVES fired, and
+  the harness pins `XDG_STATE_HOME` inside the sandbox — without that, a
+  developer's real state dir both broke three cases and received an escaped
+  once-only marker that would suppress their genuine FDA assist.
+
 ### Changed
 
 - `binary_version` 2.27.0 → **2.28.0**，讓 v2.46.0 的 first-run FDA assist（mail#355）真正生效。該 hook 從落地起就是 **no-op**：它以版本閘擋住 2.28.0 以前的 binary，因為更舊的版本會把 `--check-fda --quiet` 當成普通 `--check-fda` 解析、印出訊息並打開系統設定 —— 正是它要避免的騷擾。binary v2.28.0 已發布（signed + notarized），閘門現在開了。
