@@ -135,6 +135,16 @@ archive-mail v2.17.0+ 會:
 
 把散在各個 archive directory 的 `.email_index.json`、`.threads.json` 以及 `.claude/emails.md` 集中搬到 `.claude/.mail/` namespace（學 IDD 的 `.claude/.idd/` pattern）。`/archive-mail`、`view`、`rebuild-threads` 也會 silent auto-migrate；這個 command 是想一次 batch migrate 所有 archive targets 時用。
 
+### `/archive-mail-repair-synthetic-ids` — 修復 synthetic message_id 佔位符（一次性）
+
+```bash
+/archive-mail-repair-synthetic-ids communications/emails
+```
+
+掃歸檔目錄中 `message_id` 匹配 `^synthetic:` 的 md，從 Mail 重新解析**真實** RFC 5322 Message-ID 並就地修復 frontmatter 與 `email_index.json`。**保守優先：寧可留 unparseable 交人工，絕不錯誤合併兩封不同的信。**
+
+背景（[#319](https://github.com/PsychQuant/che-apple-mail-mcp/issues/319)）：過去某些 session 在拿不到真 Message-ID 時即興發明 `synthetic:<ISO-timestamp>` 佔位符，而該 timestamp 是**執行當下**時間——同一封信每次重跑得到不同 key，dedup 結構性失效。實測單一 target 84/273 檔帶 synthetic key、單輪 12 封靜默重複，而**所有既有 gate 全綠**。SOP 現已明文禁止此佔位符。
+
 ## Skills (v2.7.0+)
 
 3 個 skills 由 `/archive-mail` 內部觸發，也可被其他工作流引用：
@@ -210,6 +220,8 @@ https://github.com/kiki830621/che-apple-mail-mcp
 
 ## Version History
 
+- **v2.47.0 shell + binary v3.0.0**（2026-08-31）— **BREAKING：legacy compose 路徑整段移除，cite-block body 在結構上不再可達**（[#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)）。Mail 會把任何經 AppleScript 指派的 body 在 MIME 序列化時包進 `<blockquote type="cite">`；寄件人在桌面端看不出來（wrapper 的 inline style 無邊框），但 Gmail web 與 Outlook 會把**整封信的本文顯示成被引用內容**——2026-07-29 一封 10 人的正式開會通知即如此寄出且無法回收，觸發條件只是 cc 帶了中文顯示名。四個 builder 的八個注入點全數刪除，`NoBodyInjectionGuardTests` 讓三種形式（`set content` / `set html content` / 建構訊息時的 `content:`）任一重新出現即測試失敗。**公開 schema 移除**：`format` 的 `"markdown"` 與 `"html"`（enum 縮為 `["plain"]`；兩值仍被解析並以具名錯誤拒絕、指向 [#306](https://github.com/PsychQuant/che-apple-mail-mcp/issues/306)）、`require_wrapper_free`（其 `true` 行為成為無條件）、`sanitize_links`、`CHE_MAIL_DISABLE_MAILTO_COMPOSE`、`CHE_MAIL_DISABLE_PASTE_REPLY`。**行為改變**：無法走乾淨路徑的 compose 呼叫改為**失敗**而非靜默降級——六類具名原因、封閉列舉、零副作用（不建草稿、不寄出、既有草稿不動）。**能力損失（記錄，未繞過）**：不開視窗組信（`mailto:` hand-off 必然彈視窗；替代路線見 [#308](https://github.com/PsychQuant/che-apple-mail-mcp/issues/308) IMAP APPEND）；`compose_email` 寄給 `Name <addr>`（顯示名的 GUI 填入是草稿限定，[#277](https://github.com/PsychQuant/che-apple-mail-mcp/issues/277)——送信時填入失敗會漏收件人，故拒絕）。另修：附件改插在 body **結尾**而非開頭（[#341](https://github.com/PsychQuant/che-apple-mail-mcp/issues/341)／[#321](https://github.com/PsychQuant/che-apple-mail-mcp/issues/321)，同一缺陷被實地回報兩次）；`MailboxURL.mailboxName` 改由 `pathComponents` 推導、不再對名稱自身的斜線做切分（[#358](https://github.com/PsychQuant/che-apple-mail-mcp/issues/358)）。
+- _（版本歷史在 v2.44.2 與 v2.47.0 之間有缺口——中間版本未回填；明細見 repo 的 CHANGELOG.md）_
 - **v2.44.2 shell + binary v2.27.0**（2026-08-10）— **correctness batch，每案跨模型 adversarial verify（Codex gpt-5.6-sol）**：匯出碰撞鍵改用 APFS 的折疊方式，寫入改由檔案系統以 exclusive rename 裁決而非事前預測（volume 不支援時降級 `linkat`→非原子 check-then-rename，[#342](https://github.com/PsychQuant/che-apple-mail-mcp/issues/342)）；mailbox filter 改逐 path component 比對、`INBOX` 只在路徑根折疊、查無結果時以 near-miss 具名而非靜默回空（[#344](https://github.com/PsychQuant/che-apple-mail-mcp/issues/344)）；附件寫入驗證跟隨 symlink 並要求 regular file、typed error 真正接上 `download_if_missing` 重試、新增 `allow_empty`（[#347](https://github.com/PsychQuant/che-apple-mail-mcp/issues/347)）；26 個 stderr writer 全數改走單一 throwing sink + 不可繞過的 source guard（[#346](https://github.com/PsychQuant/che-apple-mail-mcp/issues/346)）；測試套件不再驅動使用者真實 Mail.app（[#362](https://github.com/PsychQuant/che-apple-mail-mcp/issues/362)）；stale-binary 自檢 + MCP handshake 回報真實版本（[#303](https://github.com/PsychQuant/che-apple-mail-mcp/issues/303)）。套件 1171 tests、0 failures。
 - _（版本歷史在 v2.28.0 與 v2.44.x 之間有缺口——中間版本未回填；明細見 binary repo 的 CHANGELOG.md）_
 - **v2.28.0 shell + binary v2.19.0**（2026-07-15）— **10-issue batch**（全數 6-AI verify）：reply/forward send-stage POSTDISPATCH 保護 + MailController 測試 seams（[#254](https://github.com/PsychQuant/che-apple-mail-mcp/issues/254)）；`require_wrapper_free` opt-in fail-fast（[#239](https://github.com/PsychQuant/che-apple-mail-mcp/issues/239)）；非 ASCII 附件路徑改走 legacy 原生附件、不再卡死 GUI（[#220](https://github.com/PsychQuant/che-apple-mail-mcp/issues/220)）；附件 `savable` false-negative 以 name-free part-id probe 修復（[#183](https://github.com/PsychQuant/che-apple-mail-mcp/issues/183)）；not-downloaded 附件具名訊號 + actionable 錯誤（[#238](https://github.com/PsychQuant/che-apple-mail-mcp/issues/238)）；per-account inbox 解析（[#249](https://github.com/PsychQuant/che-apple-mail-mcp/issues/249)）；doc census + guard tests（#248）；export date 保留原始時區 offset（#244）；compose 揭露 wiring regression lock（#241）；mailto 送信段拒絕重送（#242）。套件 882 tests、0 failures。
