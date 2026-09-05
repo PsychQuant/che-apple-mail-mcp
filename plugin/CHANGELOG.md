@@ -11,6 +11,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.47.0] - 2026-08-31
 
+### Fixed
+
+- **The binary download chain verifies what it installs — and a degraded state
+  can now end**
+  ([#392](https://github.com/PsychQuant/che-apple-mail-mcp/issues/392),
+  [#393](https://github.com/PsychQuant/che-apple-mail-mcp/issues/393)).
+  Downloads are sha256-verified against the release's own asset list, and
+  verification **fails closed**: the only unverified install is a release that
+  genuinely publishes no digest. Being unable to *compute* one — no hash tool,
+  or a `shasum` that exists but is broken — is a refusal, not a downgrade, and
+  the `openssl` fallback is now actually reachable in that case. The asset is
+  selected by exact basename from a URL list pinned to this repo's own release
+  downloads, so neither a minified API response nor a spoofed body can install
+  the wrong file or point elsewhere. Temps are unique (no shared-`.tmp` TOCTOU)
+  and now removed by a trap, so an interrupted spawn no longer leaks ~18 MB
+  into `~/bin`. The installed mode is set explicitly, and a failed `chmod` does
+  not install.
+
+  **The retry story, which round 1 got backwards.** A definitive pinned-tag 404
+  falls back to latest exactly once and records a marker with a 24h TTL;
+  transient failures (403 rate-limits, timeouts, 5xx) keep the installed binary
+  untouched. Runtime state records the version ACTUALLY installed (read from the
+  sidecar; `unknown` when it is missing — never the wishful pin), so the
+  session-start hook can finally see a failed download. `degraded_pin` tells
+  that hook when a mismatch is deliberate — but **only when a marker backs it**,
+  and the hook now re-validates that marker (existence, pin, TTL, clock skew)
+  instead of trusting the field. Round 1 trusted it blindly, which made the
+  degraded state permanent: the TTL is only ever evaluated by the wrapper, and
+  the wrapper cannot run again until a kill respawns it, so at TTL+1h the hook
+  was still suppressing the kill and the pin was never retried — deleting the
+  marker by hand did not help either, because nothing consulted it. Round 1 also
+  stamped `degraded_pin` on transient failures, suppressing the one thing that
+  triggers a retry. The invariant is now stated in the wrapper and locked by
+  tests: `degraded_pin` is set **if and only if** a marker was written.
+
+  Binary downloads get a 300-second budget again — unifying the curl calls
+  behind one helper had put the 18 MB binary on the metadata call's 30 seconds,
+  which hard-fails a fresh install on any normal-but-slow link. Legacy plugins
+  without `binary_version` keep the old semantics (the #73 spurious-kill trap
+  stays closed). A corrupt or hand-edited marker is ignored rather than fatal,
+  and its epoch can no longer reach bash arithmetic, where a crafted value is
+  executed as a command. The marker's reason field is finally read, so a digest
+  mismatch is reported as a possible tampering signal instead of "unavailable
+  upstream".
+
+  Test suite: **76 asserts across 19 mock-curl scenarios** — including a
+  minified API body, a foreign-host asset URL, a digest published on a machine
+  with no hash tool, an injection payload in the marker, temp-leak and
+  file-mode checks, and hook integration with its negative control. Every fix
+  above was **mutation-tested**: nine deliberate regressions were re-introduced
+  one at a time and all nine turned the suite red. That exercise is also how
+  the corrupt-marker case was caught testing nothing — its payload contained
+  whitespace, so `read` split it into three fields and it never reached the
+  arithmetic it claimed to exercise.
+
 ### Changed
 
 - `binary_version` 2.28.0 → **3.0.0**，出貨 [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)：legacy compose 路徑整段移除。該修正在原始碼裡躺了一段時間卻**從未發過 binary release** —— 最新 tag 仍是 v2.28.0，所以每一個已安裝的 binary 在「已有同主旨 compose 視窗開著」時仍會退回 wrapped-body 路徑（AppleScript `-2700` → legacy fallback）。2026-08-31 實地踩到：`update_draft` 回傳 `legacy path — body wrapped in <blockquote type="cite">`，產出的草稿在 Gmail web 與 Outlook 會整封顯示成引用內容，正是 2026-07-29 那起無法回收的事故的同一機制。**這條 plugin 的 `rules/compose-wrapper-free.md` 自 2.43.0 起就描述著 #304 之後的世界，而使用者手上的 binary 拿不到那個保證** —— 規則描述「應該安裝的版本」而非「實際跑的版本」時，它給的是虛假的安心。
