@@ -101,6 +101,40 @@ Removing the legacy path costs two things that have **no replacement**:
   and send the draft yourself.
 
 ### Fixed
+
+- **Marketplace clones stop shipping 22.6 MiB of v2.7.1-era build artifacts**
+  ([#391](https://github.com/PsychQuant/che-apple-mail-mcp/issues/391)). Two
+  files were committed before `.gitignore` grew its mcpb rules — rules cannot
+  untrack — and froze ~21 releases behind: the 4.6 MiB `.mcpb` bundle (inner
+  manifest said 2.7.1 while the sibling `mcpb/manifest.json` said the current
+  release — a double-click install trap for Claude Desktop) and the 18 MiB
+  ad-hoc-signed server binary (macOS 26 TCC kills ad-hoc binaries outright).
+  Both are now untracked (`git rm --cached`), the `.gitignore` gains the
+  previously unmatched `mcpb/*.mcpb.sha256` packaging sidecar, and
+  `NoTrackedBuildArtifactsTests` pins the exact tracked set under `mcpb/` in
+  both directions — a re-added artifact and a removed release-critical file
+  (`manifest.json`) both fail the suite. That guard now runs from
+  `scripts/release.sh` alongside the manifest gate: this repo has no CI, so a
+  test nobody triggers is how two artifacts sat tracked for ~21 releases.
+
+  **What users actually get back (measured, #397 verify).** The delivery
+  channel is a **shallow** clone — verified by `.git/shallow` existing in
+  `~/.claude/plugins/marketplaces/<name>/`, so a new install never pays for
+  history at all. On this machine that clone is **36 MiB, of which `mcpb/`
+  alone is 22 MiB**; untracking removes essentially all of it from a fresh
+  install. The earlier framing ("a full clone's pack does not shrink") was
+  answering about a channel nobody installs through: for a *full* clone the
+  history blobs do remain, by deliberate choice — no history rewrite, because
+  rewriting published history costs every existing clone more than the blobs
+  cost. Tree payload at the tip: **25.1 MB → 3.3 MB** (`git ls-tree -r -l`
+  sum, decimal MB; the shallow clone's working tree is what this measures).
+
+  Existing installs lose their local copy of the stale bundle on the next
+  `marketplace update` — that is the fix working, not data loss. A developer
+  checkout that ran the documented release path has an **untracked** local
+  `mcpb/` build output; `git pull` leaves it alone precisely because it is no
+  longer tracked.
+
 - Attachments added via `create_draft` / `compose_email` landed at the **start**
   of the body instead of the end
   ([#341](https://github.com/PsychQuant/che-apple-mail-mcp/issues/341),
