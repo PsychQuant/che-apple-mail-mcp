@@ -121,9 +121,11 @@ if [ -n "$DEGRADED_PIN" ] && [ "$DEGRADED_PIN" = "$PLUGIN_VERSION" ]; then
         MARKER_PIN=$(awk 'NR==1{print $1}' "$MARKER_FILE" 2>/dev/null)
         MARKER_EPOCH=$(awk 'NR==1{print $2}' "$MARKER_FILE" 2>/dev/null)
         MARKER_REASON=$(awk 'NR==1{print $3}' "$MARKER_FILE" 2>/dev/null)
-        case "$MARKER_EPOCH" in
-            ''|*[!0-9]*) MARKER_EPOCH=0 ;;
-        esac
+        if [[ "$MARKER_EPOCH" =~ ^[0-9]{1,12}$ ]]; then
+            MARKER_EPOCH=$((10#$MARKER_EPOCH))
+        else
+            MARKER_EPOCH=0
+        fi
         NOW_EPOCH=$(date +%s)
         # 86400 == the wrapper's RETRY_TTL. Both sides read the same file;
         # if you change one, change the other.

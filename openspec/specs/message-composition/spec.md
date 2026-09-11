@@ -8,178 +8,46 @@ TBD - created by archiving change 'compose-tools-format-parameter'. Update Purpo
 
 ### Requirement: Composing tools accept a format parameter
 
-The system SHALL provide four composing MCP tools — `compose_email`, `create_draft`, `reply_email`, and `forward_email` — each accepting an optional `format` parameter with permitted values `"plain"`, `"markdown"`, and `"html"`. When `format` is omitted or null, the system SHALL treat the request as `format: "plain"` to preserve backwards compatibility.
+The system SHALL provide four composing MCP tools — `compose_email`, `create_draft`, `reply_email`, and `forward_email` — each accepting an optional `format` parameter whose only permitted value is `"plain"`. When `format` is omitted or null, the system SHALL treat the request as `format: "plain"`.
+
+The system SHALL reject `format: "markdown"` and `format: "html"` with an error that names the removal and directs the caller to `"plain"`. Rich-text bodies are not representable on any non-injecting path, and every injecting path has been removed.
 
 #### Scenario: Format parameter omitted defaults to plain
 
 - **WHEN** a caller invokes `compose_email` with body `"Hi\n\n*Regards*"` and no `format` argument
-- **THEN** the system SHALL deliver the email with the literal string `"Hi\n\n*Regards*"` as plain text
-- **AND** the asterisks SHALL NOT be rendered as italic
+- **THEN** the body SHALL be delivered verbatim, with `*Regards*` appearing literally
+
+#### Scenario: Markdown is rejected with a named reason
+
+- **WHEN** a caller invokes any composing tool with `format: "markdown"`
+- **THEN** the tool SHALL fail with an error naming `markdown` as removed and directing the caller to `"plain"`
+- **AND** no draft SHALL be created and no mail SHALL be sent
+
+#### Scenario: HTML is rejected with a named reason
+
+- **WHEN** a caller invokes any composing tool with `format: "html"`
+- **THEN** the tool SHALL fail with an error naming `html` as removed and directing the caller to `"plain"`
+- **AND** no draft SHALL be created and no mail SHALL be sent
 
 #### Scenario: Invalid format value is rejected
 
-- **WHEN** a caller invokes any composing tool with `format: "rtf"` (not a permitted value)
-- **THEN** the system SHALL return an MCP error describing the permitted values `plain`, `markdown`, `html`
-- **AND** the system SHALL NOT create, send, or draft the email
+- **WHEN** a caller invokes any composing tool with `format: "rtf"`
+- **THEN** the tool SHALL fail with a validation error naming the permitted value
 
 ---
 ### Requirement: Plain mode preserves existing behavior
 
-When `format` is `"plain"`, the system SHALL pass the `body` parameter as-is into the AppleScript `content` property of the outgoing message. HTML tags in the body SHALL appear literally in the delivered email; no HTML rendering SHALL occur.
+When `format` is `"plain"`, the system SHALL deliver the `body` parameter verbatim: HTML tags SHALL appear literally in the delivered email and no HTML rendering SHALL occur. The body SHALL reach the message through Mail's own editor — the `mailto:` hand-off or the native reply/forward verb plus paste — and SHALL NOT be assigned through the AppleScript `content` property, which is what produces the `<blockquote type="cite">` wrapper.
 
-#### Scenario: Plain mode preserves literal HTML tags
+#### Scenario: Plain body is delivered literally
 
 - **WHEN** a caller invokes `compose_email` with `body: "<b>bold</b>"` and `format: "plain"`
-- **THEN** the recipient SHALL see the literal characters `<b>bold</b>` in the email body
-- **AND** the text SHALL NOT be rendered as bold
+- **THEN** the delivered email SHALL show the characters `<b>bold</b>` literally
 
----
-### Requirement: Markdown mode renders via AttributedString
+#### Scenario: Plain body is not assigned via AppleScript content
 
-When `format` is `"markdown"`, the system SHALL parse `body` using Swift's `AttributedString(markdown:)` initializer and convert the resulting attributed string to HTML, then assign the HTML to the AppleScript `html content` property of the outgoing message. The system SHALL support at minimum the following markdown constructs: bold (`**text**`), italic (`*text*` or `_text_`), inline code (`` `text` ``), links (`[text](url)`), and unordered lists. Constructs outside this subset (e.g., tables, footnotes) SHALL be delegated to `AttributedString(markdown:)` best-effort rendering and SHALL NOT cause the tool to fail.
-
-#### Scenario: Markdown bold and italic render correctly
-
-- **WHEN** a caller invokes `compose_email` with `body: "**bold** and *italic*"` and `format: "markdown"`
-- **THEN** the recipient SHALL see the word "bold" rendered with bold typography
-- **AND** the word "italic" SHALL be rendered with italic typography
-- **AND** the asterisks SHALL NOT appear in the delivered email
-
-#### Scenario: Markdown link is clickable
-
-- **WHEN** a caller invokes `compose_email` with `body: "See [example](https://example.com)"` and `format: "markdown"`
-- **THEN** the delivered email SHALL contain a clickable hyperlink with visible text "example" and URL `https://example.com`
-
----
-### Requirement: Markdown mode honors opt-in URL scheme allowlist via `sanitize_links`
-
-When `format` is `"markdown"`, the system SHALL accept an optional boolean parameter `sanitize_links` on each of the four composing tools (`compose_email`, `create_draft`, `reply_email`, `forward_email`). When `sanitize_links` is omitted or `false`, the system SHALL render markdown links exactly as `AttributedString(markdown:)` produces them — preserving every URL scheme. When `sanitize_links` is `true`, the system SHALL filter parsed link URLs against a closed allowlist of `{http, https, mailto, tel}` (compared case-insensitively against the URL's scheme component); any link whose scheme falls outside this set SHALL be rendered as plain text — the link's anchor text SHALL be preserved, but the surrounding `<a>` element SHALL be omitted from the emitted HTML. The `sanitize_links` parameter SHALL be a no-op when `format` is `"plain"` (no link parsing occurs) or `"html"` (caller-trusted raw HTML, per the existing "HTML mode writes body to AppleScript html content" requirement). The `sanitize_links` parameter SHALL NOT appear in the `required` array of any tool schema and SHALL default to `false` for backwards compatibility.
-
-#### Scenario: Default-off preserves javascript: URL passthrough
-
-- **WHEN** a caller invokes `compose_email` with `body: "[click](javascript:alert('xss'))"` and `format: "markdown"`, omitting `sanitize_links`
-- **THEN** the rendered HTML SHALL contain `href="javascript:alert('xss')"` wrapped in an `<a>` element
-- **AND** the anchor text SHALL be `click`
-- **AND** the system SHALL NOT alter the URL or drop the anchor
-
-#### Scenario: sanitize_links=true drops anchor on javascript: URL
-
-- **WHEN** a caller invokes `compose_email` with `body: "[click](javascript:alert('xss'))"`, `format: "markdown"`, and `sanitize_links: true`
-- **THEN** the rendered HTML SHALL NOT contain `href="javascript:`
-- **AND** the rendered HTML SHALL NOT contain an `<a>` element wrapping the text `click`
-- **AND** the literal text `click` SHALL be preserved in the rendered output
-
-##### Example: bypass classes blocked under sanitize_links=true
-
-| Input link in body                          | Expected emitted href                              | Notes                            |
-| ------------------------------------------- | -------------------------------------------------- | -------------------------------- |
-| `[x](javascript:alert(1))`                  | (no `<a>` element; literal `x` preserved)          | direct javascript:               |
-| `[x](JaVaScRiPt:alert(1))`                  | (no `<a>` element; literal `x` preserved)          | case-mix, lowercased compare     |
-| `[x](data:text/html,<script>alert(1)</script>)` | (no `<a>` element; literal `x` preserved)      | data: not in allowlist           |
-| `[x](file:///etc/passwd)`                   | (no `<a>` element; literal `x` preserved)          | file: not in allowlist           |
-| `[x](vbscript:msgbox(1))`                   | (no `<a>` element; literal `x` preserved)          | vbscript: not in allowlist       |
-
-#### Scenario: sanitize_links=true preserves http, https, mailto, tel allowlist
-
-- **WHEN** a caller invokes `compose_email` with `format: "markdown"` and `sanitize_links: true`, supplying a body with links across the allowlisted schemes
-- **THEN** every allowlisted link SHALL render as a clickable `<a href="...">` element with the original URL preserved verbatim
-- **AND** the anchor text SHALL match the markdown link's display text
-
-##### Example: allowlist preservation
-
-| Input link in body              | Expected behavior                                                           |
-| ------------------------------- | --------------------------------------------------------------------------- |
-| `[site](https://example.com/x)` | `<a href="https://example.com/x">site</a>` emitted                          |
-| `[mail](mailto:foo@example.com)`| `<a href="mailto:foo@example.com">mail</a>` emitted                         |
-| `[call](tel:+15551234)`         | `<a href="tel:+15551234">call</a>` emitted                                  |
-| `[home](http://example.com/)`   | `<a href="http://example.com/">home</a>` emitted                            |
-
-#### Scenario: sanitize_links is no-op in plain and html modes
-
-- **WHEN** a caller invokes any composing tool with `format: "plain"` and `sanitize_links: true`
-- **THEN** the system SHALL pass the body verbatim into the AppleScript `content` property
-- **AND** the system SHALL NOT parse, transform, or filter URLs
-- **WHEN** a caller invokes any composing tool with `format: "html"` and `sanitize_links: true`
-- **THEN** the system SHALL assign the body verbatim to the AppleScript `html content` property
-- **AND** the system SHALL NOT parse, transform, or filter URLs in the supplied HTML
-
-#### Scenario: sanitize_links wiring contract holds at the script-builder seam
-
-- **WHEN** any of the four script-builder functions (`buildComposeEmailScript`, `buildCreateDraftScript`, `buildReplyEmailScript`, `buildForwardEmailScript`) is invoked with `format: "markdown"`, `sanitizeLinks: true`, and a body containing `[click](javascript:alert(1))`
-- **THEN** the produced AppleScript text SHALL NOT contain the substring `href="javascript:`
-- **AND** when the same builder is invoked with `sanitizeLinks: false` (or omitted), the produced AppleScript text SHALL contain `href="javascript:`
-- **AND** the produced AppleScript text in both arms SHALL contain the anchor text `click` (either as plain text when scheme is dropped, or wrapped in `<a href="javascript:...">` when not)
-- **AND** this builder→renderer seam pins the most security-relevant forwarding link in the chain; the controller→builder one-line forwarding inside `MailController.{composeEmail, createDraft, replyEmail, forwardEmail}` and the MCP-schema→handler `requireBool` parsing are explicitly NOT covered by this scenario and require separate test surfaces
-
----
-### Requirement: HTML mode writes body to AppleScript html content
-
-When `format` is `"html"`, the system SHALL assign the `body` string directly to the AppleScript `html content` property of the outgoing message without parsing or transformation. The system SHALL NOT attempt to validate or sanitize the HTML.
-
-#### Scenario: HTML body renders as rich text
-
-- **WHEN** a caller invokes `compose_email` with `body: "<b>bold</b> <a href=\"https://example.com\">link</a>"` and `format: "html"`
-- **THEN** the word "bold" SHALL be rendered with bold typography in the delivered email
-- **AND** the text "link" SHALL be rendered as a clickable hyperlink to `https://example.com`
-
----
-### Requirement: Markdown rendering has documented Foundation parser limitations
-
-When `format` is `"markdown"`, the system relies on Swift Foundation's `AttributedString(markdown:)` initializer for parsing. This initializer has known limitations that the system SHALL NOT attempt to work around — instead it documents them so callers know what to expect.
-
-#### Scenario: Inline emphasis inside a markdown link is collapsed
-
-- **WHEN** a caller invokes `compose_email` with `body: "[**bold** text](https://example.com)"` and `format: "markdown"`
-- **THEN** Foundation's `AttributedString(markdown:)` MAY collapse the nested emphasis and emit a single anchor with plain text (e.g. `<a href="https://example.com">bold text</a>` instead of `<a href="https://example.com"><strong>bold</strong> text</a>`)
-- **AND** the system SHALL NOT pre-process the markdown body to preserve nested emphasis inside links — callers wanting bolded link text SHALL use `format: "html"` and supply the desired markup directly, or restructure the markdown to put the emphasis outside the link (e.g. `**[bold text](https://example.com)**`)
-
-#### Scenario: Code block language hint propagates to HTML class attribute
-
-- **WHEN** a caller invokes `compose_email` with a markdown body containing a fenced code block with a language tag (e.g. ` ```swift\nlet x = 1\n``` `) and `format: "markdown"`
-- **THEN** the rendered HTML SHALL emit `<pre><code class="language-swift">let x = 1\n</code></pre>` with the language hint as a `language-<hint>` class on the inner `<code>` element (CommonMark recommended pattern; honored by Prism / Pygments / highlight.js / mail clients with syntax-highlight plugins)
-- **AND** when the fence has no language tag (e.g. ` ```\nplain\n``` `), the rendered HTML SHALL emit `<pre><code>plain\n</code></pre>` without any `class` attribute (backwards compatible)
-
-##### Example: code fence rendering
-
-| Markdown input | Expected HTML output |
-| -------------- | -------------------- |
-| `` ```swift\nlet x = 1\n``` `` | `<pre><code class="language-swift">let x = 1\n</code></pre>` |
-| `` ```python\nprint(x)\n``` `` | `<pre><code class="language-python">print(x)\n</code></pre>` |
-| `` ```\nplain code\n``` `` (no tag) | `<pre><code>plain code\n</code></pre>` |
-
-#### Scenario: Control characters in body are not round-trip safe
-
-- **WHEN** a caller invokes any composing tool with `format: "markdown"` and a body containing C0 control characters (U+0000 through U+001F, e.g. U+001E RECORD SEPARATOR or U+0008 BACKSPACE)
-- **THEN** Foundation's `AttributedString(markdown:)` MAY strip or replace these characters during parsing
-- **AND** the system SHALL NOT escape control characters before parsing; callers needing exact byte-for-byte preservation SHALL use `format: "html"` with HTML entity references (e.g. `&#x1E;` for U+001E) or `format: "plain"` to bypass markdown parsing entirely
-
----
-### Requirement: Reply and forward wrap original content in HTML blockquote
-
-When `reply_email` or `forward_email` is invoked with `format` set to `"markdown"` or `"html"`, the system SHALL construct the outgoing message body such that the user-supplied body appears first (rendered per the format rules above), followed by an `<hr>` separator, followed by the original message content wrapped inside an HTML `<blockquote>` element. The system SHALL attempt to read `html content of originalMsg` via AppleScript first; when that read succeeds and returns non-empty content, the system SHALL place that HTML directly inside the blockquote. When the read is denied by the AppleScript runtime (a known macOS limitation — see Requirement: AppleScript html content read is denied on messages) or returns empty, the system SHALL HTML-escape the plain-text content of the original message, convert newlines to `<br>`, and place the result inside the blockquote.
-
-#### Scenario: Reply composition uses original HTML when available
-
-- **WHEN** `composeReplyHTML` is invoked with `userBody: "Thanks, noted."`, `userFormat: markdown`, `originalHTML: "<p>Can you review?</p>"`, and a non-empty `originalPlain`
-- **THEN** the returned HTML SHALL contain `Thanks, noted.` rendered as a paragraph
-- **AND** the HTML SHALL contain `<blockquote>` wrapping the content `<p>Can you review?</p>`
-
-#### Scenario: Reply composition escapes plain text when original HTML unavailable
-
-- **WHEN** `composeReplyHTML` is invoked with `userBody: "Thanks."`, `userFormat: markdown`, `originalHTML: nil`, and `originalPlain: "Can you <review>?"`
-- **THEN** the returned HTML SHALL contain `<blockquote>`
-- **AND** the blockquote content SHALL contain `Can you &lt;review&gt;?` (HTML-escaped)
-
-#### Scenario: Reply in plain mode embeds RFC 3676 quoted original
-
-- **WHEN** a caller invokes `reply_email` with `body: "Thanks"` and `format: "plain"` (or omits format)
-- **THEN** the reply SHALL use the AppleScript `content` property
-- **AND** the value SHALL be `"Thanks\n\n> <line 1 of original plain content>\n> <line 2>\n..."` — the user body, a blank line, then the original plain message with each line prefixed by `"> "` (greater-than + space) per RFC 3676 §4.5
-- **AND** empty lines in the original SHALL be quoted as `">"` (no trailing space) per RFC 3676 §4.5 stuffing rule
-- **AND** the reply SHALL NOT use the AppleScript `html content` property
-- **AND** if the pre-fetch of original content fails (e.g. message deleted, sandbox denial), the reply SHALL gracefully degrade to the user body alone (no quoted block) rather than aborting the entire reply
-
-> **Note (#43)**: Pre-v2.5.0 the plain branch used `set content to "<body>" & return & return & content`, which silently produced bare-body replies because Mail.app's outgoing-message `content` property is empty until the GUI compose pipeline materializes the quoted body. Replaced with Swift-side composition (`composeReplyPlainText`) that pre-fetches and quotes deterministically.
+- **WHEN** the AppleScript emitted for a plain compose is inspected
+- **THEN** it SHALL NOT assign the body through `content` or `html content`
 
 ---
 ### Requirement: Signature preservation is out of scope
@@ -208,52 +76,227 @@ On macOS 13+ (including macOS 26), Mail.app's AppleScript scripting interface de
 ---
 ### Requirement: Composing tools input schema exposes format parameter
 
-The MCP tool input schema for each of `compose_email`, `create_draft`, `reply_email`, and `forward_email` SHALL declare `format` as an optional string property with an enum constraint of `["plain", "markdown", "html"]` and a description stating the default is `"plain"`. The `format` property SHALL NOT appear in the `required` array of any tool schema.
+Each composing tool's input schema SHALL expose `format` as an optional string with an enum of exactly `["plain"]`, and SHALL describe it as the only supported body format. The schema SHALL NOT expose `require_wrapper_free`.
 
-#### Scenario: Tool schema advertises format enum
+#### Scenario: Schema advertises the single permitted format
 
-- **WHEN** an MCP client calls `tools/list`
-- **THEN** the returned schema for each of the four composing tools SHALL include a `format` property
-- **AND** the `format` property SHALL declare enum values exactly `["plain", "markdown", "html"]`
-- **AND** the `format` property SHALL NOT be listed as required
+- **WHEN** any composing tool's schema is inspected
+- **THEN** `format` SHALL be present with enum `["plain"]`
+- **AND** `require_wrapper_free` SHALL be absent
 
 ---
 ### Requirement: From-scratch composing tools accept cc and bcc recipients
 
-The `compose_email` and `create_draft` MCP tools SHALL each accept optional `cc` and `bcc` parameters, each an array of recipient email-address strings. When provided, the system SHALL set the corresponding Apple Mail `cc recipients` / `bcc recipients` of the outgoing message. The `cc` and `bcc` properties SHALL NOT appear in the `required` array of either tool schema, and omitting them SHALL produce behavior identical to the pre-existing single-recipient (`to`-only) path. Recipient addresses supplied via `cc` / `bcc` SHALL be validated at the boundary identically to `to` recipients.
+The `compose_email` and `create_draft` MCP tools SHALL each accept optional `cc` and `bcc` parameters, each an array of recipient strings. The `cc` and `bcc` properties SHALL NOT appear in the `required` array of either tool schema, and omitting them SHALL produce behavior identical to the single-recipient (`to`-only) path. Recipient strings supplied via `cc` / `bcc` SHALL be validated at the boundary identically to `to` recipients.
+
+Bare addr-specs in `cc` / `bcc` SHALL ride the `mailto:` URL on both tools. A display-name form (`Name <addr>`) in `cc` / `bcc` SHALL be accepted by `create_draft` (and by `update_draft`, which reuses its mechanism) and filled through the AX-addressed field mechanism, because a `mailto:` URL carries only addr-spec per RFC 6068. A display-name form in any recipient list SHALL cause `compose_email` to fail per the ineligibility contract, because a fill that failed on a send would dispatch with missing recipients.
 
 > `reply_email` instead exposes `cc_additional` (recipients added on top of those derived from `reply_all`) — a reply-context parameter with distinct semantics — and is not covered by this requirement. `forward_email` does not currently accept `cc` / `bcc`.
 
 #### Scenario: create_draft schema advertises cc and bcc
 
-- **WHEN** an MCP client calls `tools/list`
-- **THEN** the returned schema for `create_draft` SHALL include `cc` and `bcc` array-of-string properties
-- **AND** neither `cc` nor `bcc` SHALL be listed as required
+- **WHEN** the `create_draft` tool schema is inspected
+- **THEN** it SHALL expose optional `cc` and `bcc` array parameters
 
-#### Scenario: Draft is created with cc and bcc recipients
+#### Scenario: Display-name cc is accepted on a draft
 
-- **WHEN** `create_draft` is called with `cc` and/or `bcc` arrays
-- **THEN** the generated AppleScript SHALL emit `make new cc recipient` / `make new bcc recipient` fragments inside the `tell newMessage` block
-- **AND** omitting both SHALL yield AppleScript byte-identical to the pre-`cc`/`bcc` builder
+- **WHEN** `create_draft` is invoked with `cc: ["Name <a@b.co>"]`
+- **THEN** the tool SHALL create the draft with `a@b.co` as a cc recipient displayed as `Name`
+- **AND** the result SHALL include `recipients_verified`
+
+#### Scenario: Display-name cc is refused on a send
+
+- **WHEN** `compose_email` is invoked with `cc: ["Name <a@b.co>"]`
+- **THEN** the tool SHALL fail per the ineligibility contract and send nothing
 
 ---
-### Requirement: Wrapper-free strictness parameter
+### Requirement: Composing tools never inject a body via AppleScript
 
-`compose_email` and `create_draft` SHALL accept an optional boolean `require_wrapper_free` (default false). When true and the wrapper-free mailto path is ineligible (non-plain format, empty subject, Accessibility not granted, a non-simple custom sender such as a quoted local-part, or the env hatch set — note that since #219 a *simple* custom `from_address` rides the clean path via the verified From popup and is NOT an ineligibility reason on its own), the tool SHALL fail with an error naming the ineligibility reason and actionable alternatives, and SHALL NOT create any draft or send any mail via the legacy injection path. When true and the wrapper-free path is attempted but fails, the error SHALL propagate without a legacy fallback (the #242 post-dispatch semantics are unchanged). When false or omitted, behavior SHALL be identical to the pre-existing graceful-fallback contract, including its disclosure suffix.
+The system SHALL NOT assign an outgoing message's body through the AppleScript `content` property, the `html content` property, or a `content:` entry in `make new outgoing message with properties`. Apple Mail wraps any AppleScript-assigned body in `<blockquote type="cite">` at MIME serialization, which several mail clients render as a quotation of the sender's own text and which the sender cannot observe locally.
 
-#### Scenario: Strict compose refuses an ineligible call without side effects
+Every composing tool SHALL obtain its body exclusively from Mail's own editor — via the `mailto:` hand-off for `compose_email` / `create_draft`, and via the native reply/forward verb plus paste for `reply_email` / `forward_email`.
 
-- **WHEN** `compose_email` is called with `require_wrapper_free: true` and a custom `from_address` while Accessibility is not granted (so the verified From popup, #219, cannot run)
-- **THEN** the tool SHALL return an error naming the reason (the verified sender popup needs Accessibility) and the actionable alternatives (grant Accessibility for a clean body, or accept the legacy path whose native `set sender` uses the correct account)
-- **AND** no draft SHALL be created and no mail SHALL be sent
+#### Scenario: No composing path assigns content via AppleScript
 
-#### Scenario: Strict compose propagates a clean-path failure without fallback
+- **WHEN** the AppleScript emitted by any composing tool is inspected
+- **THEN** it SHALL contain no `set content`, no `set html content`, and no `content:` property in an outgoing-message construction
 
-- **WHEN** `compose_email` is called with `require_wrapper_free: true`, the call is eligible, and the mailto GUI path throws
-- **THEN** the error SHALL propagate to the caller
-- **AND** the legacy injection path SHALL NOT run
+#### Scenario: A successful compose produces an unwrapped body
 
-#### Scenario: Default remains graceful fallback
+- **WHEN** `create_draft` succeeds with `format: "plain"`
+- **THEN** the saved draft's source SHALL NOT contain `<blockquote type="cite">` wrapping the supplied body
 
-- **WHEN** `compose_email` is called without `require_wrapper_free` (or with false) and the call is ineligible
-- **THEN** the legacy path SHALL run and the result SHALL carry the `[legacy path — …]` disclosure suffix, exactly as before
+---
+### Requirement: Ineligible composing calls fail without side effects
+
+When a composing tool cannot use its non-injecting path, it SHALL fail with an error that names the reason and states an actionable alternative, and SHALL NOT create a draft, send mail, or delete an existing draft.
+
+The set of ineligibility reasons SHALL be exactly the following six, and SHALL NOT be extended by analogy:
+
+1. `format` is `markdown` or `html`
+2. the subject is empty (the clean path identifies its compose window by title)
+3. Accessibility is not granted (GUI keystrokes are unavailable)
+4. a supplied `from_address` is not a simple addr-spec
+5. an attachment path contains non-ASCII characters
+6. a `to`, `cc`, or `bcc` recipient carries a display name on a send (`compose_email`); on a draft, display-name recipients are filled through the GUI and are not a refusal reason
+
+#### Scenario: Missing Accessibility fails and names the zero-TCC alternative
+
+- **WHEN** `create_draft` is invoked while Accessibility is not granted
+- **THEN** the tool SHALL fail naming Accessibility as the reason
+- **AND** the error SHALL name `open_mailto` as an alternative that requires no TCC grant, noting that it cannot carry attachments
+- **AND** no draft SHALL be created
+
+#### Scenario: Non-ASCII attachment path fails with the manual recipe
+
+- **WHEN** `create_draft` is invoked with an attachment path containing non-ASCII characters
+- **THEN** the tool SHALL fail naming the path as the reason
+- **AND** the error SHALL direct the caller to create the draft without `attachments` and attach the file manually
+- **AND** no draft SHALL be created
+
+#### Scenario: Display-name recipient on a send fails rather than degrading silently
+
+- **WHEN** `compose_email` is invoked with `cc: ["王小明 <ming@example.com>"]`
+- **THEN** the tool SHALL fail naming display-name recipients on a send as the reason
+- **AND** the error SHALL direct the caller to `create_draft`, where display-name recipients are supported
+- **AND** no mail SHALL be sent
+
+#### Scenario: Display-name recipient on a draft is not a refusal reason
+
+- **WHEN** `create_draft` is invoked with `bcc: ["王小明 <ming@example.com>"]` and every other eligibility condition holds
+- **THEN** the tool SHALL NOT fail for reason 6
+- **AND** SHALL proceed to fill the Bcc field
+
+---
+### Requirement: Runtime composing failures propagate without falling back
+
+When a composing tool's non-injecting path fails **after** it has begun operating — a GUI keystroke that does not land, a paste that does not take, a send stage that errors — the system SHALL propagate the error to the caller and SHALL NOT retry the operation through any body-assigning path.
+
+Such a failure is distinct from the pre-flight ineligibility contract: it occurs after side effects are possible, so the error message SHALL describe how far the operation progressed and SHALL NOT claim that nothing happened. The existing post-dispatch classification (which distinguishes a failure before dispatch from one after it, so a caller can tell whether retrying risks a duplicate) SHALL continue to govern retry safety.
+
+#### Scenario: A mid-operation GUI failure surfaces rather than falling back
+
+- **WHEN** a composing tool's clean path opens its window and a subsequent GUI step fails
+- **THEN** the tool SHALL return an error describing the failure
+- **AND** the tool SHALL NOT assign the body through AppleScript as a fallback
+
+#### Scenario: A post-dispatch failure is not presented as a no-op
+
+- **WHEN** a send-stage failure occurs after the message has been dispatched
+- **THEN** the error SHALL retain its post-dispatch classification so the caller can tell that retrying risks sending twice
+- **AND** the error SHALL NOT state that no mail was sent
+
+---
+### Requirement: Draft display-name recipients are filled through AX-addressed fields
+
+When `create_draft` (or `update_draft`, which reuses its mechanism) receives a `to`, `cc`, or `bcc` list in which any entry carries a display name (`Name <addr>`), the system SHALL omit that entire list from the `mailto:` URL and SHALL fill it through the compose window's GUI. For each such list the system SHALL locate the address field by its Accessibility identifier — `Mail.toField`, `Mail.ccField`, or `Mail.bccField` — set keyboard focus on that field, paste the comma-joined recipient list from the clipboard, and press Tab to commit the tokens. The system SHALL NOT locate a field by Tab order and SHALL NOT assign the list through the field's AX value.
+
+The field lookup SHALL be polled (the AX tree settles for a beat after the window opens) rather than judged on a single probe. After committing, the system SHALL read the field's child token elements and SHALL require (a) the token count to equal the number of recipients in that list and (b) for each recipient that carries a display name, that token's AX value to equal the display name. A bare address's token value SHALL NOT be compared: Mail renders an address that has a Contacts card as the card's name, so the token text is not an invariant — cc and bcc addresses are verified by the post-save receipt; `to` addresses are not receipt-verified (the count gate is their only check). Any count mismatch, any named-token mismatch, and any field that cannot be located, SHALL abort before the save keystroke, close only the compose window this call opened, and fail the call naming the field and the mismatch.
+
+#### Scenario: Named cc recipients become tokens in the Cc field
+
+- **WHEN** `create_draft` is invoked with `cc: ["王小明 <ming@example.com>", "b@example.com"]`
+- **THEN** the compose window's `Mail.ccField` SHALL contain exactly two tokens
+- **AND** the first token's AX value SHALL be `王小明`; the second token's value SHALL NOT be compared (it may render as a Contacts card name)
+- **AND** the `mailto:` URL SHALL carry no `cc` parameter
+
+#### Scenario: Missing address field aborts before save
+
+- **WHEN** a display-name `cc` list is to be filled and no element with identifier `Mail.ccField` exists in the compose window
+- **THEN** the call SHALL fail naming `Mail.ccField` as unlocatable
+- **AND** no save keystroke SHALL be dispatched
+- **AND** the compose window opened by this call SHALL be closed
+
+#### Scenario: Token count mismatch aborts before save
+
+- **WHEN** two named cc recipients are pasted and the `Mail.ccField` afterwards exposes one token
+- **THEN** the call SHALL fail naming the expected count (2) and the observed count (1)
+- **AND** no draft SHALL be created
+
+##### Example: read-back expectations per recipient form
+
+| Recipient as supplied | Expected token AX value |
+| --- | --- |
+| `王小明 <ming@example.com>` | `王小明` |
+| `b@example.com` | (not compared — Mail may render a Contacts card name; the count still requires one token) |
+| `"Doe, Jane" <jane@example.com>` | `Doe, Jane` |
+
+---
+### Requirement: Bcc field is revealed on demand and disclosed, not restored
+
+When a display-name `bcc` list is to be filled and the compose window exposes no element with identifier `Mail.bccField`, the system SHALL click the item of the View menu whose name contains `密件副本` or `Bcc` — the View menu itself SHALL be identified only by the menu-bar name `顯示方式` or `View`, and on a Mail UI in another language the reveal SHALL fail cleanly with `BCCREVEAL` naming that limit rather than scan other menus (the Window menu lists window titles, including this window's subject) — then poll until `Mail.bccField` exists, bounded by the same deadline used for From-popup population. The system SHALL NOT attempt to hide the field again afterwards. When the field was revealed by this call, the success result SHALL include `bcc_field_revealed: true`. If the menu item cannot be found or the field does not appear before the deadline, the call SHALL fail naming the Bcc field as unrevealable, close only the compose window this call opened, and create no draft.
+
+#### Scenario: Hidden Bcc field is revealed and left visible
+
+- **WHEN** `create_draft` is invoked with `bcc: ["密件人 <bcc@example.org>"]` and the compose window has no `Mail.bccField`
+- **THEN** the system SHALL click the View menu item for the Bcc address field
+- **AND** SHALL fill `Mail.bccField` once it exists
+- **AND** the result SHALL include `bcc_field_revealed: true`
+- **AND** the system SHALL NOT click the menu item a second time
+
+#### Scenario: Bcc field cannot be revealed
+
+- **WHEN** the View menu contains no item whose name contains `密件副本` or `Bcc` (or the View menu cannot be identified by name)
+- **THEN** the call SHALL fail naming the Bcc field as unrevealable
+- **AND** no draft SHALL be created
+
+---
+### Requirement: Draft recipient receipt verifies addresses after save
+
+When a draft was created with any display-name `cc` or `bcc` recipient, then after the save keystroke the system SHALL locate the new draft in the drafts mailbox by exact subject match (the same subject-match strategy as `update_draft`'s post-create id receipt — currently two independent reads; merging them is tracked in #409), read the address of every cc recipient and every bcc recipient, and compare each set with the addresses the caller supplied. When both sets match, the result SHALL include `recipients_verified: true`. When either set differs, or the draft cannot be located, the result SHALL include `recipients_verified: false` and a `recipients_diff` JSON object (`{"cc":{"expected":[…],"found":[…]},"bcc":{…}}`) listing, per field, the expected and found addresses; the draft SHALL be kept, and the call SHALL NOT be reported as failed. When the receipt script itself cannot run (timeout, Automation refusal, runtime error), the result SHALL include `recipients_verified: false` and `recipients_receipt: unavailable` with the reason, SHALL NOT claim the draft was not found, and SHALL NOT retry the failed script (only a not-found result is polled, because the save can land asynchronously). The AX token read-back and this receipt are both required: the read-back proves the fill landed, the receipt proves the addresses Mail stored.
+
+`update_draft` SHALL gate its delete of the old draft on this receipt only after its post-create id receipt has confirmed the replacement exists: when the confirmed replacement's receipt reports a definitive mismatch, the old draft SHALL be kept and the result SHALL say `deleted_old: false` with a note that states what was observed, says the receipt identifies a draft by subject only, and SHALL NOT instruct the caller to delete anything; an unavailable or not-found receipt SHALL NOT gate the delete, and a phantom create SHALL keep being reported as unconfirmed rather than as a mismatch.
+
+#### Scenario: Receipt matches
+
+- **WHEN** a draft was created with `cc: ["王小明 <ming@example.com>"]` and the saved draft's cc recipient address is `ming@example.com`
+- **THEN** the result SHALL include `recipients_verified: true`
+
+#### Scenario: Receipt differs but the draft is kept
+
+- **WHEN** a draft was created with `bcc: ["甲 <a@example.org>", "乙 <b@example.org>"]` and the saved draft's bcc recipient addresses are `a@example.org` only
+- **THEN** the result SHALL include `recipients_verified: false`
+- **AND** `recipients_diff.bcc.expected` SHALL be `["a@example.org", "b@example.org"]` and `recipients_diff.bcc.found` SHALL be `["a@example.org"]`
+- **AND** the draft SHALL NOT be deleted
+
+#### Scenario: Receipt script fails — reported as unavailable, not as absence
+
+- **WHEN** the receipt script throws (for example the 45 s AppleScript deadline)
+- **THEN** the result SHALL include `recipients_verified: false` and `recipients_receipt: unavailable`
+- **AND** the result SHALL NOT say the draft was not found
+- **AND** the script SHALL NOT be re-run
+
+#### Scenario: update_draft keeps the old draft on a definitive mismatch
+
+- **WHEN** `update_draft` created its replacement, its post-create id receipt confirmed a new id, and the confirmed replacement's recipient receipt reports a definitive mismatch
+- **THEN** the old draft SHALL NOT be deleted
+- **AND** the result SHALL include `deleted_old: false` and a note naming the recipient mismatch, stating that two drafts MAY exist and that the receipt identifies a draft by subject only
+
+#### Scenario: update_draft reports a phantom create as unconfirmed, not as a mismatch
+
+- **WHEN** `update_draft`'s post-create id receipt finds no new id (phantom create), even though the recipient receipt read a same-subject draft whose addresses differ from the request
+- **THEN** the result SHALL say `deleted_old: false` with a "not confirmed" note
+- **AND** SHALL NOT report a recipient mismatch
+
+#### Scenario: Receipt not applicable to bare-address drafts
+
+- **WHEN** a draft was created with `cc: ["b@example.com"]` and no display-name recipient in any list
+- **THEN** the system SHALL NOT perform the recipient receipt
+- **AND** the result SHALL NOT include `recipients_verified`
+
+---
+### Requirement: Compose-window cleanup dismisses the discard-draft sheet
+
+When the clean compose path fails after its window has been identified and before its dispatch keystroke, and closes the compose window it opened with `saving no`, the system SHALL then check whether that window still exists with a sheet whose Accessibility identifier is `Mail.sendMessageAlert`. If so, and exactly one window carries the call's subject, the system SHALL click the sheet's button whose title is exactly `不儲存`, `Don't Save`, or `Don’t Save`, and SHALL confirm the window no longer exists. If more than one window carries the subject the system SHALL NOT click any sheet button. If the window still exists after this, the failure message SHALL additionally state that a compose window was left open and names its title. The system SHALL NOT click the sheet's save or cancel buttons. Failures that occur before the window is identified (a same-title window pre-existing, more than one new window, no new window) are outside this requirement and remain tracked by #333.
+
+#### Scenario: Discard sheet is dismissed on abort
+
+- **WHEN** a display-name fill aborts and `close saving no` leaves the compose window open behind a `Mail.sendMessageAlert` sheet
+- **THEN** the system SHALL click the sheet's discard button
+- **AND** the compose window SHALL no longer exist
+- **AND** no draft with the call's subject SHALL exist in the drafts mailbox
+
+#### Scenario: Window survives cleanup
+
+- **WHEN** the discard button was clicked and the compose window still exists
+- **THEN** the failure message SHALL name the window title and state that it was left open

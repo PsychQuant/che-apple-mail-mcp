@@ -9,87 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `plugin.json` description field. Section categorization is best-effort —
 > review and refine `Added` / `Changed` / `Fixed` etc. as needed.
 
-## [Unreleased]
-
-### Fixed
-
-- **The binary download chain verifies what it installs — and a degraded state
-  can now end**
-  ([#392](https://github.com/PsychQuant/che-apple-mail-mcp/issues/392),
-  [#393](https://github.com/PsychQuant/che-apple-mail-mcp/issues/393)).
-  Downloads are sha256-verified against the release's own asset list, and
-  verification **fails closed**: the only unverified install is a release that
-  genuinely publishes no digest. Being unable to *compute* one — no hash tool,
-  or a `shasum` that exists but is broken — is a refusal, not a downgrade, and
-  the `openssl` fallback is now actually reachable in that case. The asset is
-  selected by exact basename from a URL list pinned to this repo's own release
-  downloads, so neither a minified API response nor a spoofed body can install
-  the wrong file or point elsewhere. Temps are unique (no shared-`.tmp` TOCTOU)
-  and now removed by a trap, so an interrupted spawn no longer leaks ~18 MB
-  into `~/bin`. The installed mode is set explicitly, and a failed `chmod` does
-  not install.
-
-  **The retry story, which round 1 got backwards.** A definitive pinned-tag 404
-  falls back to latest exactly once and records a marker with a 24h TTL;
-  transient failures (403 rate-limits, timeouts, 5xx) keep the installed binary
-  untouched. Runtime state records the version ACTUALLY installed (read from the
-  sidecar; `unknown` when it is missing — never the wishful pin), so the
-  session-start hook can finally see a failed download. `degraded_pin` tells
-  that hook when a mismatch is deliberate — but **only when a marker backs it**,
-  and the hook now re-validates that marker (existence, pin, TTL, clock skew)
-  instead of trusting the field. Round 1 trusted it blindly, which made the
-  degraded state permanent: the TTL is only ever evaluated by the wrapper, and
-  the wrapper cannot run again until a kill respawns it, so at TTL+1h the hook
-  was still suppressing the kill and the pin was never retried — deleting the
-  marker by hand did not help either, because nothing consulted it. Round 1 also
-  stamped `degraded_pin` on transient failures, suppressing the one thing that
-  triggers a retry. The invariant is now stated in the wrapper and locked by
-  tests: `degraded_pin` is set **if and only if** a marker was written.
-
-  Binary downloads get a 300-second budget again — unifying the curl calls
-  behind one helper had put the 18 MB binary on the metadata call's 30 seconds,
-  which hard-fails a fresh install on any normal-but-slow link. Legacy plugins
-  without `binary_version` keep the old semantics (the #73 spurious-kill trap
-  stays closed). A corrupt or hand-edited marker is ignored rather than fatal,
-  and its epoch can no longer reach bash arithmetic, where a crafted value is
-  executed as a command. The marker's reason field is finally read, so a digest
-  mismatch is reported as a possible tampering signal instead of "unavailable
-  upstream".
-
-  **The asset-URL host pin was not a pin.** Round 2 validated the URL as a
-  string (`starts with https://github.com/<repo>/releases/download/`) and then
-  handed it to curl, which normalises the path *before* requesting it. Verified
-  with `curl -w '%{url_effective}'`: a URL beginning with the correct prefix but
-  carrying `../../../..` resolves to `github.com/attacker-org/evil-repo/...`,
-  and because the `.sha256` is chosen by the same rule it comes from the same
-  attacker path — so verification PASSES and the wrapper prints
-  `(sha256 verified)` while exec'ing someone else's binary. A `#fragment` is
-  likewise dropped before the request, so the basename check can be satisfied
-  by text the server never sees. The URL is now validated structurally: exactly
-  two path components after `/download/`, no query, no fragment, and no
-  dot-segment in any spelling.
-
-  Test suite: **95 asserts across 28 mock-curl scenarios**. Round 3 audited the
-  round-2 claim that "every fix was mutation-tested" and found it **false**:
-  five fixes shipped with no regression coverage at all (the stale-marker
-  clearing, the HTML-error-page refusal — an explicit acceptance item of #392's
-  own diagnosis — the `openssl` fallback for a present-but-broken `shasum`,
-  SemVer build metadata surviving `json_escape`, and the future-dated-epoch
-  guard), plus the hook's `verify` branch, which every existing case avoided by
-  writing `miss` markers. All now have cases.
-
-  Nine mutations run, nine caught — **after** two of the new cases were
-  themselves caught testing nothing: the dot-segment payload was stopped by the
-  component-count regex before it ever reached the dot-segment check, and the
-  stale-marker case had the download succeed, so the post-install cleanup
-  cleared the marker whether or not the branch under test existed. Both were
-  rewritten to exercise the code they name. A ninth case now greps for
-  bash-4-only syntax: the shebang is `/bin/bash`, which is 3.2 on macOS, where
-  `${x,,}` parses cleanly under `bash -n` and fails at expansion time — this
-  round shipped exactly that and the suite went to 0/76 with a failure that
-  read like a logic bug.
+## [2.48.0] - 2026-09-08
 
 ### Changed
+- `binary_version` 3.0.0 → 3.1.0: drafts (`create_draft` / `update_draft`) accept display-name recipients in to, cc AND bcc through AX-addressed fields; hidden Bcc revealed and disclosed (`bcc_field_revealed`); post-save three-state recipient receipt (`recipients_verified` / `recipients_diff` / `recipients_receipt: unavailable`); discard-sheet cleanup (#333 partial). `compose_email` still refuses display-name recipients. ([#404](https://github.com/PsychQuant/che-apple-mail-mcp/issues/404))
+- `rules/compose-wrapper-free.md`: reason 6 of the ineligibility enumeration is send-only; drafts support display names in all three lists.
+
+## [2.47.0] - 2026-08-31
+
+### Changed
+
+- `binary_version` 2.28.0 → **3.0.0**，出貨 [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)：legacy compose 路徑整段移除。該修正在原始碼裡躺了一段時間卻**從未發過 binary release** —— 最新 tag 仍是 v2.28.0，所以每一個已安裝的 binary 在「已有同主旨 compose 視窗開著」時仍會退回 wrapped-body 路徑（AppleScript `-2700` → legacy fallback）。2026-08-31 實地踩到：`update_draft` 回傳 `legacy path — body wrapped in <blockquote type="cite">`，產出的草稿在 Gmail web 與 Outlook 會整封顯示成引用內容，正是 2026-07-29 那起無法回收的事故的同一機制。**這條 plugin 的 `rules/compose-wrapper-free.md` 自 2.43.0 起就描述著 #304 之後的世界，而使用者手上的 binary 拿不到那個保證** —— 規則描述「應該安裝的版本」而非「實際跑的版本」時，它給的是虛假的安心。
+
+- **`plugin.json` 的 `description` 拿掉版本敘事**（18,834 → 235 字元）。該欄位累積成一整部 release 史，且開頭寫著「Shell v2.43.0 (shell-only, binary stays v2.25.0)」—— 兩個數字在寫入當下之後就再也沒對過（實際是 shell 2.46.1、binary 2.28.0）。版本已由 `version` 與 `binary_version` 兩個欄位承載，敘事已由本檔與 repo 根的 `CHANGELOG.md` 承載；寫進 description 是**第三份會腐爛的副本**，與 [#335](https://github.com/PsychQuant/che-apple-mail-mcp/issues/335) 讓 marketplace entry 不帶版本敘事是同一個理由。`marketplace.json` 的指標句一併從「live in plugin/.claude-plugin/plugin.json and CHANGELOG.md」改為「live in CHANGELOG.md」，否則拆掉敘事後那句話就成了錯的。
+
+- **README 補上 `/archive-mail-repair-synthetic-ids`**（5 個 command 先前只記載 4 個）與 v2.47.0／binary v3.0.0 的版本歷史條目。
 
 - `binary_version` 2.27.0 → **2.28.0**，讓 v2.46.0 的 first-run FDA assist（mail#355）真正生效。該 hook 從落地起就是 **no-op**：它以版本閘擋住 2.28.0 以前的 binary，因為更舊的版本會把 `--check-fda --quiet` 當成普通 `--check-fda` 解析、印出訊息並打開系統設定 —— 正是它要避免的騷擾。binary v2.28.0 已發布（signed + notarized），閘門現在開了。
 

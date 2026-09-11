@@ -58,14 +58,20 @@ cleanup_temps() {
     [[ ${#TEMPS[@]} -gt 0 ]] && rm -f "${TEMPS[@]}" 2>/dev/null
     return 0
 }
-trap cleanup_temps EXIT INT TERM
+trap cleanup_temps EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 # Result lands in $NEW_TEMP rather than on stdout: `X=$(new_temp ...)` would run
 # the function in a SUBSHELL, so the registration would be discarded and the
 # trap would have nothing to clean — the leak this exists to prevent, hidden
 # behind a function that looks like it is doing the job.
 NEW_TEMP=""
 new_temp() {
-    NEW_TEMP=$(mktemp "$1") || return 1
+    if ! NEW_TEMP=$(mktemp "$1"); then
+        NEW_TEMP=""
+        echo "$BINARY_NAME: ERROR — cannot create temporary file for $1" >&2
+        return 1
+    fi
     TEMPS+=("$NEW_TEMP")
     return 0
 }
@@ -105,18 +111,39 @@ INSTALLED_VERSION=""
 # timeouts / 5xx is the whole point (#392 round 1: conflating them let one
 # transient outage pin the user to the wrong binary permanently).
 http_get() {
+    [[ -n "$2" ]] || { printf '000'; return 0; }
     local code
     code=$(curl -sL --proto '=https' --max-redirs 3 --max-time "${3:-$META_TIMEOUT}" \
         -o "$2" -w '%{http_code}' "$1" 2>/dev/null) || code="000"
     printf '%s' "${code:-000}"
 }
 
+# Decode one URL path component before checking its meaning. Encoded separators,
+# controls and nested percent escapes are ambiguous across HTTP intermediaries.
+# Only sanitized hex digits reach printf's escape interpreter (Bash 3.2).
+decode_asset_component() {
+    local remaining="$1" decoded="" char hex
+    while [[ -n "$remaining" ]]; do
+        char=${remaining:0:1}
+        remaining=${remaining:1}
+        if [[ "$char" == '%' ]]; then
+            hex=${remaining:0:2}
+            [[ "$hex" =~ ^[0-9a-fA-F]{2}$ && "$hex" != 00 ]] || return 1
+            remaining=${remaining:2}
+            printf -v char '%b' "\\x$hex"
+        fi
+        case "$char" in /|\\|%|[[:space:][:cntrl:]]) return 1 ;; esac
+        decoded+="$char"
+    done
+    [[ -n "$decoded" && "$decoded" != . && "$decoded" != .. ]] || return 1
+    printf '%s' "$decoded"
+}
+
 # The download URL for the asset named exactly $1, from the API body $2.
 #
-# Every browser_download_url is put on its own line FIRST, so correctness no
-# longer depends on the API pretty-printing one asset per line — against a
-# minified response the old greedy sed returned the LAST url on the line, i.e.
-# the wrong asset (#398 round 2).
+# Parse the assets array and match its name, so JSON whitespace, escapes and
+# null fields do not change selection. A rejected digest URL is an invalid
+# asset, not evidence that the release omitted its digest.
 #
 # The URL is then validated STRUCTURALLY, not by string prefix. Round 2 used
 # `[[ "$u" == "$prefix"* ]]` plus a basename compare, and round 3 proved that
@@ -135,36 +162,39 @@ http_get() {
 #
 # Hence: exactly two path components after /download/, no query, no fragment,
 # and no component that is a dot-segment in any spelling.
+# Return 0 with URL, 2 for a genuinely absent named asset, 1 for invalid
+# metadata/URL. Filtering an unsafe checksum URL must never mean "no digest".
+# plutil is built into supported macOS versions; no jq/Python bootstrap needed.
 asset_url() {
-    local want="$1" body="$2"
+    local want="$1" body="$2" count i asset_name u selected="" found=false
     local re="^https://github\.com/${REPO}/releases/download/([^/?#]+)/([^/?#]+)\$"
-    grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' "$body" 2>/dev/null \
-        | cut -d'"' -f4 \
-        | while IFS= read -r u; do
-            [[ "$u" =~ $re ]] || continue
-            local tag="${BASH_REMATCH[1]}" name="${BASH_REMATCH[2]}"
-            # `..` survives [^/?#]+ but is exactly what curl collapses away.
-            # Percent-encoded spellings are rejected too: curl leaves them
-            # literal, but then the path is still not the one this check
-            # claims to have validated — and an origin that DOES decode them
-            # would resolve elsewhere.
-            # Case-insensitive by enumeration, NOT by ${x,,} — the shebang
-            # here is /bin/bash, which on macOS is 3.2, where that expansion
-            # is a runtime "bad substitution". `bash -n` parses it happily,
-            # so this class of mistake is invisible until the suite runs
-            # (#398 round 3: it went 0/76 and looked like a logic bug).
-            is_dot_segment() {
-                case "$1" in
-                    .|..) return 0 ;;
-                    %2[eE]|%2[eE]%2[eE]|.%2[eE]|%2[eE].) return 0 ;;
-                    *) return 1 ;;
-                esac
-            }
-            is_dot_segment "$tag" && continue
-            is_dot_segment "$name" && continue
-            [[ "$name" == "$want" ]] && printf '%s\n' "$u"
-          done \
-        | head -1
+    count=$(/usr/bin/plutil -extract assets raw -expect array -o - "$body" 2>/dev/null) || return 1
+    [[ "$count" =~ ^[0-9]+$ ]] || return 1
+    for ((i=0; i<count; i++)); do
+        # A sentinel preserves embedded/trailing newlines for validation.
+        asset_name=$(/usr/bin/plutil -extract "assets.$i.name" raw -expect string -n -o - "$body" 2>/dev/null && printf '.') || return 1
+        asset_name=${asset_name%.}
+        [[ "$asset_name" == "$want" ]] || continue
+        [[ "$found" == false ]] || return 1
+        found=true
+        u=$(/usr/bin/plutil -extract "assets.$i.browser_download_url" raw -expect string -n -o - "$body" 2>/dev/null && printf '.') || return 1
+        u=${u%.}
+        [[ "$u" != *[[:space:][:cntrl:]]* ]] || return 1
+        [[ "$u" =~ $re ]] || return 1
+        local tag="${BASH_REMATCH[1]}" name="${BASH_REMATCH[2]}"
+        tag=$(decode_asset_component "$tag") || return 1
+        name=$(decode_asset_component "$name") || return 1
+        [[ "$name" == "$want" ]] || return 1
+        selected="$u"
+    done
+    [[ "$found" == true ]] || return 2
+    printf '%s\n' "$selected"
+    return 0
+}
+
+select_release_assets() {
+    URL=$(asset_url "$BINARY_NAME" "$1"); BINARY_ASSET_STATUS=$?
+    SHA_URL=$(asset_url "$BINARY_NAME.sha256" "$1"); SHA_ASSET_STATUS=$?
 }
 
 # Echoes a lowercase 64-hex digest, or nothing if no tool could produce one.
@@ -210,11 +240,26 @@ json_escape() {
     printf '%s' "$1" | tr -d '\000-\037' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
 }
 
+# Publish the marker before claiming degraded_pin; a failed write cannot
+# suppress retries. A directory is not a valid destination for atomic rename.
+write_fallback_marker() {
+    local reason="$1"
+    if [[ ! -d "$FALLBACK_MARKER" ]] \
+       && new_temp "${FALLBACK_MARKER}.XXXXXX" \
+       && printf '%s %s %s\n' "$DESIRED_VERSION" "$NOW" "$reason" > "$NEW_TEMP" \
+       && mv "$NEW_TEMP" "$FALLBACK_MARKER"; then
+        DEGRADED_PIN="$DESIRED_VERSION"
+    else
+        echo "$BINARY_NAME: WARNING — could not record fallback marker; retries will not be suppressed" >&2
+    fi
+}
+
 # --- decide whether to download ----------------------------------------------
 
 NEED_DOWNLOAD=false
 REASON=""
 DEGRADED_PIN=""   # see THE degraded_pin INVARIANT above
+SIDECAR_WRITE_FAILED=false
 
 # Read the marker defensively. An epoch that is not all-digits used to reach
 # bash arithmetic directly, where `a[$(...)]` is evaluated as a command; a
@@ -226,8 +271,10 @@ if [[ -f "$FALLBACK_MARKER" ]]; then
     read -r MARKER_PIN MARKER_EPOCH MARKER_REASON _ < "$FALLBACK_MARKER" 2>/dev/null || true
     MARKER_PIN=${MARKER_PIN:-}
     MARKER_REASON=${MARKER_REASON:-}
-    if [[ ! "${MARKER_EPOCH:-}" =~ ^[0-9]{1,19}$ ]]; then
-        MARKER_PIN=""   # unparseable marker == no marker
+    if [[ "${MARKER_EPOCH:-}" =~ ^[0-9]{1,12}$ ]]; then
+        MARKER_EPOCH=$((10#$MARKER_EPOCH))
+    else
+        MARKER_PIN=""   # invalid/overflowing marker == no marker
         MARKER_EPOCH=0
     fi
 fi
@@ -273,9 +320,11 @@ if $NEED_DOWNLOAD; then
     mkdir -p "$INSTALL_DIR"
 
     new_temp "${INSTALL_DIR}/.${BINARY_NAME}.meta.XXXXXX"
-        META="$NEW_TEMP"
+    META="$NEW_TEMP"
     URL=""
     SHA_URL=""
+    BINARY_ASSET_STATUS=1
+    SHA_ASSET_STATUS=1
     PIN_DEFINITIVE_MISS=false
     PIN_TRANSIENT=false
     CODE=""
@@ -283,11 +332,15 @@ if $NEED_DOWNLOAD; then
     if [[ -n "$DESIRED_VERSION" ]]; then
         CODE=$(http_get "https://api.github.com/repos/$REPO/releases/tags/v$DESIRED_VERSION" "$META")
         if [[ "$CODE" == "200" ]]; then
-            URL=$(asset_url "$BINARY_NAME" "$META")
-            SHA_URL=$(asset_url "$BINARY_NAME.sha256" "$META")
+            select_release_assets "$META"
             # Tag exists but carries no binary asset. Not a 404, but equally
             # definitive: no retry changes a published release's asset list.
-            [[ -z "$URL" ]] && PIN_DEFINITIVE_MISS=true
+            if [[ "$BINARY_ASSET_STATUS" == 2 ]]; then
+                PIN_DEFINITIVE_MISS=true
+            elif [[ "$BINARY_ASSET_STATUS" != 0 ]]; then
+                PIN_TRANSIENT=true
+                echo "$BINARY_NAME: ERROR — invalid release asset metadata; refusing to treat it as a missing pin" >&2
+            fi
         elif [[ "$CODE" == "404" ]]; then
             PIN_DEFINITIVE_MISS=true
         else
@@ -312,8 +365,7 @@ if $NEED_DOWNLOAD; then
         fi
         CODE2=$(http_get "https://api.github.com/repos/$REPO/releases/latest" "$META")
         if [[ "$CODE2" == "200" ]]; then
-            URL=$(asset_url "$BINARY_NAME" "$META")
-            SHA_URL=$(asset_url "$BINARY_NAME.sha256" "$META")
+            select_release_assets "$META"
         fi
     fi
 
@@ -335,7 +387,10 @@ if $NEED_DOWNLOAD; then
             # ---- sha256 verification (#392) --------------------------------
             INSTALL_OK=true
             VERIFIED=false
-            if [[ -z "$SHA_URL" ]]; then
+            if [[ "$SHA_ASSET_STATUS" == 1 ]]; then
+                INSTALL_OK=false
+                echo "$BINARY_NAME: ERROR — checksum asset metadata or URL is invalid; refusing unverified install" >&2
+            elif [[ "$SHA_ASSET_STATUS" == 2 ]]; then
                 # Definitively absent from the release's own asset list — the
                 # one approved unverified path (old releases never shipped one).
                 if looks_like_html "$TMP"; then
@@ -351,7 +406,7 @@ if $NEED_DOWNLOAD; then
                 echo "$BINARY_NAME: ERROR — this release publishes a .sha256 but no sha256 tool (shasum/openssl) is available to verify it; refusing unverified install" >&2
             else
                 new_temp "${INSTALL_DIR}/.${BINARY_NAME}.sha.XXXXXX"
-        SHA_TMP="$NEW_TEMP"
+                SHA_TMP="$NEW_TEMP"
                 SHA_CODE=$(http_get "$SHA_URL" "$SHA_TMP")
                 EXPECTED_SHA=$(head -1 "$SHA_TMP" 2>/dev/null | awk '{print $1}' | tr 'A-F' 'a-f')
                 rm -f "$SHA_TMP"
@@ -375,8 +430,7 @@ if $NEED_DOWNLOAD; then
                     # Persistent-mismatch guard: without a marker every spawn
                     # re-downloads 18 MB of the same rejected bytes (#398 R1).
                     if [[ -x "$BINARY" ]] && [[ -n "$DESIRED_VERSION" ]]; then
-                        printf '%s %s verify\n' "$DESIRED_VERSION" "$NOW" > "$FALLBACK_MARKER" 2>/dev/null || true
-                        DEGRADED_PIN="$DESIRED_VERSION"
+                        write_fallback_marker verify
                     fi
                 else
                     VERIFIED=true
@@ -397,10 +451,19 @@ if $NEED_DOWNLOAD; then
                     # from the release URL — keeps the sidecar honest (#77).
                     # On a parse failure the honest value is "unknown": writing
                     # DESIRED here is exactly the #393 lie this file fixes.
-                    ACTUAL_VERSION=$(printf '%s' "$URL" | sed -nE 's|.*/releases/download/v?([^/]+)/.*|\1|p')
-                    new_temp "${VERSION_FILE}.XXXXXX"
-        SC_TMP="$NEW_TEMP"
-                    printf '%s\n' "${ACTUAL_VERSION:-unknown}" > "$SC_TMP" && mv "$SC_TMP" "$VERSION_FILE"
+                    ASSET_TAG=${URL#*/releases/download/}
+                    ASSET_TAG=${ASSET_TAG%%/*}
+                    ACTUAL_VERSION=$(decode_asset_component "$ASSET_TAG")
+                    ACTUAL_VERSION=${ACTUAL_VERSION#v}
+                    if new_temp "${VERSION_FILE}.XXXXXX" \
+                       && printf '%s\n' "${ACTUAL_VERSION:-unknown}" > "$NEW_TEMP" \
+                       && mv "$NEW_TEMP" "$VERSION_FILE"; then
+                        :
+                    else
+                        SIDECAR_WRITE_FAILED=true
+                        rm -f "$VERSION_FILE" 2>/dev/null || true
+                        echo "$BINARY_NAME: WARNING — installed binary but could not update version sidecar; runtime version is unknown" >&2
+                    fi
                     if [[ "$VERIFIED" == true ]]; then
                         echo "$BINARY_NAME: installed v${ACTUAL_VERSION:-unknown} (sha256 verified)" >&2
                     else
@@ -410,8 +473,7 @@ if $NEED_DOWNLOAD; then
                         # Definitive miss + successful fallback: remember it so
                         # the next spawns don't re-download; TTL + pin-change
                         # + manual rm all clear it (#392).
-                        printf '%s %s miss\n' "$DESIRED_VERSION" "$NOW" > "$FALLBACK_MARKER" 2>/dev/null || true
-                        DEGRADED_PIN="$DESIRED_VERSION"
+                        write_fallback_marker miss
                     else
                         rm -f "$FALLBACK_MARKER" 2>/dev/null
                     fi
@@ -447,8 +509,9 @@ fi
 # Write runtime state (per #76 — let session-start hook detect mid-session staleness).
 # Atomic write: mktemp + mv; failures silent (|| true) so they never block spawn.
 #
-# #393: version_at_spawn records the ACTUAL installed version (re-read from the
-# sidecar, which #77 made honest) — NOT the DESIRED pin. Writing DESIRED meant a
+# #393: this provisional record uses the installed sidecar, NOT the desired pin.
+# Updated binaries finalize it with their own compiled version after exec;
+# older binaries retain this compatibility fallback. Writing DESIRED meant a
 # failed download that kept an old binary stamped the new version into runtime
 # state and the staleness hook went false-negative forever. When the sidecar is
 # missing/unreadable the honest value is "unknown", not the pin (#398 round 1).
@@ -457,7 +520,7 @@ fi
 # would re-open the #73 spurious-kill trap.
 if [[ "$HAS_BINARY_VERSION" == true ]]; then
     RUNTIME_VERSION="unknown"
-    if [[ -f "$VERSION_FILE" ]]; then
+    if [[ "$SIDECAR_WRITE_FAILED" == false ]] && [[ -f "$VERSION_FILE" ]]; then
         SIDECAR_VALUE=$(tr -d '[:space:]' < "$VERSION_FILE" 2>/dev/null || true)
         [[ -n "$SIDECAR_VALUE" ]] && RUNTIME_VERSION="$SIDECAR_VALUE"
     fi
@@ -465,7 +528,8 @@ else
     RUNTIME_VERSION="${DESIRED_VERSION:-unknown}"
 fi
 {
-    RT_TMP=$(mktemp "${RUNTIME_FILE}.XXXXXX") \
+    new_temp "${RUNTIME_FILE}.XXXXXX" \
+        && RT_TMP="$NEW_TEMP" \
         && printf '{"pid":%d,"started_at":%d,"version_at_spawn":"%s","degraded_pin":"%s"}\n' \
             "$$" "$NOW" "$(json_escape "${RUNTIME_VERSION:-unknown}")" "$(json_escape "$DEGRADED_PIN")" \
             > "$RT_TMP" \
@@ -473,4 +537,14 @@ fi
 } 2>/dev/null || true
 
 cleanup_temps
+# Updated servers replace the provisional sidecar-derived record after exec
+# with their own PID/version. Older binaries ignore these variables and keep
+# the legacy fallback record. Do not opt in legacy shell-version plugins (#73).
+if [[ "$HAS_BINARY_VERSION" == true ]]; then
+    export CHE_APPLE_MAIL_WRAPPER_PID="$$"
+    export CHE_APPLE_MAIL_WRAPPER_STARTED_AT="$NOW"
+    export CHE_APPLE_MAIL_DEGRADED_PIN="$DEGRADED_PIN"
+else
+    unset CHE_APPLE_MAIL_WRAPPER_PID CHE_APPLE_MAIL_WRAPPER_STARTED_AT CHE_APPLE_MAIL_DEGRADED_PIN
+fi
 exec "$BINARY" "$@"

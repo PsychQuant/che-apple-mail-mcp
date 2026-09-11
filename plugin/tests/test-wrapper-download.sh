@@ -69,6 +69,10 @@ esac
 mt=""; prev2=""
 for a in "$@"; do [ "$prev2" = "--max-time" ] && mt="$a"; prev2="$a"; done
 [ -n "${WRAPPER_TEST_TIMEOUT_LOG:-}" ] && printf '%s %s\n' "$ep" "$mt" >> "$WRAPPER_TEST_TIMEOUT_LOG"
+if [ "$ep" = binary ] && [ -f "$SCEN/pause-download" ]; then
+    touch "$SCEN/download-ready"
+    while [ ! -f "$SCEN/release-download" ]; do sleep 0.02; done
+fi
 body="$SCEN/$ep.body"
 codef="$SCEN/$ep.code"
 if [ -f "$codef" ]; then code=$(cat "$codef"); elif [ -f "$body" ]; then code=200; else code=404; fi
@@ -123,11 +127,11 @@ write_api() {
     fi
     {
         printf '{"assets": [\n'
-        printf '  {"name": "CheAppleMailMCP", "browser_download_url": "%s/v%s/CheAppleMailMCP"},\n' "$DL_PREFIX" "$2"
+        printf '  {"name": "CheAppleMailMCP", "browser_download_url": "%s/v%s/CheAppleMailMCP"}' "$DL_PREFIX" "$2"
         if [ "$3" = "yes" ]; then
-            printf '  {"name": "CheAppleMailMCP.sha256", "browser_download_url": "%s/v%s/CheAppleMailMCP.sha256"},\n' "$DL_PREFIX" "$2"
+            printf ',\n  {"name": "CheAppleMailMCP.sha256", "browser_download_url": "%s/v%s/CheAppleMailMCP.sha256"}' "$DL_PREFIX" "$2"
         fi
-        printf ']}\n'
+        printf '\n]}\n'
     } > "$SCEN/$1.body"
 }
 write_mock_binary_content() {
@@ -730,6 +734,233 @@ for f in "$FAKE_PLUGIN/bin/che-apple-mail-mcp-wrapper.sh" "$FAKE_PLUGIN/hooks/se
     fi
 done
 assert "shipped scripts are bash-3.2 clean" "[ $BASH4_HITS -eq 0 ]"
+
+
+# ============================================================
+echo "Case 29: advertised checksum with invalid URL is not an absent checksum"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+write_api api_pinned "2.99.0" yes
+sed 's|https://github.com/PsychQuant/che-apple-mail-mcp/releases/download/v2.99.0/CheAppleMailMCP.sha256|https://example.invalid/checksum.sha256|' "$SCEN/api_pinned.body" > "$SCEN/invalid.body"
+mv "$SCEN/invalid.body" "$SCEN/api_pinned.body"
+write_mock_binary_content "UNVERIFIED-NEW"
+run_wrapper
+assert "invalid digest URL retains old executable" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
+assert "invalid digest URL never claims no published digest" "! grep -q 'publishes no .sha256' $TEST_DIR/err.txt"
+
+# ============================================================
+echo "Case 30: overflowing marker epoch does not suppress retry"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+printf '2.99.0 9223372036854775808 miss\n' > "$MARKER"
+write_api api_pinned "2.99.0" yes
+write_mock_binary_content "MOCK-RUN-299"
+write_matching_sha
+run_wrapper
+assert "overflow epoch cannot pin old binary" "grep -q MOCK-RUN-299 $TEST_DIR/out.txt"
+
+# ============================================================
+echo "Case 31: sidecar failure cannot report old metadata for a new binary"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+write_api api_pinned "2.99.0" yes
+write_mock_binary_content "MOCK-RUN-299"
+write_matching_sha
+cat > "$SHIM/mktemp" <<'EOF_MKTEMP'
+#!/bin/bash
+case "$1" in *.version.*) exit 1 ;; esac
+exec /usr/bin/mktemp "$@"
+EOF_MKTEMP
+chmod +x "$SHIM/mktemp"
+run_wrapper
+rm -f "$SHIM/mktemp"
+assert "new executable is installed" "grep -q MOCK-RUN-299 $TEST_DIR/out.txt"
+assert "failed sidecar update reports unknown instead of stale old version" "grep -q '\"version_at_spawn\":\"unknown\"' $RUNTIME"
+assert "failed sidecar update is disclosed" "grep -q 'sidecar' $TEST_DIR/err.txt"
+
+
+# ============================================================
+echo "Case 32: real JSON escaping and null fields are accepted"
+# ============================================================
+reset_state
+write_plugin_json "2.99.0"
+printf '%s\n' '{"body":null,"assets":[{"name":"CheAppleMailMCP","label":null,"browser_download_url":"https:\/\/github.com\/PsychQuant\/che-apple-mail-mcp\/releases\/download\/v2.99.0\/CheAppleMailMCP"},{"name":"CheAppleMailMCP.sha256","browser_download_url":"https:\/\/github.com\/PsychQuant\/che-apple-mail-mcp\/releases\/download\/v2.99.0\/CheAppleMailMCP.sha256"}]}' > "$SCEN/api_pinned.body"
+write_mock_binary_content "JSON-RUN-299"
+write_matching_sha
+run_wrapper
+assert "escaped JSON URL installs verified binary" "grep -q JSON-RUN-299 $TEST_DIR/out.txt && grep -q 'sha256 verified' $TEST_DIR/err.txt"
+
+# ============================================================
+echo "Case 33: invalid metadata does not mean checksum absent or pin missing"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+printf '%s\n' '{"assets":[' > "$SCEN/api_pinned.body"
+run_wrapper
+assert "malformed metadata keeps old binary" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
+assert "malformed metadata never creates a definitive-miss marker" "[ ! -f $MARKER ]"
+
+# ============================================================
+echo "Case 34: leading-zero marker epoch uses decimal arithmetic"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+printf '2.99.0 0%s miss\n' "$(date +%s)" > "$MARKER"
+run_wrapper
+assert "decimal marker remains live without arithmetic errors" "grep -q 'unavailable upstream' $TEST_DIR/err.txt && ! grep -q 'value too great' $TEST_DIR/err.txt"
+assert "live decimal marker avoids network" "[ ! -s $TEST_DIR/curl-timeouts.log ]"
+
+# ============================================================
+echo "Case 35: hook rejects overflow and accepts decimal leading zeros"
+# ============================================================
+reset_state
+mkdir -p "$TEST_HOME/bin"
+( exec -a CheAppleMailMCP-mock sleep 1000 ) >/dev/null 2>&1 &
+MOCK_PID=$!
+echo "$MOCK_PID" >> "$TEST_DIR/mock_pids"
+sleep 0.2
+write_plugin_json "2.99.0"
+printf '{"pid":%d,"started_at":1,"version_at_spawn":"2.98.0","degraded_pin":"2.99.0"}\n' "$MOCK_PID" > "$RUNTIME"
+printf '2.99.0 0%s miss\n' "$(date +%s)" > "$MARKER"
+HOME="$TEST_HOME" "$FAKE_PLUGIN/hooks/session-start.sh" 2> "$TEST_DIR/err.txt"
+assert "hook accepts live decimal epoch" "grep -q 'not killing' $TEST_DIR/err.txt && ps -p $MOCK_PID -o pid= >/dev/null 2>&1"
+printf '2.99.0 9223372036854775808 miss\n' > "$MARKER"
+HOME="$TEST_HOME" "$FAKE_PLUGIN/hooks/session-start.sh" 2> "$TEST_DIR/err.txt"
+assert "overflow cannot suppress hook retry" "grep -q 'Killing stale' $TEST_DIR/err.txt"
+
+# ============================================================
+echo "Case 36: SIGTERM cleans temporary files and does not continue into exec"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+write_api api_pinned "2.99.0" yes
+write_mock_binary_content "MOCK-RUN-299"
+write_matching_sha
+: > "$SCEN/pause-download"
+HOME="$TEST_HOME" PATH="$RUN_PATH" WRAPPER_TEST_SCEN="$SCEN" \
+    bash "$FAKE_PLUGIN/bin/che-apple-mail-mcp-wrapper.sh" > "$TEST_DIR/out.txt" 2> "$TEST_DIR/err.txt" &
+WRAPPER_PID=$!
+for _ in $(seq 1 250); do [ -f "$SCEN/download-ready" ] && break; sleep 0.02; done
+assert "cancel fixture reached binary download" "[ -f $SCEN/download-ready ]"
+kill -TERM "$WRAPPER_PID" 2>/dev/null || true
+: > "$SCEN/release-download"
+wait "$WRAPPER_PID"
+CANCEL_EXIT=$?
+assert "cancel returns SIGTERM status" "[ $CANCEL_EXIT -eq 143 ]"
+assert "cancel does not exec any binary or publish runtime" "[ ! -s $TEST_DIR/out.txt ] && [ ! -e $RUNTIME ]"
+assert "cancel does not leave download temp files" "! find $TEST_HOME/bin -name '*.tmp.*' -o -name '*.meta.*' | grep -q ."
+
+
+# ============================================================
+echo "Case 37: sidecar rename failure is disclosed and never preserves stale metadata"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+write_api api_pinned "2.99.0" yes
+write_mock_binary_content "MOCK-RUN-299"
+write_matching_sha
+cat > "$SHIM/mv" <<'EOF_MV'
+#!/bin/bash
+case "$2" in *.CheAppleMailMCP.version) exit 1 ;; esac
+exec /bin/mv "$@"
+EOF_MV
+chmod +x "$SHIM/mv"
+run_wrapper
+rm -f "$SHIM/mv"
+assert "sidecar rename failure still runs the installed executable" "grep -q MOCK-RUN-299 $TEST_DIR/out.txt"
+assert "sidecar rename failure reports unknown" "grep -q '\"version_at_spawn\":\"unknown\"' $RUNTIME"
+assert "old sidecar is removed when possible" "[ ! -e $SIDECAR ]"
+
+# ============================================================
+echo "Case 38: runtime rename failure does not leak its temp file"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.98.0"
+cat > "$SHIM/mv" <<'EOF_MV'
+#!/bin/bash
+case "$2" in *.CheAppleMailMCP.runtime.json) exit 1 ;; esac
+exec /bin/mv "$@"
+EOF_MV
+chmod +x "$SHIM/mv"
+run_wrapper
+rm -f "$SHIM/mv"
+assert "runtime metadata failure does not block spawn" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
+assert "runtime temp is cleaned" "! find $TEST_HOME/bin -name '*.runtime.json.*' | grep -q ."
+
+
+# ============================================================
+echo "Case 39: stale sidecar cannot be trusted when replacement AND removal fail"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+write_api api_pinned "2.99.0" yes
+write_mock_binary_content "MOCK-RUN-299"
+write_matching_sha
+cat > "$SHIM/mv" <<'EOF_MV'
+#!/bin/bash
+case "$2" in *.CheAppleMailMCP.version) exit 1 ;; esac
+exec /bin/mv "$@"
+EOF_MV
+cat > "$SHIM/rm" <<'EOF_RM'
+#!/bin/bash
+for arg in "$@"; do case "$arg" in *.CheAppleMailMCP.version) exit 1 ;; esac; done
+exec /bin/rm "$@"
+EOF_RM
+chmod +x "$SHIM/mv" "$SHIM/rm"
+run_wrapper
+rm -f "$SHIM/mv" "$SHIM/rm"
+assert "fixture left stale sidecar in place" "[ \"\$(cat $SIDECAR)\" = 2.98.0 ]"
+assert "runtime ignores known-stale sidecar" "grep -q '\"version_at_spawn\":\"unknown\"' $RUNTIME"
+
+# ============================================================
+echo "Case 40: failed marker write cannot claim a backed degraded pin"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+printf '404\n' > "$SCEN/api_pinned.code"
+write_api api_latest "3.0.0" yes
+write_mock_binary_content "MOCK-RUN-300"
+write_matching_sha
+mkdir "$MARKER"
+run_wrapper
+assert "marker fixture prevents a marker file" "[ -d $MARKER ]"
+assert "failed marker publication leaves degraded_pin empty" "grep -q '\"degraded_pin\":\"\"' $RUNTIME"
+
+
+# ============================================================
+echo "Case 41: encoded build metadata stays a logical version"
+# ============================================================
+reset_state
+write_plugin_json "2.99.0+build.7"
+write_api api_pinned "2.99.0%2Bbuild.7" yes
+write_mock_binary_content "ENCODED-BUILD"
+write_matching_sha
+run_wrapper
+assert "percent-encoded build metadata is decoded for sidecar/runtime" "[ \"\$(cat $SIDECAR)\" = 2.99.0+build.7 ] && grep -q '\"version_at_spawn\":\"2.99.0+build.7\"' $RUNTIME"
+
+# ============================================================
+echo "Case 42: encoded separators cannot smuggle a traversal path"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+write_api api_pinned "%2e%2e%2f%2e%2e%2fother" no
+write_mock_binary_content "BAD-ENCODED-PATH"
+run_wrapper
+assert "encoded traversal URL never replaces the installed binary" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
 
 # ============================================================
 echo ""
