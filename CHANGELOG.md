@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Draft scans no longer stall on background NSAppleScript**
+  ([#406](https://github.com/PsychQuant/che-apple-mail-mcp/issues/406)).
+  `list_drafts`, `update_draft` locate and pre/post snapshots, recipient receipts,
+  and the final id+subject deletion now use the existing cancellable `osascript`
+  transport. Each retains a 45-second deadline; only GUI flows use the 90-second
+  deadline and Escape cleanup. Both share the unreaped-child limit.
+  Scan timeouts return no partial rows; deletion
+  timeouts report an unknown outcome. Account matching, paired id/subject reads,
+  receipt gates and deletion predicates are unchanged.
+  On macOS 27, the identical scoped script completed in 1.886s via `osascript`
+  and 0.767s via main-thread NSAppleScript, while background NSAppleScript
+  exceeded 50s even with userInitiated QoS/activity. MCP listing of 17 drafts
+  completed in 4.726s / 0.819s; a named Cc/Bcc update completed in 50.897s with
+  `deleted_old: true` and `recipients_verified: true` (including GUI creation,
+  with Bcc already visible). The other affected account had one draft at retest
+  and took 30.414s / 0.287s; latency still varies, so this is not a subsecond
+  guarantee. The all-accounts script took 12.114s / 12.125s.
+  The prior update live-verification caveat is replaced with this platform-bound
+  evidence; other macOS versions remain tracked by #408.
+
 ## [3.1.0] - 2026-09-08
 
 ### Added

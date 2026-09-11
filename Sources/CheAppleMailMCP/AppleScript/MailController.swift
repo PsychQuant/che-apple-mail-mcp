@@ -50,7 +50,7 @@ actor MailController {
 
     // MARK: - AppleScript Execution
 
-    /// #297: default wall-clock ceiling for a single NSAppleScript execution.
+    /// #297/#406: default wall-clock ceiling for a non-GUI script execution.
     /// Well under the MCP client's ~120s idle timeout (so a stuck call returns
     /// an actionable error rather than silently dropping the whole server
     /// connection) and well over normal ~1-2s Mail IPC. Tunable via the
@@ -75,8 +75,8 @@ actor MailController {
     /// (verify #301, Lens A P1-4).
     static let guiScriptTimeout: TimeInterval = 90
 
-    /// #301 — refuse new GUI flows past this many unreaped (SIGKILL-resistant)
-    /// osascript children: bounds thread/zombie growth AND the re-opened
+    /// #301/#406 — refuse new GUI/draft subprocesses past this many unreaped
+    /// (SIGKILL-resistant) osascript children: bounds thread/zombie growth AND the re-opened
     /// clipboard window a still-alive paster would have (verify Lens B P1-3).
     static let maxUnreapedGuiChildren = 3
     /// Shared accounting (reference type — detached waiter threads decrement).
@@ -256,33 +256,75 @@ actor MailController {
     /// process (this binary), so the existing Automation grant covers it —
     /// verified live in the #301 gate. The preflight probe still runs first.
     ///
-    /// Short query/action scripts stay on in-process `runScript` — they are
-    /// single-digit-event payloads where in-process latency is fine and the
-    /// #297 abandon semantics are acceptable.
+    /// Short query/action scripts stay on in-process `runScript`. Draft scans
+    /// and the scoped draft deletion use this same subprocess transport via
+    /// their own 45s, non-GUI policy (#406).
     func runGuiScript(_ source: String, timeout: TimeInterval? = nil) throws -> String {
+        try runSubprocessScript(source, timeout: timeout ?? Self.guiScriptTimeout, guiFlow: true)
+    }
+
+    /// #406 — draft scans issue many Apple Events. The identical generated
+    /// script finishes in seconds in osascript but exceeds 50s in background
+    /// NSAppleScript, even with userInitiated QoS/activity. Keep the read
+    /// deadline at 45s and never send Escape on a read-only scan timeout.
+    func runDraftScanScript(_ source: String, timeout: TimeInterval? = nil) throws -> String {
+        do {
+            return try runSubprocessScript(source, timeout: timeout ?? Self.defaultScriptTimeout, guiFlow: false)
+        } catch MailError.scriptTimedOut(let seconds, let granted) {
+            throw MailError.operationFailed(
+                "The read-only drafts scan did not return within \(seconds)s. "
+                + "osascript termination was requested; no partial scan was returned. "
+                + (granted
+                   ? "Automation permission was verified GRANTED. Mail may be busy or unresponsive; retry when it responds."
+                   : "Automation permission was not verified granted. Check Mail and any pending Automation prompt.\n" + AutomationHelp.guidance))
+        }
+    }
+
+    /// #406 live gate: the final id+subject delete scan hit the same background
+    /// NSAppleScript timeout after all read scans succeeded. Keep the existing
+    /// predicate; cancellation cannot prove whether Mail applied the delete.
+    func runDraftDeleteScript(_ source: String, timeout: TimeInterval? = nil) throws -> String {
+        do {
+            return try runSubprocessScript(source, timeout: timeout ?? Self.defaultScriptTimeout, guiFlow: false)
+        } catch MailError.scriptTimedOut(let seconds, let granted) {
+            throw MailError.operationFailed(
+                "The draft deletion did not return within \(seconds)s. osascript termination "
+                + "was requested; the deletion outcome is unknown. Check the drafts mailbox before retrying. "
+                + (granted ? "Automation permission was verified GRANTED. Mail may be busy or unresponsive."
+                   : "Automation permission was not verified granted.\n" + AutomationHelp.guidance))
+        }
+    }
+
+    /// Shared process transport; caller policy controls deadline and GUI cleanup.
+    private func runSubprocessScript(_ source: String, timeout: TimeInterval, guiFlow: Bool) throws -> String {
         if let override = scriptRunnerOverride {
-            // Same seam as runScript: tests drive GUI flows with a fake runner.
-            // The fallback deadline matches the production one (guiScriptTimeout,
-            // NOT the 45s default) so a test asserting the scriptTimedOut payload
-            // sees the same number production would emit (verify #301, Lens A P2-2).
-            return try runGuarded(timeout: timeout ?? Self.guiScriptTimeout,
+            // Same seam as runScript. Each caller passes its production
+            // deadline (90s GUI / 45s scan); the test seam still takes priority.
+            return try runGuarded(timeout: timeout,
                                   automationGranted: true) { try override(source) }
         }
         let granted = try preflightAutomation()
         // #301 verify (Lens B P1): a child SIGKILL cannot reach (uninterruptible
         // kernel wait against a wedged Mail/WindowServer) leaves a permanently
         // blocked waiter thread AND a live paster that could outrun the clipboard
-        // restore. Bound the damage: refuse new GUI flows while several children
-        // remain unreaped — an honest "wedged" error beats compounding the pile.
+        // restore. GUI and draft operations share the unreaped-child limit;
+        // refuse either class while several children remain unreaped.
         guard guiChildAccounting.current() < Self.maxUnreapedGuiChildren else {
+            if guiFlow {
+                throw MailError.operationFailed(
+                    "GUI scripting subsystem appears wedged: \(Self.maxUnreapedGuiChildren) "
+                    + "terminated osascript children have not exited (Mail or WindowServer "
+                    + "may be hung). Not starting another GUI flow. Restart this MCP server "
+                    + "(and check Mail) — or use open_mailto (zero-TCC, no GUI scripting) "
+                    + "as the clean-compose fallback.")
+            }
             throw MailError.operationFailed(
-                "GUI scripting subsystem appears wedged: \(Self.maxUnreapedGuiChildren) "
+                "osascript subsystem appears wedged: \(Self.maxUnreapedGuiChildren) "
                 + "terminated osascript children have not exited (Mail or WindowServer "
-                + "may be hung). Not starting another GUI flow. Restart this MCP server "
-                + "(and check Mail) — or use open_mailto (zero-TCC, no GUI scripting) "
-                + "as the clean-compose fallback.")
+                + "may be hung). Not starting another osascript subprocess. Restart this MCP server "
+                + "and check Mail.")
         }
-        let deadline = scriptTimeoutOverride ?? timeout ?? Self.guiScriptTimeout
+        let deadline = scriptTimeoutOverride ?? timeout
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
@@ -374,7 +416,7 @@ actor MailController {
             // Best-effort: a killed popup flow can leave an OPEN MENU that
             // swallows every subsequent keystroke, making the next attempt fail
             // confusingly — send one Escape to dismiss it (Lens B P2).
-            Self.dismissLingeringGuiMenu()
+            if guiFlow { Self.dismissLingeringGuiMenu() }
             throw MailError.scriptTimedOut(seconds: Int(deadline), automationGranted: granted)
         }
         // Join the drains with a REAL barrier. On timeout, throw — never return
@@ -1698,7 +1740,7 @@ actor MailController {
             for attempt in 0..<3 {
                 if attempt > 0 { Thread.sleep(forTimeInterval: 0.4) }
                 do {
-                    let raw = try runScript(receiptScript)
+                    let raw = try runDraftScanScript(receiptScript)
                     if let parsed = parseRecipientReceipt(raw) {
                         fetch = .found(parsed)
                         break
@@ -1868,7 +1910,7 @@ actor MailController {
             // from the same invocation; `parseDraftRows` zips them (throwing
             // on any mismatch instead of silently truncating). The `id` field
             // is additive — existing subject-only consumers are unchanged.
-            let rows = try parseDraftRows(try runScript(script))
+            let rows = try parseDraftRows(try runDraftScanScript(script))
             return rows.map { row in
                 ["subject": row.subject, "id": row.id]
             }
@@ -1942,7 +1984,7 @@ actor MailController {
         let scoped = (accountName?.isEmpty == false) || (accountId?.isEmpty == false)
         let rows: [(id: String, subject: String)]
         do {
-            rows = try parseDraftRows(try runScript(listScript))
+            rows = try parseDraftRows(try runDraftScanScript(listScript))
         } catch {
             if !scoped {
                 // Verify R3 (DA-3): the all-accounts scan is deliberately
@@ -1988,7 +2030,7 @@ actor MailController {
         let receiptScript = buildListAllDraftsScript()
         let preReceiptRows: [(id: String, subject: String)]
         do {
-            preReceiptRows = try parseDraftRows(try runScript(receiptScript))
+            preReceiptRows = try parseDraftRows(try runDraftScanScript(receiptScript))
         } catch {
             throw MailError.operationFailed(
                 "update_draft: could not take the pre-create drafts snapshot needed for the "
@@ -2014,7 +2056,7 @@ actor MailController {
         var replacementConfirmed = false
         for attempt in 0..<3 {
             if attempt > 0 { Thread.sleep(forTimeInterval: 0.4) }
-            if let postRows = try? parseDraftRows(try runScript(receiptScript)),
+            if let postRows = try? parseDraftRows(try runDraftScanScript(receiptScript)),
                postRows.contains(where: { !preIds.contains($0.id) && $0.subject == subject }) {
                 replacementConfirmed = true
                 break
@@ -2067,7 +2109,7 @@ actor MailController {
         let deleteScript = buildDeleteDraftByIdScript(
             draftId: old.id, subject: old.subject, accountId: accountId, accountName: accountName)
         do {
-            _ = try runScript(deleteScript)
+            _ = try runDraftDeleteScript(deleteScript)
             return ["deleted_old": true, "old_draft_id": old.id, "new_draft": createResult]
         } catch {
             // 9276 = the whole delete scope scanned CLEAN and the old draft
