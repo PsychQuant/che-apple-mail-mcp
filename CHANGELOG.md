@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Fresh marketplace clones no longer contain obsolete build artifacts**
+  ([#391](https://github.com/PsychQuant/che-apple-mail-mcp/issues/391)).
+  The v2.7.1 bundle and old server executable are removed from the tracked
+  tree (the two removed blobs total 22,915,355 bytes, about 21.9 MiB).
+  Release assets remain
+  the distribution path. The exact-set index guard also protects the manifest,
+  icon, privacy document and server directory placeholder, and now runs as a
+  release prerequisite. Generated `.mcpb.sha256` files are ignored too.
+  Existing unmodified tracked copies disappear on update; locally modified
+  tracked copies may make Git refuse the update, so preserve those outputs
+  before updating. Newly generated ignored outputs remain local. History is
+  deliberately not rewritten; old blobs remain in full clones. Fresh shallow
+  clone measurements are recorded in the issue's verification report.
+
 - **Exited osascript children no longer leave a false unreaped count**
   ([#417](https://github.com/PsychQuant/che-apple-mail-mcp/issues/417)).
   Registration and exit now update each child's lifecycle and the total under
@@ -224,6 +238,7 @@ Removing the legacy path costs two things that have **no replacement**:
   and send the draft yourself.
 
 ### Fixed
+
 - Attachments added via `create_draft` / `compose_email` landed at the **start**
   of the body instead of the end
   ([#341](https://github.com/PsychQuant/che-apple-mail-mcp/issues/341),
