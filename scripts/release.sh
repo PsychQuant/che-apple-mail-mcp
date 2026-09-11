@@ -207,8 +207,13 @@ fi
 # a predictable name, and the redirect would then follow it and truncate the
 # target with the release runner's privileges.
 MANIFEST_GATE_LOG="$(mktemp -t che-mail-manifest-tools-gate)"
+REPO_GUARD_LOG=""
+cleanup_guard_logs() {
+    rm -f "$MANIFEST_GATE_LOG"
+    if [[ -n "${REPO_GUARD_LOG:-}" ]]; then rm -f "$REPO_GUARD_LOG"; fi
+}
+trap cleanup_guard_logs EXIT
 REPO_GUARD_LOG="$(mktemp -t che-mail-repo-guards)"
-trap 'rm -f "$MANIFEST_GATE_LOG" "$REPO_GUARD_LOG"' EXIT
 if ! swift test --filter 'ManifestToolsSetEqualityTests' > "$MANIFEST_GATE_LOG" 2>&1; then
     grep -E "ABSENT from|NOT registered|duplicate tool names|descriptions differ|error:" \
         "$MANIFEST_GATE_LOG" >&2 || true
@@ -227,6 +232,26 @@ if ! swift test --filter 'NoTrackedBuildArtifactsTests|ManifestVersionTests' > "
     die "repository guards failed — refusing to tag a release (#391/#396).
   Full output was shown above.
   Reproduce:   swift test --filter 'NoTrackedBuildArtifactsTests|ManifestVersionTests'"
+fi
+
+# Exit 0 also permits partial filter matches or XCTSkip. Require the named
+# invariant checks to have passed, not just a green test process. These are
+# macOS XCTest completion lines; a rename/output-format change fails closed
+# until this list is consciously updated alongside the tests.
+required_repo_tests=(
+    "NoTrackedBuildArtifactsTests testExactTrackedSetUnderMcpb"
+    "ManifestVersionTests testManifestVersionMatchesNewestRelease"
+    "ManifestVersionTests testMarketplaceEntryVersionMatchesPluginManifest"
+)
+for required_test in "${required_repo_tests[@]}"; do
+    if ! grep -Fq "Test Case '-[CheAppleMailMCPTests.${required_test}]' passed (" "$REPO_GUARD_LOG"; then
+        cat "$REPO_GUARD_LOG" >&2
+        die "repository guard did not complete: $required_test. Check for renamed, skipped, or unmatched tests."
+    fi
+done
+if grep -Eq "^Test Case .*' skipped " "$REPO_GUARD_LOG"; then
+    cat "$REPO_GUARD_LOG" >&2
+    die "repository guard was skipped — refusing to tag a release (#391)."
 fi
 
 # AppVersion.current (the server's self-reported version) MUST match the tag (#303).

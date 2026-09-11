@@ -12,7 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fresh marketplace clones no longer contain obsolete build artifacts**
   ([#391](https://github.com/PsychQuant/che-apple-mail-mcp/issues/391)).
   The v2.7.1 bundle and old server executable are removed from the tracked
-  tree (22,915,355 bytes of payload, about 21.9 MiB). Release assets remain
+  tree (the two removed blobs total 22,915,355 bytes, about 21.9 MiB).
+  Release assets remain
   the distribution path. The exact-set index guard also protects the manifest,
   icon, privacy document and server directory placeholder, and now runs as a
   release prerequisite. Generated `.mcpb.sha256` files are ignored too.
