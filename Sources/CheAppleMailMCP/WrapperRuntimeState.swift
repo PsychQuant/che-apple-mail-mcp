@@ -23,6 +23,7 @@ func publishWrapperRuntimeState(
         "pid": processID,
         "started_at": wrapperStart.flatMap { $0 >= 0 ? $0 : nil } ?? startedAt,
         "version_at_spawn": version,
+        "version_source": "binary",
         "degraded_pin": environment["CHE_APPLE_MAIL_DEGRADED_PIN"] ?? "",
     ])
     let fd = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)

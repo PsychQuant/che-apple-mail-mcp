@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   after decoding path components; encoded separators are rejected and build
   metadata retains its logical version.
   A rejected checksum URL is not treated as an absent checksum. Published
+  digest prerequisites are checked before downloading the executable, and
   digests must verify before installation, while genuine legacy releases
   without a digest remain explicitly disclosed. Pin fallback markers have a
   bounded decimal epoch and are revalidated by the session-start hook.
@@ -23,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runtime version instead of known-stale metadata. Cooperating server images
   then publish their own compiled version after exec, so an intervening install
   cannot leave that running image labeled with an earlier observation; older
-  binaries keep the provisional compatibility record. Interrupted launchers
+  binaries keep the provisional compatibility record. A contradictory native
+  report invalidates the sidecar-based skip on the next spawn, allowing an
+  interleaved installation to converge. Interrupted launchers
   clean up and stop before exec, and failed runtime/marker publication does not leak temporary
   files or claim an unbacked degraded pin.
 

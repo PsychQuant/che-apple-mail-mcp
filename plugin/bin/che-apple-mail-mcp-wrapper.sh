@@ -103,6 +103,23 @@ fi
 INSTALLED_VERSION=""
 [[ -f "$VERSION_FILE" ]] && INSTALLED_VERSION=$(tr -d '[:space:]' < "$VERSION_FILE" 2>/dev/null || true)
 
+# A binary and its sidecar are separate atomic replacements. Two installers
+# can interleave them, leaving sidecar A beside binary B indefinitely. A prior
+# native image report contradicting that sidecar invalidates the skip decision.
+# This may conservatively re-download once after a legitimate external update;
+# the next successful native launch publishes matching state and converges.
+# Provisional legacy records are deliberately not evidence for this decision.
+if [[ "$HAS_BINARY_VERSION" == true && -n "$INSTALLED_VERSION" && -f "$RUNTIME_FILE" ]]; then
+    PREVIOUS_SOURCE=$(/usr/bin/plutil -extract version_source raw -expect string -n -o - "$RUNTIME_FILE" 2>/dev/null || true)
+    if [[ "$PREVIOUS_SOURCE" == binary ]]; then
+        PREVIOUS_VERSION=$(/usr/bin/plutil -extract version_at_spawn raw -expect string -n -o - "$RUNTIME_FILE" 2>/dev/null || true)
+        if [[ -n "$PREVIOUS_VERSION" && "$PREVIOUS_VERSION" != "$INSTALLED_VERSION" ]]; then
+            echo "$BINARY_NAME: last running image disagrees with version sidecar; revalidating installed binary" >&2
+            INSTALLED_VERSION=""
+        fi
+    fi
+fi
+
 # --- helpers ------------------------------------------------------------------
 
 # GET $1, body to $2, with a $3-second ceiling (default META_TIMEOUT).
@@ -373,11 +390,48 @@ if $NEED_DOWNLOAD; then
     if [[ -z "$URL" ]]; then
         if [[ -x "$BINARY" ]]; then
             echo "$BINARY_NAME: WARNING — no download URL found, keeping existing binary" >&2
+            # Both lookups are definitively absent: retrying every spawn
+            # cannot select another release. A transient latest failure must
+            # remain retryable so it can recover on the next launch.
+            if [[ "$PIN_DEFINITIVE_MISS" == true ]] \
+               && { [[ "${CODE2:-}" == 404 ]] || { [[ "${CODE2:-}" == 200 ]] && [[ "$BINARY_ASSET_STATUS" == 2 ]]; }; }; then
+                write_fallback_marker miss
+            fi
         else
             echo "$BINARY_NAME: ERROR — no download URL found at $REPO. Install manually: https://github.com/$REPO/releases" >&2
             exit 1
         fi
     else
+        # Validate cheap prerequisites before downloading the full executable.
+        # An unavailable digest remains retryable; it must not consume binary
+        # bandwidth or suppress recovery behind a 24-hour degraded marker.
+        DOWNLOAD_READY=true
+        EXPECTED_SHA=""
+        if [[ "$SHA_ASSET_STATUS" == 1 ]]; then
+            DOWNLOAD_READY=false
+            echo "$BINARY_NAME: ERROR — checksum asset metadata or URL is invalid; refusing unverified install" >&2
+        elif [[ "$SHA_ASSET_STATUS" == 0 ]]; then
+            if ! have_hash_tool; then
+                DOWNLOAD_READY=false
+                echo "$BINARY_NAME: ERROR — this release publishes a .sha256 but no sha256 tool (shasum/openssl) is available to verify it; refusing unverified install" >&2
+            else
+                new_temp "${INSTALL_DIR}/.${BINARY_NAME}.sha.XXXXXX"
+                SHA_TMP="$NEW_TEMP"
+                SHA_CODE=$(http_get "$SHA_URL" "$SHA_TMP")
+                EXPECTED_SHA=$(head -1 "$SHA_TMP" 2>/dev/null | awk '{print $1}' | tr 'A-F' 'a-f')
+                rm -f "$SHA_TMP"
+                if [[ "$SHA_CODE" != "200" ]] || [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{64}$ ]]; then
+                    DOWNLOAD_READY=false
+                    echo "$BINARY_NAME: ERROR — could not fetch a usable .sha256 (HTTP ${SHA_CODE}); refusing unverified install" >&2
+                fi
+            fi
+        fi
+        if [[ "$DOWNLOAD_READY" == false ]]; then
+            if [[ ! -x "$BINARY" ]]; then
+                echo "$BINARY_NAME: ERROR — verification prerequisites failed and no existing binary is available" >&2
+                exit 1
+            fi
+        else
         # Unique temp per process (#392 round 1: a shared fixed .tmp let a
         # concurrent spawn swap content between verification and mv).
         new_temp "${BINARY}.tmp.XXXXXX"
@@ -387,38 +441,16 @@ if $NEED_DOWNLOAD; then
             # ---- sha256 verification (#392) --------------------------------
             INSTALL_OK=true
             VERIFIED=false
-            if [[ "$SHA_ASSET_STATUS" == 1 ]]; then
-                INSTALL_OK=false
-                echo "$BINARY_NAME: ERROR — checksum asset metadata or URL is invalid; refusing unverified install" >&2
-            elif [[ "$SHA_ASSET_STATUS" == 2 ]]; then
-                # Definitively absent from the release's own asset list — the
-                # one approved unverified path (old releases never shipped one).
+            if [[ "$SHA_ASSET_STATUS" == 2 ]]; then
                 if looks_like_html "$TMP"; then
                     INSTALL_OK=false
                     echo "$BINARY_NAME: ERROR — the download returned an HTML page, not a binary, and this release publishes no .sha256 to check it against; refusing install" >&2
                 else
                     echo "$BINARY_NAME: note — this release publishes no .sha256 asset; installing unverified" >&2
                 fi
-            elif ! have_hash_tool; then
-                # A digest EXISTS and this machine cannot check it. Round 1
-                # installed anyway; that is the fail-open #392 exists to close.
-                INSTALL_OK=false
-                echo "$BINARY_NAME: ERROR — this release publishes a .sha256 but no sha256 tool (shasum/openssl) is available to verify it; refusing unverified install" >&2
             else
-                new_temp "${INSTALL_DIR}/.${BINARY_NAME}.sha.XXXXXX"
-                SHA_TMP="$NEW_TEMP"
-                SHA_CODE=$(http_get "$SHA_URL" "$SHA_TMP")
-                EXPECTED_SHA=$(head -1 "$SHA_TMP" 2>/dev/null | awk '{print $1}' | tr 'A-F' 'a-f')
-                rm -f "$SHA_TMP"
                 ACTUAL_SHA=$(sha256_of "$TMP" || true)
-                if [[ "$SHA_CODE" != "200" ]] || [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{64}$ ]]; then
-                    # The asset exists but we could not obtain a usable digest:
-                    # that is a verification FAILURE, not "no asset" (#392
-                    # round 1: fail-open here defeated the whole feature).
-                    # Transient by nature — no marker; retry next spawn.
-                    INSTALL_OK=false
-                    echo "$BINARY_NAME: ERROR — could not fetch a usable .sha256 (HTTP ${SHA_CODE}); refusing unverified install" >&2
-                elif [[ -z "$ACTUAL_SHA" ]]; then
+                if [[ -z "$ACTUAL_SHA" ]]; then
                     # A hash tool is present but produced nothing usable. Fail
                     # closed: the digest exists, so "cannot verify" is a
                     # refusal, not a downgrade (#398 round 2).
@@ -430,7 +462,11 @@ if $NEED_DOWNLOAD; then
                     # Persistent-mismatch guard: without a marker every spawn
                     # re-downloads 18 MB of the same rejected bytes (#398 R1).
                     if [[ -x "$BINARY" ]] && [[ -n "$DESIRED_VERSION" ]]; then
-                        write_fallback_marker verify
+                        if [[ "$PIN_DEFINITIVE_MISS" == true ]]; then
+                            write_fallback_marker miss
+                        else
+                            write_fallback_marker verify
+                        fi
                     fi
                 else
                     VERIFIED=true
@@ -502,6 +538,7 @@ if $NEED_DOWNLOAD; then
                 exit 1
             fi
         fi
+        fi # DOWNLOAD_READY
     fi
     fi
 fi

@@ -28,6 +28,7 @@ final class WrapperRuntimeStateTests: XCTestCase {
         XCTAssertEqual(value["pid"] as? Int, 123)
         XCTAssertEqual(value["started_at"] as? Int, 95)
         XCTAssertEqual(value["version_at_spawn"] as? String, "3.0.0")
+        XCTAssertEqual(value["version_source"] as? String, "binary")
         XCTAssertEqual(value["degraded_pin"] as? String, "2.99.0")
         let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
         XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)

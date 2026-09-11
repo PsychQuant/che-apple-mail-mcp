@@ -118,9 +118,9 @@ if [ -n "$DEGRADED_PIN" ] && [ "$DEGRADED_PIN" = "$PLUGIN_VERSION" ]; then
     MARKER_FILE="$INSTALL_DIR/.${BINARY_NAME}.fallback-tried"
     MARKER_LIVE=false
     if [ -f "$MARKER_FILE" ]; then
-        MARKER_PIN=$(awk 'NR==1{print $1}' "$MARKER_FILE" 2>/dev/null)
-        MARKER_EPOCH=$(awk 'NR==1{print $2}' "$MARKER_FILE" 2>/dev/null)
-        MARKER_REASON=$(awk 'NR==1{print $3}' "$MARKER_FILE" 2>/dev/null)
+        MARKER_PIN=""; MARKER_EPOCH=""; MARKER_REASON=""
+        # One open/read keeps all fields from the same atomic marker revision.
+        read -r MARKER_PIN MARKER_EPOCH MARKER_REASON _ < "$MARKER_FILE" 2>/dev/null || true
         if [[ "$MARKER_EPOCH" =~ ^[0-9]{1,12}$ ]]; then
             MARKER_EPOCH=$((10#$MARKER_EPOCH))
         else

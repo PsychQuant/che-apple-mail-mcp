@@ -261,7 +261,7 @@ seed_installed "OLD-RUN-298" "2.98.0"
 write_plugin_json "2.99.0"
 write_api api_pinned "2.99.0" yes
 printf '404\n' > "$SCEN/binary.code"
-write_matching_sha 2>/dev/null || printf 'deadbeef\n' > "$SCEN/sha.body"
+printf '%064d\n' 0 > "$SCEN/sha.body"
 run_wrapper
 assert "download-failed warning" "grep -q 'download failed' $TEST_DIR/err.txt"
 assert "old binary runs" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
@@ -498,9 +498,10 @@ else
     write_mock_binary_content "MOCK-NOHASH"
     printf '%064d\n' 0 > "$SCEN/sha.body"
     : > "$TEST_DIR/out.txt"; : > "$TEST_DIR/err.txt"
-    HOME="$TEST_HOME" WRAPPER_TEST_SCEN="$SCEN" PATH="$NOHASH" \
+    HOME="$TEST_HOME" WRAPPER_TEST_SCEN="$SCEN" PATH="$NOHASH" WRAPPER_TEST_TIMEOUT_LOG="$TEST_DIR/curl-timeouts.log" \
         "$FAKE_PLUGIN/bin/che-apple-mail-mcp-wrapper.sh" \
         > "$TEST_DIR/out.txt" 2> "$TEST_DIR/err.txt" || true
+    assert "no hash tool: no binary request" "! grep -q '^binary ' $TEST_DIR/curl-timeouts.log"
     assert "no hash tool: refused" "grep -q 'no sha256 tool' $TEST_DIR/err.txt"
     assert "no hash tool: nothing installed" "! grep -q MOCK-NOHASH $TEST_DIR/out.txt"
     assert "no hash tool: did NOT claim an unverified install" "! grep -q 'installing unverified' $TEST_DIR/err.txt"
@@ -747,6 +748,7 @@ sed 's|https://github.com/PsychQuant/che-apple-mail-mcp/releases/download/v2.99.
 mv "$SCEN/invalid.body" "$SCEN/api_pinned.body"
 write_mock_binary_content "UNVERIFIED-NEW"
 run_wrapper
+assert "invalid digest URL avoids binary request" "! grep -q '^binary ' $TEST_DIR/curl-timeouts.log"
 assert "invalid digest URL retains old executable" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
 assert "invalid digest URL never claims no published digest" "! grep -q 'publishes no .sha256' $TEST_DIR/err.txt"
 
@@ -961,6 +963,87 @@ write_api api_pinned "%2e%2e%2f%2e%2e%2fother" no
 write_mock_binary_content "BAD-ENCODED-PATH"
 run_wrapper
 assert "encoded traversal URL never replaces the installed binary" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
+
+# ============================================================
+echo "Case 43: unusable digest avoids full binary download and retries later"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+write_api api_pinned "2.99.0" yes
+write_mock_binary_content "MOCK-RUN-299"
+printf 'malformed-digest\n' > "$SCEN/sha.body"
+run_wrapper
+assert "unusable digest avoids binary request" "! grep -q '^binary ' $TEST_DIR/curl-timeouts.log"
+assert "digest failure retains old binary without suppressing retry" "grep -q OLD-RUN-298 $TEST_DIR/out.txt && [ ! -f $MARKER ]"
+write_matching_sha
+run_wrapper
+assert "repaired digest allows next spawn to install" "grep -q MOCK-RUN-299 $TEST_DIR/out.txt"
+
+# ============================================================
+echo "Case 44: fallback mismatch is attributed to missing pin"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+printf '404\n' > "$SCEN/api_pinned.code"
+write_api api_latest "3.0.0" yes
+write_mock_binary_content "BAD-LATEST"
+printf '%064d\n' 0 > "$SCEN/sha.body"
+run_wrapper
+assert "fallback mismatch retains old binary" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
+assert "fallback mismatch marker describes missing pin" "grep -q '^2.99.0 [0-9]* miss' $MARKER"
+
+# ============================================================
+echo "Case 45: native report breaks a persistent binary/sidecar mismatch"
+# ============================================================
+# Final state of an interleaved install: binary B was installed last, but A
+# wrote its sidecar last. First launch of B reports its actual compiled version.
+reset_state
+seed_installed "UNUSED" "2.99.0"
+write_plugin_json "2.99.0"
+cat > "$TEST_HOME/bin/CheAppleMailMCP" <<'NATIVE_FIXTURE'
+#!/bin/bash
+printf '{"pid":%d,"started_at":1,"version_at_spawn":"3.0.0","version_source":"binary","degraded_pin":""}\n' "$$" > "$HOME/bin/.CheAppleMailMCP.runtime.json"
+echo CONCURRENT-B
+NATIVE_FIXTURE
+run_wrapper
+assert "mismatched image B really launched and published" "grep -q CONCURRENT-B $TEST_DIR/out.txt && grep -q 'version_source' $RUNTIME"
+write_api api_pinned "2.99.0" yes
+write_mock_binary_content "RECOVERED-A"
+write_matching_sha
+run_wrapper
+assert "next spawn repairs mismatched image despite matching sidecar" "grep -q RECOVERED-A $TEST_DIR/out.txt"
+: > "$TEST_DIR/curl-timeouts.log"
+run_wrapper
+assert "repaired installation does not redownload on third spawn" "grep -q RECOVERED-A $TEST_DIR/out.txt && [ ! -s $TEST_DIR/curl-timeouts.log ]"
+
+# ============================================================
+echo "Case 46: definitive misses back off while transient latest failure recovers"
+# ============================================================
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+printf '404\n' > "$SCEN/api_pinned.code"
+printf '404\n' > "$SCEN/api_latest.code"
+run_wrapper
+assert "both releases missing writes bounded miss marker" "grep -q '^2.99.0 [0-9]* miss' $MARKER"
+: > "$TEST_DIR/curl-timeouts.log"
+run_wrapper
+assert "second definitive-miss spawn skips network" "[ ! -s $TEST_DIR/curl-timeouts.log ] && grep -q OLD-RUN-298 $TEST_DIR/out.txt"
+reset_state
+seed_installed "OLD-RUN-298" "2.98.0"
+write_plugin_json "2.99.0"
+printf '404\n' > "$SCEN/api_pinned.code"
+printf '503\n' > "$SCEN/api_latest.code"
+run_wrapper
+assert "latest transient failure remains retryable" "[ ! -f $MARKER ]"
+rm "$SCEN/api_latest.code"
+write_api api_latest "3.0.0" yes
+write_mock_binary_content "RECOVERED-LATEST"
+write_matching_sha
+run_wrapper
+assert "latest recovers on next spawn" "grep -q RECOVERED-LATEST $TEST_DIR/out.txt"
 
 # ============================================================
 echo ""
