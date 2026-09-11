@@ -1,12 +1,12 @@
 import XCTest
 
-/// #391 — two v2.7.1-era build artifacts (`mcpb/che-apple-mail-mcp.mcpb`, 4.6 MB;
-/// `mcpb/server/CheAppleMailMCP`, 18 MB) were committed before `.gitignore` grew
+/// #391 — two v2.7.1-era build artifacts (`mcpb/che-apple-mail-mcp.mcpb` and
+/// `mcpb/server/CheAppleMailMCP`) were committed before `.gitignore` grew
 /// its mcpb rules, froze ~21 releases behind, and — once #335 made this repo a
 /// self-hosted marketplace — started shipping to every plugin user's disk on
 /// `marketplace add` as a double-click install trap: the bundle's inner manifest
 /// said 2.7.1 while the sibling `mcpb/manifest.json` said the current release,
-/// and the binary was ad-hoc signed, which macOS 26 TCC kills outright.
+/// and neither file followed subsequent release updates.
 ///
 /// `.gitignore` cannot untrack an already-tracked file, so the fix is
 /// `git rm --cached`; this test pins the INDEX so neither direction regresses:

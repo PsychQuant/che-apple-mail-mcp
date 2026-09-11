@@ -201,9 +201,8 @@ fi
 # Unlike the checks above this one CANNOT be evaluated statically: the authority
 # is `defineTools()`, which only exists once Swift compiles. So rather than
 # reimplementing name extraction in bash — a second spec that would drift from
-# the first — run the test that already owns the invariant. There is no CI in
-# this repo (no .github/workflows), so without this line nothing forces that
-# test to run before a release, which is the whole gap #311 was about.
+# the first — run the test that already owns the invariant. Running it here
+# makes manifest parity a release prerequisite, independent of CI configuration.
 # mktemp, not a fixed /tmp path: another local user can pre-create a symlink at
 # a predictable name, and the redirect would then follow it and truncate the
 # target with the release runner's privileges.
@@ -220,14 +219,11 @@ if ! swift test --filter 'ManifestToolsSetEqualityTests' > "$MANIFEST_GATE_LOG" 
 fi
 
 # Same shape, different subject: guards that protect the REPOSITORY rather than
-# the manifest. #397 verify made the gap explicit — there is no CI here, so
-# before this line `NoTrackedBuildArtifactsTests` ran only when a human typed
-# `swift test`, and #391 is precisely the failure of that arrangement: two build
-# artifacts sat tracked across ~21 releases with nobody noticing. A guard with no
-# automatic trigger protects nothing.
+# the manifest. Before #391, the release path selected only the manifest test;
+# it did not run the index guard. Keep this check before building/tagging so
+# stale tracked artifacts cannot silently enter another release checkout.
 if ! swift test --filter 'NoTrackedBuildArtifactsTests|ManifestVersionTests' > "$REPO_GUARD_LOG" 2>&1; then
-    grep -E "unexpected tracked|MISSING from the index|newest released header|error:" \
-        "$REPO_GUARD_LOG" >&2 || true
+    cat "$REPO_GUARD_LOG" >&2
     die "repository guards failed — refusing to tag a release (#391/#396).
   Full output was shown above.
   Reproduce:   swift test --filter 'NoTrackedBuildArtifactsTests|ManifestVersionTests'"
