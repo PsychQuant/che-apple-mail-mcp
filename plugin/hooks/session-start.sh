@@ -16,9 +16,10 @@
 # decides who gets swallowed) was still live for the next feature.
 #
 # What each part actually needs: the staleness block needs jq + ps. The FDA
-# assist needs the binary plus tr / sort / head / mkdir / dirname — NOT "no
+# assist needs the binary plus tr / sort / head / mkdir — NOT "no
 # external tool", as this header claimed before #399 round 2; the accurate
 # statement is that it needs neither jq nor ps, which is what #394 turned on.
+# The hook's global plugin-path resolution additionally uses dirname.
 #
 # CHE_MAIL_HOOK_DEBUG=1 (exactly "1") makes gate decisions say so on stderr —
 # both the skips AND a "gates passed" seam, so the suite can prove the gates
@@ -30,6 +31,8 @@ set -u
 # `set -u` + an unset HOME would abort with an unbound-variable error and a
 # non-zero exit — the one thing this hook promises never to do. (#399 verify:
 # a new edge once PLUGIN_ROOT/HOME resolution moved above the gates.)
+# HOME is required by the shared path initialization for all current features,
+# so its absence ends the whole hook before that initialization.
 [ -n "${HOME:-}" ] || exit 0
 
 BINARY_NAME="CheAppleMailMCP"
@@ -109,6 +112,8 @@ first_run_fda_assist
 # scoped to this feature, and anything added below still runs without jq/ps.
 # Graceful-skip semantics for the staleness block itself are unchanged.
 run_staleness_detection() {
+    local RUNTIME_VERSION PLUGIN_VERSION DEGRADED_PIN MARKER_FILE MARKER_LIVE
+    local MARKER_PIN MARKER_EPOCH MARKER_REASON NOW_EPOCH WHY PID PID_COMM _
     command -v jq >/dev/null 2>&1 || {
         [ "${CHE_MAIL_HOOK_DEBUG:-}" = "1" ] && echo "hook: staleness gate — jq missing, skipping" >&2
         return 0

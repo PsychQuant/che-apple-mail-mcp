@@ -281,9 +281,9 @@ assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "no warning emitted" "[ ! -s $TEST_DIR/hook.stderr ]"
 
 # ============================================================
-# Case 5: jq missing → silent exit 0
+# Case 5: jq missing → skip staleness and continue the hook
 # ============================================================
-echo "Case 5: jq missing"
+echo "Case 5: jq missing skips staleness"
 reset_state
 start_mock_pid; PID=$LAST_MOCK_PID
 write_plugin_json "2.18.0"
@@ -387,6 +387,7 @@ wait_for_file "$TEST_DIR/setup-called" || true   # settle window for the negativ
 assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "no offer message" "! grep -q 'Full Disk Access' $TEST_DIR/hook.stderr"
 assert "setup not launched" "[ ! -f $TEST_DIR/setup-called ]"
+assert "existing marker avoids all binary probes" "[ ! -f $TEST_DIR/binary-calls.log ]"
 
 # ============================================================
 # Case 11 (#394): FDA already granted -> no offer, no marker
@@ -397,9 +398,12 @@ write_plugin_json "2.18.0"
 write_mock_mcp_binary "2.28.0" 0
 run_hook
 EXIT=$?
+wait_for_file "$TEST_DIR/setup-called" || true
 assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "no offer message" "! grep -q 'Full Disk Access' $TEST_DIR/hook.stderr"
 assert "no marker" "[ ! -f $FDA_MARKER ]"
+assert "granted FDA never launches setup" "[ ! -f $TEST_DIR/setup-called ]"
+assert "granted FDA uses the exact quiet probe" "[ ! -f $TEST_DIR/bad-argv.log ]"
 
 # ============================================================
 # Case 12 (#394): old binary (< 2.28.0) -> version-gated skip
@@ -520,7 +524,7 @@ echo "Case 17: dependency skips remain scoped to the staleness feature"
 [ "$(tail -1 "$FAKE_PLUGIN/hooks/session-start.sh")" = "exit 0" ] || exit 2
 sed '$d' "$FAKE_PLUGIN/hooks/session-start.sh" > "$TEST_DIR/with-late-feature.sh"
 cat >> "$TEST_DIR/with-late-feature.sh" <<'LATE_FEATURE'
-: > "${LATE_FEATURE_PROBE:?}"
+printf '%s %s\n' "${PID-unset}" "${RUNTIME_VERSION-unset}" > "${LATE_FEATURE_PROBE:?}"
 exit 0
 LATE_FEATURE
 cp "$TEST_DIR/with-late-feature.sh" "$FAKE_PLUGIN/hooks/session-start.sh"
@@ -535,6 +539,14 @@ for missing in jq ps; do
     assert "missing $missing: hook exits successfully" "[ $EXIT -eq 0 ]"
     assert "missing $missing: later feature runs" "[ -f $TEST_DIR/late-feature-ran ]"
 done
+# A new later feature must not receive variables assigned by staleness.
+reset_state
+write_plugin_json "2.18.0"
+write_runtime_file "0" "2.18.0"
+HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" CHE_MAIL_HOOK_DEBUG= \
+    LATE_FEATURE_PROBE="$TEST_DIR/late-feature-ran" PID=outer-pid RUNTIME_VERSION=outer-version \
+    "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
+assert "staleness leaves later feature variables intact" "grep -Fxq 'outer-pid outer-version' $TEST_DIR/late-feature-ran"
 cp "$REAL_HOOK" "$FAKE_PLUGIN/hooks/session-start.sh"
 
 # ============================================================
