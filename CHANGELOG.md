@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **First-run Full Disk Access assistance works without jq or ps**
+  ([#394](https://github.com/PsychQuant/che-apple-mail-mcp/issues/394)).
+  Dependency checks apply only to staleness detection, so they no longer
+  suppress the setup offer or later independent hook features. Tests isolate
+  the two missing dependencies and observe the actual detached setup call.
+
 - **Wrapper download integrity and runtime-state handling**
   ([#392](https://github.com/PsychQuant/che-apple-mail-mcp/issues/392),
   [#393](https://github.com/PsychQuant/che-apple-mail-mcp/issues/393)).
