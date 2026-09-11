@@ -717,6 +717,9 @@ printf '2.99.0 %s verify\n' "$(date +%s)" > "$MARKER"
 HOME="$TEST_HOME" "$FAKE_PLUGIN/hooks/session-start.sh" 2> "$TEST_DIR/err.txt"
 assert "verify marker: hook names it as a verification failure" "grep -q 'failed sha256 verification' $TEST_DIR/err.txt"
 assert "verify marker: does NOT call it an upstream outage" "! grep -q 'unavailable upstream' $TEST_DIR/err.txt"
+printf '2.99.0 %s miss-verify\n' "$(date +%s)" > "$MARKER"
+HOME="$TEST_HOME" "$FAKE_PLUGIN/hooks/session-start.sh" 2> "$TEST_DIR/err.txt"
+assert "fallback verify marker: hook preserves both causes" "grep -q 'unavailable upstream; fallback failed sha256 verification' $TEST_DIR/err.txt"
 kill -KILL "$MOCK_PID" 2>/dev/null || true
 
 # ============================================================
@@ -992,7 +995,9 @@ write_mock_binary_content "BAD-LATEST"
 printf '%064d\n' 0 > "$SCEN/sha.body"
 run_wrapper
 assert "fallback mismatch retains old binary" "grep -q OLD-RUN-298 $TEST_DIR/out.txt"
-assert "fallback mismatch marker describes missing pin" "grep -q '^2.99.0 [0-9]* miss' $MARKER"
+assert "fallback mismatch marker preserves both causes" "grep -q '^2.99.0 [0-9]* miss-verify$' $MARKER"
+run_wrapper
+assert "later launch retains fallback tampering warning" "grep -q 'fallback failed sha256 verification' $TEST_DIR/err.txt"
 
 # ============================================================
 echo "Case 45: native report breaks a persistent binary/sidecar mismatch"
@@ -1010,12 +1015,17 @@ NATIVE_FIXTURE
 run_wrapper
 assert "mismatched image B really launched and published" "grep -q CONCURRENT-B $TEST_DIR/out.txt && grep -q 'version_source' $RUNTIME"
 write_api api_pinned "2.99.0" yes
-write_mock_binary_content "RECOVERED-A"
+cat > "$SCEN/binary.body" <<'NATIVE_RECOVERED'
+#!/bin/bash
+printf '{"pid":%d,"started_at":1,"version_at_spawn":"2.99.0","version_source":"binary","degraded_pin":""}\n' "$$" > "$HOME/bin/.CheAppleMailMCP.runtime.json"
+echo RECOVERED-A
+NATIVE_RECOVERED
 write_matching_sha
 run_wrapper
 assert "next spawn repairs mismatched image despite matching sidecar" "grep -q RECOVERED-A $TEST_DIR/out.txt"
 : > "$TEST_DIR/curl-timeouts.log"
 run_wrapper
+assert "repaired image retains native version source" "grep -q '\"version_source\":\"binary\"' $RUNTIME"
 assert "repaired installation does not redownload on third spawn" "grep -q RECOVERED-A $TEST_DIR/out.txt && [ ! -s $TEST_DIR/curl-timeouts.log ]"
 
 # ============================================================

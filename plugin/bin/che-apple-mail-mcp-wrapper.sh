@@ -30,9 +30,10 @@
 #     .version         — sidecar: ACTUAL installed binary tag (#77)
 #     .runtime.json    — pid/started_at/version_at_spawn (+degraded_pin) for the
 #                        session-start staleness hook (#76/#393)
-#     .fallback-tried  — "<pin> <epoch> <miss|verify>": a pin found definitively
+#     .fallback-tried  — "<pin> <epoch> <miss|verify|miss-verify>": a pin found definitively
 #                        missing (miss) or failing digest verification (verify)
-#                        upstream; suppresses re-download for RETRY_TTL seconds
+#                        upstream; miss-verify preserves a missing pin plus a
+#                        fallback digest failure. Suppresses re-download for RETRY_TTL seconds
 #                        or until the pin changes (#392).
 #                        Deleting the file forces an immediate retry.
 
@@ -321,6 +322,7 @@ elif [[ -n "$DESIRED_VERSION" ]] && [[ "$INSTALLED_VERSION" != "$DESIRED_VERSION
         # The marker's third field was written but never read, so a tampering
         # signal was reported as "unavailable upstream" (#398 round 2).
         case "$MARKER_REASON" in
+            miss-verify) WHY="was unavailable upstream; fallback failed sha256 verification" ;;
             verify) WHY="failed sha256 verification" ;;
             *)      WHY="was unavailable upstream" ;;
         esac
@@ -430,6 +432,8 @@ if $NEED_DOWNLOAD; then
             if [[ ! -x "$BINARY" ]]; then
                 echo "$BINARY_NAME: ERROR — verification prerequisites failed and no existing binary is available" >&2
                 exit 1
+            else
+                echo "$BINARY_NAME: WARNING — keeping existing binary after verification prerequisites failed" >&2
             fi
         else
         # Unique temp per process (#392 round 1: a shared fixed .tmp let a
@@ -463,7 +467,7 @@ if $NEED_DOWNLOAD; then
                     # re-downloads 18 MB of the same rejected bytes (#398 R1).
                     if [[ -x "$BINARY" ]] && [[ -n "$DESIRED_VERSION" ]]; then
                         if [[ "$PIN_DEFINITIVE_MISS" == true ]]; then
-                            write_fallback_marker miss
+                            write_fallback_marker miss-verify
                         else
                             write_fallback_marker verify
                         fi

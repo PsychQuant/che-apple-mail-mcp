@@ -127,17 +127,18 @@ if [ -n "$DEGRADED_PIN" ] && [ "$DEGRADED_PIN" = "$PLUGIN_VERSION" ]; then
             MARKER_EPOCH=0
         fi
         NOW_EPOCH=$(date +%s)
-        # 86400 == the wrapper's RETRY_TTL. Both sides read the same file;
-        # if you change one, change the other.
+        # 86400 == the wrapper's RETRY_TTL; both allow exactly 300 seconds
+        # of future clock skew. If you change one side, change the other.
         if [ "$MARKER_PIN" = "$PLUGIN_VERSION" ] \
            && [ "$MARKER_EPOCH" -gt 0 ] \
            && [ $((NOW_EPOCH - MARKER_EPOCH)) -lt 86400 ] \
-           && [ $((MARKER_EPOCH - NOW_EPOCH)) -lt 300 ]; then
+           && [ $((MARKER_EPOCH - NOW_EPOCH)) -le 300 ]; then
             MARKER_LIVE=true
         fi
     fi
     if [ "$MARKER_LIVE" = true ]; then
         case "$MARKER_REASON" in
+            miss-verify) WHY="unavailable upstream; fallback failed sha256 verification" ;;
             verify) WHY="failed sha256 verification" ;;
             *)      WHY="unavailable upstream" ;;
         esac
