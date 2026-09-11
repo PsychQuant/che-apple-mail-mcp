@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Wrapper download integrity and runtime-state handling**
+  ([#392](https://github.com/PsychQuant/che-apple-mail-mcp/issues/392),
+  [#393](https://github.com/PsychQuant/che-apple-mail-mcp/issues/393)).
+  Release assets are selected from parsed metadata and their URLs validated
+  after decoding path components; encoded separators are rejected and build
+  metadata retains its logical version.
+  A rejected checksum URL is not treated as an absent checksum. Published
+  digest prerequisites are checked before downloading the executable, and
+  digests must verify before installation, while genuine legacy releases
+  without a digest remain explicitly disclosed. Pin fallback markers have a
+  bounded decimal epoch and are revalidated by the session-start hook.
+  Failed sidecar publication is disclosed and that launch reports an unknown
+  runtime version instead of known-stale metadata. Cooperating server images
+  then publish their own compiled version after exec, so an intervening install
+  cannot leave that running image labeled with an earlier observation; older
+  binaries keep the provisional compatibility record. A contradictory native
+  report invalidates the sidecar-based skip on the next spawn, allowing an
+  interleaved installation to converge. Interrupted launchers
+  clean up and stop before exec, and failed runtime/marker publication does not leak temporary
+  files or claim an unbacked degraded pin.
+
 - **Exited osascript children no longer leave a false unreaped count**
   ([#417](https://github.com/PsychQuant/che-apple-mail-mcp/issues/417)).
   Registration and exit now update each child's lifecycle and the total under
