@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **GUI script timeouts distinguish requested termination from confirmed exit**
+  ([#415](https://github.com/PsychQuant/che-apple-mail-mcp/issues/415)).
+  Subprocess diagnostics no longer claim the script was abandoned or cannot be
+  cancelled. They report whether the interpreter's exit was confirmed and warn
+  that terminating it does not undo Apple Events already sent to Mail.
+  In-process timeout wording and timeout classification remain intact; send
+  flows still report an unknown outcome and refuse automatic retry, without
+  claiming an unconfirmed interpreter exit. Deadlines and termination behavior
+  are unchanged.
+
 - **Draft scans no longer stall on background NSAppleScript**
   ([#406](https://github.com/PsychQuant/che-apple-mail-mcp/issues/406)).
   `list_drafts`, `update_draft` locate and pre/post snapshots, recipient receipts,

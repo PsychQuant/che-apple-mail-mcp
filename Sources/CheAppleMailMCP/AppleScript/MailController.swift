@@ -247,10 +247,10 @@ actor MailController {
     /// (#295: unstable AX tree, #296: identical matcher passes under osascript
     /// and gets ZERO menu items in-process).
     ///
-    /// The subprocess also fixes the guard's worst residue: `Process.terminate`
-    /// actually CANCELS a timed-out script, so an abandoned GUI flow no longer
-    /// keeps typing into Mail while the legacy fallback runs (in-process
-    /// NSAppleScript is uncancellable — #297 could only abandon the thread).
+    /// Timeout cleanup requests interpreter termination and observes its exit.
+    /// A confirmed exit stops further script execution, unlike abandoning an
+    /// NSAppleScript thread; Apple Events already accepted by Mail may still
+    /// complete (#415).
     ///
     /// TCC: the subprocess's Apple Events are attributed to its RESPONSIBLE
     /// process (this binary), so the existing Automation grant covers it —
@@ -270,7 +270,7 @@ actor MailController {
     func runDraftScanScript(_ source: String, timeout: TimeInterval? = nil) throws -> String {
         do {
             return try runSubprocessScript(source, timeout: timeout ?? Self.defaultScriptTimeout, guiFlow: false)
-        } catch MailError.scriptTimedOut(let seconds, let granted) {
+        } catch MailError.scriptTimedOut(let seconds, let granted, _) {
             throw MailError.operationFailed(
                 "The read-only drafts scan did not return within \(seconds)s. "
                 + "osascript termination was requested; no partial scan was returned. "
@@ -286,7 +286,7 @@ actor MailController {
     func runDraftDeleteScript(_ source: String, timeout: TimeInterval? = nil) throws -> String {
         do {
             return try runSubprocessScript(source, timeout: timeout ?? Self.defaultScriptTimeout, guiFlow: false)
-        } catch MailError.scriptTimedOut(let seconds, let granted) {
+        } catch MailError.scriptTimedOut(let seconds, let granted, _) {
             throw MailError.operationFailed(
                 "The draft deletion did not return within \(seconds)s. osascript termination "
                 + "was requested; the deletion outcome is unknown. Check the drafts mailbox before retrying. "
@@ -398,14 +398,16 @@ actor MailController {
             // SIGTERM, brief grace, then SIGKILL — the GUI flow stops driving
             // Mail the moment the interpreter dies.
             process.terminate()
-            if waitSem.wait(timeout: .now() + 2) == .timedOut {
+            var exitConfirmed = waitSem.wait(timeout: .now() + 2) == .success
+            if !exitConfirmed {
                 // Guard the raw kill: the waiter may have reaped the child in
                 // the gap, freeing the pid for reuse — and a pathological pid 0
                 // would signal our own process group (verify Lens A P2-1 /
                 // Lens B P1-2). isRunning is false once reaped.
                 let pid = process.processIdentifier
                 if pid > 0, process.isRunning { kill(pid, SIGKILL) }
-                if waitSem.wait(timeout: .now() + 2) == .timedOut {
+                exitConfirmed = waitSem.wait(timeout: .now() + 2) == .success
+                if !exitConfirmed {
                     // Even SIGKILL did not take (uninterruptible kernel wait):
                     // count the un-reaped child; the waiter decrements when it
                     // finally exits (Lens B P1-3).
@@ -417,7 +419,9 @@ actor MailController {
             // swallows every subsequent keystroke, making the next attempt fail
             // confusingly — send one Escape to dismiss it (Lens B P2).
             if guiFlow { Self.dismissLingeringGuiMenu() }
-            throw MailError.scriptTimedOut(seconds: Int(deadline), automationGranted: granted)
+            throw MailError.scriptTimedOut(
+                seconds: Int(deadline), automationGranted: granted,
+                execution: .subprocess(exitConfirmed: exitConfirmed))
         }
         // Join the drains with a REAL barrier. On timeout, throw — never return
         // a truncated stdout as the script result (a grandchild inheriting the
@@ -3025,6 +3029,13 @@ enum AttachmentWriteProblem: Equatable {
     case statFailed(errno: Int32)
 }
 
+/// Interpreter exit is distinct from completion or rollback of Apple Events
+/// already accepted by Mail (#415). The test runner seam remains in-process.
+enum ScriptTimeoutExecution: Equatable {
+    case inProcess
+    case subprocess(exitConfirmed: Bool)
+}
+
 enum MailError: LocalizedError {
     case scriptCreationFailed
     case scriptFailed(message: String, code: Int)
@@ -3034,10 +3045,11 @@ enum MailError: LocalizedError {
     /// with an actionable, recovery-oriented explanation for the caller (#103).
     case operationFailed(String)
     /// #297: an AppleScript execution did not return within the wall-clock
-    /// budget and was abandoned to keep the MCP server responsive. Distinct
+    /// budget. Execution context distinguishes an abandoned in-process call
+    /// from a subprocess whose termination was requested (#415). Distinct
     /// from `.scriptFailed(code: -1743)` (a *returned* denial): this is the
     /// *never-returns* mode (TCC prompt pending/not-determined, or Mail stuck).
-    case scriptTimedOut(seconds: Int, automationGranted: Bool)
+    case scriptTimedOut(seconds: Int, automationGranted: Bool, execution: ScriptTimeoutExecution = .inProcess)
 
     /// #347 — `save_attachment` claimed success but the on-disk result did not
     /// verify.
@@ -3071,7 +3083,20 @@ enum MailError: LocalizedError {
             return "Invalid parameter: \(message)"
         case .operationFailed(let message):
             return message
-        case .scriptTimedOut(let seconds, let automationGranted):
+        case .scriptTimedOut(let seconds, let automationGranted, let execution):
+            if case .subprocess(let exitConfirmed) = execution {
+                return "AppleScript call did not return within \(seconds)s; osascript termination was requested. "
+                    + (exitConfirmed
+                       ? "The interpreter's exit was confirmed. "
+                       : "The interpreter's exit was not confirmed during timeout cleanup; it may still be running. ")
+                    + "Terminating the interpreter does not undo Apple Events already sent to Mail: "
+                    + "saving or sending may already have occurred. Check Mail and any leftover compose window before retrying. "
+                    + (automationGranted
+                       ? "Automation permission was verified GRANTED. A long GUI flow may have exceeded its deadline, "
+                         + "or Mail may be busy or unresponsive."
+                       : "Automation permission was not verified granted. Check for a pending Automation prompt.\n"
+                         + AutomationHelp.guidance)
+            }
             // #297: the never-returns mode. Named distinctly from the -1743
             // recorded-Deny path so a stuck call surfaces an actionable error
             // within the budget instead of hanging until the MCP client drops
