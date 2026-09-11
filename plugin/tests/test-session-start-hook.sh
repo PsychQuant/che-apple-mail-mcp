@@ -291,7 +291,7 @@ write_runtime_file "$PID" "2.17.0"
 # #394: isolate jq specifically — the old PATH (/sbin:/usr/sbin) removed BOTH
 # jq and ps, so this case also passed when only the ps gate worked.
 MINIMAL_PATH="$(make_shim_without jq)" || exit 2
-HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" \
+HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" CHE_MAIL_HOOK_DEBUG= \
     PATH="$MINIMAL_PATH" "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
 EXIT=$?
 assert "exit 0" "[ $EXIT -eq 0 ]"
@@ -510,6 +510,42 @@ HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" CHE_MAIL_HOOK_DEBUG=0 \
 EXIT=$?
 assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "stderr silent with CHE_MAIL_HOOK_DEBUG=0" "[ ! -s $TEST_DIR/hook.stderr ]"
+
+# ============================================================
+# Case 17: a feature after staleness still runs without either dependency.
+# ============================================================
+echo "Case 17: dependency skips remain scoped to the staleness feature"
+# Insert a harmless future-feature probe before the script's final exit. An
+# exit inside the staleness function would skip this, unlike return.
+[ "$(tail -1 "$FAKE_PLUGIN/hooks/session-start.sh")" = "exit 0" ] || exit 2
+sed '$d' "$FAKE_PLUGIN/hooks/session-start.sh" > "$TEST_DIR/with-late-feature.sh"
+cat >> "$TEST_DIR/with-late-feature.sh" <<'LATE_FEATURE'
+: > "${LATE_FEATURE_PROBE:?}"
+exit 0
+LATE_FEATURE
+cp "$TEST_DIR/with-late-feature.sh" "$FAKE_PLUGIN/hooks/session-start.sh"
+for missing in jq ps; do
+    reset_state
+    rm -f "$TEST_DIR/late-feature-ran"
+    FEATURE_PATH="$(make_shim_without "$missing")" || exit 2
+    HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" CHE_MAIL_HOOK_DEBUG= \
+        LATE_FEATURE_PROBE="$TEST_DIR/late-feature-ran" PATH="$FEATURE_PATH" \
+        "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
+    EXIT=$?
+    assert "missing $missing: hook exits successfully" "[ $EXIT -eq 0 ]"
+    assert "missing $missing: later feature runs" "[ -f $TEST_DIR/late-feature-ran ]"
+done
+cp "$REAL_HOOK" "$FAKE_PLUGIN/hooks/session-start.sh"
+
+# ============================================================
+# Case 18: unset HOME cannot reach path resolution or assist side effects.
+# ============================================================
+echo "Case 18: unset HOME gracefully skips the hook"
+reset_state
+env -u HOME CHE_MAIL_HOOK_DEBUG= "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
+EXIT=$?
+assert "unset HOME: exits successfully" "[ $EXIT -eq 0 ]"
+assert "unset HOME: no unbound-variable diagnostic" "[ ! -s $TEST_DIR/hook.stderr ]"
 
 # ============================================================
 # Summary

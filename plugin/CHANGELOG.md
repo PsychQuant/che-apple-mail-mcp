@@ -9,47 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `plugin.json` description field. Section categorization is best-effort —
 > review and refine `Added` / `Changed` / `Fixed` etc. as needed.
 
-## [Unreleased]
-
-### Fixed
-
-- **First-run FDA assist survives a jq-less machine**
-  ([#394](https://github.com/PsychQuant/che-apple-mail-mcp/issues/394)). The
-  `jq`/`ps` dependency gates in `hooks/session-start.sh` sat above
-  `first_run_fda_assist`, which needs neither tool — so the machines the assist
-  exists for (fresh installs, often without jq) silently never saw it. The
-  staleness block now lives in `run_staleness_detection()` and its gates
-  `return` rather than `exit`, so the scoping is **structural**: a feature added
-  after it still runs without jq/ps. (Ordering alone was the original root
-  cause; leaving the gates as bare `exit 0` would have left the next feature to
-  re-inherit it.) The harness pins `XDG_STATE_HOME` inside the sandbox —
-  without that, a developer's real state dir both broke three cases and
-  received an escaped once-only marker that would suppress their genuine FDA
-  assist — and neutralizes `CHE_MAIL_HOOK_DEBUG`, which is now read as exactly
-  `"1"` (as `-n`, the value `0` turned debug output ON, in real sessions too).
-
-  Test suite 22 → **60 asserts across 16 cases**, and — the part that matters —
-  **every claim is mutation-tested**. Round 2 of the cross-model verify proved
-  the round-1 locks were assertion theater: replacing both gate `exit 0` with
-  `:` kept the suite fully green (the diagnostic still printed), and making the
-  `--setup` launch jq-dependent — #394's exact regression — also kept it green,
-  because the cases asserted the assist's three stderr lines but never its
-  actual product, the setup window. Both now fail, verified by re-running each
-  mutation: the cases assert the launched window and the once-only marker, and
-  a `CHE_MAIL_HOOK_DEBUG` seam below the gates (`staleness gates passed`) locks
-  the gates' *effect*, with Case 15 as its positive control so its absence in
-  the skip cases cannot pass vacuously. Five mutations, five caught.
-
-  Also from that round: the probe's mock validates full argv (`--quietly` no
-  longer satisfies the `--check-fda --quiet` contract the version gate exists
-  to protect), Case 12 asserts an old binary is **never probed** rather than
-  merely staying quiet, and `make_shim_without` post-checks that exactly one
-  tool is missing. Known gap left open, deliberately out of scope and tracked:
-  `--check-fda --quiet` is a four-value contract that the hook collapses to a
-  boolean, so `noMailData` reports "not granted" and burns the once-only marker
-  ([#403](https://github.com/PsychQuant/che-apple-mail-mcp/issues/403)).
+## [2.48.0] - 2026-09-08
 
 ### Changed
+- `binary_version` 3.0.0 → 3.1.0: drafts (`create_draft` / `update_draft`) accept display-name recipients in to, cc AND bcc through AX-addressed fields; hidden Bcc revealed and disclosed (`bcc_field_revealed`); post-save three-state recipient receipt (`recipients_verified` / `recipients_diff` / `recipients_receipt: unavailable`); discard-sheet cleanup (#333 partial). `compose_email` still refuses display-name recipients. ([#404](https://github.com/PsychQuant/che-apple-mail-mcp/issues/404))
+- `rules/compose-wrapper-free.md`: reason 6 of the ineligibility enumeration is send-only; drafts support display names in all three lists.
+
+## [2.47.0] - 2026-08-31
+
+### Changed
+
+- `binary_version` 2.28.0 → **3.0.0**，出貨 [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)：legacy compose 路徑整段移除。該修正在原始碼裡躺了一段時間卻**從未發過 binary release** —— 最新 tag 仍是 v2.28.0，所以每一個已安裝的 binary 在「已有同主旨 compose 視窗開著」時仍會退回 wrapped-body 路徑（AppleScript `-2700` → legacy fallback）。2026-08-31 實地踩到：`update_draft` 回傳 `legacy path — body wrapped in <blockquote type="cite">`，產出的草稿在 Gmail web 與 Outlook 會整封顯示成引用內容，正是 2026-07-29 那起無法回收的事故的同一機制。**這條 plugin 的 `rules/compose-wrapper-free.md` 自 2.43.0 起就描述著 #304 之後的世界，而使用者手上的 binary 拿不到那個保證** —— 規則描述「應該安裝的版本」而非「實際跑的版本」時，它給的是虛假的安心。
+
+- **`plugin.json` 的 `description` 拿掉版本敘事**（18,834 → 235 字元）。該欄位累積成一整部 release 史，且開頭寫著「Shell v2.43.0 (shell-only, binary stays v2.25.0)」—— 兩個數字在寫入當下之後就再也沒對過（實際是 shell 2.46.1、binary 2.28.0）。版本已由 `version` 與 `binary_version` 兩個欄位承載，敘事已由本檔與 repo 根的 `CHANGELOG.md` 承載；寫進 description 是**第三份會腐爛的副本**，與 [#335](https://github.com/PsychQuant/che-apple-mail-mcp/issues/335) 讓 marketplace entry 不帶版本敘事是同一個理由。`marketplace.json` 的指標句一併從「live in plugin/.claude-plugin/plugin.json and CHANGELOG.md」改為「live in CHANGELOG.md」，否則拆掉敘事後那句話就成了錯的。
+
+- **README 補上 `/archive-mail-repair-synthetic-ids`**（5 個 command 先前只記載 4 個）與 v2.47.0／binary v3.0.0 的版本歷史條目。
 
 - `binary_version` 2.27.0 → **2.28.0**，讓 v2.46.0 的 first-run FDA assist（mail#355）真正生效。該 hook 從落地起就是 **no-op**：它以版本閘擋住 2.28.0 以前的 binary，因為更舊的版本會把 `--check-fda --quiet` 當成普通 `--check-fda` 解析、印出訊息並打開系統設定 —— 正是它要避免的騷擾。binary v2.28.0 已發布（signed + notarized），閘門現在開了。
 
