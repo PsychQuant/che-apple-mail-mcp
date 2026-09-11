@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Exited osascript children no longer leave a false unreaped count**
+  ([#417](https://github.com/PsychQuant/che-apple-mail-mcp/issues/417)).
+  Registration and exit now update each child's lifecycle and the total under
+  one lock. Late registration after exit and duplicate notifications are no-ops,
+  so exited children cannot accumulate a false wedge and block future GUI/draft
+  scripts. The existing unreaped-child limit, deadlines, termination sequence
+  and timeout diagnostics are unchanged.
+
 - **GUI script timeouts distinguish requested termination from confirmed exit**
   ([#415](https://github.com/PsychQuant/che-apple-mail-mcp/issues/415)).
   Subprocess diagnostics no longer claim the script was abandoned or cannot be

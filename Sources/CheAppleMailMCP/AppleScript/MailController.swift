@@ -79,7 +79,7 @@ actor MailController {
     /// (SIGKILL-resistant) osascript children: bounds thread/zombie growth AND the re-opened
     /// clipboard window a still-alive paster would have (verify Lens B P1-3).
     static let maxUnreapedGuiChildren = 3
-    /// Shared accounting (reference type — detached waiter threads decrement).
+    /// Shared accounting; waiters report exit through their child token.
     private let guiChildAccounting = GuiChildAccounting()
 
     /// Execute AppleScript and return result.
@@ -386,11 +386,10 @@ actor MailController {
         }
 
         let waitSem = DispatchSemaphore(value: 0)
-        let wedgeFlag = PipeDrainBox()   // reused as a lock-protected flag box
-        let accounting = guiChildAccounting
+        let child = guiChildAccounting.trackChild()
         Thread.detachNewThread {
             process.waitUntilExit()
-            if !wedgeFlag.get().isEmpty { accounting.decrement() }
+            child.didExit()
             waitSem.signal()
         }
         if waitSem.wait(timeout: .now() + deadline) == .timedOut {
@@ -408,11 +407,10 @@ actor MailController {
                 if pid > 0, process.isRunning { kill(pid, SIGKILL) }
                 exitConfirmed = waitSem.wait(timeout: .now() + 2) == .success
                 if !exitConfirmed {
-                    // Even SIGKILL did not take (uninterruptible kernel wait):
-                    // count the un-reaped child; the waiter decrements when it
-                    // finally exits (Lens B P1-3).
-                    wedgeFlag.set(Data([1]))
-                    accounting.increment()
+                    // Count only a child not already observed exited. The
+                    // waiter can finish after the timed wait; registration
+                    // and exit must be one synchronized lifecycle (#417).
+                    child.markUnreaped()
                 }
             }
             // Best-effort: a killed popup flow can leave an OPEN MENU that
@@ -3162,15 +3160,38 @@ final class PipeDrainBox: @unchecked Sendable {
     func get() -> Data { lock.lock(); defer { lock.unlock() }; return data }
 }
 
-/// #301 — lock-protected counter of terminated-but-unreaped osascript children
-/// (SIGKILL did not take). Reference type so detached waiter threads can
-/// decrement without touching actor state.
+/// #301/#417 — per-child lifecycle and total count share one lock. A waiter
+/// exiting before/during registration cannot leave a phantom unreaped child.
 final class GuiChildAccounting: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
     func current() -> Int { lock.lock(); defer { lock.unlock() }; return count }
-    func increment() { lock.lock(); count += 1; lock.unlock() }
-    func decrement() { lock.lock(); count = max(0, count - 1); lock.unlock() }
+
+    /// Running children do not count toward the unreaped limit. The waiter
+    /// retains this token until exit; the owner keeps no token collection.
+    func trackChild() -> Child { Child(owner: self) }
+
+    final class Child: @unchecked Sendable {
+        private enum State { case running, unreaped, exited }
+        private let owner: GuiChildAccounting
+        // Accessed only under owner.lock, including duplicate callbacks.
+        private var state: State = .running
+
+        fileprivate init(owner: GuiChildAccounting) { self.owner = owner }
+
+        func markUnreaped() {
+            owner.lock.lock(); defer { owner.lock.unlock() }
+            guard case .running = state else { return }
+            state = .unreaped
+            owner.count += 1
+        }
+
+        func didExit() {
+            owner.lock.lock(); defer { owner.lock.unlock() }
+            if case .unreaped = state { owner.count -= 1 }
+            state = .exited
+        }
+    }
 }
 
 /// #288 — actionable guidance for Automation-TCC denial (-1743), the
