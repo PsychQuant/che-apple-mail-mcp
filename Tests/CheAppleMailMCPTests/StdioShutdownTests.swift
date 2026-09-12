@@ -31,6 +31,8 @@ final class StdioShutdownTests: XCTestCase {
 
             @main enum Probe {
                 static func main() async throws {
+                    // Match production main: EPIPE must be handled, not kill us.
+                    signal(SIGPIPE, SIG_IGN)
                     let blocked = CommandLine.arguments[1] == "blocked"
                     await MailController.shared.setTestSeams(scriptRunner: { _ in
                         FileHandle.standardError.write(Data("PROBE_SYNC_BEGIN\n".utf8))
@@ -85,7 +87,7 @@ final class StdioShutdownTests: XCTestCase {
         }
     }
 
-    private func exercise(blocked: Bool, strict: Bool, handshake: Bool = false) throws {
+    private func exercise(blocked: Bool, strict: Bool, handshake: Bool = false, brokenStdout: Bool = false) throws {
         let executable = try probe()
         let directory = executable.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
@@ -104,7 +106,15 @@ final class StdioShutdownTests: XCTestCase {
         process.environment = environment
         process.standardInput = stdin
         process.standardError = stderr
-        process.standardOutput = stdout
+        let outputPipe = brokenStdout ? Pipe() : nil
+        if let outputPipe {
+            // Close before spawn so no inherited read descriptor can mask EPIPE.
+            try outputPipe.fileHandleForReading.close()
+            process.standardOutput = outputPipe
+        } else {
+            process.standardOutput = stdout
+        }
+        defer { try? outputPipe?.fileHandleForWriting.close() }
         try process.run()
         defer {
             try? stdin.fileHandleForWriting.close()
@@ -119,9 +129,11 @@ final class StdioShutdownTests: XCTestCase {
         let ready = try String(contentsOf: stderrURL)
         XCTAssertTrue(ready.contains("PROBE_SYNC_BEGIN"), "startup fixture never began: \(ready)")
         if blocked { XCTAssertFalse(ready.contains("PROBE_SYNC_END")) }
-        if handshake {
+        if handshake || brokenStdout {
             let request = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}"# + "\n"
             try stdin.fileHandleForWriting.write(contentsOf: Data(request.utf8))
+        }
+        if handshake {
             let responseDeadline = ProcessInfo.processInfo.systemUptime + 2
             while process.isRunning && ProcessInfo.processInfo.systemUptime < responseDeadline {
                 if (try Data(contentsOf: stdoutURL)).contains(0x0a) { break }
@@ -137,13 +149,19 @@ final class StdioShutdownTests: XCTestCase {
             XCTAssertFalse((try String(contentsOf: stderrURL)).contains("PROBE_SYNC_END"),
                            "handshake must not wait for the six-second script")
         }
-        let eof = ProcessInfo.processInfo.systemUptime
-        try stdin.fileHandleForWriting.close()
-        while process.isRunning && ProcessInfo.processInfo.systemUptime - eof < 2 {
+        let shutdownStart = ProcessInfo.processInfo.systemUptime
+        // #377: keep stdin OPEN until after all stdout-failure assertions.
+        // Closing it here would let the EOF path falsely satisfy the test.
+        if !brokenStdout { try stdin.fileHandleForWriting.close() }
+        while process.isRunning && ProcessInfo.processInfo.systemUptime - shutdownStart < 2 {
             Thread.sleep(forTimeInterval: 0.01)
         }
         let finalTrace = try String(contentsOf: stderrURL)
-        XCTAssertFalse(process.isRunning, "EOF waited on Mail work: \(finalTrace)")
+        XCTAssertFalse(process.isRunning, "shutdown waited on Mail work: \(finalTrace)")
+        if brokenStdout {
+            XCTAssertEqual(finalTrace.components(separatedBy: "stdout write failed").count - 1, 1,
+                           "must observe the real write-failure path exactly once")
+        }
         if !process.isRunning {
             XCTAssertEqual(process.terminationReason, .exit)
             XCTAssertEqual(process.terminationStatus, 0)
@@ -167,6 +185,14 @@ final class StdioShutdownTests: XCTestCase {
 
     func testEOFWithIdleStartup() throws {
         try exercise(blocked: false, strict: true)
+    }
+
+    func testBrokenStdoutExitsWithoutEOFWhileStartupBlocked() throws {
+        try exercise(blocked: true, strict: true, brokenStdout: true)
+    }
+
+    func testBrokenStdoutExitsWithoutEOFWithOrdinaryPool() throws {
+        try exercise(blocked: true, strict: false, brokenStdout: true)
     }
 
     func testMailActorStillSerializesConcurrentCalls() async throws {
