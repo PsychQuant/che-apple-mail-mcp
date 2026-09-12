@@ -28,9 +28,7 @@ cd "$(dirname "$0")/.."
 
 [[ -f "$BINARY" ]] || { echo "error: no binary at $BINARY" >&2; exit 1; }
 
-VERSION=$(python3 -c "import json;print(json.load(open('mcpb/manifest.json'))['version'])")
-OUTPUT="${2:-mcpb/che-apple-mail-mcp-${VERSION}.mcpb}"
-[[ ! -d "$OUTPUT" ]] || { echo "error: output must name a package file, not a directory" >&2; exit 1; }
+[[ ! -d "${2:-}" ]] || { echo "error: output must name a package file, not a directory" >&2; exit 1; }
 
 # Build a private bundle tree: packaging must not reuse a stale sidecar or
 # include unrelated files left in the repository's generated server directory.
@@ -40,6 +38,7 @@ mkdir -p "$STAGE/server"
 cp "$BINARY" "$STAGE/server/CheAppleMailMCP"
 chmod 755 "$STAGE/server/CheAppleMailMCP"
 PACKAGE_BINARY="$STAGE/server/CheAppleMailMCP"
+cp mcpb/manifest.json "$STAGE/manifest.json"
 
 # ---- Distribution gate ------------------------------------------------------
 # Fails CLOSED. The whole point of #323 is that an unsigned bundle is not a
@@ -73,7 +72,8 @@ fi
 # Query the image that will actually be packaged, after the distribution gate.
 # stdin is closed; a failed, malformed or stuck query must not publish a bundle
 # with stale/guessed metadata. The unsigned dev opt-in does not bypass this.
-python3 - "$PACKAGE_BINARY" "$VERSION" "$STAGE/server/.CheAppleMailMCP.version" <<'PY_VERSION'
+VERSION=$(python3 - "$PACKAGE_BINARY" "$STAGE/manifest.json" <<'PY_VERSION'
+import json
 import re
 import subprocess
 import sys
@@ -81,9 +81,13 @@ from pathlib import Path
 
 pattern = re.compile(r"(?:0|[1-9][0-9]{0,18})\.(?:0|[1-9][0-9]{0,18})\.(?:0|[1-9][0-9]{0,18})")
 def valid(value):
-    return bool(pattern.fullmatch(value)) and all(int(p) <= (1 << 63) - 1 for p in value.split('.'))
+    return isinstance(value, str) and bool(pattern.fullmatch(value)) and all(int(p) <= (1 << 63) - 1 for p in value.split('.'))
 
-if not valid(sys.argv[2]):
+try:
+    manifest_version = json.loads(Path(sys.argv[2]).read_text(encoding='utf-8'))['version']
+except (OSError, ValueError, KeyError, TypeError):
+    raise SystemExit("error: cannot read packaged manifest version")
+if not valid(manifest_version):
     raise SystemExit("error: manifest version must be a canonical MAJOR.MINOR.PATCH value")
 try:
     result = subprocess.run([sys.argv[1], "--version"], stdin=subprocess.DEVNULL,
@@ -91,8 +95,11 @@ try:
                             check=True, timeout=5)
 except subprocess.TimeoutExpired:
     raise SystemExit("error: packaged binary --version timed out after 5 seconds")
-except (OSError, subprocess.CalledProcessError):
-    raise SystemExit("error: packaged binary --version failed")
+except subprocess.CalledProcessError as exc:
+    detail = json.dumps(exc.stderr[:400].decode('utf-8', errors='replace'), ensure_ascii=True)
+    raise SystemExit(f"error: packaged binary --version failed (exit {exc.returncode}, stderr {detail})")
+except OSError as exc:
+    raise SystemExit(f"error: could not run packaged binary --version: {exc.strerror}")
 try:
     version = result.stdout.decode('ascii')
 except UnicodeDecodeError:
@@ -101,13 +108,18 @@ if version.endswith('\n'):
     version = version[:-1]
 if not valid(version):
     raise SystemExit("error: packaged binary returned an invalid version")
-if version != sys.argv[2]:
+if version != manifest_version:
     raise SystemExit("error: packaged binary version does not match mcpb/manifest.json")
-Path(sys.argv[3]).write_text(version + '\n', encoding='ascii')
+executable = Path(sys.argv[1])
+executable.with_name('.' + executable.name + '.version').write_text(version + '\n', encoding='ascii')
+print(version)
 PY_VERSION
+)
 
 # ---- Package ----------------------------------------------------------------
-cp mcpb/manifest.json mcpb/icon.png mcpb/PRIVACY.md "$STAGE/"
+OUTPUT="${2:-mcpb/che-apple-mail-mcp-${VERSION}.mcpb}"
+[[ ! -d "$OUTPUT" ]] || { echo "error: output must name a package file, not a directory" >&2; exit 1; }
+cp mcpb/icon.png mcpb/PRIVACY.md "$STAGE/"
 ( cd "$STAGE" && zip -qr bundle.mcpb manifest.json icon.png PRIVACY.md server/ )
 mkdir -p "$(dirname "$OUTPUT")"
 mv -f "$STAGE/bundle.mcpb" "$OUTPUT"

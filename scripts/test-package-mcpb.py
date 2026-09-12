@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Exercise the real packager in an isolated repository-shaped fixture."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -56,12 +57,26 @@ class PackageSidecarTests(unittest.TestCase):
         self.assertIn("version", result.stderr.lower())
         self.assertEqual(self.output.read_bytes(), b"previous-package")
 
+    def test_default_output_and_checksum_use_verified_version(self):
+        self.executable("printf '3.1.0\\n'\n")
+        result = subprocess.run(["/bin/bash", "scripts/package-mcpb.sh", str(self.binary)],
+                                cwd=self.root, env=self.env, capture_output=True, text=True, timeout=12)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = self.root / "mcpb/che-apple-mail-mcp-3.1.0.mcpb"
+        self.assertEqual(Path(str(output) + ".sha256").read_text().strip(),
+                         hashlib.sha256(output.read_bytes()).hexdigest())
+
     def test_invalid_or_failed_version_query_preserves_output(self):
-        for body in ["printf '3.1.0\\nextra\\n'\n", "printf '3.1.0\\n'; exit 1\n"]:
+        for body, diagnostic in [
+            ("printf '3.1.0\\nextra\\n'\n", "invalid version"),
+            ("printf 'fixture-version-error\\n' >&2; exit 1\n", "fixture-version-error"),
+        ]:
             with self.subTest(body=body):
                 self.executable(body)
                 self.output.write_bytes(b"previous-package")
-                self.assertNotEqual(self.package().returncode, 0)
+                result = self.package()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(diagnostic, result.stderr)
                 self.assertEqual(self.output.read_bytes(), b"previous-package")
 
     def test_version_query_is_bounded(self):
@@ -71,6 +86,15 @@ class PackageSidecarTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("timed out", result.stderr)
         self.assertEqual(self.output.read_bytes(), b"previous-package")
+
+    def test_manifest_version_is_not_normalized_by_shell_capture(self):
+        for version in ["3.1.0\n", "3.1.\x000", 3.1, None]:
+            with self.subTest(version=version):
+                (self.root / "mcpb/manifest.json").write_text(json.dumps({"version": version}))
+                self.executable("printf '3.1.0\\n'\n")
+                self.output.write_bytes(b"previous-package")
+                self.assertNotEqual(self.package().returncode, 0)
+                self.assertEqual(self.output.read_bytes(), b"previous-package")
 
     def test_distribution_gate_still_rejects_unsigned_fixture(self):
         self.executable("printf '3.1.0\\n'\n")
