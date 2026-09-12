@@ -1648,7 +1648,7 @@ actor MailController {
     }
 
     /// #175 — run the wrapper-free mailto compose path. Builds the percent-encoded
-    /// URL, refuses over-long URLs (→ caller falls back; avoids silent body
+    /// URL, refuses over-long URLs with an error (avoids silent body
     /// truncation), and runs the GUI script with the user's clipboard preserved
     /// at full fidelity when attachments are involved (the script sets the
     /// clipboard per-attachment for the Go-to-folder paste).
