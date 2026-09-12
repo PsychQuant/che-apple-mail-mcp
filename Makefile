@@ -1,13 +1,17 @@
 BINARY_NAME := CheAppleMailMCP
 ENTITLEMENTS := Sources/CheAppleMailMCP/Entitlements.plist
 
-.PHONY: build test clean verify-developer-id install install-signed release-signed
+.PHONY: build test test-plugin clean verify-developer-id install install-signed release-signed
 
 build:
 	swift build
 
 test:
 	swift test
+	$(MAKE) test-plugin
+
+test-plugin:
+	/bin/bash scripts/test-plugin.sh
 
 clean:
 	swift package clean

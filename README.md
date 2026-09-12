@@ -602,6 +602,19 @@ Still **not** covered by `account_id` (tracked): `get_account_info` / `list_mail
 
 ---
 
+## Development tests
+
+Run `make test` on macOS with Xcode Command Line Tools, Python 3 and `jq` on
+PATH. It runs the Swift suite, then the plugin suites; any failure makes the
+command fail. `make test-plugin` runs only the plugin suites for faster iteration.
+
+The plugin runner discovers `plugin/tests/test-*.sh` and `test-*.py`, checks
+that the required hook suite exists, and fails clearly if a dependency is
+missing. Each matching file must be a standalone Bash or Python suite; keep
+shared helpers under a different name or in a subdirectory. Plugin tests use
+isolated fixtures and mock processes/downloads.
+This Makefile wiring does not itself add a GitHub Actions workflow.
+
 ## Technical Details
 
 - **Framework**: [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) v0.10.0

@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The standard test command includes plugin regression suites**
+  ([#337](https://github.com/PsychQuant/che-apple-mail-mcp/issues/337)).
+  `make test` now runs Swift tests followed by plugin shell/Python suites;
+  failures propagate, and the required hook suite or missing dependencies fail
+  explicitly. `make test-plugin` provides a focused entry point.
+
 - **First-run Full Disk Access assistance works without jq or ps**
   ([#394](https://github.com/PsychQuant/che-apple-mail-mcp/issues/394)).
   Dependency checks apply only to staleness detection, so they no longer
