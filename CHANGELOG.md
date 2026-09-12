@@ -7,6 +7,138 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Archive mail treats message content as data and narrows command grants**
+  ([#395](https://github.com/PsychQuant/che-apple-mail-mcp/issues/395)).
+  Archive and repair commands enumerate their required mail tools. Guards
+  reject alternate authorization metadata, extra grants and unknown named
+  calls. The SOP preserves valid user authorization across turns, keeps raw
+  attachment lookup keys separate from safe filenames, transports inline
+  metadata as JSON, and encodes Markdown labels and link destinations separately.
+  Executable recipe tests cover path, control-character and markup edge cases.
+
+- **Exited osascript children no longer leave a false unreaped count**
+  ([#417](https://github.com/PsychQuant/che-apple-mail-mcp/issues/417)).
+  Registration and exit now update each child's lifecycle and the total under
+  one lock. Late registration after exit and duplicate notifications are no-ops,
+  so exited children cannot accumulate a false wedge and block future GUI/draft
+  scripts. The existing unreaped-child limit, deadlines, termination sequence
+  and timeout diagnostics are unchanged.
+
+- **GUI script timeouts distinguish requested termination from confirmed exit**
+  ([#415](https://github.com/PsychQuant/che-apple-mail-mcp/issues/415)).
+  Subprocess diagnostics no longer claim the script was abandoned or cannot be
+  cancelled. They report whether the interpreter's exit was confirmed and warn
+  that terminating it does not undo Apple Events already sent to Mail.
+  In-process timeout wording and timeout classification remain intact; send
+  flows still report an unknown outcome and refuse automatic retry, without
+  claiming an unconfirmed interpreter exit. Deadlines and termination behavior
+  are unchanged.
+
+- **Draft scans no longer stall on background NSAppleScript**
+  ([#406](https://github.com/PsychQuant/che-apple-mail-mcp/issues/406)).
+  `list_drafts`, `update_draft` locate and pre/post snapshots, recipient receipts,
+  and the final id+subject deletion now use the existing cancellable `osascript`
+  transport. Each retains a 45-second deadline; only GUI flows use the 90-second
+  deadline and Escape cleanup. Both share the unreaped-child limit.
+  Scan timeouts return no partial rows; deletion
+  timeouts report an unknown outcome. Account matching, paired id/subject reads,
+  receipt gates and deletion predicates are unchanged.
+  On macOS 27, the identical scoped script completed in 1.886s via `osascript`
+  and 0.767s via main-thread NSAppleScript, while background NSAppleScript
+  exceeded 50s even with userInitiated QoS/activity. MCP listing of 17 drafts
+  completed in 4.726s / 0.819s; a named Cc/Bcc update completed in 50.897s with
+  `deleted_old: true` and `recipients_verified: true` (including GUI creation,
+  with Bcc already visible). The other affected account had one draft at retest
+  and took 30.414s / 0.287s; latency still varies, so this is not a subsecond
+  guarantee. The all-accounts script took 12.114s / 12.125s.
+  The prior update live-verification caveat is replaced with this platform-bound
+  evidence; other macOS versions remain tracked by #408.
+
+## [3.1.0] - 2026-09-08
+
+### Added
+
+- **Drafts accept display-name Cc/Bcc recipients (`Name <addr>`), filled through
+  AX-addressed compose-window fields**
+  ([#404](https://github.com/PsychQuant/che-apple-mail-mcp/issues/404)).
+  `to` has taken display names on the clean path since #277; `cc` / `bcc` were
+  refused because a Tab-to-Cc paste could land in the wrong field when Mail hides
+  Cc (#277 verify). A live Accessibility probe on 2026-09-07 showed Mail gives every
+  address field a stable AXIdentifier (`Mail.toField` / `Mail.ccField` /
+  `Mail.bccField`), so the fill phase now locates each field by identifier,
+  focuses it, pastes the whole list, commits with Tab, and reads the tokens back
+  (count + display names) before ⌘S — a missing field or a mismatch aborts with a
+  named `FILLFIELD` / `FILLREADBACK` reason, nothing saved, our window closed. AX
+  `set value` is deliberately not used: the same probe showed it collapses a comma
+  list of *named* recipients into one token (silent recipient loss). New pure
+  helpers `composeCallRefusal`, `partitionRecipientsForMailto`, `AddressField`,
+  `RecipientFill`; new tests `ComposeEligibilityMatrixTests`,
+  `MailtoRecipientPartitionTests`, `ComposeFillPhaseTests`; generated AppleScript
+  syntax-checked with `osacompile`.
+- **Hidden Bcc field is revealed on demand and disclosed** (#404). When
+  `Mail.bccField` is absent, the View menu item matching `密件副本` / `Bcc` is
+  clicked and the field polled until present; the menu state is *not* restored
+  (restoring before the save is unverified for recipient loss, after the save
+  there is no window to act on), so the result says `bcc_field_revealed: true`.
+  The reveal looks for its menu item only under a menu named 顯示方式 / View —
+  other Mail UI languages fail cleanly with `BCCREVEAL` and are not supported
+  yet.
+- **Post-save recipient receipt** (#404). A token exposes no address over AX, so
+  when cc/bcc were GUI-filled the newest draft with the exact subject is re-read
+  (`considering case`) and its cc/bcc addresses compared with the request. The
+  result carries `recipients_verified: true`, or `recipients_verified: false`
+  plus a `recipients_diff` JSON object, or `recipients_receipt: unavailable`
+  with the reason when the script itself could not run (a failed script is never
+  reported as "not found" and is not retried — only a not-found result polls) —
+  never a failure, the draft is always kept (#276 direction). `update_draft`
+  inherits it through `createDraft` and, once its id receipt has confirmed the
+  replacement exists, keeps the OLD draft (`deleted_old: false` + a note that
+  reports what was observed and never instructs a deletion) on a definitive
+  mismatch; an unavailable or not-found receipt does not gate the delete, and a
+  phantom create keeps being reported as unconfirmed. Known limit: the receipt
+  identifies a draft by subject only ([#409](https://github.com/PsychQuant/che-apple-mail-mcp/issues/409)). The read-back name check applies to named recipients only — a
+  bare address's token is not name-compared because Mail renders a Contacts
+  card's name there; the count stays strict. `DraftRecipientReceipt.swift`;
+  `DraftRecipientReceiptTests`.
+
+### Changed
+
+- **Ineligibility reason 6 is send-only** (#404, spec `message-composition`).
+  It read "a `cc` or `bcc` recipient carries a display name"; it now reads "a
+  `to` / `cc` / `bcc` recipient carries a display name on a *send*
+  (`compose_email`)". `compose_email` behaves exactly as before (still refuses —
+  a fill that failed on a send would dispatch with missing recipients);
+  `create_draft` / `update_draft` no longer refuse for reason 6. The refusal
+  message, the five `create_draft` / `update_draft` recipient descriptions, and
+  the three compose rules (`.claude/rules`, `plugin/rules`,
+  `che-claude-config`) say so. The draft result string gains the
+  `[display-name … GUI-filled]`, `[bcc_field_revealed …]` and
+  `[recipients_verified …]` disclosures.
+
+### Fixed
+
+- **The discard-sheet half of the orphan-window chain**
+  ([#333](https://github.com/PsychQuant/che-apple-mail-mcp/issues/333), partial).
+  The on-error cleanup closed our window with `close … saving no`, but a mailto
+  compose window answers that with the "save this message as a draft?" sheet
+  (AXIdentifier `Mail.sendMessageAlert`) and stays open behind it — so the next
+  attempt found a same-title window and failed too, the chain #333 describes
+  (live-observed 2026-09-07 during the #404 probe). For failures that happen
+  *after* our window was identified (the `raiseOnly` / fill / popup / attach
+  phases), cleanup now clicks the sheet's *discard* button — exact titles
+  `不儲存` / `Don't Save` / `Don’t Save`, never save or cancel, and only when
+  exactly one window carries the subject — re-checks the window, and appends a
+  `WINDOWLEFTOPEN` note naming the title if it survives. Failures *before* the
+  window is identified (a same-title window already open, more than one new
+  window, no new window) still leave the window and stay on #333; the discard
+  title is locale-matched (zh-TW / English), other locales fall through to
+  `WINDOWLEFTOPEN`. The post-dispatch branch (#242) is untouched.
+  `ComposeCleanupSheetTests`.
+
+## [3.0.0] - 2026-08-31
+
 ### Added
 
 - **Self-hosted plugin marketplace — the plugin shell now lives beside its binary** ([#335](https://github.com/PsychQuant/che-apple-mail-mcp/issues/335)). The commands / skills / rules / hooks / wrapper previously lived in the `psychquant-claude-plugins` aggregator while the Swift source lived here, splitting one product across two repos: archive-mail SOP issues accumulated in the aggregator (#104/#107/#109/#110/#112) while binary issues stayed here (#232/#261), each "split from" the other — and the two manifests drifted (`marketplace.json` said `binary_version: 2.24.0`, `plugin.json` said `2.25.0`, while the newest release was v2.26.0, so the v2.44.0 shell shipped an SOP that documents "binary v2.26.0+" against a pin that fetched 2.25.0). Layout follows the `che-ical-mcp` pilot: a root `.claude-plugin/marketplace.json` with `source: "./plugin"`, plus a `plugin/` subtree carrying the 20 files verbatim (md5-identical, 20/20). The new manifest **deliberately omits `binary_version`** so `plugin/.claude-plugin/plugin.json` is the single source for the binary pin and that axis of the two-manifest drift is structurally impossible rather than merely corrected once. (The shell `version` is still declared in both manifests — the schema wants one per entry — so `ManifestVersionTests` pins the pair equal, and the marketplace entry's description deliberately carries no version narrative at all; both guards added at #335 verify.) Cross-references updated in `CLAUDE.md` and `scripts/release.sh`; the plugin's own hook suite passes unchanged in its new path (22/22).

@@ -20,6 +20,11 @@ actor MailController {
     /// (nil = proceed) instead of probing Accessibility — lets tests select the
     /// branch deterministically.
     private var refusalOverride: (() -> ComposeRefusal?)?
+    /// #404 (PR #407 R1 #4): the recipient receipt's verdict for the most recent
+    /// draft created through `composeViaMailto`, so `updateDraft` can gate its
+    /// delete on a DEFINITIVE mismatch. Actor-isolated; reset at the start of
+    /// every receipt-bearing compose, `nil` when no receipt ran.
+    private var lastRecipientReceiptOutcome: RecipientReceiptOutcome?
 
     /// #287: when set, `openMailtoURL` calls this instead of
     /// `NSWorkspace.shared.open` — lets tests exercise the LaunchServices
@@ -45,7 +50,7 @@ actor MailController {
 
     // MARK: - AppleScript Execution
 
-    /// #297: default wall-clock ceiling for a single NSAppleScript execution.
+    /// #297/#406: default wall-clock ceiling for a non-GUI script execution.
     /// Well under the MCP client's ~120s idle timeout (so a stuck call returns
     /// an actionable error rather than silently dropping the whole server
     /// connection) and well over normal ~1-2s Mail IPC. Tunable via the
@@ -70,11 +75,11 @@ actor MailController {
     /// (verify #301, Lens A P1-4).
     static let guiScriptTimeout: TimeInterval = 90
 
-    /// #301 — refuse new GUI flows past this many unreaped (SIGKILL-resistant)
-    /// osascript children: bounds thread/zombie growth AND the re-opened
+    /// #301/#406 — refuse new GUI/draft subprocesses past this many unreaped
+    /// (SIGKILL-resistant) osascript children: bounds thread/zombie growth AND the re-opened
     /// clipboard window a still-alive paster would have (verify Lens B P1-3).
     static let maxUnreapedGuiChildren = 3
-    /// Shared accounting (reference type — detached waiter threads decrement).
+    /// Shared accounting; waiters report exit through their child token.
     private let guiChildAccounting = GuiChildAccounting()
 
     /// Execute AppleScript and return result.
@@ -242,42 +247,84 @@ actor MailController {
     /// (#295: unstable AX tree, #296: identical matcher passes under osascript
     /// and gets ZERO menu items in-process).
     ///
-    /// The subprocess also fixes the guard's worst residue: `Process.terminate`
-    /// actually CANCELS a timed-out script, so an abandoned GUI flow no longer
-    /// keeps typing into Mail while the legacy fallback runs (in-process
-    /// NSAppleScript is uncancellable — #297 could only abandon the thread).
+    /// Timeout cleanup requests interpreter termination and observes its exit.
+    /// A confirmed exit stops further script execution, unlike abandoning an
+    /// NSAppleScript thread; Apple Events already accepted by Mail may still
+    /// complete (#415).
     ///
     /// TCC: the subprocess's Apple Events are attributed to its RESPONSIBLE
     /// process (this binary), so the existing Automation grant covers it —
     /// verified live in the #301 gate. The preflight probe still runs first.
     ///
-    /// Short query/action scripts stay on in-process `runScript` — they are
-    /// single-digit-event payloads where in-process latency is fine and the
-    /// #297 abandon semantics are acceptable.
+    /// Short query/action scripts stay on in-process `runScript`. Draft scans
+    /// and the scoped draft deletion use this same subprocess transport via
+    /// their own 45s, non-GUI policy (#406).
     func runGuiScript(_ source: String, timeout: TimeInterval? = nil) throws -> String {
+        try runSubprocessScript(source, timeout: timeout ?? Self.guiScriptTimeout, guiFlow: true)
+    }
+
+    /// #406 — draft scans issue many Apple Events. The identical generated
+    /// script finishes in seconds in osascript but exceeds 50s in background
+    /// NSAppleScript, even with userInitiated QoS/activity. Keep the read
+    /// deadline at 45s and never send Escape on a read-only scan timeout.
+    func runDraftScanScript(_ source: String, timeout: TimeInterval? = nil) throws -> String {
+        do {
+            return try runSubprocessScript(source, timeout: timeout ?? Self.defaultScriptTimeout, guiFlow: false)
+        } catch MailError.scriptTimedOut(let seconds, let granted, _) {
+            throw MailError.operationFailed(
+                "The read-only drafts scan did not return within \(seconds)s. "
+                + "osascript termination was requested; no partial scan was returned. "
+                + (granted
+                   ? "Automation permission was verified GRANTED. Mail may be busy or unresponsive; retry when it responds."
+                   : "Automation permission was not verified granted. Check Mail and any pending Automation prompt.\n" + AutomationHelp.guidance))
+        }
+    }
+
+    /// #406 live gate: the final id+subject delete scan hit the same background
+    /// NSAppleScript timeout after all read scans succeeded. Keep the existing
+    /// predicate; cancellation cannot prove whether Mail applied the delete.
+    func runDraftDeleteScript(_ source: String, timeout: TimeInterval? = nil) throws -> String {
+        do {
+            return try runSubprocessScript(source, timeout: timeout ?? Self.defaultScriptTimeout, guiFlow: false)
+        } catch MailError.scriptTimedOut(let seconds, let granted, _) {
+            throw MailError.operationFailed(
+                "The draft deletion did not return within \(seconds)s. osascript termination "
+                + "was requested; the deletion outcome is unknown. Check the drafts mailbox before retrying. "
+                + (granted ? "Automation permission was verified GRANTED. Mail may be busy or unresponsive."
+                   : "Automation permission was not verified granted.\n" + AutomationHelp.guidance))
+        }
+    }
+
+    /// Shared process transport; caller policy controls deadline and GUI cleanup.
+    private func runSubprocessScript(_ source: String, timeout: TimeInterval, guiFlow: Bool) throws -> String {
         if let override = scriptRunnerOverride {
-            // Same seam as runScript: tests drive GUI flows with a fake runner.
-            // The fallback deadline matches the production one (guiScriptTimeout,
-            // NOT the 45s default) so a test asserting the scriptTimedOut payload
-            // sees the same number production would emit (verify #301, Lens A P2-2).
-            return try runGuarded(timeout: timeout ?? Self.guiScriptTimeout,
+            // Same seam as runScript. Each caller passes its production
+            // deadline (90s GUI / 45s scan); the test seam still takes priority.
+            return try runGuarded(timeout: timeout,
                                   automationGranted: true) { try override(source) }
         }
         let granted = try preflightAutomation()
         // #301 verify (Lens B P1): a child SIGKILL cannot reach (uninterruptible
         // kernel wait against a wedged Mail/WindowServer) leaves a permanently
         // blocked waiter thread AND a live paster that could outrun the clipboard
-        // restore. Bound the damage: refuse new GUI flows while several children
-        // remain unreaped — an honest "wedged" error beats compounding the pile.
+        // restore. GUI and draft operations share the unreaped-child limit;
+        // refuse either class while several children remain unreaped.
         guard guiChildAccounting.current() < Self.maxUnreapedGuiChildren else {
+            if guiFlow {
+                throw MailError.operationFailed(
+                    "GUI scripting subsystem appears wedged: \(Self.maxUnreapedGuiChildren) "
+                    + "terminated osascript children have not exited (Mail or WindowServer "
+                    + "may be hung). Not starting another GUI flow. Restart this MCP server "
+                    + "(and check Mail) — or use open_mailto (zero-TCC, no GUI scripting) "
+                    + "as the clean-compose fallback.")
+            }
             throw MailError.operationFailed(
-                "GUI scripting subsystem appears wedged: \(Self.maxUnreapedGuiChildren) "
+                "osascript subsystem appears wedged: \(Self.maxUnreapedGuiChildren) "
                 + "terminated osascript children have not exited (Mail or WindowServer "
-                + "may be hung). Not starting another GUI flow. Restart this MCP server "
-                + "(and check Mail) — or use open_mailto (zero-TCC, no GUI scripting) "
-                + "as the clean-compose fallback.")
+                + "may be hung). Not starting another osascript subprocess. Restart this MCP server "
+                + "and check Mail.")
         }
-        let deadline = scriptTimeoutOverride ?? timeout ?? Self.guiScriptTimeout
+        let deadline = scriptTimeoutOverride ?? timeout
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
@@ -339,11 +386,10 @@ actor MailController {
         }
 
         let waitSem = DispatchSemaphore(value: 0)
-        let wedgeFlag = PipeDrainBox()   // reused as a lock-protected flag box
-        let accounting = guiChildAccounting
+        let child = guiChildAccounting.trackChild()
         Thread.detachNewThread {
             process.waitUntilExit()
-            if !wedgeFlag.get().isEmpty { accounting.decrement() }
+            child.didExit()
             waitSem.signal()
         }
         if waitSem.wait(timeout: .now() + deadline) == .timedOut {
@@ -351,26 +397,29 @@ actor MailController {
             // SIGTERM, brief grace, then SIGKILL — the GUI flow stops driving
             // Mail the moment the interpreter dies.
             process.terminate()
-            if waitSem.wait(timeout: .now() + 2) == .timedOut {
+            var exitConfirmed = waitSem.wait(timeout: .now() + 2) == .success
+            if !exitConfirmed {
                 // Guard the raw kill: the waiter may have reaped the child in
                 // the gap, freeing the pid for reuse — and a pathological pid 0
                 // would signal our own process group (verify Lens A P2-1 /
                 // Lens B P1-2). isRunning is false once reaped.
                 let pid = process.processIdentifier
                 if pid > 0, process.isRunning { kill(pid, SIGKILL) }
-                if waitSem.wait(timeout: .now() + 2) == .timedOut {
-                    // Even SIGKILL did not take (uninterruptible kernel wait):
-                    // count the un-reaped child; the waiter decrements when it
-                    // finally exits (Lens B P1-3).
-                    wedgeFlag.set(Data([1]))
-                    accounting.increment()
+                exitConfirmed = waitSem.wait(timeout: .now() + 2) == .success
+                if !exitConfirmed {
+                    // Count only a child not already observed exited. The
+                    // waiter can finish after the timed wait; registration
+                    // and exit must be one synchronized lifecycle (#417).
+                    child.markUnreaped()
                 }
             }
             // Best-effort: a killed popup flow can leave an OPEN MENU that
             // swallows every subsequent keystroke, making the next attempt fail
             // confusingly — send one Escape to dismiss it (Lens B P2).
-            Self.dismissLingeringGuiMenu()
-            throw MailError.scriptTimedOut(seconds: Int(deadline), automationGranted: granted)
+            if guiFlow { Self.dismissLingeringGuiMenu() }
+            throw MailError.scriptTimedOut(
+                seconds: Int(deadline), automationGranted: granted,
+                execution: .subprocess(exitConfirmed: exitConfirmed))
         }
         // Join the drains with a REAL barrier. On timeout, throw — never return
         // a truncated stdout as the script result (a grandchild inheriting the
@@ -1554,7 +1603,7 @@ actor MailController {
             refusal: composeRefusalForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
                 attachments: attachments,
-                recipients: to + (cc ?? []) + (bcc ?? [])),
+                to: to, cc: cc ?? [], bcc: bcc ?? []),
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
@@ -1578,30 +1627,24 @@ actor MailController {
     /// (`fromAddress`) rides the clean path via the verified From-popup (#219)
     /// when Accessibility is granted. An empty subject refuses (the GUI dispatch
     /// guard identifies our compose window by its title = subject).
-    private func composeRefusalForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, recipients: [String] = [], draftMode: Bool = false, cc: [String] = [], bcc: [String] = []) -> ComposeRefusal? {
+    // PR #407 R1 #9: the three lists are passed AS the three lists — the pure
+    // derivation is per-list, and the 12-cell matrix tests that shape.
+    private func composeRefusalForCall(format: BodyFormat, fromAddress: String?, subject: String, attachments: [String]? = nil, to recipients: [String] = [], draftMode: Bool = false, cc: [String] = [], bcc: [String] = []) -> ComposeRefusal? {
         if let override = refusalOverride { return override() }
-        return composeRefusal(
+        // #404: the derivation is the pure `composeCallRefusal` so the
+        // draft/send × to/cc/bcc × bare/named matrix is unit-testable. Reason 6
+        // is send-only — on a draft every list is AX-addressed and GUI-filled
+        // (#277 for `to`, #404 for `cc` / `bcc`); the "Cc can be hidden via
+        // Header Fields" objection is answered by locating fields through their
+        // AXIdentifier and revealing Bcc on demand, not by refusing.
+        return composeCallRefusal(
             format: format,
             accessibilityTrusted: AccessibilityStatus.isTrusted,
-            hasCustomSender: (fromAddress?.isEmpty == false),
-            hasSubject: !subject.isEmpty,
-            attachmentsGuiSafe: attachmentPathsGuiSafe(attachments),
-            recipientsAddrSpecOnly: !anyRecipientHasDisplayName(recipients),
-            // #277: GUI clipboard fill is DRAFT-only (a failed fill on a send
-            // would fire with missing recipients) and TO-ONLY — the To field
-            // is always visible + default-focused; Cc/Bcc can be hidden via
-            // Header Fields (#277 verify, Codex: a hidden Cc would silently
-            // drop names), so display-name cc/bcc are refused.
-            displayNameFillViable: draftMode
-                && !anyRecipientHasDisplayName(cc)
-                && !anyRecipientHasDisplayName(bcc),
-            // #219 verify R2 (Codex): only a simple addr-spec is safe to drive
-            // the exact From-popup match; an exotic quoted local-part is
-            // refused. Check the popup address (the value the GUI matches).
-            customSenderIsSimple: fromAddress.map {
-                isSimpleAddrSpec(parseRecipient($0).address)
-            } ?? true
-        )
+            fromAddress: fromAddress,
+            subject: subject,
+            attachments: attachments,
+            to: recipients, cc: cc, bcc: bcc,
+            draftMode: draftMode)
     }
 
     /// #175 — run the wrapper-free mailto compose path. Builds the percent-encoded
@@ -1614,13 +1657,12 @@ actor MailController {
         cc: [String]?, bcc: [String]?, attachments: [String]?, send: Bool,
         fromAddress: String? = nil
     ) throws -> String {
-        // #277: display-name To can't ride the mailto URL (RFC 6068). When the
-        // To list carries ANY display name, the WHOLE To list goes through the
-        // GUI clipboard-fill phase (order preserved; bare + named tokenize
-        // alike) and the URL omits To. Cc is NEVER GUI-filled (#277 verify,
-        // Codex: a hidden Cc field would silently drop names), so eligibility
-        // guarantees cc here has no display names and cc always rides the URL.
-        let fillTo = anyRecipientHasDisplayName(to) ? to : []
+        // #277/#404: a display name can't ride the mailto URL (RFC 6068). Any
+        // list carrying a display name is omitted from the URL as a whole and
+        // filled through its AX-addressed field (order preserved; bare + named
+        // tokenize alike). Cc/Bcc joined To here in #404 — the field is located
+        // by AXIdentifier, so a hidden field fails loud instead of misfiring.
+        let partition = partitionRecipientsForMailto(to: to, cc: cc ?? [], bcc: bcc ?? [])
         // #277 defense-in-depth (verify R1 + R2, Codex): display-name fill is
         // DRAFT-ONLY. Eligibility already routes a send with ANY display-name
         // recipient (To/Cc/Bcc) to the legacy path, so this is unreachable — but
@@ -1635,8 +1677,8 @@ actor MailController {
                 "internal: display-name recipient on a send reached the clean path — refusing "
                 + "(display-name recipients are draft-only on the clean path, #277)")
         }
-        let urlTo = fillTo.isEmpty ? to : []
-        let url = buildMailtoURL(to: urlTo, subject: subject, body: body, cc: cc, bcc: bcc)
+        let url = buildMailtoURL(to: partition.urlTo, subject: subject, body: body,
+                                 cc: partition.urlCc, bcc: partition.urlBcc)
         guard url.count <= maxMailtoURLLength else {
             throw MailError.scriptFailed(
                 message: "mailto URL too long (\(url.count) > \(maxMailtoURLLength) chars)",
@@ -1650,8 +1692,8 @@ actor MailController {
         let popupAddress = fromAddress.map { parseRecipient($0).address }
         let script = buildMailtoComposeScript(
             url: url, subject: subject, attachments: attachments ?? [], send: send,
-            fromAddress: popupAddress, fillToRecipients: fillTo)
-        let needsClipboard = attachments?.isEmpty == false || !fillTo.isEmpty
+            fromAddress: popupAddress, fill: partition.fill)
+        let needsClipboard = attachments?.isEmpty == false || !partition.fill.isEmpty
         // #301: the whole keystroke flow is ONE script with deliberate per-phase
         // delays — on a large mailbox a HEALTHY run crosses the 45s default, so
         // it gets the GUI deadline (the default killed it mid-flight and the
@@ -1659,14 +1701,65 @@ actor MailController {
         var result = needsClipboard
             ? try withClipboardPreserved({ try runGuiScript(script, timeout: Self.guiScriptTimeout) })
             : try runGuiScript(script, timeout: Self.guiScriptTimeout)
+        // #404: the script tags its return value when it had to reveal the Bcc
+        // field (the View-menu state is deliberately NOT restored — disclose it).
+        // Strip the tag FIRST: it is a suffix of the raw script return, and any
+        // disclosure appended before this check would hide it (PR #407 R1 #1 —
+        // with from_address set the sender disclosure used to land first, so
+        // bcc_field_revealed was lost and the raw tag leaked).
+        var bccRevealed = false
+        if result.hasSuffix(bccFieldRevealedScriptTag) {
+            result.removeLast(bccFieldRevealedScriptTag.count)
+            bccRevealed = true
+        }
         // #219/#277: disclose what the GUI verified/filled so the caller can
         // see the clean path handled the extras (parity with the legacy
         // disclosure discipline, #237).
         if let addr = popupAddress, !addr.isEmpty {
             result += " [sender verified via From popup: \(addr)]"
         }
-        if !fillTo.isEmpty {
-            result += " [display-name To recipients GUI-filled (draft-only, #277) — verify To in the draft]"
+        if !partition.fill.isEmpty {
+            let fields = partition.fill.map { $0.field.rawValue }.joined(separator: "/")
+            result += " [display-name \(fields) recipients GUI-filled via AX-addressed fields (draft-only, #277/#404)]"
+        }
+        if bccRevealed {
+            result += " [bcc_field_revealed: true — Mail's Bcc address field was shown via View ▸ Bcc Address Field and left visible]"
+        }
+        // #404 recipient receipt: the AX read-back verified token count + display
+        // names, but a token exposes no address, so when cc/bcc were GUI-filled
+        // the saved draft is re-read and its cc/bcc ADDRESSES compared with the
+        // request. Draft-only (a send has nothing left to read); never a failure
+        // — a mismatch or a missing draft is disclosed and the draft is KEPT.
+        let filledCcOrBcc = partition.fill.contains { $0.field == .cc || $0.field == .bcc }
+        lastRecipientReceiptOutcome = nil
+        if !send && filledCcOrBcc {
+            let receiptScript = buildDraftRecipientReceiptScript(subject: subject)
+            // Three states (PR #407 R1 #3): a script FAILURE is recorded as
+            // `unavailable` and never retried — retrying a 45 s timeout three
+            // times stacked ~135 s onto the call (#406) and still said nothing;
+            // only NOTFOUND polls, because the save can land asynchronously.
+            var fetch: RecipientReceiptFetch = .notFound
+            for attempt in 0..<3 {
+                if attempt > 0 { Thread.sleep(forTimeInterval: 0.4) }
+                do {
+                    let raw = try runDraftScanScript(receiptScript)
+                    if let parsed = parseRecipientReceipt(raw) {
+                        fetch = .found(parsed)
+                        break
+                    }
+                    fetch = .notFound
+                } catch {
+                    let reason = error.localizedDescription
+                    _ = Diagnostics.emit(
+                        "recipient receipt for subject \"\(subject)\" could not run: \(reason)\n")
+                    fetch = .unavailable(reason)
+                    break
+                }
+            }
+            let outcome = recipientReceiptOutcome(
+                expectedCc: cc ?? [], expectedBcc: bcc ?? [], receipt: fetch)
+            lastRecipientReceiptOutcome = outcome
+            result += recipientReceiptDisclosure(outcome)
         }
         return result
     }
@@ -1819,7 +1912,7 @@ actor MailController {
             // from the same invocation; `parseDraftRows` zips them (throwing
             // on any mismatch instead of silently truncating). The `id` field
             // is additive — existing subject-only consumers are unchanged.
-            let rows = try parseDraftRows(try runScript(script))
+            let rows = try parseDraftRows(try runDraftScanScript(script))
             return rows.map { row in
                 ["subject": row.subject, "id": row.id]
             }
@@ -1893,7 +1986,7 @@ actor MailController {
         let scoped = (accountName?.isEmpty == false) || (accountId?.isEmpty == false)
         let rows: [(id: String, subject: String)]
         do {
-            rows = try parseDraftRows(try runScript(listScript))
+            rows = try parseDraftRows(try runDraftScanScript(listScript))
         } catch {
             if !scoped {
                 // Verify R3 (DA-3): the all-accounts scan is deliberately
@@ -1939,7 +2032,7 @@ actor MailController {
         let receiptScript = buildListAllDraftsScript()
         let preReceiptRows: [(id: String, subject: String)]
         do {
-            preReceiptRows = try parseDraftRows(try runScript(receiptScript))
+            preReceiptRows = try parseDraftRows(try runDraftScanScript(receiptScript))
         } catch {
             throw MailError.operationFailed(
                 "update_draft: could not take the pre-create drafts snapshot needed for the "
@@ -1965,7 +2058,7 @@ actor MailController {
         var replacementConfirmed = false
         for attempt in 0..<3 {
             if attempt > 0 { Thread.sleep(forTimeInterval: 0.4) }
-            if let postRows = try? parseDraftRows(try runScript(receiptScript)),
+            if let postRows = try? parseDraftRows(try runDraftScanScript(receiptScript)),
                postRows.contains(where: { !preIds.contains($0.id) && $0.subject == subject }) {
                 replacementConfirmed = true
                 break
@@ -1983,12 +2076,42 @@ actor MailController {
             ]
         }
 
+        // 2.6 RECIPIENT GATE (#404, PR #407 R1 #4 → R2-1): only now, with the
+        //     replacement CONFIRMED to exist by the id receipt above. On a
+        //     same-subject update the recipient receipt's first read is always
+        //     `.found` (the old draft carries the subject), so it judges at the
+        //     first instant after ⌘S — before this gate moved here, a phantom
+        //     create read the OLD draft's recipients and fired a false mismatch
+        //     (PR #407 R2, logic N1 / DA Q1). Only a DEFINITIVE mismatch gates;
+        //     `unavailable` (#406) and not-found do not, or every update on a
+        //     slow-scan account would leave two drafts. Residual (#409): the
+        //     receipt identifies the draft by subject alone (newest id wins), so
+        //     it can still read the old draft — the note therefore states what
+        //     was observed and never instructs a deletion.
+        if let receipt = lastRecipientReceiptOutcome, receipt.isDefinitiveMismatch {
+            return [
+                "deleted_old": false,
+                "old_draft_id": old.id,
+                "new_draft": createResult,
+                "note": "the replacement draft was confirmed created, but the post-save recipient "
+                    + "receipt read cc/bcc addresses that differ from the request "
+                    + "(recipients_verified: false, see recipients_diff). The OLD draft (id \(old.id)) "
+                    + "was KEPT — it holds the recipients the draft had before this call — so two "
+                    + "drafts MAY now exist (the id receipt can also be satisfied by a re-saved old "
+                    + "draft, #405). Caveat: the receipt identifies a draft by subject only (newest id wins, "
+                    + "#409), so on a same-subject update it MAY have read the old draft rather than "
+                    + "the replacement, and a bare address may differ only by server-side "
+                    + "normalization. Open the drafts in Mail and decide yourself which to keep; "
+                    + "nothing was deleted.",
+            ]
+        }
+
         // 3. Delete the old draft — best-effort (D5). Predicate = id AND
         //    exact subject (DA-1 cross-account protection).
         let deleteScript = buildDeleteDraftByIdScript(
             draftId: old.id, subject: old.subject, accountId: accountId, accountName: accountName)
         do {
-            _ = try runScript(deleteScript)
+            _ = try runDraftDeleteScript(deleteScript)
             return ["deleted_old": true, "old_draft_id": old.id, "new_draft": createResult]
         } catch {
             // 9276 = the whole delete scope scanned CLEAN and the old draft
@@ -2050,7 +2173,7 @@ actor MailController {
             refusal: composeRefusalForCall(
                 format: format, fromAddress: fromAddress, subject: subject,
                 attachments: attachments,
-                recipients: to + (cc ?? []) + (bcc ?? []),
+                to: to,
                 draftMode: true, cc: cc ?? [], bcc: bcc ?? []),
             cleanPath: {
                 try composeViaMailto(
@@ -2904,6 +3027,13 @@ enum AttachmentWriteProblem: Equatable {
     case statFailed(errno: Int32)
 }
 
+/// Interpreter exit is distinct from completion or rollback of Apple Events
+/// already accepted by Mail (#415). The test runner seam remains in-process.
+enum ScriptTimeoutExecution: Equatable {
+    case inProcess
+    case subprocess(exitConfirmed: Bool)
+}
+
 enum MailError: LocalizedError {
     case scriptCreationFailed
     case scriptFailed(message: String, code: Int)
@@ -2913,10 +3043,11 @@ enum MailError: LocalizedError {
     /// with an actionable, recovery-oriented explanation for the caller (#103).
     case operationFailed(String)
     /// #297: an AppleScript execution did not return within the wall-clock
-    /// budget and was abandoned to keep the MCP server responsive. Distinct
+    /// budget. Execution context distinguishes an abandoned in-process call
+    /// from a subprocess whose termination was requested (#415). Distinct
     /// from `.scriptFailed(code: -1743)` (a *returned* denial): this is the
     /// *never-returns* mode (TCC prompt pending/not-determined, or Mail stuck).
-    case scriptTimedOut(seconds: Int, automationGranted: Bool)
+    case scriptTimedOut(seconds: Int, automationGranted: Bool, execution: ScriptTimeoutExecution = .inProcess)
 
     /// #347 — `save_attachment` claimed success but the on-disk result did not
     /// verify.
@@ -2950,7 +3081,20 @@ enum MailError: LocalizedError {
             return "Invalid parameter: \(message)"
         case .operationFailed(let message):
             return message
-        case .scriptTimedOut(let seconds, let automationGranted):
+        case .scriptTimedOut(let seconds, let automationGranted, let execution):
+            if case .subprocess(let exitConfirmed) = execution {
+                return "AppleScript call did not return within \(seconds)s; osascript termination was requested. "
+                    + (exitConfirmed
+                       ? "The interpreter's exit was confirmed. "
+                       : "The interpreter's exit was not confirmed during timeout cleanup; it may still be running. ")
+                    + "Terminating the interpreter does not undo Apple Events already sent to Mail: "
+                    + "saving or sending may already have occurred. Check Mail and any leftover compose window before retrying. "
+                    + (automationGranted
+                       ? "Automation permission was verified GRANTED. A long GUI flow may have exceeded its deadline, "
+                         + "or Mail may be busy or unresponsive."
+                       : "Automation permission was not verified granted. Check for a pending Automation prompt.\n"
+                         + AutomationHelp.guidance)
+            }
             // #297: the never-returns mode. Named distinctly from the -1743
             // recorded-Deny path so a stuck call surfaces an actionable error
             // within the budget instead of hanging until the MCP client drops
@@ -3016,15 +3160,38 @@ final class PipeDrainBox: @unchecked Sendable {
     func get() -> Data { lock.lock(); defer { lock.unlock() }; return data }
 }
 
-/// #301 — lock-protected counter of terminated-but-unreaped osascript children
-/// (SIGKILL did not take). Reference type so detached waiter threads can
-/// decrement without touching actor state.
+/// #301/#417 — per-child lifecycle and total count share one lock. A waiter
+/// exiting before/during registration cannot leave a phantom unreaped child.
 final class GuiChildAccounting: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
     func current() -> Int { lock.lock(); defer { lock.unlock() }; return count }
-    func increment() { lock.lock(); count += 1; lock.unlock() }
-    func decrement() { lock.lock(); count = max(0, count - 1); lock.unlock() }
+
+    /// Running children do not count toward the unreaped limit. The waiter
+    /// retains this token until exit; the owner keeps no token collection.
+    func trackChild() -> Child { Child(owner: self) }
+
+    final class Child: @unchecked Sendable {
+        private enum State { case running, unreaped, exited }
+        private let owner: GuiChildAccounting
+        // Accessed only under owner.lock, including duplicate callbacks.
+        private var state: State = .running
+
+        fileprivate init(owner: GuiChildAccounting) { self.owner = owner }
+
+        func markUnreaped() {
+            owner.lock.lock(); defer { owner.lock.unlock() }
+            guard case .running = state else { return }
+            state = .unreaped
+            owner.count += 1
+        }
+
+        func didExit() {
+            owner.lock.lock(); defer { owner.lock.unlock() }
+            if case .unreaped = state { owner.count -= 1 }
+            state = .exited
+        }
+    }
 }
 
 /// #288 — actionable guidance for Automation-TCC denial (-1743), the

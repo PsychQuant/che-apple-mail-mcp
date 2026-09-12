@@ -11,7 +11,7 @@ import XCTest
 /// (#233, #248) shows doc↔`defineTools()` drift is recurrent, and the
 /// enumeration is exactly the kind of list a future step silently outgrows.
 ///
-/// Four invariants, each locking a defect this repo has actually shipped:
+/// Five invariants, each locking a defect this repo has actually shipped:
 ///   1. every command file declares `allowed-tools` (the repair command
 ///      shipped with NO frontmatter at all — broader than the wildcard #395
 ///      removed, since a command without frontmatter is unrestricted);
@@ -20,7 +20,8 @@ import XCTest
 ///      allow-list (the drift guard — a new step that calls a new tool fails
 ///      here instead of prompting the user at runtime);
 ///   4. every allow-listed mail tool exists in `defineTools()` (no phantom
-///      names, which would silently authorize nothing and mask a typo).
+///      names, which would silently authorize nothing and mask a typo);
+///   5. archive and repair commands grant exactly their required tool sets.
 final class CommandAllowedToolsGuardTests: XCTestCase {
 
     private static let repoRoot = URL(fileURLWithPath: #filePath)
@@ -73,6 +74,22 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
             // bare scalars. Every other spelling fails loudly here instead of
             // being read differently by the two readers.
             let fmLines = frontmatter.split(separator: "\n", omittingEmptySubsequences: false)
+            // Fail closed for the entire small metadata grammar used here.
+            // Looking only for a literal allowed-tools: line misses a second
+            // quoted/indented/escaped YAML key that another loader may read.
+            let knownKeys: Set<String> = ["description", "argument-hint", "allowed-tools"]
+            var seenKeys = Set<String>()
+            for line in fmLines where !line.isEmpty {
+                guard let colon = line.firstIndex(of: ":") else {
+                    return Command(name: name, allowedTools: [], body: body,
+                                   formatError: "non-canonical frontmatter line")
+                }
+                let key = String(line[..<colon])
+                guard knownKeys.contains(key), seenKeys.insert(key).inserted else {
+                    return Command(name: name, allowedTools: [], body: body,
+                                   formatError: "unsupported or duplicate frontmatter key: \(key)")
+                }
+            }
             let matching = fmLines.filter { $0.hasPrefix("allowed-tools:") }
             guard matching.count <= 1 else {
                 return Command(name: name, allowedTools: [], body: body,
@@ -92,9 +109,13 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
                                  + "guard and the host cannot read it differently")
             }
             let tools = value
-                .split(separator: ",")
+                .split(separator: ",", omittingEmptySubsequences: false)
                 .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
+            let tokenPattern = #"^[A-Za-z][A-Za-z0-9_*-]*(?:\([A-Za-z0-9_./: *-]+\))?$"#
+            guard tools.allSatisfy({ $0.range(of: tokenPattern, options: .regularExpression) != nil }) else {
+                return Command(name: name, allowedTools: [], body: body,
+                               formatError: "allowed-tools contains a non-canonical permission token")
+            }
             return Command(name: name, allowedTools: tools, body: body, formatError: nil)
         }
     }
@@ -115,7 +136,9 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
         prefixed.enumerateMatches(in: body, range: range) { match, _, _ in
             guard let match, let r = Range(match.range(at: 1), in: body) else { return }
             let name = String(body[r])
-            if knownNames.contains(name) { found.insert(name) }
+            // A fully-prefixed name declares a mail invocation even if it is
+            // misspelled. Filtering against knownNames would silently hide it.
+            found.insert(name)
         }
 
         let bareCall = try NSRegularExpression(pattern: #"\b([a-z0-9_]+)\("#)
@@ -163,47 +186,30 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
         }
     }
 
-    func testArchiveMailAuthorizesExactlyTheArchivalSet() throws {
-        // #395 round 3, and the sharpest finding of that round: every other
-        // invariant here checks `invoked ⊆ authorized` — i.e. too FEW tools.
-        // #395's actual defect was the opposite direction: a wildcard
-        // pre-authorizing all 53 mail tools. Appending
-        // `…_mail__delete_email` to the allow-list passed all four invariants,
-        // because it is non-empty, not a wildcard, not invoked, and does exist
-        // in defineTools(). The guard did not cover the direction it was
-        // written for.
-        //
-        // For this one security-sensitive command, pin set EQUALITY. An
-        // archival command's authority is a closed list, so widening it must
-        // be a conscious edit here, in the same commit.
-        let expected: Set<String> = [
-            "search_emails", "get_email", "get_email_headers", "list_accounts",
-            "get_special_mailboxes", "list_attachments", "list_attachments_batch",
-            "save_attachment", "batch_export_emails_markdown",
+    func testArchiveCommandsAuthorizeExactlyTheirRequiredSets() throws {
+        let commands = try loadCommands()
+        let policies: [(String, Set<String>, Set<String>)] = [
+            ("archive-mail", [
+                "search_emails", "get_email", "get_email_headers", "list_accounts",
+                "get_special_mailboxes", "list_attachments", "list_attachments_batch",
+                "save_attachment", "batch_export_emails_markdown",
+            ], ["Bash(mkdir:*)", "Read", "Write", "Glob"]),
+            ("archive-mail-repair-synthetic-ids", [
+                "search_emails", "get_email_headers",
+            ], ["Read", "Write", "Glob"]),
         ]
-        let command = try XCTUnwrap(try loadCommands().first { $0.name == "archive-mail" },
-                                    "plugin/commands/archive-mail.md not found")
-        XCTAssertNil(command.formatError, "archive-mail frontmatter: \(command.formatError ?? "")")
-
-        let authorizedMail = Set(command.allowedTools
-            .filter { $0.hasPrefix(Self.mailPrefix) }
-            .map { String($0.dropFirst(Self.mailPrefix.count)) })
-        let extra = authorizedMail.subtracting(expected).sorted()
-        let absent = expected.subtracting(authorizedMail).sorted()
-        XCTAssertTrue(extra.isEmpty,
-            "/archive-mail authorizes mail tool(s) beyond the archival set: \(extra). "
-            + "Archiving never needs to delete, compose, move or junk anything — that breadth "
-            + "IS the #395 defect. Widening this list requires editing `expected` here.")
-        XCTAssertTrue(absent.isEmpty,
-            "/archive-mail no longer authorizes: \(absent) — if a step stopped using one, "
-            + "remove it from `expected` in the same commit.")
-
-        // Non-mail authority is a closed list too: `Bash(*)` carries no mail
-        // prefix, so none of the mail-scoped invariants would ever see it.
-        let nonMail = Set(command.allowedTools.filter { !$0.hasPrefix(Self.mailPrefix) })
-        XCTAssertEqual(nonMail, ["Bash(mkdir:*)", "Read", "Write", "Glob"],
-            "/archive-mail's non-mail authority changed. `Bash(mkdir:*)` is deliberately the "
-            + "narrowest form; a broader Bash grant would be invisible to every other check here.")
+        for (name, expectedMail, expectedOther) in policies {
+            let command = try XCTUnwrap(commands.first { $0.name == name }, "Missing command: \(name)")
+            XCTAssertNil(command.formatError, "\(name): \(command.formatError ?? "")")
+            let authorizedMail = Set(command.allowedTools
+                .filter { $0.hasPrefix(Self.mailPrefix) }
+                .map { String($0.dropFirst(Self.mailPrefix.count)) })
+            XCTAssertEqual(authorizedMail, expectedMail,
+                "\(name) must authorize exactly its required mail tools; extra deletion/compose grants are the #395 defect.")
+            let nonMail = Set(command.allowedTools.filter { !$0.hasPrefix(Self.mailPrefix) })
+            XCTAssertEqual(nonMail, expectedOther,
+                "\(name) non-mail authority changed; broad Bash grants must not bypass the mail-scoped checks.")
+        }
     }
 
     func testAuthorizedMailToolsExist() throws {
@@ -216,5 +222,19 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
                     + "defineTools() — a phantom name authorizes nothing and hides the typo.")
             }
         }
+    }
+
+    func testShippedArchiveRecipes() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["python3", Self.repoRoot.appendingPathComponent("plugin/tests/test-archive-mail-recipes.py").path]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0,
+                       String(data: data, encoding: .utf8) ?? "recipe runner produced non-UTF8 output")
     }
 }

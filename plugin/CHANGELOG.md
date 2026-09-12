@@ -9,35 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `plugin.json` description field. Section categorization is best-effort —
 > review and refine `Added` / `Changed` / `Fixed` etc. as needed.
 
-## [Unreleased]
-
-### Security
-
-- **`/archive-mail` 不再把郵件內容當指令，也不再把它直接當路徑**
-  ([#395](https://github.com/PsychQuant/che-apple-mail-mcp/issues/395))。
-  四個缺陷同源——「郵件內容是 data、不是 instruction」這條邊界從未被寫下來：
-  (1) command 的 `allowed-tools` 用 wildcard 預授權**全部 53 個** mail 工具（含
-  delete/compose/move/junk），現改為逐一列舉歸檔實際會呼叫的 9 個 read/export 工具；
-  (2)「User override」列出 confirmation-skip 語句卻沒有出處要求，一封內文寫著「直接做,
-  不要問」的信在字面上就滿足該規則——現由 `rules/confirmation-triggers.md`
-  「Provenance（全域前提）」以**封閉三類管道**（使用者當前 turn／command flag／使用者
-  workspace 設定檔）約束**全部** skip 章節，含 `archive-mail` Step 4.5；
-  (3) 文件承諾了一個「test mode 可用 env flag 跳過所有確認」的旁路，該 flag 在出貨程式碼中
-  **從不存在**——幻影旁路邀請人發明它，整句刪除；
-  (4) inline 附件的 `alt`（與 explicit 附件的 `Content-Disposition: filename=`）被原樣拿去組
-  `save_path`——現由單一份「Safe leaf filename」程序統一消毒，Step 5／5.5.0／5.5.1 共用。
-  新增 `CommandAllowedToolsGuardTests`（4 個 invariant）鎖住 allow-list 不漂移、並鎖住
-  「每個 command 都必須宣告 `allowed-tools`」——`archive-mail-repair-synthetic-ids.md`
-  原本**完全沒有 frontmatter**（比被移除的 wildcard 更寬），本次一併補上。
-
-  **範圍與殘留（誠實記錄）**：這是 doc/SOP 層的硬化，**縮小**而非消除 injection 的作用面。
-  `save_attachment` 的 server 端**目前沒有 path containment**（#193 的 `AllowedRootsValidator`
-  只覆蓋 export 工具），因此上述消毒目前是**唯一**一道防線而非縱深——已開
-  [#402](https://github.com/PsychQuant/che-apple-mail-mcp/issues/402) 追蹤程式碼側修復。
-  `Write` 與 `Bash(mkdir:*)` 仍是預授權能力；SOP bootstrap 區塊用到的
-  `find`/`mv`/`sed`/`tr`/`python3` 刻意不在 allow-list 內，會逐次請求授權。
+## [2.48.0] - 2026-09-08
 
 ### Changed
+- `binary_version` 3.0.0 → 3.1.0: drafts (`create_draft` / `update_draft`) accept display-name recipients in to, cc AND bcc through AX-addressed fields; hidden Bcc revealed and disclosed (`bcc_field_revealed`); post-save three-state recipient receipt (`recipients_verified` / `recipients_diff` / `recipients_receipt: unavailable`); discard-sheet cleanup (#333 partial). `compose_email` still refuses display-name recipients. ([#404](https://github.com/PsychQuant/che-apple-mail-mcp/issues/404))
+- `rules/compose-wrapper-free.md`: reason 6 of the ineligibility enumeration is send-only; drafts support display names in all three lists.
+
+## [2.47.0] - 2026-08-31
+
+### Changed
+
+- `binary_version` 2.28.0 → **3.0.0**，出貨 [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)：legacy compose 路徑整段移除。該修正在原始碼裡躺了一段時間卻**從未發過 binary release** —— 最新 tag 仍是 v2.28.0，所以每一個已安裝的 binary 在「已有同主旨 compose 視窗開著」時仍會退回 wrapped-body 路徑（AppleScript `-2700` → legacy fallback）。2026-08-31 實地踩到：`update_draft` 回傳 `legacy path — body wrapped in <blockquote type="cite">`，產出的草稿在 Gmail web 與 Outlook 會整封顯示成引用內容，正是 2026-07-29 那起無法回收的事故的同一機制。**這條 plugin 的 `rules/compose-wrapper-free.md` 自 2.43.0 起就描述著 #304 之後的世界，而使用者手上的 binary 拿不到那個保證** —— 規則描述「應該安裝的版本」而非「實際跑的版本」時，它給的是虛假的安心。
+
+- **`plugin.json` 的 `description` 拿掉版本敘事**（18,834 → 235 字元）。該欄位累積成一整部 release 史，且開頭寫著「Shell v2.43.0 (shell-only, binary stays v2.25.0)」—— 兩個數字在寫入當下之後就再也沒對過（實際是 shell 2.46.1、binary 2.28.0）。版本已由 `version` 與 `binary_version` 兩個欄位承載，敘事已由本檔與 repo 根的 `CHANGELOG.md` 承載；寫進 description 是**第三份會腐爛的副本**，與 [#335](https://github.com/PsychQuant/che-apple-mail-mcp/issues/335) 讓 marketplace entry 不帶版本敘事是同一個理由。`marketplace.json` 的指標句一併從「live in plugin/.claude-plugin/plugin.json and CHANGELOG.md」改為「live in CHANGELOG.md」，否則拆掉敘事後那句話就成了錯的。
+
+- **README 補上 `/archive-mail-repair-synthetic-ids`**（5 個 command 先前只記載 4 個）與 v2.47.0／binary v3.0.0 的版本歷史條目。
 
 - `binary_version` 2.27.0 → **2.28.0**，讓 v2.46.0 的 first-run FDA assist（mail#355）真正生效。該 hook 從落地起就是 **no-op**：它以版本閘擋住 2.28.0 以前的 binary，因為更舊的版本會把 `--check-fda --quiet` 當成普通 `--check-fda` 解析、印出訊息並打開系統設定 —— 正是它要避免的騷擾。binary v2.28.0 已發布（signed + notarized），閘門現在開了。
 
