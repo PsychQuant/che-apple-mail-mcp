@@ -124,6 +124,87 @@ final class ComposeCleanupSheetTests: XCTestCase {
         }
     }
 
+    func testRepeatedExistingTitleRefusalNeverLaunches() throws {
+        let lines = draftScript().components(separatedBy: "\n")
+        let begin = try XCTUnwrap(lines.firstIndex { codeLine($0) == "tell application \"Mail\"" })
+        let end = try XCTUnwrap(lines.indices.first { $0 > begin && codeLine(lines[$0]) == "end tell" })
+        let fragment = lines[(begin + 1)..<end].map { line -> String in
+            let code = codeLine(line)
+            if code == "activate" { return "set _activated to true" }
+            if code.hasPrefix("mailto ") { return "set _launchCount to _launchCount + 1" }
+            return line.replacingOccurrences(of: "id of every window", with: "{1}")
+                .replacingOccurrences(of: "name of every window", with: "{\"S\"}")
+        }.joined(separator: "\n")
+        guard !fragment.contains("tell application") else { throw BoundaryViolation.malformed("unexpected application call") }
+        let source = "set _launchCount to 0\nrepeat 3 times\ntry\n" + fragment
+            + "\non error _ignored\nend try\nend repeat\nreturn _launchCount"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", source]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .newlines)
+        XCTAssertEqual(process.terminationStatus, 0, text)
+        XCTAssertEqual(text, "0", "repeated collision refusals must issue no compose launches")
+    }
+
+    func testExistingTitleIsRejectedBeforeLaunchingAnotherWindow() throws {
+        for send in [false, true] {
+            let script = buildMailtoComposeScript(url: "mailto:a@example.test?subject=S", subject: "S", attachments: [], send: send)
+            let boundary = try cleanupBoundary(script)
+            let launch = try XCTUnwrap(boundary.lines.firstIndex { $0.hasPrefix("mailto ") })
+            XCTAssertLessThan(boundary.guards[0], launch, "same-title retries must refuse before opening another window")
+        }
+    }
+
+    /// Run the actual post-launch identification control flow, replacing only
+    /// window-property access with fixed lists. Never execute a Mail tell block.
+    private func identifyFixture(_ windows: String) throws -> (Int32, String) {
+        let lines = draftScript().components(separatedBy: "\n")
+        let launch = try XCTUnwrap(lines.firstIndex { codeLine($0).hasPrefix("mailto ") })
+        let begin = try XCTUnwrap(lines.indices.first { $0 > launch && codeLine(lines[$0]) == "tell application \"Mail\"" })
+        let end = try XCTUnwrap(lines.indices.first { $0 > begin && codeLine(lines[$0]) == "end tell" })
+        let fragment = lines[(begin + 1)..<end].joined(separator: "\n")
+            .replacingOccurrences(of: "count of windows", with: "count of _testWindows")
+            .replacingOccurrences(of: "repeat with _cw in windows", with: "repeat with _cw in _testWindows")
+            .replacingOccurrences(of: "id of _cw", with: "item 1 of _cw")
+            .replacingOccurrences(of: "name of _cw", with: "item 2 of _cw")
+        guard !fragment.contains("tell application") else {
+            throw BoundaryViolation.malformed("unexpected application call in fixture fragment")
+        }
+        let source = "set _wc to 1\nset _beforeIds to {1}\nset _beforeTitles to {\"Other\"}\nset _testWindows to "
+            + windows + "\n" + fragment + "\nreturn _ourId as text"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", source]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: data, as: UTF8.self).trimmingCharacters(in: .newlines))
+    }
+
+    func testIdentificationDoesNotRequireNetWindowCountGrowth() throws {
+        let (status, text) = try identifyFixture("{{2, \"S\"}}")
+        XCTAssertEqual(status, 0, text)
+        XCTAssertEqual(text, "2", "another window closing must not hide our new window")
+    }
+
+    func testIdentificationStillRejectsMissingOrAmbiguousOwnership() throws {
+        let missing = try identifyFixture("{{1, \"Other\"}}")
+        XCTAssertNotEqual(missing.0, 0)
+        XCTAssertTrue(missing.1.contains("could not identify"), missing.1)
+        let ambiguous = try identifyFixture("{{2, \"S\"}, {3, \"S\"}}")
+        XCTAssertNotEqual(ambiguous.0, 0)
+        XCTAssertTrue(ambiguous.1.contains("more than one new window"), ambiguous.1)
+    }
+
     func testCleanupFailureHasItsOwnHandler() {
         for send in [false, true] {
             let s = buildMailtoComposeScript(url: "mailto:a@example.test?subject=S", subject: "S", attachments: [], send: send)
@@ -177,7 +258,7 @@ final class ComposeCleanupSheetTests: XCTestCase {
         for send in [false, true] {
             let result = try executeHandler(send: send,
                 cleanup: "set _cleanupRan to true\nerror \"cleanup denied\" number -1743")
-            XCTAssertEqual(result, "FILLFIELD: original reason — CLEANUPFAILED: cleanup denied||true")
+            XCTAssertEqual(result, "FILLFIELD: original reason — CLEANUPFAILED: cleanup denied (compose window state unknown; inspect Mail before retrying)||true")
         }
     }
 

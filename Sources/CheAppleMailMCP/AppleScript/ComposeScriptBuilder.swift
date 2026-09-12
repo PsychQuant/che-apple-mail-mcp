@@ -140,7 +140,7 @@ func buildComposeErrorHandler(cleanupBody: String, send: Bool) -> String {
         try
     \(cleanupBody)
         on error _cleanupErr
-            set _mErr to (_mErr as text) & " — CLEANUPFAILED: " & (_cleanupErr as text)
+            set _mErr to (_mErr as text) & " — CLEANUPFAILED: " & (_cleanupErr as text) & " (compose window state unknown; inspect Mail before retrying)"
         end try
     """
     return send
@@ -283,6 +283,9 @@ func buildMailtoComposeScript(
     // The later System Events discard click only has a title, not a Mail id;
     // entering cleanup before ownership is established could discard a user's
     // pre-existing same-title compose window. Structural tests pin this boundary.
+    // #333: refuse known title collisions before mailto can create another
+    // window. Net window-count growth is not evidence of creation: another
+    // window can close concurrently. Use the existing id/subject checks below.
     // 1. Capture Mail window ids BEFORE the mailto, hand it off, then identify
     // OUR compose window as the NEW window (id unseen before) whose title is our
     // subject — captured as `_ourId`. On-error cleanup closes ONLY `_ourId`, by
@@ -333,16 +336,14 @@ func buildMailtoComposeScript(
     """ : ""
     var s = fillHandlers + senderMatchHandler + """
     tell application "Mail"
-        set _wc to (count of windows)
         set _beforeIds to (id of every window)
         set _beforeTitles to (name of every window)
+        if _beforeTitles contains "\(subjEsc)" then error "a window titled \\"\(subjEsc)\\" already existed before this compose — refusing before mailto; inspect that window in Mail before retrying"
         activate
         mailto "\(appleScriptEscape(url))"
     end tell
     delay \(windowDelay)
     tell application "Mail"
-        if (count of windows) <= _wc then error "mailto did not open a compose window"
-        if _beforeTitles contains "\(subjEsc)" then error "a window titled \\"\(subjEsc)\\" already existed before this compose — cannot safely disambiguate the new window (safe fallback)"
         set _ourId to missing value
         set _ourMatches to 0
         repeat with _cw in windows
@@ -353,8 +354,8 @@ func buildMailtoComposeScript(
                 end if
             end try
         end repeat
-        if _ourMatches is 0 then error "could not identify our new compose window by subject after mailto (safe fallback)"
-        if _ourMatches > 1 then error "more than one new window is titled the subject — cannot safely identify our compose window (safe fallback)"
+        if _ourMatches is 0 then error "could not identify our new compose window by subject after mailto — ownership is unconfirmed; inspect Mail before retrying"
+        if _ourMatches > 1 then error "more than one new window is titled the subject — ownership is unconfirmed; inspect Mail before retrying"
     end tell
     \(flagInit)\(bccFlagInit)try
         tell application "System Events"
