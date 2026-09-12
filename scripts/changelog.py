@@ -105,7 +105,7 @@ def notes(path, want):
         if capturing:
             # Any level-2 header ends the section — including `## [Unreleased]`,
             # which `released_lines` does not classify as a version.
-            if visible is not None and visible.startswith('## '):
+            if visible is not None and re.match(r'^##[ \t]', visible):
                 break
             collected.append(line)
     if not capturing:

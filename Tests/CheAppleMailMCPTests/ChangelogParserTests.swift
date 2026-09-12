@@ -28,11 +28,13 @@ final class ChangelogParserTests: XCTestCase {
     static func run(_ args: [String], changelog: String? = nil) throws -> (status: Int32, out: String) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        p.arguments = ["python3", repoRoot.appendingPathComponent("scripts/changelog.py").path]
+        p.arguments = ["python3", "-c",
+            "import runpy,signal,sys; p=sys.argv[1]; sys.argv=sys.argv[1:]; signal.signal(signal.SIGALRM,signal.SIG_DFL); signal.alarm(30); runpy.run_path(p,run_name='__main__')",
+            repoRoot.appendingPathComponent("scripts/changelog.py").path]
             + args + [changelog ?? repoRoot.appendingPathComponent("CHANGELOG.md").path]
         let out = Pipe()
         p.standardOutput = out
-        p.standardError = Pipe()
+        p.standardError = FileHandle.nullDevice
         try p.run()
         let data = out.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
@@ -173,5 +175,10 @@ final class ChangelogParserTests: XCTestCase {
     func testCommentMarkersInsideCodeDoNotHideLaterReleases() throws {
         let path = try fixture("`<!--` is literal.\n```md <!--\n## [9.9.9] - 2099-01-01\n```\n## [2.27.0] - 2026-08-10\nreal\n")
         XCTAssertEqual(try Self.run(["newest"], changelog: path).out, "2.27.0")
+    }
+
+    func testTabSeparatedHeaderEndsReleaseNotes() throws {
+        let path = try fixture("## [2.27.0] - 2026-08-10\nnew\n##\t[2.26.0] - 2026-08-01\nold\n")
+        XCTAssertEqual(try Self.run(["notes", "2.27.0"], changelog: path).out, "new")
     }
 }

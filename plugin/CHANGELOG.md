@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 本檔是 plugin shell 的版本沿革單一來源；目前版本與 binary pin 見
 `plugin/.claude-plugin/plugin.json`，binary/server 沿革見根目錄 `CHANGELOG.md`。
 
-歷史範圍為 2.3.0 至 2.48.0，共 65 個在 manifest 歷史觀察到的版本。2.46.1 以前取自
+稽核 fixture 的固定歷史範圍為 2.3.0 至 2.48.0，共 65 個在 manifest 歷史觀察到的版本。2.46.1（含）以前取自
 `PsychQuant/psychquant-claude-plugins`，其後取自本 repository。日期採該版本首次出現之
 manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨立證明的發布時間。
 原始 commit、路徑、時間與 `binary_version` 欄位值保存在
@@ -16,10 +16,14 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 證據不需要隨每次新 release 重寫。更早的版本不在此範圍。
 
 下方「機械重建」條目提供精簡摘要並連到原始 manifest。舊 description 仍可從 Git 查閱；
-不能因摘要較短就說原始敘事已遺失。`binary_version` 欄位尚不存在的版本，其 binary 版本
+不能因摘要較短就說原始敘事已遺失。首次觀察 commit 未有 `binary_version` 欄位時，其 binary 版本
 描述只表示當時的敘事，不是 machine-readable pin 的證據。
 
 ## [Unreleased]
+
+### Changed
+- Descriptions 保持短敘述；README／CLAUDE.md 的版本沿革指向本檔，發布時同步 version 與條目（#396）。
+- plugin 的安裝與 Source Code 連結使用 PsychQuant；個人署名與其他 repo 連結保留（#387）。
 
 
 ## [2.48.0] - 2026-09-08
@@ -459,6 +463,8 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 ### Notes
 - Binary v2.7.1 → v2.7.2 (#71 fallback parity + cluster #61-64 hardening);smoke tested wrapper bash syntax + plugin.json validity + binary_version field extraction + URL tag parser
 - Refs PsychQuant/che-apple-mail-mcp#77
+
+> 同版號的兩個時點不同：fixture 記錄首次出現 2.18.1 時欄位尚不存在；其後同版號的 [28db61f](https://github.com/PsychQuant/psychquant-claude-plugins/commit/28db61fa73e50c8069825bc60105b3f9581eddc2) 加入 binary_version=2.7.2。
 
 ## [2.18.0] - 2026-05-10
 

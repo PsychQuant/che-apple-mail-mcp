@@ -2,7 +2,7 @@
   "name": "che-apple-mail-mcp",
   "version": "2.48.0",
   "binary_version": "3.1.0",
-  "description": "Apple Mail tools for macOS: search, read, export, compose, and manage drafts, plus Markdown archiving workflows. Current versions are in version/binary_version. Release notes: plugin/CHANGELOG.md (plugin) and CHANGELOG.md (server).",
+  "description": "Apple Mail tools for macOS: search, read, export, compose, and manage drafts, plus Markdown archiving workflows. Current versions are in version/binary_version. Release notes: https://github.com/PsychQuant/che-apple-mail-mcp/blob/main/plugin/CHANGELOG.md (plugin), https://github.com/PsychQuant/che-apple-mail-mcp/blob/main/CHANGELOG.md (server).",
   "author": {
     "name": "Che Cheng"
   },

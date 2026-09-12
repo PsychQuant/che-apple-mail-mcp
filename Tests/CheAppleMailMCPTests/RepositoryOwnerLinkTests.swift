@@ -33,4 +33,32 @@ final class RepositoryOwnerLinkTests: XCTestCase {
         }
         XCTAssertTrue(try read("Tests/MailSQLiteTests/AccountMapperTests.swift").contains("kiki830621@gmail.com"))
     }
+
+    func testTrackedTextHasNoUnclassifiedOldRepositoryLinks() throws {
+        guard FileManager.default.fileExists(atPath: root.appendingPathComponent(".git").path) else {
+            throw XCTSkip("Tracked-file audit requires a Git checkout; explicit file and attribution checks still run")
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["git", "-c", "core.fsmonitor=false", "-C", root.path, "ls-files", "-z"]
+        process.environment = ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("GIT_") }
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+        let listing = try XCTUnwrap(String(data: data, encoding: .utf8))
+        let paths = listing.split(separator: "\0").map(String.init)
+        XCTAssertFalse(paths.isEmpty)
+        for path in paths {
+            // These are historical records or test oracles, not live links.
+            if path == "CHANGELOG.md" || path == "plugin/CHANGELOG.md"
+                || path.hasPrefix("openspec/changes/archive/") || path.hasPrefix("Tests/") { continue }
+            let bytes = try Data(contentsOf: root.appendingPathComponent(path))
+            guard !bytes.contains(0), let text = String(data: bytes, encoding: .utf8) else { continue }
+            XCTAssertFalse(text.contains("github.com/kiki830621/che-apple-mail-mcp"), path)
+        }
+    }
 }
