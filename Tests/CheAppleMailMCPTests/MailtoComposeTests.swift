@@ -305,7 +305,7 @@ final class MailtoComposeTests: XCTestCase {
 
 }
 
-// MARK: - #220 non-ASCII attachment paths route to the legacy (native-attach) path
+// MARK: - #220 non-ASCII attachment paths are refused before composition
 
 extension MailtoComposeTests {
 
