@@ -43,9 +43,34 @@ enum AccessibilityStatus {
         case .granted:
             return "Accessibility: GRANTED — GUI scripting (keystrokes, File ▸ Attach, sender popup) is allowed."
         case .denied:
-            return "Accessibility: DENIED — this process can't send keystrokes, so the wrapper-free mailto compose path is unavailable (compose falls back to the legacy path, which works but wraps the body in a quote on some mobile clients — see #175)."
+            return "Accessibility: DENIED — GUI-based composing calls are refused before composition starts. Grant Accessibility, or use open_mailto to open a clean compose window without TCC permission."
         case .unsupported:
             return "Accessibility: UNSUPPORTED — not a macOS environment."
+        }
+    }
+
+    /// Pure formatter shared by the tool and its tests; the probe stays at the caller.
+    static func report(for probe: Probe) -> String {
+        switch probe {
+        case .granted:
+            return "✅ " + summary(probe)
+                + "\nEligible compose_email / create_draft calls use the clean compose path."
+                + " Six named preflight refusal reasons cover: non-plain format, empty subject,"
+                + " missing Accessibility, a non-simple from_address, a non-ASCII attachment path,"
+                + " or display-name recipients on a SEND (drafts support names in to/cc/bcc)."
+                + " A preflight refusal returns a named reason before composition starts."
+                + " Other input validation can also fail before GUI steps, including an over-long mailto URL."
+                + " A GUI-step failure returns an error without switching to another body path;"
+                + " it may leave a compose window or draft. A send-stage failure or timeout can"
+                + " leave the send state unknown: check Sent/Outbox before sending again."
+                + " This probe checks Accessibility only; Automation (Apple Events) is separately"
+                + " required for System Events. Alternative: open_mailto needs zero TCC permission,"
+                + " has no attachments, and opens the default mail client; drag files in manually"
+                + " and save or send yourself."
+        case .denied:
+            return "⚠️ " + summary(probe) + "\n\n" + guidance()
+        case .unsupported:
+            return "ℹ️ " + summary(probe)
         }
     }
 
@@ -61,9 +86,12 @@ enum AccessibilityStatus {
              (macOS can't tell us which one automatically — add whichever applies.)
           3. Re-run check_accessibility to confirm.
 
-        Without it, compose/create_draft still work but route through the legacy
-        path, which Mail wraps in <blockquote type="cite"> (looks like quoted text
-        on mobile). This is separate from Full Disk Access (see check_fda).
+        Without Accessibility, GUI-based composing calls are refused before
+        composition starts. Use open_mailto instead: zero TCC permission,
+        no attachments; drag files in manually and save or send yourself.
+        It opens the system default mail client, which may not be Mail.app.
+        Accessibility is separate from Full Disk Access (check_fda) and
+        Automation (check_automation).
         """
     }
 }

@@ -51,14 +51,17 @@ final class OpenMailtoLaunchServicesTests: XCTestCase {
             try await MailController.shared.openMailtoURL(url: "mailto:a@example.com"))
     }
 
-    func testOpenMailtoToolDescription_advertisesLadder() {
-        // The schema description must carry the cite-block-avoidance ladder +
-        // the zero-TCC claim (#287 documentation surface, consumer-facing).
+    func testOpenMailtoToolDescription_advertisesAvailableRoutes() {
+        // #410: advertise the two available routes and their limits;
+        // the removed injection path must not appear as a third option.
         let tool = CheAppleMailMCPServer.defineTools().first { $0.name == "open_mailto" }
         let desc = tool?.description ?? ""
         XCTAssertTrue(desc.contains("ZERO Automation TCC"), "must advertise the zero-TCC property")
         XCTAssertTrue(desc.contains("-1743"), "must name the failure code it escapes")
         XCTAssertTrue(desc.contains("cite-block-free"), "must state the cite-block property")
-        XCTAssertTrue(desc.contains("(c) legacy AppleScript injection"), "must spell out the full ladder")
+        XCTAssertFalse(desc.contains("legacy AppleScript injection"))
+        XCTAssertTrue(desc.contains("create_draft"))
+        XCTAssertTrue(desc.contains("no attachments"))
+        XCTAssertTrue(desc.contains("Save or send manually"))
     }
 }
