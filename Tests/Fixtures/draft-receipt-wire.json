@@ -1,0 +1,179 @@
+[
+  {
+    "name": "found",
+    "payload": "{\"version\":\"1\",\"status\":\"found\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"id\":\"102\",\"subject\":\"共同主旨\",\"to\":[\"To@Example.test\"],\"cc\":[\"cc@example.test\"],\"bcc\":[]}",
+    "expected": "found"
+  },
+  {
+    "name": "not-found",
+    "payload": "{\"version\":\"1\",\"status\":\"not_found\"}",
+    "expected": "not_found"
+  },
+  {
+    "name": "ambiguous",
+    "payload": "{\"version\":\"1\",\"status\":\"ambiguous\",\"candidate_count\":\"2\"}",
+    "expected": "ambiguous"
+  },
+  {
+    "name": "unavailable",
+    "payload": "{\"version\":\"1\",\"status\":\"unavailable\",\"reason_code\":\"read_failed\"}",
+    "expected": "unavailable:read_failed"
+  },
+  {
+    "name": "wrong-account",
+    "payload": "{\"version\":\"1\",\"status\":\"found\",\"account_id\":\"22222222-2222-4222-8222-222222222222\",\"id\":\"102\",\"subject\":\"共同主旨\",\"to\":[\"never-disclose@example.test\"],\"cc\":[\"cc@example.test\"],\"bcc\":[]}",
+    "expected": "unavailable:wrong_scope"
+  },
+  {
+    "name": "wrong-id-type",
+    "payload": "{\"version\":\"1\",\"status\":\"found\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"id\":102,\"subject\":\"共同主旨\",\"to\":[\"never-disclose@example.test\"],\"cc\":[\"cc@example.test\"],\"bcc\":[]}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "unicode-id",
+    "payload": "{\"version\":\"1\",\"status\":\"found\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"id\":\"١٠٢\",\"subject\":\"共同主旨\",\"to\":[\"never-disclose@example.test\"],\"cc\":[\"cc@example.test\"],\"bcc\":[]}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "empty-id",
+    "payload": "{\"version\":\"1\",\"status\":\"found\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"id\":\"\",\"subject\":\"共同主旨\",\"to\":[\"never-disclose@example.test\"],\"cc\":[\"cc@example.test\"],\"bcc\":[]}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "wrong-to-type",
+    "payload": "{\"version\":\"1\",\"status\":\"found\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"id\":\"102\",\"subject\":\"共同主旨\",\"to\":\"never-disclose@example.test\",\"cc\":[\"cc@example.test\"],\"bcc\":[]}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "bool-version",
+    "payload": "{\"version\":true,\"status\":\"found\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"id\":\"102\",\"subject\":\"共同主旨\",\"to\":[\"never-disclose@example.test\"],\"cc\":[\"cc@example.test\"],\"bcc\":[]}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "unknown-version",
+    "payload": "{\"version\":\"2\",\"status\":\"found\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"id\":\"102\",\"subject\":\"共同主旨\",\"to\":[\"never-disclose@example.test\"],\"cc\":[\"cc@example.test\"],\"bcc\":[]}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "unknown-status",
+    "payload": "{\"version\":\"1\",\"status\":\"verified\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"id\":\"102\",\"subject\":\"共同主旨\",\"to\":[\"never-disclose@example.test\"],\"cc\":[\"cc@example.test\"],\"bcc\":[]}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "unknown-field",
+    "payload": "{\"version\":\"1\",\"status\":\"found\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"id\":\"102\",\"subject\":\"共同主旨\",\"to\":[\"never-disclose@example.test\"],\"cc\":[\"cc@example.test\"],\"bcc\":[],\"extra\":\"never-disclose@example.test\"}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "missing-field",
+    "payload": "{\"version\":\"1\",\"status\":\"found\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"id\":\"102\",\"subject\":\"共同主旨\",\"to\":[\"never-disclose@example.test\"],\"cc\":[\"cc@example.test\"]}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "malformed",
+    "payload": "malformed receipt",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "array-top-level",
+    "payload": "[]",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "ambiguous-one",
+    "payload": "{\"version\":\"1\",\"status\":\"ambiguous\",\"candidate_count\":\"1\"}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "ambiguous-bool",
+    "payload": "{\"version\":\"1\",\"status\":\"ambiguous\",\"candidate_count\":true}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "failure-with-addresses",
+    "payload": "{\"version\":\"1\",\"status\":\"not_found\",\"to\":[\"never-disclose@example.test\"]}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "array-element-number",
+    "payload": "{\"version\":\"1\",\"status\":\"found\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"id\":\"102\",\"subject\":\"共同主旨\",\"to\":[1],\"cc\":[\"cc@example.test\"],\"bcc\":[]}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "invalid-uuid",
+    "payload": "{\"version\":\"1\",\"status\":\"found\",\"account_id\":\"not-a-uuid\",\"id\":\"102\",\"subject\":\"共同主旨\",\"to\":[\"To@Example.test\"],\"cc\":[\"cc@example.test\"],\"bcc\":[]}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "fractional-version",
+    "payload": "{\"version\":1.5,\"status\":\"found\",\"account_id\":\"11111111-1111-4111-8111-111111111111\",\"id\":\"102\",\"subject\":\"共同主旨\",\"to\":[\"To@Example.test\"],\"cc\":[\"cc@example.test\"],\"bcc\":[]}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "unknown-reason",
+    "payload": "{\"version\":\"1\",\"status\":\"unavailable\",\"reason_code\":\"never-disclose@example.test\"}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "large-exact-count",
+    "payload": "{\"version\":\"1\",\"status\":\"ambiguous\",\"candidate_count\":\"9007199254740993\"}",
+    "expected": "ambiguous",
+    "expectedCandidateCount": 9007199254740993
+  },
+  {
+    "name": "overflow-count",
+    "payload": "{\"version\":\"1\",\"status\":\"ambiguous\",\"candidate_count\":\"9223372036854775808\"}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "fractional-count",
+    "payload": "{\"version\":\"1\",\"status\":\"ambiguous\",\"candidate_count\":2.5}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "number-version",
+    "payload": "{\"version\":1,\"status\":\"not_found\"}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "near-one-version",
+    "payload": "{\"version\":1.000000000000000000000000000000000000000000000000001,\"status\":\"not_found\"}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "near-two-count",
+    "payload": "{\"version\":\"1\",\"status\":\"ambiguous\",\"candidate_count\":2.000000000000000000000000000000000000000000000000001}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "count-number",
+    "payload": "{\"version\": \"1\", \"status\": \"ambiguous\", \"candidate_count\": 2}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "count-decimal-string",
+    "payload": "{\"version\": \"1\", \"status\": \"ambiguous\", \"candidate_count\": \"2.0\"}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "count-exponent-string",
+    "payload": "{\"version\": \"1\", \"status\": \"ambiguous\", \"candidate_count\": \"2e0\"}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "count-leading-zero",
+    "payload": "{\"version\": \"1\", \"status\": \"ambiguous\", \"candidate_count\": \"02\"}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "large-exponent-count",
+    "payload": "{\"version\": \"1\", \"status\": \"ambiguous\", \"candidate_count\": \"9.007199254740993e15\"}",
+    "expected": "unavailable:invalid_payload"
+  },
+  {
+    "name": "int64-max-count",
+    "payload": "{\"version\":\"1\",\"status\":\"ambiguous\",\"candidate_count\":\"9223372036854775807\"}",
+    "expected": "ambiguous",
+    "expectedCandidateCount": 9223372036854775807
+  }
+]
