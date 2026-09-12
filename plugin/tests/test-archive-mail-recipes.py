@@ -30,6 +30,122 @@ def recipe(name):
     return namespace
 
 
+class ArchiveDateRecipesTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dates = recipe("date")
+
+    def test_truncated_rfc822_and_full_rfc822_preserve_calendar_day(self):
+        parse = self.dates["to_ymd"]
+        for value in ["Tue, 30 Jun 2026", "30 Jun 2026", "tue, 30 JUN 2026",
+                      "Tue, 30 Jun 2026 19:43:20 +0800 (CST)",
+                      "Tue, 30 Jun 2026 00:30:00 +0800"]:
+            with self.subTest(value=value):
+                self.assertEqual(parse(value), "2026-06-30")
+
+    def test_iso_dates_and_legacy_naive_datetime_keep_their_calendar_day(self):
+        parse = self.dates["to_ymd"]
+        for value in ["2026-06-30", "2026-06-30 14:30", "2026-06-30T00:30:00+08:00",
+                      "2026-06-30T23:59:00-08:00", "2026-06-30T12:00:00Z"]:
+            with self.subTest(value=value):
+                self.assertEqual(parse(value), "2026-06-30")
+
+    def test_calendar_validation_and_nonstring_values_do_not_crash_or_guess(self):
+        parse = self.dates["to_ymd"]
+        for value in [None, "", "  ", 20260630, False, [], {}, "2026-02-31",
+                      "Tue, 31 Jun 2026", "Thu, 29 Feb 2025", "Tue, 30 Jun 0000",
+                      "Tue, 30 Foo 2026", "Tue, 30 Jun 2026 trailing", "30/06/2026",
+                      "2026-06-30junk", "2026-06-30T99:99:99Z"]:
+            with self.subTest(value=value):
+                self.assertIsNone(parse(value))
+        self.assertEqual(parse("Thu, 29 Feb 2024"), "2024-02-29")
+
+    def test_explicit_rfc_years_are_not_silently_pivoted(self):
+        parse = self.dates["to_ymd"]
+        for template in ["Tue, 30 Jun {year} 19:43:20 +0800",
+                         "Tuesday, 30-Jun-{year} 19:43:20 GMT",
+                         "Tue Jun 30 19:43:20 {year}",
+                         "Tue, 30 June {year} 19:43:20 +0800"]:
+            with self.subTest(template=template):
+                self.assertIsNone(parse(template.format(year="0000")))
+                self.assertEqual(parse(template.format(year="0068")), "0068-06-30")
+                self.assertEqual(parse(template.format(year="1968")), "1968-06-30")
+        self.assertEqual(parse("Tue, 30 Jun 68 19:43:20 +0800"), "2068-06-30")
+        audit = self.dates["reconcile_dates"]({
+            "bad": {"date": "Tue, 30 Jun 0000 19:43:20 +0800"},
+            "ancient": {"date": "Tue, 30 Jun 0068 19:43:20 +0800"},
+            "normal": {"date": "2026-06-30"},
+        })
+        self.assertEqual(audit["last_updated"], "2026-06-30")
+        self.assertEqual(audit["date_excluded_count"], 1)
+
+    def test_full_parser_consumes_tokens_and_validates_years_zones_and_comments(self):
+        parse = self.dates["to_ymd"]
+        for value in ["Tue, 30 Jun 0000, 19:43:20 +0800",
+                      "Tue, 30 Jun 9999 19:43:20 +0800 garbage",
+                      "Tue, 30 Jun 2026 19:43:20 UnknownZone",
+                      "Tue, 30 Jun 2026 19:43:20 +2460",
+                      "Tue, 30 Jun 2026 19:43:20 +0800 (unterminated",
+                      "Tue, 00030 Jun 0000 19:43:20 +0800",
+                      "Tue, 30 Jun 00000000 19:43:20 +0800",
+                      "Tue, 30 Jun 0 19:43:20 +0800"]:
+            with self.subTest(value=value):
+                self.assertIsNone(parse(value))
+        self.assertEqual(parse("Tue, 30 Jun 0068, 19:43:20 +0800"), "0068-06-30")
+        self.assertEqual(parse("Tue, 30 Jun 099 19:43:20 +0800"), "0099-06-30")
+        self.assertEqual(parse("Tue, 30 Jun 2026 19:43:20 +0800 (CST (local))"), "2026-06-30")
+
+    def test_timestamp_writer_shares_parser_without_inventing_time_or_zone(self):
+        normalize = self.dates["normalize_archive_timestamp"]
+        self.assertEqual(normalize("Tue, 30 Jun 0068, 19:43:20 +0800"), "0068-06-30T19:43:20+08:00")
+        self.assertEqual(normalize("Tue, 30 Jun 2026 00:30:00 +0800 (CST)"), "2026-06-30T00:30:00+08:00")
+        self.assertEqual(normalize("Tue, 30 Jun 2026 19:43:20 GMT"), "2026-06-30T19:43:20+00:00")
+        for value in ["Tue, 30 Jun 0000, 19:43:20 +0800", "Tue, 30 Jun 2026",
+                      "2026-06-30", "2026-06-30 14:30", "Tue, 30 Jun 2026 19:43:20 -0000",
+                      "Tue, 30 Jun 2026 19:43:20 +0800 garbage"]:
+            with self.subTest(value=value):
+                self.assertIsNone(normalize(value))
+        document = DOCUMENT.read_text()
+        self.assertNotIn("parsedate_to_datetime(raw).isoformat()", document)
+        self.assertGreaterEqual(document.count("normalize_archive_timestamp(raw)"), 2)
+
+    def test_exclusions_include_every_index_entry_without_mutating_or_reading_files(self):
+        emails = {
+            "old": {"date": "2026-06-29T10:00:00+08:00", "file": "old.md"},
+            "moved": {"date": "Tue, 30 Jun 2026", "file": "other-workspace/2026-06-30_note.md"},
+            "bad": {"date": "unknown", "file": "2027-01-01_do-not-guess.md"},
+            "missing": {"file": "missing-date.md"},
+            "malformed": None,
+        }
+        original = json.loads(json.dumps(emails))
+        audit = self.dates["reconcile_dates"](emails)
+        self.assertEqual(audit["last_updated"], "2026-06-30")
+        self.assertEqual(audit["valid_date_count"], 2)
+        self.assertEqual(audit["date_excluded_count"], 3)
+        self.assertEqual(audit["valid_date_count"] + audit["date_excluded_count"], len(emails))
+        self.assertEqual({x["message_id"] for x in audit["date_excluded"]}, {"bad", "missing", "malformed"})
+        bad = next(x for x in audit["date_excluded"] if x["message_id"] == "bad")
+        self.assertEqual(bad["date"], "unknown")
+        self.assertEqual(bad["file"], "2027-01-01_do-not-guess.md")
+        self.assertEqual(emails, original)
+
+    def test_all_six_reported_date_only_entries_advance_the_max(self):
+        emails = {str(i): {"date": "Tue, 30 Jun 2026", "file": f"subproject/2026-06-30_{i}.md"}
+                  for i in range(6)}
+        audit = self.dates["reconcile_dates"](emails)
+        self.assertEqual(audit["last_updated"], "2026-06-30")
+        self.assertEqual(audit["valid_date_count"], 6)
+        self.assertEqual(audit["date_excluded_count"], 0)
+        self.assertEqual(audit["date_excluded"], [])
+
+    def test_empty_and_all_invalid_never_invent_a_watermark(self):
+        for emails, expected_excluded in [({}, 0), ({"x": {"date": "bad"}}, 1)]:
+            audit = self.dates["reconcile_dates"](emails)
+            self.assertEqual(audit["last_updated"], "")
+            self.assertEqual(audit["valid_date_count"], 0)
+            self.assertEqual(audit["date_excluded_count"], expected_excluded)
+
+
 class ArchiveRecipesTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
