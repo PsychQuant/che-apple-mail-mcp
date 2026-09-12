@@ -17,31 +17,11 @@ struct ExportManifestItem {
     // be header-only; nil = no partial-file evidence of a missing body.
     // Never true. See `partialBodyMissingForExport`.
     var bodyDownloaded: Bool? = nil
-    // #316 — negative-only fallback signal (mirrors `bodyDownloaded`):
-    // `true` = this item's frontmatter `direction` came from the mailbox-label
-    // fallback because sender identity could NOT be established; nil = it came
-    // from sender identity. Never false.
-    //
-    // #351/#343 widened when it fires. It used to mean only "the own-addresses
-    // set was empty", which missed the case that bit in practice: an EWS
-    // account contributes no addresses while other accounts keep the set
-    // non-empty, so mail the user sent from it was written `received` with no
-    // signal at all. It now also fires when this email's own account
-    // contributes no address, and when the `From` header does not parse.
-    //
-    // The contract consumers rely on: ABSENT means no address of any configured
-    // account matched AND this email's account contributes at least one
-    // address. Emitting a wrong `direction` without this field is worse than
-    // emitting an uncertain one with it.
-    //
-    // KNOWN LIMIT, stated rather than implied (#343 verify): the Envelope Index
-    // maps an account to ONE address, so mail sent from an ALIAS on an
-    // otherwise-resolvable account matches nothing and is written `received`
-    // with no disclosure. Widening the fail-open to cover it would disclose
-    // essentially every received email — the account is "resolvable", we simply
-    // cannot enumerate every address it can send as — which would make the
-    // signal useless. The alias gap needs a real address source (the AppleScript
-    // `list_accounts` path enumerates them), not a broader guess.
+    // Negative-only confidence disclosure. True means direction depended on
+    // a mailbox-label fallback or degraded SQLite-primary evidence. A valid
+    // native positive match can be confident even in a partial snapshot; a
+    // confident non-match requires complete configured identity metadata and
+    // a represented message account. Never false.
     var directionInferred: Bool? = nil
     var isDraft: Bool? = nil
     var skipReason: String? = nil
@@ -138,6 +118,9 @@ struct ExportDirLock {
 struct ExportManifest {
     let outputDir: String
     let items: [ExportManifestItem]
+    var identitySource: String? = nil
+    var identityComplete: Bool? = nil
+    var identityCacheAgeSeconds: Int? = nil
 
     var written: Int { items.filter { $0.status == "written" }.count }
     var errors: Int { items.filter { $0.status == "error" }.count }
@@ -149,7 +132,7 @@ struct ExportManifest {
     var bodyNotDownloaded: Int { items.filter { $0.bodyDownloaded == false }.count }
 
     var jsonObject: [String: Any] {
-        [
+        var result: [String: Any] = [
             "output_dir": outputDir,
             "written": written,
             "errors": errors,
@@ -157,6 +140,10 @@ struct ExportManifest {
             "body_not_downloaded": bodyNotDownloaded,
             "items": items.map { $0.jsonObject },
         ]
+        if let identitySource { result["identity_source"] = identitySource }
+        if let identityComplete { result["identity_complete"] = identityComplete }
+        if let identityCacheAgeSeconds { result["identity_cache_age_seconds"] = identityCacheAgeSeconds }
+        return result
     }
 }
 
@@ -437,6 +424,7 @@ enum ExportEmailsMarkdown {
         filenameOverrides: [String: String],
         extraFrontmatter: [(String, String)],
         identityResolvable: (String) -> Bool = { _ in true },
+        authoritativeIdentityEvidence: Bool = true,
         fetch: (String) throws -> EmailContent,
         attachmentNamesFor: (String) throws -> [String],
         attachmentData: (String, String) throws -> Data,
@@ -597,7 +585,7 @@ enum ExportEmailsMarkdown {
             let directionInferred: Bool?
             if senderCandidates.contains(where: { ownAddresses.contains($0) }) {
                 direction = "sent"
-                directionInferred = nil
+                directionInferred = authoritativeIdentityEvidence ? nil : true
             } else if ownAddresses.isEmpty
                         || canonicalSender == nil
                         || !identityResolvable(id) {

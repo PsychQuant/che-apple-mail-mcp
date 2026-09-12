@@ -635,6 +635,29 @@ or a guarantee against subsequent Mail changes. Consumer adoption (including the
 archive-mail default-exclusion workflow tracked by plugins#127) remains explicit.
 
 
+### Export identity cache
+
+Batch export uses Mail's configured account address lists, including EWS and
+configured send-from aliases, through a memory-only 300-second cache. Concurrent
+refreshes share one metadata operation; failures back off for 60 seconds. The
+caller wait budget is five seconds, including time queued behind other Mail work.
+A late refresh can populate the cache for the next call. No per-message Apple
+Event or address-cache file is added.
+
+Set `opts.refresh_identity: true` after changing aliases to bypass the cached
+result/backoff; it joins an update already in progress. Refresh requires Mail to
+be running and an existing Automation grant. It does not request a new grant.
+Unavailable metadata preserves the SQLite-primary fallback but marks its direction
+as inferred. Partial native metadata supports known positive matches; non-matches
+need a complete snapshot and a represented account to be confident.
+
+The manifest reports `identity_source` (`mail_account_cache` or
+`sqlite_primary_fallback`), `identity_complete`, and `identity_cache_age_seconds`
+when a cached snapshot is available. The address list itself is not returned in
+this manifest. These are configured addresses observed at refresh time, not a
+claim about unconfigured SMTP From permissions or permanent address ownership.
+
+
 ## Technical Details
 
 - **Framework**: [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) v0.10.0

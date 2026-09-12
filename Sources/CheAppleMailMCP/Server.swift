@@ -8,6 +8,9 @@ class CheAppleMailMCPServer {
     private let server: Server
     private let transport: ShutdownOnWriteFailureTransport
     private let mailController = MailController.shared
+    private let accountIdentityCache = AccountIdentityCache {
+        try await MailController.shared.configuredAccountIdentities()
+    }
     private let tools: [Tool]
     private let indexReader: EnvelopeIndexReader?
 
@@ -785,7 +788,7 @@ class CheAppleMailMCPServer {
                 "description": .string("Array of message id strings (SQLite rowIds)"),
                 "items": .object(["type": .string("string")])
             ]),
-            "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox name. Direction is derived per email from sender identity (sender matches one of your accounts' addresses → sent, else received); this label is only the fallback direction source when identity CANNOT be established for that email — its account resolves to no address (EWS accounts, whose AccountURL is an opaque store id), no own address resolved at all, or the From header does not parse. Those items carry direction_inferred: true in the manifest. KNOWN LIMIT (#343): the index maps each account to ONE address, so mail you sent from an ALIAS on a resolvable account matches nothing and is written 'received' WITHOUT direction_inferred — an absent direction_inferred therefore means 'no address of any configured account matched, and this email's account does contribute at least one address', not 'every address you own was considered'")]),
+            "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox name, used only for disclosed fallback direction. Export compares sender addresses with a 300-second in-memory snapshot of Mail configured addresses, including EWS and configured aliases. A complete snapshot plus represented account permits a confident non-match; partial/unavailable identity is disclosed via direction_inferred. SQLite-primary fallback is also marked inferred, even on a positive match. Manifests expose identity_source/identity_complete/cache age. Set opts.refresh_identity=true after changing aliases. Unconfigured SMTP From capabilities and changes after the snapshot are not inferred.")]),
             "account_name": .object(["type": .string("string"), "description": .string("Optional mail account (accepted for consistency; the SQLite fast path is account-agnostic)")]),
             "output_dir": .object(["type": .string("string"), "description": .string("Directory to write .md files into. Must resolve under the user's home (path traversal and system directories are rejected).")]),
             "skip_message_ids_path": .object(["type": .string("string"), "description": .string("Optional dedup escape hatch (#177): path to a file listing already-archived RFC 5322 Message-IDs (one per line; blank lines and `#` comments ignored). Emails whose Message-ID is in the set are skipped (status 'skipped', counted in the manifest's `skipped`), not rewritten — so a re-run only writes new mail. Validated read-only under the same allowed-roots policy as output_dir; missing/unreadable file → no skips.")]),
@@ -794,6 +797,7 @@ class CheAppleMailMCPServer {
                 "description": .string("Optional export options"),
                 "properties": .object([
                     "include_attachments": .object(["type": .string("boolean"), "description": .string("Also export each email's attachments (data extensions → output_dir/data/, others → output_dir/attachments/<stem>/)")]),
+                    "refresh_identity": .object(["type": .string("boolean"), "description": .string("Default false. True refreshes the in-memory Mail configured-address cache, bypassing its 300s TTL and 60s failure backoff while sharing any active refresh. Caller wait budget is 5s; late completion may populate the cache. Requires an existing Automation grant and running Mail; this does not request a new grant. Failure uses disclosed SQLite-primary fallback. Manifests report identity_source, identity_complete and cache age when available. Only actual booleans are accepted.")]),
                     "skip_drafts": .object(["type": .string("boolean"), "description": .string("Default false preserves existing exports. Set true to exclude known drafts before content/attachment fetch (status skipped, skip_reason draft); unknown draft status produces a per-item draft_status_unknown error. Every manifest item includes is_draft: true (type 5), false (type 0), or null (unknown). No mailbox-name inference. Explicit non-boolean values, including null, are rejected.")]),
                     "skip_partial": .object(["type": .string("boolean"), "description": .string("Opt-in (#283): when an email's on-disk .emlx is a partial (Mail stores it as <rowid>.partial.emlx) AND the body the .md would carry is empty, do NOT write a header-only .md; record it as status 'header_only' with body_downloaded:false instead. Default false = still written but annotated (manifest item gets body_downloaded:false, summary gets body_not_downloaded count) so bulk archives are never silently header-only. With skip_partial:true the clean re-export loop is: re-fetch flagged ids via single get_email (its fallback nudges Mail to download the body), then re-run export for just those ids — nothing stale is on disk and the skipped email's filename slot is reserved, so the re-export lands on its original name. Under the DEFAULT mode that loop is NOT safe as-is: the header-only .md was really written, so a re-export collides into a -N-suffixed duplicate next to the stale file — delete each flagged item's written_path first (or use skip_partial:true from the start).")]),
                     "filename_template": .object(["type": .string("string"), "description": .string("Override filename with placeholders {date}/{subject}/{sender}/{message_id}")]),
@@ -2024,37 +2028,9 @@ class CheAppleMailMCPServer {
             guard let exportReader = indexReader else {
                 throw MailError.invalidParameter("batch_export_emails_markdown (alias: export_emails_markdown) requires the SQLite envelope index, which is unavailable. " + FullDiskAccessHelp.unavailableSuffix())
             }
-            // #316 — direction is derived per email from sender identity: the
-            // own-addresses set is the union of every configured account's
-            // addresses resolvable from the local account mapping (IMAP-style
-            // accounts map to an email-form name; EWS accounts resolve to a
-            // UUID and contribute nothing — #9/#11). No AppleScript round-trip.
-            // #343: normalise every set member through the SAME function the
-            // sender goes through. A member is not guaranteed to be a bare
-            // address — an AccountURL like `imap://Work%20%3Cuser%40x.com%3E/`
-            // yields `Work <user@x.com>`, which could never match a parsed
-            // sender and, because it kept the set non-empty, suppressed the
-            // disclosure too. Members that still do not reduce to an address
-            // are dropped rather than kept as permanently-unmatchable entries.
-            let exportAccounts = exportReader.listAccounts()
-            let exportOwnAddresses = ExportIdentity.ownAddresses(from: exportAccounts)
-            // #351: which ACCOUNTS actually contributed an address. EWS accounts
-            // contribute none (opaque AccountURL, #9), so mail sent from one can
-            // never match — and without this per-account view the whole-set
-            // emptiness test cannot see it while other accounts resolve.
-            let exportResolvedAccountUUIDs = ExportIdentity.resolvedAccountUUIDs(from: exportAccounts)
-            // Mailbox-label heuristic, demoted to the fail-open fallback used
-            // only when no own address is resolvable (whole batch, disclosed
-            // per item via `direction_inferred: true`).
             let exportMailbox = arguments["mailbox"]?.stringValue ?? ""
             let exportFallbackDirection = (exportMailbox.range(of: "sent", options: .caseInsensitive) != nil
                 || exportMailbox.contains("寄件")) ? "sent" : "received"
-            if exportOwnAddresses.isEmpty {
-                Diagnostics.emit((
-                    "batch_export_emails_markdown: no own email address resolvable from the "
-                    + "account mapping — falling back to the mailbox-label direction heuristic "
-                    + "for the whole batch (manifest items carry direction_inferred: true) (#316)\n"))
-            }
             let exportOpts = arguments["opts"]?.objectValue ?? [:]
             let includeAttachments = exportOpts["include_attachments"]?.boolValue ?? false
             // #283: opt-in — keep header-only (partial-.emlx, body absent)
@@ -2062,6 +2038,7 @@ class CheAppleMailMCPServer {
             // instead of the default annotate-and-write.
             let skipPartial = exportOpts["skip_partial"]?.boolValue ?? false
             let skipDrafts = try parseSkipDraftsOption(exportOpts["skip_drafts"])
+            let refreshIdentity = try parseRefreshIdentityOption(exportOpts["refresh_identity"])
             let filenameTemplate = exportOpts["filename_template"]?.stringValue
             var filenameOverrides: [String: String] = [:]
             if let fmap = exportOpts["filenames"]?.objectValue {
@@ -2118,12 +2095,18 @@ class CheAppleMailMCPServer {
                         + "treating as empty skip-set (#177)\n"))
                 }
             }
-            let exportManifest = try ExportEmailsMarkdown.run(
+            try Task.checkCancellation()
+            let identityLookup = await accountIdentityCache.get(forceRefresh: refreshIdentity)
+            try Task.checkCancellation()
+            let fallbackAccounts = identityLookup.snapshot == nil ? exportReader.listAccounts() : []
+            let exportIdentity = ExportAccountIdentity(lookup: identityLookup, sqliteAccounts: fallbackAccounts)
+            var exportManifest = try ExportEmailsMarkdown.run(
                 ids: exportIds, outputDir: validatedDir,
-                ownAddresses: exportOwnAddresses, fallbackDirection: exportFallbackDirection,
+                ownAddresses: exportIdentity.ownAddresses, fallbackDirection: exportFallbackDirection,
                 includeAttachments: includeAttachments, filenameTemplate: filenameTemplate,
                 filenameOverrides: filenameOverrides, extraFrontmatter: extraFrontmatter,
                 identityResolvable: { id in
+                    guard exportIdentity.complete else { return false }
                     // Fail CLOSED: anything we cannot resolve to a known
                     // address-bearing account is "cannot tell" → disclosed,
                     // never silently resolved to `received` (#351).
@@ -2134,8 +2117,9 @@ class CheAppleMailMCPServer {
                     // the reader already folds it (#343 verify) — a store that
                     // reports one case in the account map and the other in the
                     // mailbox URL would otherwise look unresolvable.
-                    return exportResolvedAccountUUIDs.contains(mailbox.accountUUID.lowercased())
+                    return exportIdentity.canClassifyNonMatch(accountID: mailbox.accountUUID)
                 },
+                authoritativeIdentityEvidence: exportIdentity.authoritativePositiveEvidence,
                 fetch: { id in
                     guard let rowId = Int(id) else {
                         throw MailError.invalidParameter("id '\(id)' is not a numeric rowId")
@@ -2166,6 +2150,7 @@ class CheAppleMailMCPServer {
                     guard let rowId = Int(id) else { throw MailError.invalidParameter("id is not a numeric rowId") }
                     return try exportReader.messageIsDraft(messageId: rowId)
                 })
+            exportIdentity.annotate(&exportManifest)
             return formatJSON(exportManifest.jsonObject)
 
         case "get_emails_batch":
@@ -2650,9 +2635,17 @@ func parseBodyFormat(_ raw: String?) throws -> BodyFormat {
 
 /// Unlike the legacy optional Bool helper, an explicit null is not an opt-out.
 func parseSkipDraftsOption(_ value: Value?) throws -> Bool {
+    try parseExportBooleanOption(value, name: "skip_drafts")
+}
+
+func parseRefreshIdentityOption(_ value: Value?) throws -> Bool {
+    try parseExportBooleanOption(value, name: "refresh_identity")
+}
+
+private func parseExportBooleanOption(_ value: Value?, name: String) throws -> Bool {
     guard let value else { return false }
     if case .bool(let flag) = value { return flag }
-    throw MailError.invalidParameter("opts.skip_drafts must be a boolean (true/false)")
+    throw MailError.invalidParameter("opts.\(name) must be a boolean (true/false)")
 }
 
 /// Issue #35: type-strict bool extraction. Returns the bool when key is present
