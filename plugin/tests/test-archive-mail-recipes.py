@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import re
 import string
+import shlex
+import subprocess
 import tempfile
 import unittest
 from urllib.parse import unquote, urlsplit
@@ -70,6 +72,20 @@ class ArchiveRecipesTests(unittest.TestCase):
         for punctuation in '()[]#?%"':
             self.assertIn("%" + format(ord(punctuation), "02X"), url)
 
+    def test_generated_labels_cannot_create_new_lines(self):
+        for codepoint in list(range(32)) + list(range(127, 160)):
+            label = self.paths["markdown_label"]("a" + chr(codepoint) + "b")
+            self.assertFalse(any(ord(c) < 32 or 127 <= ord(c) <= 159 for c in label))
+        self.assertFalse(self.paths["valid_leaf"](" \t "))
+
+    def test_yaml_scalar_preserves_astral_unicode(self):
+        value = '中文📎 "quoted"\nnext'
+        scalar = self.paths["yaml_scalar"](value)
+        self.assertEqual(json.loads(scalar), value)
+        self.assertIn("📎", scalar)
+        self.assertNotIn(r"\ud83d", scalar)
+        scalar.encode("utf-8")
+
     def test_inline_attribute_order_empty_alt_and_dedup(self):
         html = '<IMG ALT="first &amp; image.png" SRC="CID:one"><img src="cid:one" alt="ignored">'
         html += '<img alt="" src="cid:two"><img src="cid:three"><img src="https://example.test/p.png">'
@@ -98,6 +114,16 @@ class ArchiveRecipesTests(unittest.TestCase):
                 destination = root / name
                 destination.write_text("fixture")
                 self.assertEqual(destination.parent, root)
+            self.assertFalse((root / "PWNED").exists())
+
+    def test_quoted_shell_paths_do_not_execute_attachment_names(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for raw in ["$(touch PWNED)", "`touch PWNED`", "a'b;touch PWNED"]:
+                path = root / self.paths["safe_leaf"](raw)
+                subprocess.run(["/bin/bash", "-c", "mkdir -p -- " + shlex.quote(str(path))],
+                               cwd=root, check=True, timeout=5)
+                self.assertTrue(path.is_dir())
             self.assertFalse((root / "PWNED").exists())
 
 

@@ -1,5 +1,5 @@
 ---
-description: 修復歸檔 markdown 中的 synthetic message_id 佔位符（一次性，mail#319）
+description: "修復歸檔 markdown 中的 synthetic message_id 佔位符（一次性，mail#319）"
 argument-hint: "<archive_target 或 output_dir>"
 allowed-tools: mcp__plugin_che-apple-mail-mcp_mail__search_emails, mcp__plugin_che-apple-mail-mcp_mail__get_email_headers, Read, Write, Glob
 ---

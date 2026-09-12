@@ -13,8 +13,8 @@ import XCTest
 ///
 /// Five invariants, each locking a defect this repo has actually shipped:
 ///   1. every command file declares `allowed-tools` (the repair command
-///      shipped with NO frontmatter at all — broader than the wildcard #395
-///      removed, since a command without frontmatter is unrestricted);
+///      shipped with NO frontmatter, so it lacked an explicit, reviewable
+///      command-level pre-approval policy; absence inherits host permissions);
 ///   2. no wildcard mail authorization anywhere;
 ///   3. every mail tool a command's prose actually invokes is in its own
 ///      allow-list (the drift guard — a new step that calls a new tool fails
@@ -89,6 +89,20 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
                     return Command(name: name, allowedTools: [], body: body,
                                    formatError: "unsupported or duplicate frontmatter key: \(key)")
                 }
+                if key != "allowed-tools" {
+                    // Complete quoted metadata keeps both readers on one line.
+                    // Use literal Unicode, avoiding loader-dependent escaped
+                    // surrogate pairs. Checking keys alone misses a multiline quoted
+                    // description that absorbs the apparent allowed-tools key.
+                    let scalar = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
+                    guard scalar.hasPrefix("\""),
+                          scalar.range(of: #"(?<!\\)(?:\\\\)*\\u[dD][89a-fA-F][0-9a-fA-F]{2}"#, options: .regularExpression) == nil,
+                          let decoded = try? JSONSerialization.jsonObject(with: Data(scalar.utf8), options: .fragmentsAllowed),
+                          decoded is String else {
+                        return Command(name: name, allowedTools: [], body: body,
+                                       formatError: "\(key) must be a complete single-line JSON-quoted string with literal Unicode")
+                    }
+                }
             }
             let matching = fmLines.filter { $0.hasPrefix("allowed-tools:") }
             guard matching.count <= 1 else {
@@ -131,7 +145,7 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
     private func invokedMailTools(in body: String, knownNames: Set<String>) throws -> Set<String> {
         var found = Set<String>()
 
-        let prefixed = try NSRegularExpression(pattern: Self.mailPrefix + #"([a-z0-9_]+)"#)
+        let prefixed = try NSRegularExpression(pattern: Self.mailPrefix + #"([^\s`()\[\]{}<>,;:"']+)"#)
         let range = NSRange(body.startIndex..., in: body)
         prefixed.enumerateMatches(in: body, range: range) { match, _, _ in
             guard let match, let r = Range(match.range(at: 1), in: body) else { return }
@@ -156,16 +170,18 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
                 "plugin/commands/\(command.name).md: \(command.formatError ?? "")")
             XCTAssertFalse(command.allowedTools.isEmpty,
                 "plugin/commands/\(command.name).md declares no `allowed-tools` — a command "
-                + "without one is UNRESTRICTED, i.e. broader than the wildcard #395 removed.")
+                + "must declare its pre-approval policy explicitly; absence inherits host permissions.")
         }
     }
 
     func testNoWildcardMailAuthorization() throws {
+        let known = Set(CheAppleMailMCPServer.defineTools().map(\.name))
         for command in try loadCommands() {
-            for tool in command.allowedTools {
-                XCTAssertFalse(tool.contains(Self.mailPrefix) && tool.hasSuffix("*"),
-                    "plugin/commands/\(command.name).md pre-authorizes mail tools by wildcard "
-                    + "(\(tool)) — enumerate the tools the command actually invokes (#395).")
+            for tool in command.allowedTools where tool.hasPrefix("mcp__") {
+                XCTAssertTrue(tool.hasPrefix(Self.mailPrefix)
+                    && known.contains(String(tool.dropFirst(Self.mailPrefix.count))),
+                    "plugin/commands/\(command.name).md must name an individual known mail tool "
+                    + "(got \(tool)); server-wide and wildcard grants are not allowed (#395).")
             }
         }
     }

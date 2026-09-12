@@ -1,6 +1,6 @@
 ---
-description: 一次性把所有舊 archive 的 indices + config 搬到 .claude/.mail/ namespace
-argument-hint: [--dry-run]
+description: "一次性把所有舊 archive 的 indices + config 搬到 .claude/.mail/ namespace"
+argument-hint: "[--dry-run]"
 allowed-tools: Read, Write, Glob, Bash(mkdir:*), Bash(mv:*), Bash(find:*)
 ---
 

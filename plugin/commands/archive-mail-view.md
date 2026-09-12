@@ -1,6 +1,6 @@
 ---
-description: 從 .threads.json 生成指定 thread 的聚合視圖
-argument-hint: <thread-key-substring> [archive-dir]
+description: "從 .threads.json 生成指定 thread 的聚合視圖"
+argument-hint: "<thread-key-substring> [archive-dir]"
 allowed-tools: Read, Write, Glob, Bash(mkdir:*)
 ---
 
