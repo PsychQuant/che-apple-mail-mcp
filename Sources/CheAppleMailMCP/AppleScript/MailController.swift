@@ -22,8 +22,11 @@ actor MailController {
     private var refusalOverride: (() -> ComposeRefusal?)?
     /// #404 (PR #407 R1 #4): the recipient receipt's verdict for the most recent
     /// draft created through `composeViaMailto`, so `updateDraft` can gate its
-    /// delete on a DEFINITIVE mismatch. Actor-isolated; reset at the start of
-    /// every receipt-bearing compose, `nil` when no receipt ran.
+    /// delete on a DEFINITIVE mismatch. Reset before every successful
+    /// composeViaMailto return, including bare-address calls with no receipt.
+    /// updateDraft calls createDraft and reads this value without suspension;
+    /// do not add an await or another reader without making the outcome local
+    /// to that call (#414). A failed create throws before updateDraft can read it.
     private var lastRecipientReceiptOutcome: RecipientReceiptOutcome?
 
     /// #287: when set, `openMailtoURL` calls this instead of
@@ -2058,10 +2061,25 @@ actor MailController {
         var replacementConfirmed = false
         for attempt in 0..<3 {
             if attempt > 0 { Thread.sleep(forTimeInterval: 0.4) }
-            if let postRows = try? parseDraftRows(try runDraftScanScript(receiptScript)),
-               postRows.contains(where: { !preIds.contains($0.id) && $0.subject == subject }) {
-                replacementConfirmed = true
-                break
+            do {
+                let postRows = try parseDraftRows(try runDraftScanScript(receiptScript))
+                if postRows.contains(where: { !preIds.contains($0.id) && $0.subject == subject }) {
+                    replacementConfirmed = true
+                    break
+                }
+            } catch {
+                // #414: same policy as the recipient receipt: poll a successful
+                // not-found read, but never retry a read/parse failure. A timeout
+                // is unavailable evidence, not proof that no draft exists.
+                return [
+                    "deleted_old": false,
+                    "old_draft_id": old.id,
+                    "new_draft": createResult,
+                    "note": "the post-create ID receipt is unavailable because its read or parsing "
+                        + "failed; no retry was attempted after the failure. The old draft was KEPT. "
+                        + "The replacement may exist; inspect Mail's drafts before retrying this "
+                        + "update. Underlying error: " + error.localizedDescription,
+                ]
             }
         }
         guard replacementConfirmed else {
