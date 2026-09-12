@@ -5,6 +5,28 @@ import MCP
 
 final class ServerSchemaTests: XCTestCase {
 
+    func testDraftDescriptionsExplainTransientIdsAndTheLiveKeyCaveat() throws {
+        for name in ["list_drafts", "update_draft"] {
+            let description = try XCTUnwrap(try XCTUnwrap(tool(named: name)).description)
+            for phrase in ["ROWID", "autosave", "synchronization", "subject_match", "unique"] {
+                XCTAssertTrue(description.contains(phrase), name + ": missing " + phrase)
+            }
+        }
+        let create = try XCTUnwrap(try XCTUnwrap(tool(named: "create_draft")).description)
+        XCTAssertTrue(create.contains("window open"))
+        XCTAssertTrue(create.contains("Message-ID"))
+        XCTAssertTrue(create.contains("not validated"))
+        let update = try XCTUnwrap(tool(named: "update_draft"))
+        let properties = try XCTUnwrap(propertiesObject(of: update))
+        for name in ["draft_id", "subject_match"] {
+            guard let value = properties[name], case .object(let schema) = value,
+                  let description = schema["description"], case .string(let text) = description else {
+                return XCTFail("missing selector description")
+            }
+            XCTAssertTrue(text.contains("stable"), name + ": state the identity limit")
+        }
+    }
+
     private func tool(named name: String) -> Tool? {
         CheAppleMailMCPServer.defineTools().first { $0.name == name }
     }

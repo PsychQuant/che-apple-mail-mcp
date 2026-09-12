@@ -135,6 +135,45 @@ final class UpdateDraftTests: XCTestCase {
         XCTAssertTrue(order.entries.isEmpty, "zero-match refuse must not create anything")
     }
 
+    func testStaleDraftIdExplainsRecoveryWithoutCreatingOrDeleting() async throws {
+        addTeardownBlock { await self.teardownSeam() }
+        let order = OrderLog()
+        await installSeam(rows: "202\(GS)Existing", log: { script in
+            if script.contains("mailto:") { order.append("create") }
+            else if script.contains("whose id is") { order.append("delete") }
+            else if script.contains("drafts mailbox") { order.append("read") }
+        })
+        do {
+            _ = try await MailController.shared.updateDraft(
+                draftId: "101", subjectMatch: nil, accountName: "Test", accountId: nil,
+                to: ["a@example.test"], subject: "new", body: "b", cc: nil, bcc: nil,
+                attachments: nil, format: .plain, fromAddress: nil)
+            XCTFail("stale id must refuse")
+        } catch MailError.operationFailed(let message) {
+            for phrase in ["autosave", "synchronization", "list_drafts", "subject_match",
+                           "unique", "same account", "No replacement", "no draft was deleted"] {
+                XCTAssertTrue(message.contains(phrase), phrase + ": " + message)
+            }
+            XCTAssertFalse(message.contains("use create_draft"), message)
+        }
+        XCTAssertEqual(order.entries, ["read"], "no implicit subject fallback, create, or delete")
+    }
+
+    func testMissingSubjectDoesNotClaimIdDrift() async throws {
+        addTeardownBlock { await self.teardownSeam() }
+        await installSeam(rows: "202\(GS)Existing")
+        do {
+            _ = try await MailController.shared.updateDraft(
+                draftId: nil, subjectMatch: "Missing", accountName: "Test", accountId: nil,
+                to: ["a@example.test"], subject: "new", body: "b", cc: nil, bcc: nil,
+                attachments: nil, format: .plain, fromAddress: nil)
+            XCTFail("missing subject must refuse")
+        } catch MailError.operationFailed(let message) {
+            XCTAssertTrue(message.contains("subject_match"))
+            XCTAssertFalse(message.contains("autosave"))
+        }
+    }
+
     // MARK: - selector validation (verify R1, Codex blocking 2 + empty subject_match)
 
     func testUpdateDraft_selectorValidation_strictAndExclusive() async throws {
