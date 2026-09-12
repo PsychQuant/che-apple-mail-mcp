@@ -610,7 +610,9 @@ command fail. `make test-plugin` runs only the plugin suites for faster iteratio
 
 The plugin runner discovers `plugin/tests/test-*.sh` and `test-*.py`, checks
 that the required hook suite exists, and fails clearly if a dependency is
-missing. Plugin tests use isolated fixtures and mock processes/downloads.
+missing. Each matching file must be a standalone Bash or Python suite; keep
+shared helpers under a different name or in a subdirectory. Plugin tests use
+isolated fixtures and mock processes/downloads.
 This Makefile wiring does not itself add a GitHub Actions workflow.
 
 ## Technical Details
