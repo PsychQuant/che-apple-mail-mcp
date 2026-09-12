@@ -310,7 +310,7 @@ actor MailController {
     }
 
     /// Shared process transport; caller policy controls deadline and GUI cleanup.
-    private func runSubprocessScript(_ source: String, timeout: TimeInterval, guiFlow: Bool) throws -> String {
+    private func runSubprocessScript(_ source: String, timeout: TimeInterval, guiFlow: Bool, requireExistingGrant: Bool = false) throws -> String {
         if let override = scriptRunnerOverride {
             // Same seam as runScript. Each caller passes its production
             // deadline (90s GUI / 45s scan); the test seam still takes priority.
@@ -318,6 +318,9 @@ actor MailController {
                                   automationGranted: true) { try override(source) }
         }
         let granted = try preflightAutomation()
+        guard !requireExistingGrant || granted else {
+            throw MailError.operationFailed("Account identity refresh requires an existing Mail Automation grant; use check_automation and the explicit account-access setup flow first.")
+        }
         // #301 verify (Lens B P1): a child SIGKILL cannot reach (uninterruptible
         // kernel wait against a wedged Mail/WindowServer) leaves a permanently
         // blocked waiter thread AND a live paster that could outrun the clipboard
@@ -690,6 +693,13 @@ actor MailController {
     }
 
     // MARK: - Account Operations
+
+    /// Bounded identity metadata; requires an existing Automation grant.
+    func configuredAccountIdentities() throws -> AccountIdentitySnapshot {
+        let raw = try runSubprocessScript(buildAccountIdentitySnapshotScript(), timeout: 5,
+                                          guiFlow: false, requireExistingGrant: true)
+        return try AccountIdentitySnapshot.parse(raw)
+    }
 
     /// List all mail accounts with structured metadata.
     ///
