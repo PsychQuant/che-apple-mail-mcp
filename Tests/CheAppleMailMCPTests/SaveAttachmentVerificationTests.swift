@@ -28,7 +28,7 @@ final class SaveAttachmentVerificationTests: XCTestCase {
     private var dir: URL!
 
     override func setUpWithError() throws {
-        dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        dir = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("verify347-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
@@ -191,13 +191,10 @@ final class SaveAttachmentVerificationTests: XCTestCase {
         FileManager.default.createFile(atPath: p, contents: Data())   // starts empty
 
         let calls = Counter()
-        try await withSeam({ _ in
-            // Call 1 is the fetch-trigger; the saves follow. Let the first save
-            // find an empty file, then have the bytes "arrive".
-            if calls.bump() >= 3 {
-                FileManager.default.createFile(atPath: p, contents: Data(repeating: 9, count: 512))
-            }
-            return "Attachment saved to \(p)"
+        try await withSeam({ source in
+            let count = calls.bump()
+            if source.contains("source of") { return "" }
+            return try stageAttachmentFixture(source, data: count >= 3 ? Data(repeating: 9, count: 512) : Data())
         }) {
             let out = try await MailController.shared.saveAttachmentRetryingForDownload(
                 id: "1", mailbox: "INBOX", accountId: nil, accountName: "A",
@@ -226,7 +223,11 @@ final class SaveAttachmentVerificationTests: XCTestCase {
         FileManager.default.createFile(atPath: p, contents: Data())
 
         let calls = Counter()
-        try await withSeam({ _ in _ = calls.bump(); return "Attachment saved to \(p)" }) {
+        try await withSeam({ source in
+            _ = calls.bump()
+            if source.contains("source of") { return "" }
+            return try stageAttachmentFixture(source, data: Data())
+        }) {
             do {
                 _ = try await MailController.shared.saveAttachmentRetryingForDownload(
                     id: "1", mailbox: "INBOX", accountId: nil, accountName: "A",

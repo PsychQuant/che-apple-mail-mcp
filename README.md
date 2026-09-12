@@ -602,6 +602,29 @@ Still **not** covered by `account_id` (tracked): `get_account_info` / `list_mail
 
 ---
 
+### Attachment destination policy
+
+`save_attachment.save_path` uses the same destination policy as Markdown export.
+Set `CHE_MAIL_EXPORT_ALLOWED_ROOTS` to colon-separated absolute directories to
+restrict both tools to those roots. A nonempty list **replaces** the default
+home-directory allowance; the existing system and sensitive-home denylist always
+applies. For example, configure `/Volumes/Archive/Mail` for a dedicated archive.
+Without this setting, ordinary paths within the user's home are accepted; the
+home denylist is not an exhaustive list of sensitive files. Configure narrow roots
+when unrelated home files must be protected.
+
+The full filename path is checked before creating directories or invoking Mail.
+Dot/dot-dot, empty, backslash and control-character components are rejected.
+Existing symlinks work only when their canonical target satisfies the policy;
+links introduced after validation cannot redirect publication. Allowed missing
+parents are created, and existing regular files are atomically replaced.
+AppleScript saves each attempt to a fresh private temporary file, then the server
+streams it to the authorized destination. `destination_rejected` and
+`destination_write_failed` are terminal errors; changing the attachment name or
+requesting a download does not bypass them. Previously accepted destinations
+outside home, including `/tmp`, require an explicit allowed-root configuration.
+
+
 ## Technical Details
 
 - **Framework**: [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) v0.10.0

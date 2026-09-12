@@ -12,7 +12,7 @@ final class SaveAttachmentPostWriteTests: XCTestCase {
     private var dir: URL!
 
     override func setUpWithError() throws {
-        dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        dir = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("postwrite-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
     }
@@ -70,8 +70,7 @@ final class SaveAttachmentPostWriteTests: XCTestCase {
         FileManager.default.createFile(atPath: p, contents: Data())   // Mail "saved" an empty file
 
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Attachment saved to \(p)" }, refusal: { nil })
-        defer { Task { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) } }
+            scriptRunner: { source in try stageAttachmentFixture(source, data: Data()) }, refusal: { nil })
 
         do {
             _ = try await MailController.shared.saveAttachment(
@@ -82,6 +81,7 @@ final class SaveAttachmentPostWriteTests: XCTestCase {
             XCTAssertTrue(error.localizedDescription.contains("0-byte"),
                           "unexpected error: \(error.localizedDescription)")
         }
+        await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
     }
 
     func testSaveAttachment_realBytes_succeedsWithSize() async throws {
@@ -89,12 +89,17 @@ final class SaveAttachmentPostWriteTests: XCTestCase {
         FileManager.default.createFile(atPath: p, contents: Data(repeating: 1, count: 99))
 
         await MailController.shared.setTestSeams(
-            scriptRunner: { _ in "Attachment saved to \(p)" }, refusal: { nil })
-        defer { Task { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) } }
+            scriptRunner: { source in try stageAttachmentFixture(source, data: Data(repeating: 1, count: 99)) }, refusal: { nil })
 
+        do {
         let out = try await MailController.shared.saveAttachment(
             id: "1", mailbox: "INBOX", accountName: "A",
             attachmentName: "ok.pdf", savePath: p)
         XCTAssertTrue(out.hasSuffix("(99 bytes)"), "got: \(out)")
+        } catch {
+            await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
+            throw error
+        }
+        await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
     }
 }
