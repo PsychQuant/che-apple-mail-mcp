@@ -37,7 +37,8 @@ private let mailtoUnreserved: CharacterSet =
 
 /// Upper bound on the encoded `mailto:` URL length. Beyond this, the native
 /// compose path risks silent body truncation (URL parsers / Mail), so the caller
-/// fails with a named reason (#304 removed the injection path that had no length limit). 8000 is
+/// returns an error without dispatching the compose URL (#304 removed the injection path that
+/// had no length limit). 8000 is
 /// well under typical OS URL ceilings while comfortably fitting ordinary mail.
 let maxMailtoURLLength = 8000
 
@@ -346,8 +347,8 @@ func anyRecipientHasDisplayName(_ recipients: [String]?) -> Bool {
 /// (an exotic quoted local-part such as `"prefix<foo"@evil.example`) could let a
 /// crafted account label end in the literal `<addr>` and suffix-match the WRONG
 /// account. Requires exactly one '@' and none of `" < > ` or whitespace, so a
-/// non-simple custom sender is refused with a named reason (#304) instead of
-/// driving the popup.
+/// non-simple custom sender is refused before composition (#304) rather than risking
+/// a wrong-account selection through the clean popup.
 func isSimpleAddrSpec(_ addr: String) -> Bool {
     let a = addr.trimmingCharacters(in: .whitespacesAndNewlines)
     if a.isEmpty { return false }
@@ -392,9 +393,9 @@ enum ComposeRefusal: Equatable {
     case nonASCIIAttachmentPath
     /// 6 — a recipient carries a display name the clean path cannot fill.
     ///
-    /// Always for cc/bcc; and for `to` on a SEND, because the GUI fill is
-    /// draft-only (#277 — a fill that fails on a send would dispatch with
-    /// missing recipients). A draft's `to` display name is supported.
+    /// Applies to to/cc/bcc on a SEND: a failed GUI fill could send with missing
+    /// recipients. Drafts support display names in all three lists through
+    /// GUI fill (#277/#404).
     case displayNameRecipient
 
     var message: String {
@@ -460,9 +461,9 @@ func composeRefusal(
     if !accessibilityTrusted { return .accessibilityNotGranted }
     if hasCustomSender && !customSenderIsSimple { return .customSenderNotSimple }
     if !attachmentsGuiSafe { return .nonASCIIAttachmentPath }
-    // #277: display-name recipients ride the clean path via GUI clipboard fill —
-    // but DRAFT-only (a failed fill on a send would fire with missing
-    // recipients), TO-only, and only when the caller marked the fill viable.
+    // #277/#404: display-name recipients in to/cc/bcc use GUI fill on drafts
+    // when the caller marks the fill viable. Sends refuse: a failed fill could
+    // dispatch with missing recipients.
     if !recipientsAddrSpecOnly && !displayNameFillViable { return .displayNameRecipient }
     return nil
 }

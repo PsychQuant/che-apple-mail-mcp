@@ -22,9 +22,8 @@ final class ComposeDisclosureGuardTests: XCTestCase {
         return try String(contentsOf: url, encoding: .utf8)
     }
 
-    /// Every `from_address` parameter description must warn that using it
-    /// forces the legacy (wrapped-body) path until #219 lands.
-    func testFromAddressDescriptions_discloseLegacyPathAnd219() throws {
+    /// A custom sender uses the verified From popup; no legacy route remains.
+    func testFromAddressDescriptions_describeVerifiedPopup() throws {
         let source = try serverSwiftSource()
         let lines = source.components(separatedBy: "\n")
         let fromAddressLines = lines.filter { $0.contains("\"from_address\": .object") }
