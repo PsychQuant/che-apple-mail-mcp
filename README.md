@@ -361,8 +361,8 @@ or detect a new bundle installed in a different directory. Desktop's update/
 restart lifecycle has not been verified here; matching versions remain silent.
 Older bundles without the sidecar require an update to obtain it.
 
-Use `make release-signed VERSION=vX.Y.Z` for distribution. `make mcpb` remains
-an explicitly unsigned development build.
+Use `make release-signed VERSION=vX.Y.Z` for distribution.
+`scripts/build-mcpb.sh` remains an explicitly unsigned development build.
 
 ### Requirements
 
