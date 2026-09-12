@@ -1398,6 +1398,11 @@ actor MailController {
                 continue
             }
             let parsed = parseRecipient(raw)
+            if parsed.name != nil && hasUnquotedDisplayNameComma(raw) {
+                failures.append("'\(raw)' display name contains an unquoted comma — quote it, "
+                    + "for example: \"Doe, Jane\" <jane@example.test>, or use a bare address")
+                continue
+            }
             let addr = parsed.address
             // #265 + #270 + #280: an extracted addr-spec carrying an UNQUOTED
             // angle bracket is malformed — whether a matched pair
@@ -1986,6 +1991,15 @@ actor MailController {
         } else {
             listScript = buildListAllDraftsScript()
         }
+        // #411: reject recipient syntax before even the read-only locate;
+        // a slow mailbox must not hide a caller's input-format error.
+        try validateEmailAddresses(to, field: "to")
+        if let cc { try validateEmailAddresses(cc, field: "cc") }
+        if let bcc { try validateEmailAddresses(bcc, field: "bcc") }
+        if let fromAddress, !fromAddress.isEmpty {
+            try validateEmailAddresses([fromAddress], field: "from_address")
+        }
+
         let scoped = (accountName?.isEmpty == false) || (accountId?.isEmpty == false)
         let rows: [(id: String, subject: String)]
         do {
