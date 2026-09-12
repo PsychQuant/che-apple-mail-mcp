@@ -133,6 +133,30 @@ func composeDispatchKeystroke(send: Bool) -> String {
         : "keystroke \"s\" using command down"
 }
 
+/// #412 — preserve the original compose sentinel if cleanup itself fails.
+/// The cleanup payload remains unchanged; post-dispatch sends never execute it.
+func buildComposeErrorHandler(cleanupBody: String, send: Bool) -> String {
+    let guardedCleanup = """
+        try
+    \(cleanupBody)
+        on error _cleanupErr
+            set _mErr to (_mErr as text) & " — CLEANUPFAILED: " & (_cleanupErr as text)
+        end try
+    """
+    return send
+        ? """
+            if _mErr starts with "POSTDISPATCH:" then
+                error _mErr
+            else if _dispatched then
+                error "POSTDISPATCH: " & _mErr
+            else
+        \(guardedCleanup)
+                error _mErr
+            end if
+        """
+        : "\(guardedCleanup)\n        error _mErr"
+}
+
 func buildMailtoComposeScript(
     url: String,
     subject: String,
@@ -721,18 +745,7 @@ func buildMailtoComposeScript(
     // send:true handler: three branches, all rethrow — sentinel-marked errors
     // (keystroke) pass through untouched; unmarked errors with the flag set
     // (tail) get marked here; genuine pre-dispatch errors clean up + rethrow.
-    let handlerBlock = send
-        ? """
-            if _mErr starts with "POSTDISPATCH:" then
-                error _mErr
-            else if _dispatched then
-                error "POSTDISPATCH: " & _mErr
-            else
-        \(cleanupBody)
-                error _mErr
-            end if
-        """
-        : "\(cleanupBody)\n        error _mErr"
+    let handlerBlock = buildComposeErrorHandler(cleanupBody: cleanupBody, send: send)
     // send:true keeps the settle delay INSIDE the outer try (flag-guarded);
     // send:false keeps it after end try, as before.
     let preHandlerTail = send ? "\n        delay \(stepDelay)" : ""
