@@ -1321,6 +1321,9 @@ def extract_inline(html_body):
 
 若 Step 5.5.0 的 `save_attachment(inline_filename)` 失敗(binary 不支援 inline name 或 inline cid: 不在 binary 的 attachment list),**不**完全 skip — 改寫 cross-reference 註記:
 
+生成 cross-reference 或報告時，cid、附件名、sender 等插入欄位也使用 `markdown_label`，不把
+郵件提供的字串當成完整 Markdown 語法。這與原始附件查找鍵及 URL 編碼仍是不同用途。
+
 ```markdown
 Inline images:
 - (cid:331ECED2 — CleanShot 2026-05-07 at 15.44.58@2x.png — binary 無法 download by name;見 Mail.app 原始信)
