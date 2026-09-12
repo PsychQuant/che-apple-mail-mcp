@@ -344,6 +344,26 @@ Both tools return an **envelope object** `{ results, returned, limit, truncated 
 > [Plugin vs MCP-only](#plugin-vs-mcp-only) for what is missing, since nothing
 > at runtime will tell you).
 
+### Claude Desktop bundle version metadata
+
+New `.mcpb` bundles built by `scripts/package-mcpb.sh` include
+`server/.CheAppleMailMCP.version` beside the executable (#312). The packager
+queries the copied binary's `--version`, requires it to match the manifest,
+and writes the sidecar before zipping. A failed, malformed or timed-out query
+refuses the package; the running server does not create this file on first use.
+Both the development and signed-release paths use this shared packager.
+
+This enables the existing staleness diagnostic when a newer bundle replaces
+files at the running executable's location while an older image remains alive.
+The warning goes to the MCP server's stderr log and asks you to restart the
+host. It does not check GitHub for new releases, update an untouched old install,
+or detect a new bundle installed in a different directory. Desktop's update/
+restart lifecycle has not been verified here; matching versions remain silent.
+Older bundles without the sidecar require an update to obtain it.
+
+Use `make release-signed VERSION=vX.Y.Z` for distribution. `make mcpb` remains
+an explicitly unsigned development build.
+
 ### Requirements
 
 - macOS 13.0+

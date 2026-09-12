@@ -30,13 +30,23 @@ cd "$(dirname "$0")/.."
 
 VERSION=$(python3 -c "import json;print(json.load(open('mcpb/manifest.json'))['version'])")
 OUTPUT="${2:-mcpb/che-apple-mail-mcp-${VERSION}.mcpb}"
+[[ ! -d "$OUTPUT" ]] || { echo "error: output must name a package file, not a directory" >&2; exit 1; }
+
+# Build a private bundle tree: packaging must not reuse a stale sidecar or
+# include unrelated files left in the repository's generated server directory.
+STAGE=$(mktemp -d "${TMPDIR:-/tmp}/che-mail-mcpb.XXXXXX")
+trap 'rm -rf "$STAGE"' EXIT
+mkdir -p "$STAGE/server"
+cp "$BINARY" "$STAGE/server/CheAppleMailMCP"
+chmod 755 "$STAGE/server/CheAppleMailMCP"
+PACKAGE_BINARY="$STAGE/server/CheAppleMailMCP"
 
 # ---- Distribution gate ------------------------------------------------------
 # Fails CLOSED. The whole point of #323 is that an unsigned bundle is not a
 # lesser bundle — it is one that cannot work at all on a current macOS, and
 # nothing downstream would have told the user why.
-ARCHS=$(lipo -archs "$BINARY" 2>/dev/null || echo "")
-SIGN_INFO=$(codesign -dvvv "$BINARY" 2>&1 || true)
+ARCHS=$(lipo -archs "$PACKAGE_BINARY" 2>/dev/null || echo "")
+SIGN_INFO=$(codesign -dvvv "$PACKAGE_BINARY" 2>&1 || true)
 TEAM=$(printf '%s' "$SIGN_INFO" | sed -nE 's/^TeamIdentifier=(.*)$/\1/p')
 
 PROBLEMS=()
@@ -60,14 +70,47 @@ if [[ ${#PROBLEMS[@]} -gt 0 ]]; then
     fi
 fi
 
-# ---- Package ----------------------------------------------------------------
-mkdir -p mcpb/server
-cp "$BINARY" mcpb/server/CheAppleMailMCP
-chmod +x mcpb/server/CheAppleMailMCP
+# Query the image that will actually be packaged, after the distribution gate.
+# stdin is closed; a failed, malformed or stuck query must not publish a bundle
+# with stale/guessed metadata. The unsigned dev opt-in does not bypass this.
+python3 - "$PACKAGE_BINARY" "$VERSION" "$STAGE/server/.CheAppleMailMCP.version" <<'PY_VERSION'
+import re
+import subprocess
+import sys
+from pathlib import Path
 
-rm -f "$OUTPUT"
-( cd mcpb && zip -qr "$(basename "$OUTPUT")" manifest.json icon.png PRIVACY.md server/ )
-[[ "$(dirname "$OUTPUT")" == "mcpb" ]] || mv "mcpb/$(basename "$OUTPUT")" "$OUTPUT"
+pattern = re.compile(r"(?:0|[1-9][0-9]{0,18})\.(?:0|[1-9][0-9]{0,18})\.(?:0|[1-9][0-9]{0,18})")
+def valid(value):
+    return bool(pattern.fullmatch(value)) and all(int(p) <= (1 << 63) - 1 for p in value.split('.'))
+
+if not valid(sys.argv[2]):
+    raise SystemExit("error: manifest version must be a canonical MAJOR.MINOR.PATCH value")
+try:
+    result = subprocess.run([sys.argv[1], "--version"], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            check=True, timeout=5)
+except subprocess.TimeoutExpired:
+    raise SystemExit("error: packaged binary --version timed out after 5 seconds")
+except (OSError, subprocess.CalledProcessError):
+    raise SystemExit("error: packaged binary --version failed")
+try:
+    version = result.stdout.decode('ascii')
+except UnicodeDecodeError:
+    raise SystemExit("error: packaged binary returned an invalid version")
+if version.endswith('\n'):
+    version = version[:-1]
+if not valid(version):
+    raise SystemExit("error: packaged binary returned an invalid version")
+if version != sys.argv[2]:
+    raise SystemExit("error: packaged binary version does not match mcpb/manifest.json")
+Path(sys.argv[3]).write_text(version + '\n', encoding='ascii')
+PY_VERSION
+
+# ---- Package ----------------------------------------------------------------
+cp mcpb/manifest.json mcpb/icon.png mcpb/PRIVACY.md "$STAGE/"
+( cd "$STAGE" && zip -qr bundle.mcpb manifest.json icon.png PRIVACY.md server/ )
+mkdir -p "$(dirname "$OUTPUT")"
+mv -f "$STAGE/bundle.mcpb" "$OUTPUT"
 
 shasum -a 256 "$OUTPUT" | awk '{print $1}' > "$OUTPUT.sha256"
 

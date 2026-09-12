@@ -9,7 +9,7 @@ import Foundation
 /// preflight this check runs in, which is why the sidecar read must be bounded
 /// at the syscall (see `MailController.readVersionSidecar`, #303 verify B1).
 /// Staleness is otherwise invisible — the user silently runs old features. This
-/// helper turns the compiled self-version and the wrapper-written sidecar
+/// helper turns the compiled self-version and the install-side version file
 /// version into a one-line actionable warning so the server can *say* it's
 /// stale and nudge a restart.
 ///
@@ -23,8 +23,8 @@ enum StalenessCheck {
     /// `sidecar > compiled` (the running image is behind the installed binary).
     ///
     /// Returns `nil` — fail-open — for every other case: `sidecar` is `nil`
-    /// (no sidecar found, e.g. a dev build run from `.build/` or a non-plugin
-    /// install), unparseable on either side, or `sidecar <= compiled` (the
+    /// (no sidecar found, e.g. a dev build run from `.build/` or an older bundle),
+    /// unparseable on either side, or `sidecar <= compiled` (the
     /// running image is current or ahead). Fail-open is the whole point: a
     /// spurious "restart" nag on every ambiguous session would be worse than
     /// the (already-guarded) staleness it warns about.
@@ -45,7 +45,7 @@ enum StalenessCheck {
         return "che-apple-mail-mcp is running a stale binary v\(running.major).\(running.minor).\(running.patch); "
             + "v\(onDisk.major).\(onDisk.minor).\(onDisk.patch) is installed on disk. "
             + "This session's MCP server started before the update — "
-            + "restart Claude Code to load it."
+            + "restart the MCP host (Claude Code or Claude Desktop) to load it."
     }
 }
 
