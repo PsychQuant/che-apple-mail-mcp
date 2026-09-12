@@ -13,6 +13,108 @@ final class ComposeCleanupSheetTests: XCTestCase {
         buildMailtoComposeScript(url: "mailto:a@x?subject=S", subject: "S", attachments: [], send: false)
     }
 
+    private enum BoundaryViolation: Error { case malformed(String), unsafe }
+
+    /// Structural check for the line-oriented try syntax emitted by this
+    /// builder, not a general AppleScript parser. Ignore -- inside strings.
+    private func codeLine(_ raw: String) -> String {
+        let chars = Array(raw)
+        var quoted = false, escaped = false
+        var end = chars.count
+        for i in chars.indices {
+            let c = chars[i]
+            if quoted {
+                if escaped { escaped = false }
+                else if c == "\\" { escaped = true }
+                else if c == "\"" { quoted = false }
+            } else if c == "\"" { quoted = true }
+            else if c == "-", i + 1 < chars.count, chars[i + 1] == "-" { end = i; break }
+        }
+        return String(chars[..<end]).trimmingCharacters(in: .whitespaces)
+    }
+
+    private func cleanupBoundary(_ script: String) throws -> (start: Int, guards: [Int], lines: [String]) {
+        let lines = script.components(separatedBy: "\n").map(codeLine)
+        var stack: [Int] = []
+        var handlers: [Int] = []
+        for (i, line) in lines.enumerated() {
+            if line == "try" { stack.append(i) }
+            else if line == "end try" {
+                guard !stack.isEmpty else { throw BoundaryViolation.malformed("unmatched end try") }
+                stack.removeLast()
+            } else if line == "on error _mErr" || line.hasPrefix("on error _mErr ") {
+                guard let start = stack.last else { throw BoundaryViolation.malformed("handler without try") }
+                handlers.append(start)
+            }
+        }
+        guard stack.isEmpty, handlers.count == 1 else {
+            throw BoundaryViolation.malformed("expected one balanced compose error handler")
+        }
+        let prefixes = ["if _beforeTitles contains ", "if _ourMatches is 0 then error ",
+                        "if _ourMatches > 1 then error "]
+        var guards: [Int] = []
+        for prefix in prefixes {
+            let matches = lines.indices.filter { lines[$0].hasPrefix(prefix) && lines[$0].contains(" then error ") }
+            guard matches.count == 1 else { throw BoundaryViolation.malformed("missing or duplicate ownership refusal") }
+            guards.append(matches[0])
+        }
+        let captured = lines.indices.filter { lines[$0] == "set _ourId to (id of _cw)" }
+        guard captured.count == 1 else { throw BoundaryViolation.malformed("missing or duplicate owned-id capture") }
+        return (handlers[0], guards + captured, lines)
+    }
+
+    private func verifyCleanupBoundary(_ script: String) throws {
+        let boundary = try cleanupBoundary(script)
+        guard boundary.guards.allSatisfy({ $0 < boundary.start }) else { throw BoundaryViolation.unsafe }
+    }
+
+    func testCleanupTryBeginsAfterOwnershipForAllGeneratedVariants() throws {
+        let fills: [[RecipientFill]] = [[], [.init(field: .cc, recipients: ["Named <n@example.test>"])],
+                                       [.init(field: .bcc, recipients: ["Named <n@example.test>"])]]
+        let senders: [String?] = [nil, "sender@example.test"]
+        for send in [false, true] {
+            for fill in fills {
+                for sender in senders {
+                    // The comment-shaped subject must not confuse codeLine.
+                    let script = buildMailtoComposeScript(url: "mailto:a@example.test?subject=S",
+                        subject: "S -- \"quoted\"", attachments: [], send: send, fromAddress: sender, fill: fill)
+                    XCTAssertNoThrow(try verifyCleanupBoundary(script))
+                }
+            }
+        }
+    }
+
+    func testBoundaryCheckRejectsEarlyTryAndGuardsMovedInside() throws {
+        for send in [false, true] {
+            let script = buildMailtoComposeScript(url: "mailto:a@example.test?subject=S", subject: "S",
+                                                 attachments: [], send: send)
+            let boundary = try cleanupBoundary(script)
+            let original = script.components(separatedBy: "\n")
+            let identificationTell = try XCTUnwrap(boundary.lines.indices.last {
+                $0 < boundary.guards[0] && boundary.lines[$0] == "tell application \"Mail\""
+            })
+            var earlyTry = original
+            let tryLine = earlyTry.remove(at: boundary.start)
+            earlyTry.insert(tryLine, at: identificationTell)
+            var mutants = [earlyTry.joined(separator: "\n")]
+            for guardIndex in boundary.guards.prefix(3) {
+                var movedGuard = original
+                let line = movedGuard.remove(at: guardIndex)
+                // Removing a preceding guard shifts try back one line; inserting
+                // at the original try index places the guard just inside it.
+                movedGuard.insert(line, at: boundary.start)
+                mutants.append(movedGuard.joined(separator: "\n"))
+            }
+            for mutant in mutants {
+                XCTAssertThrowsError(try verifyCleanupBoundary(mutant)) { error in
+                    guard case BoundaryViolation.unsafe = error else {
+                        return XCTFail("mutation must fail ownership ordering, not token parsing: \(error)")
+                    }
+                }
+            }
+        }
+    }
+
     func testCleanupFailureHasItsOwnHandler() {
         for send in [false, true] {
             let s = buildMailtoComposeScript(url: "mailto:a@example.test?subject=S", subject: "S", attachments: [], send: send)
