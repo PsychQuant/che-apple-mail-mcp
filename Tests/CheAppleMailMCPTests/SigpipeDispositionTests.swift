@@ -33,13 +33,10 @@ import XCTest
 /// non-throwing writer appears is `NoNonThrowingStderrWriteGuardTests`. This
 /// test remains responsible for exactly one thing: the process disposition.
 ///
-/// Deliberately NOT tested here: "exits within N seconds of stdin EOF".
-/// Interleaved A/B measurement showed shutdown-after-EOF latency is highly
-/// variable on the UNMODIFIED binary too (4s to >40s under load — a
-/// pre-existing property, likely the fire-and-forget startup sync's 45s
-/// guard), so a bounded-exit assertion would flake on noise this change does
-/// not own. The no-spin property was verified live (broken-pipe stdout +
-/// stdin EOF → clean rc=0 exit) and is recorded in the PR.
+/// EOF latency is covered separately by StdioShutdownTests (#329): a real SDK
+/// pipe probe blocks startup sync under a constrained cooperative pool. This
+/// suite continues to pin only the SIGPIPE disposition; it does not attribute
+/// historical 4s-to->40s shutdown variance to SIG_IGN.
 final class SigpipeDispositionTests: XCTestCase {
 
     /// Skip-not-fail when the server product is absent mirrors the existing
