@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Live repository links use the current organization**
+  ([#387](https://github.com/PsychQuant/che-apple-mail-mcp/issues/387)).
+  Extension metadata, privacy and promotion links now point to
+  PsychQuant. Personal attribution, other repositories and historical links
+  remain unchanged.
+
+- **Release metadata checks share one parser and audited history**
+  ([#396](https://github.com/PsychQuant/che-apple-mail-mcp/issues/396)).
+  Shared changelog parsing checks version pins, release notes and historical
+  coverage against audited manifest records. Plugin-facing narrative changes
+  are recorded in plugin/CHANGELOG.md.
+
 - **Exited osascript children no longer leave a false unreaped count**
   ([#417](https://github.com/PsychQuant/che-apple-mail-mcp/issues/417)).
   Registration and exit now update each child's lifecycle and the total under

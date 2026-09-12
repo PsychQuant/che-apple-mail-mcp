@@ -77,7 +77,7 @@ This server does **not** connect to any third-party services:
 
 che-apple-mail-mcp is open source software licensed under the MIT License. You can review the source code to verify these privacy practices:
 
-- Repository: https://github.com/kiki830621/che-apple-mail-mcp
+- Repository: https://github.com/PsychQuant/che-apple-mail-mcp
 - All code is available for inspection
 - No hidden functionality
 - No obfuscated network calls

@@ -1,0 +1,592 @@
+{
+  "through_version": "2.48.0",
+  "floor_version": "2.3.0",
+  "date_basis": "first introducing manifest commit, committer timestamp in Asia/Taipei; not a publication timestamp",
+  "records": [
+    {
+      "version": "2.48.0",
+      "date": "2026-09-08",
+      "binary_version": "3.1.0",
+      "source_repo": "PsychQuant/che-apple-mail-mcp",
+      "source_commit": "2070ad134f183001c715d24a0ef75e83595c9cbf",
+      "source_path": "plugin/.claude-plugin/plugin.json",
+      "committed_at": "2026-09-08T18:04:49+09:00"
+    },
+    {
+      "version": "2.47.0",
+      "date": "2026-08-31",
+      "binary_version": "3.0.0",
+      "source_repo": "PsychQuant/che-apple-mail-mcp",
+      "source_commit": "b4a7cea7cb665b1f4ce8966730ca5728d01897db",
+      "source_path": "plugin/.claude-plugin/plugin.json",
+      "committed_at": "2026-08-31T18:08:39+09:00"
+    },
+    {
+      "version": "2.46.1",
+      "date": "2026-08-14",
+      "binary_version": "2.28.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "adc0e36d5118914d0d8da075d00e3f8a3e5e4786",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-08-14T05:24:02+08:00"
+    },
+    {
+      "version": "2.46.0",
+      "date": "2026-08-13",
+      "binary_version": "2.27.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "b5f49abb407d0ed980cebc4d0c9aa7d46b2ad68f",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-08-13T08:20:19+08:00"
+    },
+    {
+      "version": "2.45.0",
+      "date": "2026-08-13",
+      "binary_version": "2.27.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "d9a361cf937df64ce32bb1d8d951476905ddd4d5",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-08-13T08:19:23+08:00"
+    },
+    {
+      "version": "2.44.2",
+      "date": "2026-08-10",
+      "binary_version": "2.27.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "e06ad18b0ffebea4d995f656b2498c3a564f2ec3",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-08-10T15:03:03+08:00"
+    },
+    {
+      "version": "2.44.1",
+      "date": "2026-08-05",
+      "binary_version": "2.26.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "8da11e2b71a755d6de5eea0e0f497df08ebfeb2d",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-08-05T08:25:46+08:00"
+    },
+    {
+      "version": "2.44.0",
+      "date": "2026-08-02",
+      "binary_version": "2.25.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "9acb80d242185689e8b97988fdfdd055785287bb",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-08-02T00:12:42+08:00"
+    },
+    {
+      "version": "2.43.0",
+      "date": "2026-08-01",
+      "binary_version": "2.25.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "5e3cfe9be4175371e31911d19fde6237126e43fd",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-08-01T15:14:01+08:00"
+    },
+    {
+      "version": "2.42.0",
+      "date": "2026-07-27",
+      "binary_version": "2.25.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "1b9ae3c50d070ef113220c29ae04ef59c17001db",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-27T17:27:36+08:00"
+    },
+    {
+      "version": "2.41.0",
+      "date": "2026-07-26",
+      "binary_version": "2.24.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "3b814954102afd94a387c1b9545650eae3bc5ba9",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-26T01:13:02+09:00"
+    },
+    {
+      "version": "2.40.0",
+      "date": "2026-07-22",
+      "binary_version": "2.23.1",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "2c7d60443067798392bb7a5883a2cfbf82ddd280",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-22T10:04:01+09:00"
+    },
+    {
+      "version": "2.39.0",
+      "date": "2026-07-22",
+      "binary_version": "2.23.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "f3ef828fd6ef104613f0026a02e22ca759c1bbda",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-22T01:24:23+09:00"
+    },
+    {
+      "version": "2.38.0",
+      "date": "2026-07-22",
+      "binary_version": "2.22.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "27a4e34b3582aa95183108d19776b58597f8155d",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-22T01:14:36+09:00"
+    },
+    {
+      "version": "2.37.0",
+      "date": "2026-07-20",
+      "binary_version": "2.22.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "e9c7ff3d25797274f596aa31514e4cfde028afb2",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-20T17:50:39+09:00"
+    },
+    {
+      "version": "2.36.0",
+      "date": "2026-07-19",
+      "binary_version": "2.21.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "e6bcdfa5f7e448261a14e64329b3ea0963c49832",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-19T15:57:16+08:00"
+    },
+    {
+      "version": "2.35.0",
+      "date": "2026-07-16",
+      "binary_version": "2.21.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "a6275ef1fe9aa8e8b1c33b41dd8fcfae9efeeae7",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-16T10:06:08+08:00"
+    },
+    {
+      "version": "2.34.0",
+      "date": "2026-07-16",
+      "binary_version": "2.20.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "00a9f4f4e5476abd80cde18989a8043f7516e4ce",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-16T06:59:01+08:00"
+    },
+    {
+      "version": "2.33.0",
+      "date": "2026-07-15",
+      "binary_version": "2.19.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "61b1f03becc59961c75c300e28787fd119c3add7",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-15T20:23:18+08:00"
+    },
+    {
+      "version": "2.32.0",
+      "date": "2026-07-15",
+      "binary_version": "2.19.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "dc849ffdff44c6de64c1e0de0721ceba2ee74d6e",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-15T18:48:47+08:00"
+    },
+    {
+      "version": "2.31.0",
+      "date": "2026-07-15",
+      "binary_version": "2.19.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "c2fe89dbf7319adf69952165481b428dcf5fb746",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-15T17:19:05+08:00"
+    },
+    {
+      "version": "2.30.0",
+      "date": "2026-07-15",
+      "binary_version": "2.19.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "8d22f5cd224fea43f413c97383971d7f0828a276",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-15T16:36:21+08:00"
+    },
+    {
+      "version": "2.29.0",
+      "date": "2026-07-15",
+      "binary_version": "2.19.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "69c93de78c893227b6dcfefdac522b13f5e6b9f0",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-15T12:08:31+08:00"
+    },
+    {
+      "version": "2.28.0",
+      "date": "2026-07-15",
+      "binary_version": "2.19.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "08f6a9801854a90be5c8ff26f102fe8fcc5f300d",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-15T11:28:00+08:00"
+    },
+    {
+      "version": "2.27.0",
+      "date": "2026-07-14",
+      "binary_version": "2.18.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "c3e68c197cca97ba7e7bd14b09199c0f55a90a10",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-14T00:05:47+08:00"
+    },
+    {
+      "version": "2.26.2",
+      "date": "2026-07-03",
+      "binary_version": "2.17.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "9870e2e7d17717b32389f83cb0078a9435f3a541",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-07-03T04:23:01+08:00"
+    },
+    {
+      "version": "2.26.1",
+      "date": "2026-06-24",
+      "binary_version": "2.17.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "187eadab182f41e7217ca921c5c763d9f71494d7",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-06-24T15:04:13+08:00"
+    },
+    {
+      "version": "2.26.0",
+      "date": "2026-06-19",
+      "binary_version": "2.16.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "bd1693a55544b428c7fd80f0914bb79bca7c07e3",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-06-19T21:00:13+08:00"
+    },
+    {
+      "version": "2.25.0",
+      "date": "2026-06-16",
+      "binary_version": "2.15.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "5182904f9e514f300701560c523fa2c4e7f38b51",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-06-16T15:59:49+08:00"
+    },
+    {
+      "version": "2.24.0",
+      "date": "2026-06-16",
+      "binary_version": "2.14.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "afe082cd3cf06a4b83eaadea9617cecdaca29118",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-06-16T12:27:45+08:00"
+    },
+    {
+      "version": "2.23.0",
+      "date": "2026-06-16",
+      "binary_version": "2.13.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "a7efe793f55aced3afd777c91fba799127c64836",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-06-16T10:24:58+08:00"
+    },
+    {
+      "version": "2.22.0",
+      "date": "2026-06-13",
+      "binary_version": "2.12.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "07e8e39395e20ba306ed8e610e7b67b3a6938f97",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-06-13T23:50:10+08:00"
+    },
+    {
+      "version": "2.21.0",
+      "date": "2026-06-12",
+      "binary_version": "2.11.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "cdf8e15efba177c6cedbe36aad53815f626e3d4e",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-06-12T15:28:35+08:00"
+    },
+    {
+      "version": "2.20.1",
+      "date": "2026-05-20",
+      "binary_version": "2.10.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "ccf2f6c4531e52a5f65659fda2e8c8c51ebd26de",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-20T10:01:49+08:00"
+    },
+    {
+      "version": "2.20.0",
+      "date": "2026-05-18",
+      "binary_version": "2.9.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "26b5a78f0d668a581e95cfccc29ab7ea7a26eb7a",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-18T15:28:10+08:00"
+    },
+    {
+      "version": "2.19.7",
+      "date": "2026-05-18",
+      "binary_version": "2.9.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "9a68e155d4f8829d33d18f062f753d91927a4dea",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-18T11:15:30+08:00"
+    },
+    {
+      "version": "2.19.6",
+      "date": "2026-05-12",
+      "binary_version": "2.8.5",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "4a7c5a8a32afc11b7b5f891ba29dec08a78c6b03",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-12T07:12:22+08:00"
+    },
+    {
+      "version": "2.19.5",
+      "date": "2026-05-11",
+      "binary_version": "2.8.5",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "4afb362234e4068c4edb98024a071a47cd3e9733",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-11T20:13:15+08:00"
+    },
+    {
+      "version": "2.19.4",
+      "date": "2026-05-11",
+      "binary_version": "2.8.4",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "2106dd766926f8c675777a54c7b0a7e0f7bda41f",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-11T18:37:58+08:00"
+    },
+    {
+      "version": "2.19.3",
+      "date": "2026-05-11",
+      "binary_version": "2.8.3",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "8edc846abcb14a2e43d23bb4e36fd7f75ca6f84a",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-11T17:27:33+08:00"
+    },
+    {
+      "version": "2.19.2",
+      "date": "2026-05-11",
+      "binary_version": "2.8.2",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "6fa9f91a86b2f8f3ab2c3b6c262ce2f3302c714c",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-11T16:46:36+08:00"
+    },
+    {
+      "version": "2.19.1",
+      "date": "2026-05-11",
+      "binary_version": "2.8.1",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "34ef836883f27260a8e27ef581a618d6399ef4c1",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-11T16:25:06+08:00"
+    },
+    {
+      "version": "2.19.0",
+      "date": "2026-05-11",
+      "binary_version": "2.8.0",
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "aa6235327837c72ff64fcea002b803281a77cd5e",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-11T16:15:39+08:00"
+    },
+    {
+      "version": "2.18.1",
+      "date": "2026-05-10",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "c74fab1b1874dae016e6ee0ef1b0c322c6834719",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-10T14:57:55+08:00"
+    },
+    {
+      "version": "2.18.0",
+      "date": "2026-05-10",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "37bb31c0a76f4d8db405e52e93e072da5bf7eb0d",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-10T14:15:17+08:00"
+    },
+    {
+      "version": "2.17.0",
+      "date": "2026-05-10",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "d690db39115f750718b037ed58144f4e1550634c",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-10T09:31:19+08:00"
+    },
+    {
+      "version": "2.16.1",
+      "date": "2026-05-09",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "7513a5da1379a68ba5b682995ea0f952e112490d",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-09T15:46:56+08:00"
+    },
+    {
+      "version": "2.16.0",
+      "date": "2026-05-07",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "e9bf1daf0869657cb5e373098532070a0d80b5c7",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-07T16:56:08+08:00"
+    },
+    {
+      "version": "2.15.0",
+      "date": "2026-05-07",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "6978a218d9b2e4167a56e9e359d9765ca8040ab9",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-07T16:36:26+08:00"
+    },
+    {
+      "version": "2.14.0",
+      "date": "2026-05-07",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "d6ee18218a6d2ee25481ec86034cd3b3a57a9518",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-07T16:02:53+08:00"
+    },
+    {
+      "version": "2.13.0",
+      "date": "2026-05-07",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "defcc67efabf74a977796f17d17d90ac2a4ec32f",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-07T16:01:17+08:00"
+    },
+    {
+      "version": "2.12.0",
+      "date": "2026-05-07",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "757841c3508b07249a96755251ef91b509786c12",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-07T15:25:47+08:00"
+    },
+    {
+      "version": "2.11.0",
+      "date": "2026-05-03",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "33e5e0d0382d3e522082dc3af9663d3aebbde38d",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-03T15:25:27+08:00"
+    },
+    {
+      "version": "2.10.3",
+      "date": "2026-05-03",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "94019990ed3e3bc2eb495761c04c7223c2d39706",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-03T07:59:42+08:00"
+    },
+    {
+      "version": "2.10.2",
+      "date": "2026-05-03",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "cb20fd84f90237f1b0aa4a0cc651b4975fb72a1b",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-03T05:18:21+08:00"
+    },
+    {
+      "version": "2.10.1",
+      "date": "2026-05-02",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "2355735e7ec4dc63b1c3adee24209670635ab502",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-02T20:47:28+08:00"
+    },
+    {
+      "version": "2.10.0",
+      "date": "2026-05-02",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "a1ea3a1017e271467c4e75d839f9a4c2083c02bd",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-02T18:16:19+08:00"
+    },
+    {
+      "version": "2.9.0",
+      "date": "2026-05-01",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "40fe80d92cfc8c5891b0f5a018b716ffa5389fce",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-01T15:06:27+08:00"
+    },
+    {
+      "version": "2.8.0",
+      "date": "2026-05-01",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "bd52ed78fbfe732e4f8c89ba1b69a9b0d845bcd3",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-01T14:10:57+08:00"
+    },
+    {
+      "version": "2.7.0",
+      "date": "2026-05-01",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "97460862ae1c6a919cf2143fd91e72c234aaeade",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-05-01T13:57:33+08:00"
+    },
+    {
+      "version": "2.6.0",
+      "date": "2026-04-22",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "3482d5446200db4422373b18a7753caa3e0580b6",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-04-22T15:34:32+08:00"
+    },
+    {
+      "version": "2.5.1",
+      "date": "2026-04-22",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "afc332110c3896cbdad77399b550be668ff62be9",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-04-22T14:00:26+08:00"
+    },
+    {
+      "version": "2.5.0",
+      "date": "2026-04-17",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "52339e01d8fdd6adbfbc55031da7a139f1ddd117",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-04-17T07:43:54+08:00"
+    },
+    {
+      "version": "2.4.0",
+      "date": "2026-04-17",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "d65925e73f9a31920838a138e47030efcd5a4617",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-04-17T06:54:28+08:00"
+    },
+    {
+      "version": "2.3.0",
+      "date": "2026-04-17",
+      "binary_version": null,
+      "source_repo": "PsychQuant/psychquant-claude-plugins",
+      "source_commit": "0de3660233c8a546b893e71eee83881b3be8caec",
+      "source_path": "plugins/che-apple-mail-mcp/.claude-plugin/plugin.json",
+      "committed_at": "2026-04-17T06:27:53+08:00"
+    }
+  ]
+}

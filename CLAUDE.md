@@ -66,8 +66,11 @@ ship an unsigned binary). See README "Signing & Notarization" for one-time
 setup and why signing is what keeps Full Disk Access working across upgrades
 ([#211](https://github.com/PsychQuant/che-apple-mail-mcp/issues/211)).
 
-After the script finishes, bump `plugin/.claude-plugin/plugin.json`'s **`version`
-and `binary_version`** in this repo — the installed-plugin cache is keyed by
+After the script finishes, **write the shell release entry in
+`plugin/CHANGELOG.md`** — it is the single source for plugin-shell narrative
+(#396), and `ManifestVersionTests` pins its newest released header to
+`plugin.json`'s `version`, so a bump without an entry fails the suite. Then bump
+`plugin/.claude-plugin/plugin.json`'s **`version` and `binary_version`** in this repo — the installed-plugin cache is keyed by
 `version`, so bumping only `binary_version` ships nothing (#335 verify). Mirror
 the new `version` into `.claude-plugin/marketplace.json`'s plugin entry
 (`ManifestVersionTests` pins the two equal; the root manifest deliberately
