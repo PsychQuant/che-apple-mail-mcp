@@ -238,7 +238,7 @@ TaskCreate(subject="report_and_audit",
            description="Step 7 + 8: 輸出歸檔報告(新歸檔/跳過/thread 索引/附件分流)。執行 Coverage Audit (8a 附件完整性 + 8b thread 完整性 → search by bare_subject 比對 archived/total + 8d 方向覆蓋 → 讀 frontmatter direction 分布,零寄件且 ≥10 封則警告,有回覆串證據則升級,mail#350)。")
 
 TaskCreate(subject="reconcile_index",
-           description="Step 8.5(強制最終 gate,mail#261 + plugins#110): Phase 0 若本 run 有 batch manifest → 對每個 written item 三源合併(written_path/manifest message_id/4.5-preview date+subject/寫出 frontmatter thread_key)機械化補齊,零 heuristic;Phase 1 掃 ${output_dir} 頂層全部 *.md 的 frontmatter message_id → 每個都必須在 Phase-0 set 或 ${INDEX_FILE} keys 內,歷史孤兒就地補寫 canonical schema entry {file,date,subject,thread_key}(subject 從本文 Subject: 行 heuristic,僅 Phase 1)或列 unparseable;index 寫回走 temp+rename 原子寫入;last_updated bump 為 max(entry date,經 robust to_ymd 正規化——ISO 快篩+RFC822 parse,mail#275);repaired>0 → 跑 /archive-mail-rebuild-threads;輸出 Phase0/Phase1 reconcile 摘要。此 task 未 verified 前,整個 run 不得標示成功 — 靜默完成 = 違規。")
+           description="Step 8.5(強制最終 gate,mail#261 + plugins#110): Phase 0 若本 run 有 batch manifest → 對每個 written item 三源合併(written_path/manifest message_id/4.5-preview date+subject/寫出 frontmatter thread_key)機械化補齊,零 heuristic;Phase 1 掃 ${output_dir} 頂層全部 *.md 的 frontmatter message_id → 每個都必須在 Phase-0 set 或 ${INDEX_FILE} keys 內,歷史孤兒就地補寫 canonical schema entry {file,date,subject,thread_key}(subject 從本文 Subject: 行 heuristic,僅 Phase 1)或列 unparseable;index 寫回走 temp+rename 原子寫入;last_updated bump 為 max(entry date,經 robust 日期 recipe——驗證 ISO／完整及日期-only RFC822，列出所有 date_excluded entry,mail#275/#364);repaired>0 → 跑 /archive-mail-rebuild-threads;輸出 Phase0/Phase1 reconcile 摘要。此 task 未 verified 前,整個 run 不得標示成功 — 靜默完成 = 違規。")
 ```
 
 **完成每一步立即 `TaskUpdate → completed`。靜默完成 = 違規。**
@@ -1158,7 +1158,7 @@ direction: received
   4. 若結果為空，用 `no-subject`
   > **歷史檔 caveat**：本規則之前的舊版不去 `回覆:`/`回复:` 且區分大小寫；在此之前歸檔的 md 其 thread_key 可能仍帶 `回覆:` 前綴，與新檔的 thread_key 分屬兩 thread。若某中文回覆 thread 出現此分裂，跑 `/archive-mail-rebuild-threads` 以新規則全量重算即可收斂。
 - `in_reply_to`: 若有，來自郵件的 `In-Reply-To` header；若 MCP 未暴露，從 body 的 quote intro 嘗試提取第一個 Message-ID，否則留空
-- `date`: ISO 8601，**保留原始 Date-header 的時區 offset**（如 `…+08:00`；對齊 batch 工具 #244，兩路徑同表示法——若舊版寫 UTC `Z` 而 batch 寫 offset，跨午夜信的檔名日期前綴會差 ±1 天）。**enforcement（mail#275）**：Date header 為 **RFC822 原樣**（`Thu, 25 Jun 2026 09:30:45 +0800 (CST)`，常見於 webmail 系統寄件）時**必須先轉 ISO 再寫入** frontmatter——`email.utils.parsedate_to_datetime(raw).isoformat()`——直接抄原樣會經 Step 6/8.5 流入 index，汙染 max(date) 計算（mail#275 實證案例即此路徑）。**offset 缺失即錯誤（mail#319）**：任何寫入的 `date` 一律**必須帶時區 offset**（`+08:00` / `Z`）——來源給 naive local time 時不得當 UTC 寫入（mail#319 同批 synthetic 檔實測 +08:00 被當 UTC，差 8 小時，汙染 `last_updated = max(date)` 且跨午夜檔名日期差一天）；無法確定 offset 時比照 unparseable 揭露，不靜默猜
+- `date`: ISO 8601，**保留原始 Date-header 的時區 offset**（如 `…+08:00`；對齊 batch 工具 #244，兩路徑同表示法——若舊版寫 UTC `Z` 而 batch 寫 offset，跨午夜信的檔名日期前綴會差 ±1 天）。**enforcement（mail#275）**：Date header 為 **RFC822 原樣**（`Thu, 25 Jun 2026 09:30:45 +0800 (CST)`，常見於 webmail 系統寄件）時**必須先轉 ISO 再寫入** frontmatter——`normalize_archive_timestamp(raw)`（Step 8.5 共用日期 recipe；回傳 None 時保留原始資訊並揭露，不能當成已取得完整 timestamp）——直接抄原樣會經 Step 6/8.5 流入 index，汙染 max(date) 計算（mail#275 實證案例即此路徑）。**offset 缺失即錯誤（mail#319）**：任何寫入的 `date` 一律**必須帶時區 offset**（`+08:00` / `Z`）——來源給 naive local time 時不得當 UTC 寫入（mail#319 同批 synthetic 檔實測 +08:00 被當 UTC，差 8 小時，汙染 `last_updated = max(date)` 且跨午夜檔名日期差一天）；無法確定 offset 時比照 unparseable 揭露，不靜默猜
 - `sender`: 寄件人 email 地址（display name 剝除，**並轉小寫**——對齊 batch 工具的 `bareEmail().lowercased()`，否則 threads.json 的 participant 去重會把 `A@x` 與 `a@x` 當兩人）
 - `direction`: `received` 或 `sent`。**判定規則（mail#316）**：以 sender identity 判定——bare sender（lowercase）∈ 使用者**全帳號** own addresses 聯集（`list_accounts` 各帳號 `email_addresses` 聯集）→ `sent`，否則 `received`。**絕不可由信所在 mailbox 推導**——Gmail All Mail 是雙向超集，mailbox 不攜帶 direction 資訊（mail#316 實測誤標）。此規則與 batch 工具（binary v2.26.0+）的 server-side 判定同義，兩路徑不漂移
 
@@ -1420,7 +1420,7 @@ User 看到註記知道 inline 圖存在但需手動 export from Mail.app。File
   "emails": {
     "message-id@example.com": {
       "file": "2026-01-13_Meeting-notes.md",
-      "date": "2026-01-13 14:30",
+      "date": "2026-01-13T14:30:00+08:00",
       "subject": "郵件主旨",
       "thread_key": "Meeting notes"
     }
@@ -1430,7 +1430,7 @@ User 看到註記知道 inline 圖存在但需手動 export from Mail.app。File
 
 v2.6.0+ 在每個 email entry 多記一個 `thread_key`，方便反向查詢。
 
-> **`last_updated` 語意（mail#261）**：email_index.json 的頂層 `last_updated` = 所有 entry 的 **max(date)**（語料最新歸檔日，非執行日）——與 threads.json（Step 5.7）用**目前時間**不同，兩者刻意分工：前者答「語料多新」，後者答「索引多新」。**計算一律經 Step 8.5 的 robust `to_ymd()` 正規化（mail#275）**——entry date 可能混入 RFC822，直接 `[:10]` 字典序比較會選出無效值；本 step 與 Step 8.5 兩處計算必須同一規則。
+> **`last_updated` 語意（mail#261）**：email_index.json 的頂層 `last_updated` = 所有 entry 的 **max(date)**（語料最新歸檔日，非執行日）——與 threads.json（Step 5.7）用**目前時間**不同，兩者刻意分工：前者答「語料多新」，後者答「索引多新」。**計算一律經 Step 8.5 的 robust `to_ymd()` 正規化（mail#275）**——entry date 可能混入 RFC822，直接 `[:10]` 字典序比較會選出無效值；本 step 與 Step 8.5 兩處計算必須同一份日期 recipe，並保留 `date_excluded` 清單，不得只取 max 丟掉失敗資料。日期-only 的還原僅供 calendar watermark；不補造時間或時區。
 
 > **原子寫入（plugins#110，partial-write-safe）**：寫 `${INDEX_FILE}` **一律 temp+rename**——先寫 `${INDEX_FILE}.tmp`（完整 JSON），再 `os.replace(tmp, INDEX_FILE)`（同檔系統的 atomic rename）。中斷（agent abort / 寫到一半失敗）只會留下半寫的 `.tmp`（下次覆寫），**絕不**讓 `${INDEX_FILE}` 本身變成半寫/損壞的 JSON。這是 #261 diagnosis「先解有 gate、durable fix 待補」的根治，針對的威脅是 **interrupted/partial write**；**嚴格 power-fail durability** 另需 `fsync(檔案)+fsync(目錄)`（本 SOP 威脅模型不含斷電，故不強制，但要斷電安全時可加）。Step 8.5 reconcile gate 擋的是 cross-file 孤兒（md 有、index 無 entry），原子寫入擋的是 single-file partial-write 損壞——兩者互補。Step 6 與 Step 8.5 的 index 寫入都走此路徑。
 
@@ -1591,39 +1591,163 @@ Thread 覆蓋: 3 threads, 3 complete ✓
 
 > **「無 manifest」的兩種情形要區分（不可一律靜默降級）**：(a) 本 run **全走 Step 5.1 fallback**（< 5 封 / enriched / 無 batch）→ 本就沒有 manifest，Phase 0 空跑、直接進 Phase 1，**正常**。(b) 本 run **確實跑過 Step 5.0 batch**、卻取不到 manifest → 這違反 Step 5.0「manifest 必須留存」的契約（#107），**必須在摘要標 ⚠「batch ran but manifest lost — reconcile degraded to Phase 1 heuristic」**，不得當成 (a) 靜默吞掉。兩者 index 完整性都由 Phase 1 兜底（batch md 會被當歷史孤兒補齊），差別只在 (b) 的 subject 退回 body-line heuristic 且揭露契約違反。
 
+
+**日期來源與寫入紀律（mail#364）**：Step 5.1 新歸檔及 Step 6 新 entry 都使用同一 `normalize_archive_timestamp` 保留已驗證的完整 ISO timestamp／原時區，不能把 `to_ymd()` 的 calendar 結果寫回 entry date；Step 6 範例亦使用帶 offset 的 timestamp。Phase 0 複製 frontmatter；Phase 1 也透過 `normalize_archive_timestamp`，避免先被寬鬆 parser 改寫年份；對無法轉為完整 ISO 的歷史 date 保留原值並揭露（包含日期-only 的情形），交本節 audit 做 calendar 判讀。已檢查 renderer 的 `rfc822ToISO8601`：完整 RFC822 會轉 ISO，無法解析則保留原值，可能傳遞既有日期-only；目前沒有找到將完整 RFC822 主動截短為該形狀的寫入碼，歷史產生點仍未證實。
+
 **Phase 1：full-scan fallback（歷史孤兒 + 非 manifest 來源）**
 
 1. 對每個 `${output_dir}/*.md`（**僅頂層 glob**，不深入子目錄、不追 Step 2.1 的 symlink 兄弟歸檔——那些只是 read-only 去重來源，絕不寫進本 index）：讀 frontmatter `message_id`。
    - message_id 已在 Phase 0 set 或 `${INDEX_FILE}` keys → `verified` +1（不重複補寫）。
    - **`message_id` 匹配 `^synthetic:`（mail#319）→ 記入獨立的 `synthetic_placeholder` 清單**（列檔名報告，不 `verified` 不 `repaired` 不補寫 index）——synthetic key 是過去 session 發明的佔位符，不是真 Message-ID；即使內容衍生格式在本 target 內穩定，也無法可靠對齊真 ID 且可能碰撞，不能當合法 key 收進 index。修復走 `/archive-mail-repair-synthetic-ids`。
    - 無 frontmatter / 無 `message_id` / `message_id_missing: true` → 記入 `unparseable` 清單（列檔名報告，不修改該檔）。
-   - **不在** → 孤兒：**就地補寫 index entry**（append-only），`repaired` +1。補寫的 entry **必須符合 Step 6 的 canonical schema** `{file, date, subject, thread_key}`：`file` = 掃描到的 md 檔名（basename，**必填**）；`date` / `thread_key` 取自 frontmatter——**`date` 若非 ISO 開頭**（如 RFC822 原樣，見 Step 5.1 enforcement）**先以 `email.utils.parsedate_to_datetime(raw).isoformat()` 正規化再寫入 entry**（parse 失敗比照揭露紀律列於摘要、寫原樣不阻斷；mail#275——孤兒補寫是歷史 RFC822 汙染收斂進 ISO 的機會點）；`subject` 從 md 本文的 `Subject:` 行抽取（抽不到 → 填空字串並在摘要揭露）——**此 heuristic 僅 Phase 1 用**（Phase 0 有 preview 的乾淨 subject）。**若 frontmatter 有 `message_id` 但缺 `date` 或 `thread_key`**（罕見——archive-mail 寫的 frontmatter 一律帶這兩欄；只可能是外部/損毀 md）：比照 subject-miss 的「揭露而非靜默」紀律（惟 date/thread_key **無** subject 那種 body-line fallback，缺就是缺），缺的欄位填空字串並在摘要揭露該檔欄位不全，**不得靜默寫 null**。frontmatter 的 `sender` / `direction` **不寫入** entry（非 email_index 欄位）。摘要須揭露 repaired 列為重建而來。
-2. Phase 0 + Phase 1 都補完後，`last_updated` 更新為 index 內所有 entry 的 **max(date)**（不是今天——反映語料實況）。**比較與寫入必須先做 robust 日期正規化（mail#275）——絕不可直接 `date[:10]` 字典序比較**：entry 的 date 實務上混雜三種格式——`2026-01-13 14:30`、ISO `T`、以及 **RFC822**（`Thu, 25 Jun 2026 09:30:45 +0800 (CST)`，見 Step 5.1 的正規化漏洞）。RFC822 開頭是星期縮寫，`[:10]` 切片後（`Thu, 25 Ju`）首字母字典序恆大於數字，任何一筆 RFC822 entry 都會贏過全部 ISO entry，`last_updated` 被寫成 `Wed, 01 Ju` 類無效值（mail#275 實證）。正規化參考實作（`^\d{4}-\d{2}-\d{2}` 快篩 ISO 取前 10 字；其餘走 `email.utils.parsedate_to_datetime`；parse 失敗回 None、**排除於 max 之外並在 reconcile 摘要揭露**，不靜默）：
+   - **不在** → 孤兒：**就地補寫 index entry**（append-only），`repaired` +1。補寫的 entry **必須符合 Step 6 的 canonical schema** `{file, date, subject, thread_key}`：`file` = 掃描到的 md 檔名（basename，**必填**）；`date` / `thread_key` 取自 frontmatter——**`date` 若非 ISO 開頭**（如 RFC822 原樣，見 Step 5.1 enforcement）**先以 `normalize_archive_timestamp(raw)`（Step 8.5 共用日期 recipe；回傳 None 時保留原始資訊並揭露，不能當成已取得完整 timestamp） 正規化再寫入 entry**（parse 失敗比照揭露紀律列於摘要、寫原樣不阻斷；mail#275——孤兒補寫是歷史 RFC822 汙染收斂進 ISO 的機會點）；`subject` 從 md 本文的 `Subject:` 行抽取（抽不到 → 填空字串並在摘要揭露）——**此 heuristic 僅 Phase 1 用**（Phase 0 有 preview 的乾淨 subject）。**若 frontmatter 有 `message_id` 但缺 `date` 或 `thread_key`**（罕見——archive-mail 寫的 frontmatter 一律帶這兩欄；只可能是外部/損毀 md）：比照 subject-miss 的「揭露而非靜默」紀律（惟 date/thread_key **無** subject 那種 body-line fallback，缺就是缺），缺的欄位填空字串並在摘要揭露該檔欄位不全，**不得靜默寫 null**。frontmatter 的 `sender` / `direction` **不寫入** entry（非 email_index 欄位）。摘要須揭露 repaired 列為重建而來。
+2. Phase 0 + Phase 1 都補完後，對 **index 全部 entry**（不只本輪新增或頂層 md）執行下列 canonical 日期 recipe。`last_updated` 是所有可還原 entry 的最新 **calendar day**，不是今天。支援合法 ISO 日期／日期時間、完整 RFC822（保留其原時區的日期），以及 `Tue, 30 Jun 2026` 這類日期-only RFC822；完整解析 ISO、RFC-style（日 月 年 時間 時區，允許年份尾逗號／連字號）、asctime（月 日 時間 年）與日期-only 形式；英文縮寫／完整月份、平衡註解可接受，其餘尾隨 token 與未知時區拒絕。明寫的三／四位數年份保留原值（零年拒絕）；舊式兩位數年份沿用既有 email parser 的規則（00–68 → 2000–2068、69–99 → 1969–1999）。非法日期、空值、非字串或未知格式保留為 `date_excluded`，不得靜默濾掉。
 
-   ```python
-   import re
-   from email.utils import parsedate_to_datetime
-   def to_ymd(s):
-       s = (s or "").strip()
-       if re.match(r'^\d{4}-\d{2}-\d{2}', s):
-           return s[:10]
-       try:
-           return parsedate_to_datetime(s).date().isoformat()
-       except Exception:
-           return None
-   mx = max((y for y in (to_ymd(v.get("date","")) for v in emails.values()) if y), default="")
-   ```
+<!-- archive-mail-date-recipe:start -->
+```python
+import re
+from datetime import date, datetime, timedelta, timezone
+
+_MONTHS = {}
+for number, name in enumerate(
+        "january february march april may june july august september october november december".split(), 1):
+    _MONTHS[name] = _MONTHS[name[:3]] = number
+_WEEKDAY = r"(?:Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)"
+_PREFIX = rf"(?:{_WEEKDAY},?\s*)?"
+_CLOCK = r"(?P<hour>[0-9]{1,2}):(?P<minute>[0-9]{2})(?::(?P<second>[0-9]{2}))?"
+_ZONE = r"(?:\s+(?P<zone>[+-][0-9]{4}|UT|UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT))?"
+_RFC_FULL = re.compile(
+    _PREFIX + r"(?P<day>[0-9]{1,2})[\s-]+(?P<month>[A-Za-z]+)[\s-]+(?P<year>[0-9]{2,4}),?\s+"
+    + _CLOCK + _ZONE, re.IGNORECASE)
+_ASCTIME = re.compile(
+    _PREFIX + r"(?P<month>[A-Za-z]+)\s+(?P<day>[0-9]{1,2})\s+" + _CLOCK
+    + r"\s+(?P<year>[0-9]{2,4})" + _ZONE, re.IGNORECASE)
+_RFC_DATE_ONLY = re.compile(
+    _PREFIX + r"(?P<day>[0-9]{1,2})\s+(?P<month>[A-Za-z]+)\s+(?P<year>[0-9]{4})",
+    re.IGNORECASE)
+_NAMED_ZONES = {"UT": 0, "UTC": 0, "GMT": 0, "EST": -5, "EDT": -4,
+                "CST": -6, "CDT": -5, "MST": -7, "MDT": -6, "PST": -8, "PDT": -7}
+
+
+def _without_date_comments(value):
+    output, depth, escaped = [], 0, False
+    for character in value:
+        if depth:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == "(":
+                depth += 1
+            elif character == ")":
+                depth -= 1
+        elif character == "(":
+            depth = 1
+            output.append(" ")
+        elif character == ")":
+            return None
+        else:
+            output.append(character)
+    return None if depth else " ".join("".join(output).split())
+
+
+def parse_archive_date(value):
+    """Parse explicit ISO, RFC-style or asctime forms without dropping tokens."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    if re.match(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:$|[Tt ])", value):
+        try:
+            return (date.fromisoformat(value) if len(value) == 10
+                    else datetime.fromisoformat(value.replace("Z", "+00:00")))
+        except ValueError:
+            return None
+    value = _without_date_comments(value)
+    if value is None:
+        return None
+    full = _RFC_FULL.fullmatch(value) or _ASCTIME.fullmatch(value)
+    match = full or _RFC_DATE_ONLY.fullmatch(value)
+    if match is None:
+        return None
+    fields = match.groupdict()
+    try:
+        year_text = fields["year"]
+        year = int(year_text)
+        # Preserve explicit 3/4-digit years; only legacy 2-digit years pivot.
+        if len(year_text) == 2:
+            year += 2000 if year <= 68 else 1900
+        month = _MONTHS[fields["month"].lower()]
+        day = int(fields["day"])
+        if full is None:
+            return date(year, month, day)
+        zone = fields.get("zone")
+        tz = None
+        if zone and zone != "-0000":  # RFC -0000 means unknown local offset.
+            if zone[0] in "+-":
+                hours, minutes = int(zone[1:3]), int(zone[3:5])
+                if hours > 23 or minutes > 59:
+                    return None
+                offset = (hours * 60 + minutes) * (-1 if zone[0] == "-" else 1)
+            else:
+                offset = _NAMED_ZONES[zone.upper()] * 60
+            tz = timezone(timedelta(minutes=offset))
+        return datetime(year, month, day, int(fields["hour"]), int(fields["minute"]),
+                        int(fields.get("second") or 0), tzinfo=tz)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def to_ymd(value):
+    parsed = parse_archive_date(value)
+    if parsed is None:
+        return None
+    return (parsed.date() if isinstance(parsed, datetime) else parsed).isoformat()
+
+
+def normalize_archive_timestamp(value):
+    parsed = parse_archive_date(value)
+    if not isinstance(parsed, datetime) or parsed.utcoffset() is None:
+        return None  # Calendar-only and unknown-zone values cannot become instants.
+    return parsed.isoformat()
+
+
+def reconcile_dates(emails):
+    """Inspect every index entry, including files moved outside the current glob."""
+    valid, excluded = [], []
+    for message_id, entry in emails.items():
+        if not isinstance(entry, dict):
+            excluded.append({"message_id": message_id, "file": None, "date": None,
+                             "reason": "entry-not-object"})
+            continue
+        raw = entry.get("date")
+        day = to_ymd(raw)
+        if day is None:
+            excluded.append({"message_id": message_id, "file": entry.get("file"),
+                             "date": raw, "reason": "missing-or-invalid-date"})
+        else:
+            valid.append(day)
+    return {"last_updated": max(valid, default=""), "valid_date_count": len(valid),
+            "date_excluded_count": len(excluded), "date_excluded": excluded}
+```
+<!-- archive-mail-date-recipe:end -->
+
+   `normalize_archive_timestamp` 只回傳具已知時區的完整 timestamp；無時間、無時區或 RFC `-0000` 都回 None，不補造 UTC。具名時區只接受明列的 RFC 傳統代碼；例如 CST 沿用 RFC 的 UTC−06:00 語意，不自行猜成其他地區時區。
+
+   Step 6 與本 gate 都使用 `date_audit = reconcile_dates(emails)`，以 `date_audit["last_updated"]` 寫入頂層 `last_updated`，並將整份 audit 留至摘要。`date_excluded_count > 0` 必須標 ⚠、列出每筆 message_id／file／原 date／reason；這些欄位是資料，以 JSON serializer 或文字輸出，不插入 shell。全無有效日期時 `last_updated` 寫空字串並明示 `no-valid-dates`（空 index 則說明 `empty-index`）；不可用今天、舊值或檔名前綴冒充 max，也不可據此推進 `last_archived`。
+
+   **Append-only 邊界（mail#364）**：recipe 只做日期判讀與 audit，不改既有 entry 或其 `file`，也不讀取／搬移該檔。即使檔名前綴可提供佐證，也不自動覆寫原 date。日期-only 的 `2026-06-30` 是 calendar watermark，不代表 `2026-06-30T00:00:00Z`；原信缺少時間／時區時不得猜補。若要清理歷史 entry，另做可預覽的修復流程。
 
    **寫回 `${INDEX_FILE}` 走 temp+rename 原子寫入**（見 Step 6 的原子寫入 note）——本 gate 一次補多筆，中斷不得留半寫 index。
 3. `${THREADS_FILE}` **不在本 gate 內逐孤兒補寫**（frontmatter 沒有 to/cc，無法重建 Step 5.7 要求的 `participants`；threads.json 的規則在 Step 5.7、不是 Step 6）。**Phase 0 新增任一 entry OR Phase 1 `repaired > 0`** 時，改跑 `/archive-mail-rebuild-threads` 從 md 全量重建 threads.json——Phase 0 的機械化補齊同樣是 index 新增，若只看 Phase 1 的 `repaired` 會漏掉「Phase 0 補了 entry 但 Step 5.7 那步被中斷」的 thread-view 過時（happy path 下 Step 5.7 已為 batch md 更新 threads.json，此僅防雙重中斷）。
 4. 輸出一行摘要並附在歸檔報告末尾（首跑常見 unparseable > 0——歷史檔常無 frontmatter，這是預期輸出、不是失敗）。摘要區分 Phase 0（manifest 機械化）與 Phase 1（磁碟重建）：
 
 ```
-Index Reconcile: Phase 0 manifest 12 written（乾淨補齊）; Phase 1 135 md 掃描 — 61 verified（含 Phase 0 補的 12）, 66 repaired（heuristic subject）, 8 unparseable ⚠（列出 8 檔）, 3 synthetic_placeholder ⚠（mail#319，列出檔名；跑 /archive-mail-repair-synthetic-ids）
+Index Reconcile: Phase 0 manifest 12 written（乾淨補齊）; Phase 1 135 md 掃描 — 61 verified（含 Phase 0 補的 12）, 66 repaired（heuristic subject）, 8 unparseable ⚠（列出 8 檔）, 3 synthetic_placeholder ⚠（mail#319，列出檔名；跑 /archive-mail-repair-synthetic-ids）; date audit: 142 index entries — 140 valid dates, 2 date_excluded ⚠（列 message_id/file/raw date/reason）, last_updated=2026-08-05
 ```
 
 5. `unparseable > 0` → 摘要標 ⚠ 並列出檔名，**不得靜默**；由 user 決定補 frontmatter 或排除。**這不使 run 失敗**——會失敗的是跳過本 gate 或靜默吞掉清單。
-6. 全部完成後才 `TaskUpdate reconcile_index → completed`。**跳過本步 = run 失敗**。
+6. 日期 audit 獨立於 Phase 1 的 md 計數：即使所有 md 都 `verified` 且 `last_updated` 等於可解析 max，也必須顯示 `date_excluded_count`（0 也要顯示）。非零時可完成 gate 並保留警告，但不得宣稱「全綠／日期全部有效」；省略 audit 或吞掉失敗 entry 才是 gate 失敗。報告的有效日期數＋排除數必須等於本 index 的 entry 總數。
+7. 全部完成後才 `TaskUpdate reconcile_index → completed`。**跳過本步 = run 失敗**。
 
 ## 注意事項
 
