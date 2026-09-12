@@ -615,6 +615,26 @@ shared helpers under a different name or in a subdirectory. Plugin tests use
 isolated fixtures and mock processes/downloads.
 This Makefile wiring does not itself add a GitHub Actions workflow.
 
+### Per-message draft status
+
+`search_emails` (`full` and `summary`), `list_emails`, `get_email_metadata`, and
+export manifest items include `is_draft`: `true` for observed integer message
+type 5, `false` for type 0, and `null` when the column/value/backend cannot
+establish either state. Draft copies in All Mail remain drafts; a folder named
+Drafts is not evidence. Unknown is **not** false. Summary now has six fields;
+`ids` and `count` projections keep their existing shapes. AppleScript fallback
+reports null without additional per-message header calls.
+
+For correspondence exports, explicitly set `opts.skip_drafts: true`. Known drafts
+are `skipped` with `skip_reason: "draft"`; unknown state produces a per-item
+`draft_status_unknown` error. Both stop before body/attachment fetch. These items
+can omit `message_id` because their content was not fetched. The default remains
+false for compatibility and can still export drafts, with the observed flag in
+the manifest. The field is a read-time observation, not a durable message identity
+or a guarantee against subsequent Mail changes. Consumer adoption (including the
+archive-mail default-exclusion workflow tracked by plugins#127) remains explicit.
+
+
 ## Technical Details
 
 - **Framework**: [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) v0.10.0
