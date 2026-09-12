@@ -84,6 +84,65 @@ final class ComposeRefusalTests: XCTestCase {
                       "renaming to ASCII changes what the recipient sees — must be ruled out: \(msg)")
     }
 
+    // #220 reopened: exercise actual paths through the production derivation
+    // and dispatcher together, without substituting a preselected refusal.
+    func testNonASCIIPaths_refuseDraftAndSendBeforeDispatch() throws {
+        let pathSets = [
+            ["/tmp/「議程」.pdf"],
+            ["/tmp/中文目錄/report.pdf"],
+            ["/tmp/résumé.pdf"],
+            ["/tmp/cafe\u{301}.pdf"],
+            ["/tmp/📎.pdf"],
+            ["/tmp/first.pdf", "/tmp/附件.pdf"],
+            ["/tmp/附件.pdf", "/tmp/last.pdf"],
+        ]
+        for draft in [true, false] {
+            for paths in pathSets {
+                let reason = composeCallRefusal(
+                    format: .plain, accessibilityTrusted: true,
+                    fromAddress: nil, subject: "Attachment regression",
+                    attachments: paths, to: ["recipient@example.test"],
+                    cc: [], bcc: [], draftMode: draft)
+                XCTAssertEqual(reason, .nonASCIIAttachmentPath,
+                               "draft=\(draft), paths=\(paths)")
+                var dispatched = false
+                XCTAssertThrowsError(try dispatchComposePath(
+                    refusal: reason,
+                    cleanPath: { dispatched = true; return "unexpected" })) { error in
+                    guard case MailError.invalidParameter(let message) = error else {
+                        return XCTFail("expected named parameter refusal: \(error)")
+                    }
+                    XCTAssertTrue(message.contains("non-ASCII"), message)
+                    XCTAssertTrue(message.contains("WITHOUT the attachments"), message)
+                    XCTAssertTrue(message.contains("drag"), message)
+                }
+                XCTAssertFalse(dispatched, "rejected attachments must never reach composition")
+            }
+        }
+    }
+
+    func testSafeAttachmentPaths_preserveDraftAndSendDispatch() throws {
+        let pathSets: [[String]?] = [nil, [], ["/tmp/report.pdf"],
+                                    ["/tmp/first report.pdf", "/tmp/second.pdf"]]
+        for draft in [true, false] {
+            for paths in pathSets {
+                let reason = composeCallRefusal(
+                    format: .plain, accessibilityTrusted: true,
+                    fromAddress: nil, subject: "Attachment regression",
+                    attachments: paths, to: ["recipient@example.test"],
+                    cc: [], bcc: [], draftMode: draft)
+                XCTAssertNil(reason)
+                var dispatchCount = 0
+                let result = try dispatchComposePath(refusal: reason, cleanPath: {
+                    dispatchCount += 1
+                    return "clean result"
+                })
+                XCTAssertEqual(result, "clean result")
+                XCTAssertEqual(dispatchCount, 1)
+            }
+        }
+    }
+
     // MARK: selection order
 
     func testRefusalOrder_followsTheEnumeration() {
