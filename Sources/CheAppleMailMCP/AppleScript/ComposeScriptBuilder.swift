@@ -278,7 +278,8 @@ func buildMailtoComposeScript(
 
     """
 
-    // #413: ownership refusals MUST remain before the outer cleanup try.
+    // #413: ownership refusals MUST remain before the outer cleanup try,
+    // and must not be swallowed by another try.
     // The later System Events discard click only has a title, not a Mail id;
     // entering cleanup before ownership is established could discard a user's
     // pre-existing same-title compose window. Structural tests pin this boundary.

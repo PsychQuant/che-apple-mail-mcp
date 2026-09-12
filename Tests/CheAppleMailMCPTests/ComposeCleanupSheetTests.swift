@@ -33,11 +33,13 @@ final class ComposeCleanupSheetTests: XCTestCase {
         return String(chars[..<end]).trimmingCharacters(in: .whitespaces)
     }
 
-    private func cleanupBoundary(_ script: String) throws -> (start: Int, guards: [Int], lines: [String]) {
+    private func cleanupBoundary(_ script: String) throws -> (start: Int, guards: [Int], lines: [String], refusalDepths: [Int]) {
         let lines = script.components(separatedBy: "\n").map(codeLine)
         var stack: [Int] = []
         var handlers: [Int] = []
+        var depths: [Int] = []
         for (i, line) in lines.enumerated() {
+            depths.append(stack.count)
             if line == "try" { stack.append(i) }
             else if line == "end try" {
                 guard !stack.isEmpty else { throw BoundaryViolation.malformed("unmatched end try") }
@@ -60,12 +62,13 @@ final class ComposeCleanupSheetTests: XCTestCase {
         }
         let captured = lines.indices.filter { lines[$0] == "set _ourId to (id of _cw)" }
         guard captured.count == 1 else { throw BoundaryViolation.malformed("missing or duplicate owned-id capture") }
-        return (handlers[0], guards + captured, lines)
+        return (handlers[0], guards + captured, lines, guards.map { depths[$0] })
     }
 
     private func verifyCleanupBoundary(_ script: String) throws {
         let boundary = try cleanupBoundary(script)
-        guard boundary.guards.allSatisfy({ $0 < boundary.start }) else { throw BoundaryViolation.unsafe }
+        guard boundary.guards.allSatisfy({ $0 < boundary.start }),
+              boundary.refusalDepths.allSatisfy({ $0 == 0 }) else { throw BoundaryViolation.unsafe }
     }
 
     func testCleanupTryBeginsAfterOwnershipForAllGeneratedVariants() throws {
@@ -78,13 +81,13 @@ final class ComposeCleanupSheetTests: XCTestCase {
                     // The comment-shaped subject must not confuse codeLine.
                     let script = buildMailtoComposeScript(url: "mailto:a@example.test?subject=S",
                         subject: "S -- \"quoted\"", attachments: [], send: send, fromAddress: sender, fill: fill)
-                    XCTAssertNoThrow(try verifyCleanupBoundary(script))
+                    XCTAssertNoThrow(try verifyCleanupBoundary(script), "send=\(send) fill=\(fill) sender=\(String(describing: sender))")
                 }
             }
         }
     }
 
-    func testBoundaryCheckRejectsEarlyTryAndGuardsMovedInside() throws {
+    func testBoundaryCheckRejectsEarlyTryMovedOrSwallowedGuards() throws {
         for send in [false, true] {
             let script = buildMailtoComposeScript(url: "mailto:a@example.test?subject=S", subject: "S",
                                                  attachments: [], send: send)
@@ -104,6 +107,12 @@ final class ComposeCleanupSheetTests: XCTestCase {
                 // at the original try index places the guard just inside it.
                 movedGuard.insert(line, at: boundary.start)
                 mutants.append(movedGuard.joined(separator: "\n"))
+                // A separate try could swallow the refusal while leaving it
+                // textually before the cleanup try; that is unsafe too.
+                var swallowed = original
+                swallowed.insert("end try", at: guardIndex + 1)
+                swallowed.insert("try", at: guardIndex)
+                mutants.append(swallowed.joined(separator: "\n"))
             }
             for mutant in mutants {
                 XCTAssertThrowsError(try verifyCleanupBoundary(mutant)) { error in
