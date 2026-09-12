@@ -84,7 +84,7 @@ final class ComposeRefusalTests: XCTestCase {
                       "renaming to ASCII changes what the recipient sees — must be ruled out: \(msg)")
     }
 
-    // #220 reopened: exercise actual paths through the production derivation
+    // #220 reopened: exercise Unicode path strings through the production derivation
     // and dispatcher together, without substituting a preselected refusal.
     func testNonASCIIPaths_refuseDraftAndSendBeforeDispatch() throws {
         let pathSets = [
