@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "che-apple-mail-mcp",
-  "description": "Apple Mail MCP server — self-hosted marketplace co-located with the binary source (#335).",
+  "description": "Self-hosted marketplace for Apple Mail tools and Markdown archiving on macOS.",
   "owner": {
     "name": "Che Cheng"
   },
@@ -9,8 +9,8 @@
   "plugins": [
     {
       "name": "che-apple-mail-mcp",
-      "version": "2.46.1",
-      "description": "Apple Mail MCP server plugin — archive-mail SOP commands, compose/confirmation rules, and the signed-binary wrapper. Current versions live in plugin/.claude-plugin/plugin.json; the release narrative lives in plugin/CHANGELOG.md (#396). This entry deliberately carries no binary_version (#335), and its version is pinned equal to plugin.json by ManifestVersionTests.",
+      "version": "2.48.0",
+      "description": "Apple Mail tools and Markdown archiving workflows for macOS. Current versions: plugin/.claude-plugin/plugin.json. Release notes: plugin/CHANGELOG.md (plugin) and CHANGELOG.md (server).",
       "author": {
         "name": "Che Cheng"
       },

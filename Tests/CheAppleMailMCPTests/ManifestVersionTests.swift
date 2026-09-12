@@ -51,7 +51,12 @@ final class ManifestVersionTests: XCTestCase {
         let mktData = try Data(contentsOf: root.appendingPathComponent(".claude-plugin/marketplace.json"))
         let mkt = try XCTUnwrap(try JSONSerialization.jsonObject(with: mktData) as? [String: Any])
         let plugins = try XCTUnwrap(mkt["plugins"] as? [[String: Any]])
-        let entry = try XCTUnwrap(plugins.first, "marketplace.json must list the plugin entry")
+        let pjDataForName = try Data(contentsOf: root.appendingPathComponent("plugin/.claude-plugin/plugin.json"))
+        let pjForName = try XCTUnwrap(try JSONSerialization.jsonObject(with: pjDataForName) as? [String: Any])
+        let name = try XCTUnwrap(pjForName["name"] as? String)
+        let matches = plugins.filter { ($0["name"] as? String) == name }
+        XCTAssertEqual(matches.count, 1, "marketplace must contain exactly one entry for \(name)")
+        let entry = try XCTUnwrap(matches.first, "marketplace.json must list the named plugin entry")
         let entryVersion = try XCTUnwrap(entry["version"] as? String)
 
         let pjData = try Data(contentsOf: root.appendingPathComponent("plugin/.claude-plugin/plugin.json"))
@@ -82,15 +87,15 @@ final class ManifestVersionTests: XCTestCase {
             inspected += 1
             XCTAssertFalse(desc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                 "\(label): description is empty")
-            XCTAssertLessThan(desc.count, 1000,
-                "\(label): description is \(desc.count) chars — narrative belongs in plugin/CHANGELOG.md (#396)")
+            XCTAssertLessThan(desc.utf8.count, 1000,
+                "\(label): description is \(desc.utf8.count) UTF-8 bytes — narrative belongs in plugin/CHANGELOG.md (#396)")
             // Token-bounded so an IP address is not mistaken for a version.
             // The lookahead is (?!\.?[0-9A-Za-z]), NOT (?![0-9A-Za-z.]): the
             // latter let a version at the end of a sentence ("ships v2.28.0.")
             // escape the ban, because the trailing period satisfied it. Found
             // by mutation-testing this guard.
             XCTAssertNil(desc.range(of: #"(?<![0-9A-Za-z.])v?[0-9]+\.[0-9]+\.[0-9]+(?!\.?[0-9A-Za-z])"#,
-                                    options: .regularExpression),
+                                    options: [.regularExpression, .caseInsensitive]),
                 "\(label): description contains a semver-shaped token — any version claim here "
                 + "starts lying the release after it was written (#396)")
         }
@@ -109,7 +114,9 @@ final class ManifestVersionTests: XCTestCase {
         // moves to whichever entry happens to be first (#396 verify).
         let pluginName = try XCTUnwrap(pj["name"] as? String)
         let plugins = try XCTUnwrap(mkt["plugins"] as? [[String: Any]])
-        let entry = try XCTUnwrap(plugins.first { ($0["name"] as? String) == pluginName },
+        let matching = plugins.filter { ($0["name"] as? String) == pluginName }
+        XCTAssertEqual(matching.count, 1, "marketplace must have exactly one named plugin entry")
+        let entry = try XCTUnwrap(matching.first,
             "marketplace.json lists no entry named '\(pluginName)'")
         check(try XCTUnwrap(entry["description"] as? String, "marketplace entry must declare a description"),
               at: "marketplace.json (entry)")
@@ -141,96 +148,60 @@ final class ManifestVersionTests: XCTestCase {
             + "version ('\(shellVersion)') — the single narrative source needs an owner (#396); "
             + "write the release entry alongside the version bump.")
 
-        // Owning the header string alone is not owning the narrative: an empty
-        // `## [x.y.z]` section satisfies the equality above while saying
-        // nothing (#396 verify). Require prose under the newest header.
-        let changelog = try String(
-            contentsOf: repoRoot().appendingPathComponent("plugin/CHANGELOG.md"), encoding: .utf8)
-        let lines = changelog.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard let headerIndex = lines.firstIndex(where: { $0.hasPrefix("## [\(probe.out)]") }) else {
-            XCTFail("could not locate the '## [\(probe.out)]' section body")
-            return
+        let notes = try ChangelogParserTests.run(
+            ["notes", probe.out], changelog: repoRoot().appendingPathComponent("plugin/CHANGELOG.md").path)
+        XCTAssertEqual(notes.status, 0)
+        let visible = notes.out.replacingOccurrences(of: #"(?s)<!--.*?-->"#, with: "", options: .regularExpression)
+        let substantive = visible.split(separator: "\n").filter {
+            let line = $0.trimmingCharacters(in: .whitespaces)
+            return !line.isEmpty && !line.hasPrefix("#") && !line.hasPrefix("```") && !line.hasPrefix("~~~")
         }
-        var body: [String] = []
-        for line in lines[(headerIndex + 1)...] {
-            if line.hasPrefix("## ") { break }
-            body.append(line)
-        }
-        let substantive = body.filter {
-            let s = $0.trimmingCharacters(in: .whitespaces)
-            return !s.isEmpty && !s.hasPrefix("###")
-        }
-        XCTAssertFalse(substantive.isEmpty,
-            "plugin/CHANGELOG.md's newest section '[\(probe.out)]' has a header and no content — "
-            + "the guard owns the version string, but the point is owning the narrative (#396).")
+        XCTAssertFalse(substantive.isEmpty, "Newest shell release must contain an actual change note")
     }
 
     func testPluginChangelogIsOrderedAndComplete() throws {
-        // #396 verify round 3. The round-2 backfill shipped three defects that
-        // NOTHING in this suite could see, because every guard here checked the
-        // newest entry only:
-        //   1. `[2.19.7]` was inserted ABOVE `[2.20.0]` — the version ordering
-        //      silently broke;
-        //   2. nine dates were an invented one-per-day descending sequence
-        //      rather than looked-up values (2.29.0–2.33.0 all shipped on the
-        //      SAME day, ~8 hours apart);
-        //   3. `2.11.0` / `2.8.0` / `2.7.0` / `2.5.1` had no entry AND sat
-        //      outside both declared gaps, while the file carried a sentence
-        //      certifying that no such version existed.
-        //
-        // Dates cannot be re-derived offline — they live in another repo's
-        // commit history. What CAN be enforced locally is the structure that
-        // makes a fabricated or misfiled entry visible: strictly descending
-        // versions, non-increasing dates, and no skipped minor. All three were
-        // violated by the round-2 file and all three are cheap to check.
-        let text = try String(
-            contentsOf: repoRoot().appendingPathComponent("plugin/CHANGELOG.md"), encoding: .utf8)
-
-        let re = try NSRegularExpression(
-            pattern: #"^## \[(\d+)\.(\d+)\.(\d+)\] - (\d{4}-\d{2}-\d{2})$"#,
-            options: [.anchorsMatchLines])
-        var entries: [(v: [Int], date: String, raw: String)] = []
-        let range = NSRange(text.startIndex..., in: text)
-        re.enumerateMatches(in: text, range: range) { match, _, _ in
-            guard let match,
-                  let r1 = Range(match.range(at: 1), in: text),
-                  let r2 = Range(match.range(at: 2), in: text),
-                  let r3 = Range(match.range(at: 3), in: text),
-                  let r4 = Range(match.range(at: 4), in: text) else { return }
-            let v = [Int(text[r1])!, Int(text[r2])!, Int(text[r3])!]
-            entries.append((v, String(text[r4]), "\(v[0]).\(v[1]).\(v[2])"))
+        let probe = try ChangelogParserTests.run(
+            ["entries"], changelog: repoRoot().appendingPathComponent("plugin/CHANGELOG.md").path)
+        XCTAssertEqual(probe.status, 0)
+        let rows = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(probe.out.utf8)) as? [[String: Any]])
+        guard !rows.isEmpty else { XCTFail("Shell changelog has no release entries"); return }
+        var entries: [(version: String, parts: [Int], date: String)] = []
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.isLenient = false
+        for row in rows {
+            let version = try XCTUnwrap(row["version"] as? String)
+            let header = try XCTUnwrap(row["header"] as? String)
+            let parts = version.split(separator: ".").compactMap { Int($0) }
+            guard parts.count == 3 else { XCTFail("Version components overflow: \(version)"); continue }
+            let prefix = "## [\(version)] - "
+            guard header.hasPrefix(prefix) else { XCTFail("Missing canonical date in \(header)"); continue }
+            let date = String(header.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+            guard let parsed = formatter.date(from: date), formatter.string(from: parsed) == date else {
+                XCTFail("Invalid release date: \(date)"); continue
+            }
+            entries.append((version, parts, date))
         }
-        XCTAssertGreaterThan(entries.count, 40,
-            "expected the full release history in plugin/CHANGELOG.md, found \(entries.count) entries")
-
-        // 1. strictly descending versions
-        for i in 0..<(entries.count - 1) {
-            let a = entries[i], b = entries[i + 1]
-            XCTAssertTrue(a.v.lexicographicallyPrecedes(b.v) == false && a.v != b.v,
-                "plugin/CHANGELOG.md: [\(a.raw)] appears before [\(b.raw)] — release headers "
-                + "must strictly descend. An entry inserted at the wrong place reads as a "
-                + "different release history than the one that happened (#396 round 3).")
+        for (a, b) in zip(entries, entries.dropFirst()) {
+            XCTAssertTrue(b.parts.lexicographicallyPrecedes(a.parts),
+                          "Shell release versions must descend without duplicates: \(a.version), \(b.version)")
         }
-
-        // 2. non-increasing dates (an older release cannot post-date a newer one)
-        for i in 0..<(entries.count - 1) {
-            let a = entries[i], b = entries[i + 1]
-            XCTAssertTrue(a.date >= b.date,
-                "plugin/CHANGELOG.md: [\(a.raw)] is dated \(a.date) but the older [\(b.raw)] "
-                + "is dated \(b.date) — dates must not increase going down the file.")
-        }
-
-        // 3. no skipped minor between the oldest and newest entry. The file
-        //    claims completeness from its floor upward, so a hole is either a
-        //    missing entry or an unpublished version that must be named here.
-        let knownAbsentMinors: Set<Int> = []   // none as of 2.46.1; add with a reason
-        let minors = Set(entries.map { $0.v[1] })
-        let lo = entries.map { $0.v[1] }.min()!, hi = entries.map { $0.v[1] }.max()!
-        for minor in lo...hi where !minors.contains(minor) && !knownAbsentMinors.contains(minor) {
-            XCTFail("plugin/CHANGELOG.md skips 2.\(minor).x with no entry and no declared "
-                + "absence — either backfill it (version/date/binary pin are recoverable from "
-                + "the aggregator's plugin.json history) or add it to knownAbsentMinors with a "
-                + "reason (#396 round 3).")
+        // Frozen audit data covers every observed manifest version in the
+        // stated historical interval. Do not assume that every possible minor
+        // was published, or that a future backport must have an older date.
+        let data = try Data(contentsOf: repoRoot().appendingPathComponent("Tests/Fixtures/plugin-release-history.json"))
+        let fixture = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let expected = try XCTUnwrap(fixture["records"] as? [[String: Any]])
+        XCTAssertFalse(expected.isEmpty)
+        for record in expected {
+            let version = try XCTUnwrap(record["version"] as? String)
+            let date = try XCTUnwrap(record["date"] as? String)
+            let matches = entries.filter { $0.version == version }
+            XCTAssertEqual(matches.count, 1, "Historical release \(version) missing or duplicated")
+            XCTAssertEqual(matches.first?.date, date, "Historical date drift for \(version); recheck its source commit")
         }
     }
 
@@ -248,24 +219,16 @@ final class ManifestVersionTests: XCTestCase {
         // mislabelled. The failure was silent.
         //
         // A pin can never legitimately name a binary that was never released,
-        // so pin it to the ROOT changelog — the binary's own single source.
+        // so check its documented release in the ROOT changelog using the shared parser.
+        // A changelog entry alone does not prove that a GitHub asset was published.
         let pjData = try Data(contentsOf: repoRoot().appendingPathComponent("plugin/.claude-plugin/plugin.json"))
         let pj = try XCTUnwrap(try JSONSerialization.jsonObject(with: pjData) as? [String: Any])
         let binaryPin = try XCTUnwrap(pj["binary_version"] as? String,
             "plugin.json must declare binary_version — the wrapper downloads whatever it names")
 
-        let rootChangelog = try String(
-            contentsOf: repoRoot().appendingPathComponent("CHANGELOG.md"), encoding: .utf8)
-        let released = rootChangelog
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .compactMap { line -> String? in
-                guard line.hasPrefix("## ["), let close = line.firstIndex(of: "]") else { return nil }
-                let v = String(line[line.index(line.startIndex, offsetBy: 4)..<close])
-                return v == "Unreleased" ? nil : v
-            }
-        XCTAssertTrue(released.contains(binaryPin),
-            "plugin.json pins binary_version '\(binaryPin)', which has no released section in the "
-            + "root CHANGELOG.md — the wrapper would download a tag that was never shipped, or the "
-            + "pin is a typo. Released binary versions: \(released.prefix(5).joined(separator: ", "))…")
+        let result = try ChangelogParserTests.run(["has", binaryPin])
+        XCTAssertEqual(result.status, 0,
+            "binary_version \(binaryPin) must have a real, unfenced root changelog section. "
+            + "This is a documentation check; release availability is verified separately.")
     }
 }

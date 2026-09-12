@@ -283,7 +283,7 @@ v2.8.0+ 的 `archive-mail` / `view` / `rebuild-threads` **每次跑都會 silent
 | plugin.json `version` / `binary_version` | 機器可讀的現行版本（唯一 authoritative；ManifestVersionTests 鎖 marketplace entry 等式）|
 | `plugin/CHANGELOG.md` | **shell 敘事單源**（Keep a Changelog）；**最新 released header 必須等於 plugin.json `version`**（guard 鎖定 —— 這給了單源一個 owner）|
 | repo 根 `CHANGELOG.md` | binary/server 敘事單源 |
-| plugin.json `description` | 短敘述（guard 鎖 <1000 字元、必須存在、且不得含任何 semver 樣式 token）|
+| plugin.json `description` | 短敘述（guard 鎖 <1000 UTF-8 bytes、必須存在、且不得含任何 semver 樣式 token）|
 | marketplace.json 頂層與 entry 的 `description` | 同上 guard；entry 版本另有等式鎖 |
 | `plugin/README.md` | 用法文件；版本沿革一律指向 plugin/CHANGELOG.md |
 | **本檔（`plugin/CLAUDE.md`）** | 架構與 convention；**不得攜帶版本沿革**（#396 verify：漏列自己，於是自己成了第五個敘事表面）|
@@ -292,22 +292,6 @@ Release 時的 bump 清單見 repo 根 `CLAUDE.md`「Publishing a new release」
 在 `plugin/CHANGELOG.md` 寫該版條目並讓 newest header 對齊新 `version`（不寫 guard 會紅）。此 convention 的
 成因：description-as-changelog 是 aggregator 時代（marketplace 列表只顯示 description）的
 產物，自營 marketplace 後只剩漂移成本 —— 四個表面曾同時各說各話（#396 diagnosis 有對照表）。
-
-## Version History
-
-**已移除（#396 verify）。** 這裡曾保留一份「凍結」的里程碑清單，但凍結只擋得住新增，擋不住
-既有條目日後被修正而與單源分岔——而 CLAUDE.md 會直接成為後續 agent 的工作 context，分岔時
-影響的是 release 操作本身。沿革一律見 `plugin/CHANGELOG.md`，該檔是 shell 敘事的**唯一**
-source，且自 `[2.3.0]` 起逐版完整（`ManifestVersionTests` 鎖住排序、日期單調與不得跳號）。
-
-> **這段話的前一版是錯的，值得留著當紀錄。** 它原本寫「清單中的每一條（v2.9.0 / v2.8.0 /
-> v2.7.0 / …）都已存在於 `plugin/CHANGELOG.md`」——而 `v2.8.0` 與 `v2.7.0` 當時**並不在**
-> 該檔裡。那句話是刪除這份清單的**授權依據**，前提為假，刪除就等於淨資訊損失：兩個里程碑的
-> 敘事在同一個 commit 裡失去了最後的載體。#396 verify round 3 抓到後已回填。
->
-> 這與 round 2 抓到的「本檔宣稱 root 發版清單多了一步，但那一步當時並不存在」是**同一個
-> 形狀**：拿一個尚未成立的前提去授權一個當下就做掉的動作。同型缺陷在同一個檔案連續出現
-> 兩輪，所以留下這段而不是靜靜改掉。
 
 ## MCP Tool 命名 prefix
 

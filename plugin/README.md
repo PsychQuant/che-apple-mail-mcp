@@ -115,6 +115,16 @@ archive-mail v2.17.0+ 會:
 
 把散在各個 archive directory 的 `.email_index.json`、`.threads.json` 以及 `.claude/emails.md` 集中搬到 `.claude/.mail/` namespace（學 IDD 的 `.claude/.idd/` pattern）。`/archive-mail`、`view`、`rebuild-threads` 也會 silent auto-migrate；這個 command 是想一次 batch migrate 所有 archive targets 時用。
 
+### `/archive-mail-repair-synthetic-ids` — 修復 synthetic message_id 佔位符（一次性）
+
+```bash
+/archive-mail-repair-synthetic-ids communications/emails
+```
+
+掃歸檔目錄中 `message_id` 匹配 `^synthetic:` 的 md，從 Mail 重新解析**真實** RFC 5322 Message-ID 並就地修復 frontmatter 與 `email_index.json`。**保守優先：寧可留 unparseable 交人工，絕不錯誤合併兩封不同的信。**
+
+背景（[#319](https://github.com/PsychQuant/che-apple-mail-mcp/issues/319)）：過去某些 session 在拿不到真 Message-ID 時即興發明 `synthetic:<ISO-timestamp>` 佔位符，而該 timestamp 是**執行當下**時間——同一封信每次重跑得到不同 key，dedup 結構性失效。實測單一 target 84/273 檔帶 synthetic key、單輪 12 封靜默重複，而**所有既有 gate 全綠**。SOP 現已明文禁止此佔位符。
+
 ## Skills (v2.7.0+)
 
 3 個 skills 由 `/archive-mail` 內部觸發，也可被其他工作流引用：
@@ -146,7 +156,7 @@ archive-mail v2.17.0+ 會:
 
 ```bash
 # Download latest release
-curl -L https://github.com/kiki830621/che-apple-mail-mcp/releases/latest/download/CheAppleMailMCP -o ~/bin/CheAppleMailMCP
+curl -L https://github.com/PsychQuant/che-apple-mail-mcp/releases/latest/download/CheAppleMailMCP -o ~/bin/CheAppleMailMCP
 chmod +x ~/bin/CheAppleMailMCP
 ```
 
@@ -186,11 +196,9 @@ search_emails(account="your@email.com", mailbox="收件匣", query="keyword")
 
 ## Source Code
 
-https://github.com/kiki830621/che-apple-mail-mcp
+https://github.com/PsychQuant/che-apple-mail-mcp
 
 ## Version History
 
-版本沿革見 [CHANGELOG.md](CHANGELOG.md) —— #396 起為 shell 敘事的唯一 source（binary/server
-沿革見 repo 根目錄的 `CHANGELOG.md`）。本節先前的逐版敘事已隨 #396 移除：它與 plugin.json
-`description`、CHANGELOG 三處並行維護、必然漂移 —— 實證是移除當下本節同時掛著 v2.44.2 與
-v2.19.6 兩個時代的斷裂敘事，而 `description` 開頭還停在 v2.43.0。
+目前 shell 版本與 binary pin 見 [plugin.json](.claude-plugin/plugin.json)。
+Shell 沿革見 [CHANGELOG.md](CHANGELOG.md)，binary/server 沿革見 [根目錄 CHANGELOG.md](../CHANGELOG.md)。

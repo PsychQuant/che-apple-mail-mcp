@@ -37,8 +37,8 @@ let listDraftsNoMatchErrorNumber = 9174
 ///     account description, e.g. "Google") in the fallback path. Note this is
 ///     NOT necessarily the email address (#173/#176 namespace caveat).
 /// - Returns: A complete AppleScript program (string), ready for
-///   `MailController.runScriptAsList(...)`. Returns the matched mailbox's
-///   message subjects; raises error number 9174 when no child matches.
+///   `MailController.runDraftScanScript(...)`. Returns paired id/subject
+///   groups; raises error number 9174 when no child matches.
 func buildListDraftsScript(accountId: String?, accountName: String) -> String {
     let condition: String
     if let aid = accountId, !aid.isEmpty {

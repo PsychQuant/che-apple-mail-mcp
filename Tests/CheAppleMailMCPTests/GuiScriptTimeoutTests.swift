@@ -49,8 +49,9 @@ final class GuiScriptTimeoutTests: XCTestCase {
         do {
             _ = try await MailController.shared.runScript("hang", timeout: 0.2)
             XCTFail("a hanging runner must time out")
-        } catch let MailError.scriptTimedOut(seconds, _) {
+        } catch let MailError.scriptTimedOut(seconds, _, execution) {
             XCTAssertEqual(seconds, 0, "Int(0.2) — the per-call deadline was used")
+            XCTAssertEqual(execution, .inProcess)
         } catch {
             XCTFail("expected scriptTimedOut, got \(error)")
         }
@@ -159,8 +160,9 @@ final class GuiScriptTimeoutTests: XCTestCase {
         do {
             _ = try await MailController.shared.runGuiScript("delay 300", timeout: 1)
             XCTFail("a hanging script must time out")
-        } catch let MailError.scriptTimedOut(seconds, _) {
+        } catch let MailError.scriptTimedOut(seconds, _, execution) {
             XCTAssertEqual(seconds, 1)
+            XCTAssertEqual(execution, .subprocess(exitConfirmed: true))
         } catch {
             XCTFail("expected scriptTimedOut, got \(error)")
         }
@@ -232,6 +234,44 @@ final class GuiScriptTimeoutTests: XCTestCase {
         XCTAssertTrue(msg.contains("Automation permission is pending"),
                       "not-granted keeps the TCC-pending diagnosis; got: \(msg)")
         XCTAssertTrue(msg.contains("45"), "must state the deadline that fired")
+    }
+
+    func testSubprocessTimeoutMessage_reportsExitAndPreservesEventUncertainty() throws {
+        for granted in [true, false] {
+            for exited in [true, false] {
+                let error = MailError.scriptTimedOut(
+                    seconds: 90, automationGranted: granted,
+                    execution: .subprocess(exitConfirmed: exited))
+                let message = try XCTUnwrap(error.errorDescription)
+                XCTAssertTrue(message.contains("90"))
+                XCTAssertTrue(message.contains("termination was requested"), message)
+                XCTAssertTrue(message.contains(exited ? "exit was confirmed" : "exit was not confirmed"), message)
+                XCTAssertFalse(message.contains("abandoned"), message)
+                XCTAssertFalse(message.contains("cannot be cancelled"), message)
+                XCTAssertTrue(message.contains("does not undo Apple Events"), message)
+                XCTAssertTrue(message.contains("may already"), message)
+                XCTAssertEqual(message.contains("permission was verified GRANTED"), granted, message)
+                if !granted { XCTAssertTrue(message.contains("Automation permission was not verified"), message) }
+            }
+        }
+    }
+
+    func testAllTimeoutExecutionsRemainUnknownSendStateWithoutRetry() throws {
+        let contexts: [ScriptTimeoutExecution] = [
+            .inProcess, .subprocess(exitConfirmed: true), .subprocess(exitConfirmed: false),
+        ]
+        for context in contexts {
+            let error = MailError.scriptTimedOut(seconds: 90, automationGranted: true, execution: context)
+            XCTAssertTrue(isTimeoutError(error))
+            guard case MailError.scriptFailed(let message, _) = unknownSendStateError(error) else {
+                XCTFail("send timeout must retain its unknown-state classification")
+                continue
+            }
+            XCTAssertTrue(message.contains("UNKNOWN"), message)
+            XCTAssertTrue(message.contains("NOT retrying"), message)
+            XCTAssertTrue(message.contains("may or may not"), message)
+            XCTAssertFalse(message.contains("was terminated mid-flight"), message)
+        }
     }
 
     // MARK: - #301 verify round — parse hardening, sentinel survival, P0 gate, real termination

@@ -147,4 +147,31 @@ final class ChangelogParserTests: XCTestCase {
         XCTAssertEqual(r.status, 0)
         XCTAssertFalse(r.out.isEmpty, "the repo's own CHANGELOG must yield a released version")
     }
+
+    func testShorterFenceCannotExposeAnExampleRelease() throws {
+        let path = try fixture("````markdown\n```\n## [9.9.9] - 2099-01-01\n````\n## [2.27.0] - 2026-08-10\nreal\n")
+        XCTAssertEqual(try Self.run(["newest"], changelog: path).out, "2.27.0")
+        XCTAssertNotEqual(try Self.run(["has", "9.9.9"], changelog: path).status, 0)
+    }
+
+    func testNotesKeepFencedHeadingsAndIgnoreCommentedReleases() throws {
+        let path = try fixture("<!--\n## [9.9.9] - 2099-01-01\n-->\n## [2.27.0] - 2026-08-10\nfirst\n```md\n## example\n```\nlast\n## [2.26.0] - 2026-08-01\nold\n")
+        XCTAssertEqual(try Self.run(["newest"], changelog: path).out, "2.27.0")
+        XCTAssertEqual(try Self.run(["notes", "2.27.0"], changelog: path).out,
+                       "first\n```md\n## example\n```\nlast")
+    }
+
+    func testEntriesUseTheSharedVisibleHeaderRules() throws {
+        let path = try fixture("```md\n## [9.9.9] - 2099-01-01\n```\n## [2.27.0] - 2026-08-10\nreal\n")
+        let result = try Self.run(["entries"], changelog: path)
+        XCTAssertEqual(result.status, 0)
+        let rows = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(result.out.utf8)) as? [[String: Any]])
+        XCTAssertEqual(rows.compactMap { $0["version"] as? String }, ["2.27.0"])
+        XCTAssertEqual(rows.first?["line"] as? Int, 4)
+    }
+
+    func testCommentMarkersInsideCodeDoNotHideLaterReleases() throws {
+        let path = try fixture("`<!--` is literal.\n```md <!--\n## [9.9.9] - 2099-01-01\n```\n## [2.27.0] - 2026-08-10\nreal\n")
+        XCTAssertEqual(try Self.run(["newest"], changelog: path).out, "2.27.0")
+    }
 }

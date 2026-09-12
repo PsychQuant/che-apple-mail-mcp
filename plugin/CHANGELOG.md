@@ -5,27 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-> **本檔是 plugin shell 敘事的單一 source（#396 起）。** 每次 shell release 必須在此新增
-> 條目，且最新 released header 必須等於 plugin.json 的 `version`（`ManifestVersionTests`
-> 鎖定）。本檔最初由 `changelog-tools:changelog-init` 自已廢除的 description-as-changelog
-> 欄位 bootstrap。
->
-> **完整性（#396 verify round 3 起）。** 自 `[2.3.0]` 起的**每一個** shell 版本都有條目，
-> 且每個條目的日期與 binary pin 都取自 aggregator（`psychquant-claude-plugins`）
-> `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 該版首次出現的 commit —— 不是推估、
-> 不是等距編排。前一版曾以「兩段缺口宣告」處理 `[2.42.0]`–`[2.34.0]` 與 `[2.26.2]`–`[2.22.0]`，
-> 並附一句「兩段缺口以外的所有版本都有條目」；**那句話當時是假的**（`2.11.0` / `2.8.0` /
-> `2.7.0` / `2.5.1` 四個版本既無條目也不在缺口內），而缺口本身也非必要 —— 版本、日期與
-> binary pin 全部可從 aggregator 機械復原。現已全數補齊，缺口宣告隨之移除。
->
-> 標有「機械重建」引言的條目，其**版本／日期／binary pin 為一手事實**，逐項散文敘事則已
-> 隨舊 description 消失 —— 該引言正是為了不讓讀者把前者的可靠度誤讀到後者身上。
->
-> **地板**：本檔最舊條目為 `[2.3.0]`（2026-04-17）。更早的 `2.1.1` / `2.0.1` / `2.0.0` /
-> `1.1.0` / `0.8.0` 存在於 aggregator 歷史但不在本檔範圍內。
+本檔是 plugin shell 的版本沿革單一來源；目前版本與 binary pin 見
+`plugin/.claude-plugin/plugin.json`，binary/server 沿革見根目錄 `CHANGELOG.md`。
+
+歷史範圍為 2.3.0 至 2.48.0，共 65 個在 manifest 歷史觀察到的版本。2.46.1 以前取自
+`PsychQuant/psychquant-claude-plugins`，其後取自本 repository。日期採該版本首次出現之
+manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨立證明的發布時間。
+原始 commit、路徑、時間與 `binary_version` 欄位值保存在
+`Tests/Fixtures/plugin-release-history.json`，供歷史完整性測試與核對使用；該固定範圍的
+證據不需要隨每次新 release 重寫。更早的版本不在此範圍。
+
+下方「機械重建」條目提供精簡摘要並連到原始 manifest。舊 description 仍可從 Git 查閱；
+不能因摘要較短就說原始敘事已遺失。`binary_version` 欄位尚不存在的版本，其 binary 版本
+描述只表示當時的敘事，不是 machine-readable pin 的證據。
 
 ## [Unreleased]
 
+
+## [2.48.0] - 2026-09-08
+
+### Changed
+- `binary_version` 3.0.0 → 3.1.0: drafts (`create_draft` / `update_draft`) accept display-name recipients in to, cc AND bcc through AX-addressed fields; hidden Bcc revealed and disclosed (`bcc_field_revealed`); post-save three-state recipient receipt (`recipients_verified` / `recipients_diff` / `recipients_receipt: unavailable`); discard-sheet cleanup (#333 partial). `compose_email` still refuses display-name recipients. ([#404](https://github.com/PsychQuant/che-apple-mail-mcp/issues/404))
+- `rules/compose-wrapper-free.md`: reason 6 of the ineligibility enumeration is send-only; drafts support display names in all three lists.
+
+## [2.47.0] - 2026-08-31
+
+### Changed
+
+- `binary_version` 2.28.0 → **3.0.0**，出貨 [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)：legacy compose 路徑整段移除。該修正在原始碼裡躺了一段時間卻**從未發過 binary release** —— 最新 tag 仍是 v2.28.0，所以每一個已安裝的 binary 在「已有同主旨 compose 視窗開著」時仍會退回 wrapped-body 路徑（AppleScript `-2700` → legacy fallback）。2026-08-31 實地踩到：`update_draft` 回傳 `legacy path — body wrapped in <blockquote type="cite">`，產出的草稿在 Gmail web 與 Outlook 會整封顯示成引用內容，正是 2026-07-29 那起無法回收的事故的同一機制。**這條 plugin 的 `rules/compose-wrapper-free.md` 自 2.43.0 起就描述著 #304 之後的世界，而使用者手上的 binary 拿不到那個保證** —— 規則描述「應該安裝的版本」而非「實際跑的版本」時，它給的是虛假的安心。
+
+- **`plugin.json` 的 `description` 拿掉版本敘事**（18,834 → 235 字元）。該欄位累積成一整部 release 史，且開頭寫著「Shell v2.43.0 (shell-only, binary stays v2.25.0)」—— 兩個數字在寫入當下之後就再也沒對過（實際是 shell 2.46.1、binary 2.28.0）。版本已由 `version` 與 `binary_version` 兩個欄位承載，敘事已由本檔與 repo 根的 `CHANGELOG.md` 承載；寫進 description 是**第三份會腐爛的副本**，與 [#335](https://github.com/PsychQuant/che-apple-mail-mcp/issues/335) 讓 marketplace entry 不帶版本敘事是同一個理由。`marketplace.json` 的指標句一併從「live in plugin/.claude-plugin/plugin.json and CHANGELOG.md」改為「live in CHANGELOG.md」，否則拆掉敘事後那句話就成了錯的。
+
+- **README 補上 `/archive-mail-repair-synthetic-ids`**（5 個 command 先前只記載 4 個）與 v2.47.0／binary v3.0.0 的版本歷史條目。
 
 ## [2.46.1] - 2026-08-14
 
@@ -103,19 +114,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - `CLAUDE.md` lists the new rule under Rules.
 
-### Added
-- **`distributed_archives` config field — first-class capture-then-distribute** ([mail#285](https://github.com/PsychQuant/che-apple-mail-mcp/issues/285)). Generalizes Step 2.1's sibling-archive dedup (previously only symlinks physically under `output_dir`, #49) to an opt-in YAML list of arbitrary distribution-target archive dirs. Use case: a broad capture-layer `filter` config pulls all relevant mail into a staging dir; the user then moves each message belonging to a sub-project into that sub-project's own archive. Before, the next capture run re-pulled the already-distributed mail (it still matches the filter, and moving it dropped it from the capture `output_dir` + index → dedup saw "new"). Now Step 2.1 folds the `message_id` frontmatter of every dir listed in `distributed_archives:` into the same `EXTENDED_DEDUP_IDS` set, so distribution sticks with **no manual tombstone**. Read-only (find + head + awk, never mv/rm/>), bounded (`-maxdepth 2`), and — unlike the silent symlink scan — a **missing distributed dir WARNS** to stderr (a wrong path would silently miss dedup and re-pull, the exact pain being fixed). 100% backward compatible: unset `distributed_archives:` is a no-op, identical to v2.37.0. Closes #285.
-
-### Fixed
-- **archive-mail `last_updated` 計算對 RFC822 entry date 失效**（[mail#275](https://github.com/PsychQuant/che-apple-mail-mcp/issues/275)）。Step 6 / Step 8.5 的 max(date) 原以 `date[:10]` 字典序比較，只涵蓋 ISO 兩變體 — RFC822（`Thu, 25 Jun …`）切片後星期縮寫字典序恆大於數字，任一 RFC822 entry 都會贏過全部 ISO entry，`last_updated` 被寫成 `Wed, 01 Ju` 類無效值（並汙染 `dedup_strategy: last_archived` 的增量搜尋 date_from）。兩處計算改為 robust `to_ymd()`（ISO 快篩 + `email.utils.parsedate_to_datetime`，parse 失敗排除於 max 並在 reconcile 摘要揭露）；上游 enforcement：Step 5.1 明文 RFC822 Date header 必先轉 ISO 再寫 frontmatter，Step 8.5 Phase 1 孤兒補寫時將非 ISO date 正規化（歷史汙染的收斂點）。
-
 ## [2.42.0] - 2026-07-27
 
 ### Changed
 
 - shell v2.42.0 —— `binary_version` **2.25.0**。sender-popup live-fix 三部曲、AppleScript timeout guard（mail#297）、draft-creation unhang 這一段時期的 shell 迭代。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `1b9ae3c` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/1b9ae3c50d070ef113220c29ae04ef59c17001db/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.25.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.41.0] - 2026-07-26
 
@@ -123,7 +128,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.41.0 —— `binary_version` **2.24.0**。同上一段時期的 shell 迭代（sender-popup / timeout guard 家族）。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `3b81495` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/3b814954102afd94a387c1b9545650eae3bc5ba9/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.24.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.40.0] - 2026-07-22
 
@@ -131,7 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.40.0 —— `binary_version` **2.23.1**。同上一段時期的 shell 迭代。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `2c7d604` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/2c7d60443067798392bb7a5883a2cfbf82ddd280/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.23.1。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.39.0] - 2026-07-22
 
@@ -139,7 +144,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.39.0 —— `binary_version` **2.23.0**。同上一段時期的 shell 迭代。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `f3ef828` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/f3ef828fd6ef104613f0026a02e22ca759c1bbda/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.23.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.38.0] - 2026-07-22
 
@@ -147,7 +152,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.38.0 —— `binary_version` **2.22.0**。`distributed_archives` 支援 capture-then-distribute 工作流（mail#285）。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `27a4e34` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/27a4e34b3582aa95183108d19776b58597f8155d/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.22.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
+
+### Added
+- **`distributed_archives` config field — first-class capture-then-distribute** ([mail#285](https://github.com/PsychQuant/che-apple-mail-mcp/issues/285)). Generalizes Step 2.1's sibling-archive dedup (previously only symlinks physically under `output_dir`, #49) to an opt-in YAML list of arbitrary distribution-target archive dirs. Use case: a broad capture-layer `filter` config pulls all relevant mail into a staging dir; the user then moves each message belonging to a sub-project into that sub-project's own archive. Before, the next capture run re-pulled the already-distributed mail (it still matches the filter, and moving it dropped it from the capture `output_dir` + index → dedup saw "new"). Now Step 2.1 folds the `message_id` frontmatter of every dir listed in `distributed_archives:` into the same `EXTENDED_DEDUP_IDS` set, so distribution sticks with **no manual tombstone**. Read-only (find + head + awk, never mv/rm/>), bounded (`-maxdepth 2`), and — unlike the silent symlink scan — a **missing distributed dir WARNS** to stderr (a wrong path would silently miss dedup and re-pull, the exact pain being fixed). 100% backward compatible: unset `distributed_archives:` is a no-op, identical to v2.37.0. Closes #285.
 
 ## [2.37.0] - 2026-07-20
 
@@ -155,7 +163,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.37.0 —— `binary_version` **2.22.0**。同一段時期的 shell 迭代。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `e9c7ff3` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/e9c7ff3d25797274f596aa31514e4cfde028afb2/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.22.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.36.0] - 2026-07-19
 
@@ -163,7 +171,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.36.0 —— `binary_version` **2.21.0**。Date-header RFC822 正規化紀律（mail#275）。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `e6bcdfa` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/e6bcdfa5f7e448261a14e64329b3ea0963c49832/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.21.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
+
+### Fixed
+- **archive-mail `last_updated` 計算對 RFC822 entry date 失效**（[mail#275](https://github.com/PsychQuant/che-apple-mail-mcp/issues/275)）。Step 6 / Step 8.5 的 max(date) 原以 `date[:10]` 字典序比較，只涵蓋 ISO 兩變體 — RFC822（`Thu, 25 Jun …`）切片後星期縮寫字典序恆大於數字，任一 RFC822 entry 都會贏過全部 ISO entry，`last_updated` 被寫成 `Wed, 01 Ju` 類無效值（並汙染 `dedup_strategy: last_archived` 的增量搜尋 date_from）。兩處計算改為 robust `to_ymd()`（ISO 快篩 + `email.utils.parsedate_to_datetime`，parse 失敗排除於 max 並在 reconcile 摘要揭露）；上游 enforcement：Step 5.1 明文 RFC822 Date header 必先轉 ISO 再寫 frontmatter，Step 8.5 Phase 1 孤兒補寫時將非 ISO date 正規化（歷史汙染的收斂點）。
 
 ## [2.35.0] - 2026-07-16
 
@@ -171,7 +182,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.35.0 —— `binary_version` **2.21.0**。同一段時期的 shell 迭代。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `a6275ef` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/a6275ef1fe9aa8e8b1c33b41dd8fcfae9efeeae7/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.21.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.34.0] - 2026-07-16
 
@@ -179,7 +190,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.34.0 —— `binary_version` **2.20.0**。同一段時期的 shell 迭代。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `00a9f4f` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/00a9f4f4e5476abd80cde18989a8043f7516e4ce/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.20.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.33.0] - 2026-07-15
 
@@ -249,7 +260,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.26.2 —— `binary_version` **2.17.0**。帳號解析 completeness sweep 一段（mail#176/#180）家族的收尾。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `9870e2e` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/9870e2e7d17717b32389f83cb0078a9435f3a541/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.17.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.26.1] - 2026-06-24
 
@@ -257,7 +268,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.26.1 —— `binary_version` **2.17.0**。同一段時期的 shell 迭代。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `187eada` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/187eadab182f41e7217ca921c5c763d9f71494d7/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.17.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.26.0] - 2026-06-19
 
@@ -265,7 +276,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.26.0 —— `binary_version` **2.16.0**。`projection` / `dedup` 投影與去重（mail#208）。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `bd1693a` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/bd1693a55544b428c7fd80f0914bb79bca7c07e3/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.16.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.25.0] - 2026-06-16
 
@@ -273,7 +284,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.25.0 —— `binary_version` **2.15.0**。FDA onboarding `--setup` 視窗（mail#213/#214）、Developer ID signing + notarization（mail#211）落地期。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `5182904` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/5182904f9e514f300701560c523fa2c4e7f38b51/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.15.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.24.0] - 2026-06-16
 
@@ -281,7 +292,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.24.0 —— `binary_version` **2.14.0**。`export_emails_markdown` 的 truncation envelope（mail#204）。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `afe082c` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/afe082cd3cf06a4b83eaadea9617cecdaca29118/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.14.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.23.0] - 2026-06-16
 
@@ -289,7 +300,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.23.0 —— `binary_version` **2.13.0**。`export_emails_markdown` 誕生（mail#193）。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `a7efe79` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/a7efe793f55aced3afd777c91fba799127c64836/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.13.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.22.0] - 2026-06-13
 
@@ -297,7 +308,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.22.0 —— `binary_version` **2.12.0**。帳號解析 completeness sweep（mail#176/#180）。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `07e8e39` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/07e8e39395e20ba306ed8e610e7b67b3a6938f97/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；binary_version 為 2.12.0。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.21.0] - 2026-06-12
 
@@ -564,9 +575,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `binary_version` → **2.7.0**：multi-attachment race fix（mail#60）。
+- 當時敘事指向 binary **2.7.0**：multi-attachment race fix（mail#60）。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `33e5e0d` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/33e5e0d0382d3e522082dc3af9663d3aebbde38d/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；未設 binary_version 欄位。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.10.3] - 2026-05-03
 
@@ -616,7 +627,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`.claude/.mail/` namespace**：學 IDD 的 `.claude/.idd/` 收斂 config + state。新增 `/archive-mail-migrate`；archive-mail / view / rebuild-threads 都加 auto-migrate。Backward compatible —— legacy path 自動偵測並搬遷。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `bd52ed7` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/bd52ed78fbfe732e4f8c89ba1b69a9b0d845bcd3/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；未設 binary_version 欄位。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.7.0] - 2026-05-01
 
@@ -624,7 +635,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **NSQL confirmation protocol**：加 3 skills（`confirmation-protocol` / `email-search-disambiguation` / `bulk-operation-preview`）+ 2 rules + CLAUDE.md。archive-mail 預設套用 4-phase confirmation workflow。Backward compatible —— 精確 filter 仍可直接執行。
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `9746086` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/97460862ae1c6a919cf2143fd91e72c234aaeade/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；未設 binary_version 欄位。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.6.0] - 2026-04-22
 
@@ -640,7 +651,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - shell v2.5.1 —— （此版早於 `binary_version` 欄位存在）。（無可考的散文敘事）
 
-  > 本條由 aggregator `plugins/che-apple-mail-mcp/.claude-plugin/plugin.json` 在 commit `afc3321` 的內容機械重建（#396 verify round 3）：**版本、日期與 binary pin 是一手事實**；逐項散文敘事已隨舊 description 一併消失，不再宣稱擁有它。
+  > 機械重建依據：[原始 manifest](https://github.com/PsychQuant/psychquant-claude-plugins/blob/afc332110c3896cbdad77399b550be668ff62be9/plugins/che-apple-mail-mcp/.claude-plugin/plugin.json)；未設 binary_version 欄位。日期採 committer timestamp 的 Asia/Taipei 日期；完整原文可於 Git 查閱。
 
 ## [2.5.0] - 2026-04-17
 

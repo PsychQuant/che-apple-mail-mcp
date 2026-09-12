@@ -26,36 +26,63 @@ Usage:
     changelog.py newest [PATH]        print the newest released version
     changelog.py has VERSION [PATH]   exit 0 iff VERSION has a released header
     changelog.py notes VERSION [PATH] print that version's section body
+    changelog.py entries [PATH]       JSON inventory of visible release headers
 """
 import re
+import json
 import sys
 
 HEADER = re.compile(r'^##[ \t]+\[([0-9]{1,19}\.[0-9]{1,19}\.[0-9]{1,19})\][ \t]*(?:-.*)?$')
-FENCE = re.compile(r'^[ \t]*(```|~~~)')
+FENCE = re.compile(r'^ {0,3}(`{3,}|~{3,})(.*)$')
 
 
-def released_lines(path):
-    """Yield (index, line, version_or_None) with fenced blocks masked out.
+def mask_comments(line, active):
+    """Mask comment bytes in place, preserving heading columns and code spans."""
+    result, pos = list(line), 0
+    while pos < len(line):
+        if active:
+            end = line.find('-->', pos)
+            stop = len(line) if end < 0 else end + 3
+            result[pos:stop] = ' ' * (stop - pos)
+            pos, active = stop, end < 0
+        else:
+            token = re.search(r'<!--|`+', line[pos:])
+            if token is None:
+                break
+            start, stop = pos + token.start(), pos + token.end()
+            if token.group() == '<!--':
+                pos, active = start, True
+            else:
+                closing = re.search(r'(?<!`)`{' + str(stop - start) + r'}(?!`)', line[stop:])
+                pos = stop + closing.end() if closing else stop
+    return ''.join(result), active
 
-    The fence marker is tracked by its character (``` vs ~~~) so a ``` inside a
-    ~~~ block does not close it.
-    """
+
+def visible_lines(path):
+    """Yield (index, raw line, heading text or None inside fenced code)."""
     with open(path, encoding='utf-8') as fh:
         lines = fh.read().split('\n')
-    fence_char = None
+    fence_char, fence_length, comment = None, 0, False
     for i, line in enumerate(lines):
-        m = FENCE.match(line)
-        if m:
-            if fence_char is None:
-                fence_char = m.group(1)[0]
-            elif m.group(1)[0] == fence_char:
+        if fence_char is not None:
+            closing = re.match(r'^ {0,3}(' + re.escape(fence_char) + r'{'+str(fence_length)+r',})[ \t]*$', line)
+            if closing:
                 fence_char = None
             yield i, line, None
             continue
-        if fence_char is not None:
+        m = FENCE.match(line) if not comment else None
+        if m and not (m.group(1)[0] == '`' and '`' in m.group(2)):
+            fence_char, fence_length = m.group(1)[0], len(m.group(1))
             yield i, line, None
             continue
-        h = HEADER.match(line.rstrip())
+        projected, comment = mask_comments(line, comment)
+        yield i, line, projected
+
+
+def released_lines(path):
+    """Keep the existing tuple API while sharing fence/comment handling."""
+    for i, line, projected in visible_lines(path):
+        h = HEADER.match(projected.rstrip()) if projected is not None else None
         yield i, line, (h.group(1) if h else None)
 
 
@@ -69,14 +96,16 @@ def newest(path):
 def notes(path, want):
     """The body between this version's header and the next ## header."""
     collected, capturing = [], False
-    for _, line, version in released_lines(path):
+    for _, line, visible in visible_lines(path):
+        h = HEADER.match(visible.rstrip()) if visible is not None else None
+        version = h.group(1) if h else None
         if version == want and not capturing:
             capturing = True
             continue
         if capturing:
             # Any level-2 header ends the section — including `## [Unreleased]`,
             # which `released_lines` does not classify as a version.
-            if line.startswith('## '):
+            if visible is not None and visible.startswith('## '):
                 break
             collected.append(line)
     if not capturing:
@@ -93,6 +122,16 @@ def main(argv):
         print(__doc__, file=sys.stderr)
         return 2
     command = argv[1]
+
+    if command == 'entries':
+        path = argv[2] if len(argv) > 2 else 'CHANGELOG.md'
+        rows = []
+        for i, _, projected in visible_lines(path):
+            match = HEADER.match(projected.rstrip()) if projected is not None else None
+            if match:
+                rows.append({'line': i + 1, 'header': projected.rstrip(), 'version': match.group(1)})
+        print(json.dumps(rows))
+        return 0
 
     if command == 'newest':
         path = argv[2] if len(argv) > 2 else 'CHANGELOG.md'
