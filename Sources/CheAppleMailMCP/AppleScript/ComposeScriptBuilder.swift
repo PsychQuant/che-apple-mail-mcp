@@ -278,6 +278,11 @@ func buildMailtoComposeScript(
 
     """
 
+    // #413: ownership refusals MUST remain before the outer cleanup try,
+    // and must not be swallowed by another try.
+    // The later System Events discard click only has a title, not a Mail id;
+    // entering cleanup before ownership is established could discard a user's
+    // pre-existing same-title compose window. Structural tests pin this boundary.
     // 1. Capture Mail window ids BEFORE the mailto, hand it off, then identify
     // OUR compose window as the NEW window (id unseen before) whose title is our
     // subject — captured as `_ourId`. On-error cleanup closes ONLY `_ourId`, by
