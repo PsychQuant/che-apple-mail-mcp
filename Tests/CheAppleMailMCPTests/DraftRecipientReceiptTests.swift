@@ -12,6 +12,11 @@ final class DraftRecipientReceiptTests: XCTestCase {
 
     func testReceiptScript_locatesNewestDraftByExactSubject_readsCcAndBcc() {
         let s = buildDraftRecipientReceiptScript(subject: "Re: \"Q3\" plan")
+        XCTAssertTrue(s.contains("-- #404 recipient receipt"), "fake-runner dispatch requires this marker before the drafts-list branch")
+        for other in [buildMailtoComposeScript(url: "mailto:a@example.test?subject=s", subject: "s", attachments: [], send: false),
+                      buildListAllDraftsScript()] {
+            XCTAssertFalse(other.contains("#404 recipient receipt"), "only the recipient receipt may select that fake-runner branch")
+        }
         XCTAssertTrue(s.contains("drafts mailbox"))
         XCTAssertTrue(s.contains("considering case"), "subject match must be case-sensitive (Swift == parity with update_draft)")
         XCTAssertTrue(s.contains("\\\"Q3\\\""), "subject must be AppleScript-escaped")
@@ -27,6 +32,115 @@ final class DraftRecipientReceiptTests: XCTestCase {
         let empty = try XCTUnwrap(parseRecipientReceipt("\u{1D}"))
         XCTAssertEqual(empty.ccFound, []); XCTAssertEqual(empty.bccFound, [])
         XCTAssertNil(parseRecipientReceipt("NOTFOUND"))
+    }
+
+    func testBareAddressUpdateDoesNotReusePreviousMismatch() async throws {
+        final class Log: @unchecked Sendable {
+            var scans = 0
+            var receipts = 0
+            var deletes = 0
+        }
+        let log = Log()
+        let RS = "\u{1E}", GS = "\u{1D}"
+        await MailController.shared.setTestSeams(scriptRunner: { script in
+            if script.contains("#404 recipient receipt") {
+                log.receipts += 1
+                return "wrong@example.test\(GS)"
+            }
+            if script.contains("whose id is") { log.deletes += 1; return "Draft deleted" }
+            if script.contains("mailto:") { return "Draft created successfully (mailto path)" }
+            if script.contains("drafts mailbox") {
+                log.scans += 1
+                return log.scans <= 2 ? "101\(GS)old" : "101\(RS)999\(GS)old\(RS)new"
+            }
+            XCTFail("unexpected script")
+            return ""
+        }, refusal: { nil })
+        let previous = try await MailController.shared.createDraft(
+            to: ["a@example.test"], subject: "seed", body: "b",
+            cc: ["Named <expected@example.test>"])
+        XCTAssertTrue(previous.contains("recipients_verified: false"), previous)
+        // Keep the same actor and runner; the next successful bare compose must
+        // clear the previous mismatch itself, not via a test-only setter.
+        let result = try await MailController.shared.updateDraft(
+            draftId: "101", subjectMatch: nil, accountName: "Test", accountId: nil,
+            to: ["a@example.test"], subject: "new", body: "b", cc: ["bare@example.test"], bcc: nil,
+            attachments: nil, format: .plain, fromAddress: nil)
+        XCTAssertEqual(result["deleted_old"] as? Bool, true)
+        XCTAssertEqual(log.receipts, 1, "only the seed draft may run a recipient receipt")
+        XCTAssertEqual(log.deletes, 1)
+        XCTAssertFalse((result["new_draft"] as? String ?? "").contains("recipients_verified"))
+    }
+
+    func testIDReceiptFailureStopsWithoutRetryOrDelete() async throws {
+        for failure in ["timeout", "script", "malformed"] {
+            final class Log: @unchecked Sendable { var scans = 0; var deletes = 0 }
+            let log = Log()
+            let RS = "\u{1E}", GS = "\u{1D}"
+            await MailController.shared.setTestSeams(scriptRunner: { script in
+                if script.contains("#404 recipient receipt") { XCTFail("bare call has no recipient receipt") }
+                if script.contains("whose id is") { log.deletes += 1; return "Draft deleted" }
+                if script.contains("mailto:") { return "Draft created successfully (mailto path)" }
+                if script.contains("drafts mailbox") {
+                    log.scans += 1
+                    if log.scans <= 2 { return "101\(GS)old" }
+                    if log.scans == 3 {
+                        switch failure {
+                        case "timeout": throw MailError.scriptTimedOut(seconds: 45, automationGranted: true)
+                        case "script": throw MailError.scriptFailed(message: "scan failed", code: -1743)
+                        default: return "malformed receipt"
+                        }
+                    }
+                    // A retry would appear successful and delete the old draft.
+                    return "101\(RS)999\(GS)old\(RS)new"
+                }
+                XCTFail("unexpected script")
+                return ""
+            }, refusal: { nil })
+            let result = try await MailController.shared.updateDraft(
+                draftId: "101", subjectMatch: nil, accountName: "Test", accountId: nil,
+                to: ["a@example.test"], subject: "new", body: "b", cc: nil, bcc: nil,
+                attachments: nil, format: .plain, fromAddress: nil)
+            XCTAssertEqual(log.scans, 3, failure + ": locate + baseline + one failed receipt")
+            XCTAssertEqual(log.deletes, 0, failure)
+            XCTAssertEqual(result["deleted_old"] as? Bool, false, failure)
+            let note = result["note"] as? String ?? ""
+            XCTAssertTrue(note.contains("unavailable"), note)
+            XCTAssertTrue(note.contains("KEPT"), note)
+            XCTAssertFalse(note.contains("not found"), note)
+            XCTAssertFalse(note.contains("delete the old draft manually"), note)
+        }
+    }
+
+    func testRecipientNotFoundPollsUntilVisible() async throws {
+        final class Log: @unchecked Sendable { var receipts = 0 }
+        let log = Log()
+        await MailController.shared.setTestSeams(scriptRunner: { script in
+            if script.contains("#404 recipient receipt") {
+                log.receipts += 1
+                return log.receipts < 3 ? "NOTFOUND" : "expected@example.test\u{1D}"
+            }
+            if script.contains("mailto:") { return "Draft created successfully (mailto path)" }
+            XCTFail("unexpected script")
+            return ""
+        }, refusal: { nil })
+        let result = try await MailController.shared.createDraft(
+            to: ["a@example.test"], subject: "s", body: "b",
+            cc: ["Named <expected@example.test>"])
+        XCTAssertEqual(log.receipts, 3)
+        XCTAssertTrue(result.contains("recipients_verified: true"), result)
+    }
+
+    func testReceiptDescriptionsDeclareBoundedReadPolicy() throws {
+        let tools = CheAppleMailMCPServer.defineTools()
+        for name in ["create_draft", "update_draft"] {
+            let tool = try XCTUnwrap(tools.first { $0.name == name })
+            let text = try XCTUnwrap(tool.description)
+            for phrase in ["without retry", "three reads", "0.4"] {
+                XCTAssertTrue(text.contains(phrase), name + ": missing " + phrase)
+            }
+            XCTAssertFalse(text.contains("in-process AppleScript"), "receipt transport is a cancellable subprocess")
+        }
     }
 
     // MARK: verdict (three-state, PR #407 R1 #3)
