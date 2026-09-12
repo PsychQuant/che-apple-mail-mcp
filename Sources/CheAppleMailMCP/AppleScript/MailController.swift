@@ -612,7 +612,7 @@ actor MailController {
         Diagnostics.emit(line + "\n")
     }
 
-    /// #303 — locate the wrapper's version sidecar next to THIS running
+    /// #303/#312 — locate the wrapper- or packager-supplied sidecar next to THIS running
     /// executable (`<dir>/.<binary>.version`). Derived from the executable's
     /// own directory, never a hardcoded `~/bin`, so a dev build (from
     /// `.build/`) or a non-plugin install simply finds nothing.
