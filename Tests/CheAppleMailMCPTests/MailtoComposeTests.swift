@@ -305,7 +305,7 @@ final class MailtoComposeTests: XCTestCase {
 
 }
 
-// MARK: - #220 non-ASCII attachment paths route to the legacy (native-attach) path
+// MARK: - #220 non-ASCII attachment paths are refused before composition
 
 extension MailtoComposeTests {
 
@@ -357,7 +357,7 @@ extension MailtoComposeTests {
         // One needle covering both threaded dimensions: the probe's exact
         // two-argument tail (attachments #220 + recipients #251). A bare
         // "attachments: attachments," needle would also match the many
-        // composeViaMailto/legacy call sites.
+        // composeViaMailto call sites.
         // #404 (PR #407 R1 #9): the three lists are threaded AS three lists —
         // `to:` / `cc:` / `bcc:` — not concatenated into one `recipients:`.
         let sendTail = "attachments: attachments,\n                to: to, cc: cc ?? [], bcc: bcc ?? [])"
