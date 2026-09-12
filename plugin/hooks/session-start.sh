@@ -81,13 +81,16 @@ first_run_fda_assist() {
     [ -z "$bin_ver" ] && return 0
     [ "$(printf '%s\n2.28.0\n' "$bin_ver" | sort -V | head -1)" = "2.28.0" ] || return 0
 
-    # Silent probe. `--check-fda --quiet` is a FOUR-value contract (SetupCLI:
-    # 0 granted / 1 denied / 2 noMailData / 3 undetermined) that this line
-    # collapses to a boolean, so states 2 and 3 offer the assist AND burn the
-    # once-only marker. Pre-existing since mail#355, out of scope for #394;
-    # surfaced by #399 verify round 2 and tracked in #403.
-    # 0 = granted → nothing to offer.
-    "$binary" --check-fda --quiet >/dev/null 2>&1 && return 0
+    # Only an explicit denial can justify an offer (#403). No Mail data,
+    # undetermined status, or a failed probe must preserve the once-only marker
+    # for a later session that can actually determine the permission state.
+    local fda_status
+    "$binary" --check-fda --quiet >/dev/null 2>&1
+    fda_status=$?
+    case "$fda_status" in
+        1) ;;          # denied: offer below
+        *) return 0 ;; # granted, unknown, or abnormal exit: leave state alone
+    esac
 
     mkdir -p "$marker_dir" 2>/dev/null || return 0
     : > "$marker" 2>/dev/null || return 0

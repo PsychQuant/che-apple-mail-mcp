@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **FDA assistance preserves its one-time offer when status is unknown**
+  ([#403](https://github.com/PsychQuant/che-apple-mail-mcp/issues/403)).
+  Setup is offered only after an explicit denial; no Mail data, undetermined
+  status and failed probes leave the marker untouched for a later session.
+
 - **The standard test command includes plugin regression suites**
   ([#337](https://github.com/PsychQuant/che-apple-mail-mcp/issues/337)).
   `make test` now runs Swift tests followed by plugin shell/Python suites;
