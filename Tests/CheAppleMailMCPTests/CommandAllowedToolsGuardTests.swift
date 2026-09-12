@@ -55,7 +55,7 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
             let text = try String(contentsOf: url, encoding: .utf8)
             let name = url.deletingPathExtension().lastPathComponent
             guard text.hasPrefix("---\n"),
-                  let close = text.range(of: "\n---\n", range: text.index(text.startIndex, offsetBy: 3)..<text.endIndex)
+                  let close = text.range(of: "\n---\n", range: text.index(text.startIndex, offsetBy: 4)..<text.endIndex)
             else {
                 return Command(name: name, allowedTools: [], body: text, formatError: nil)
             }
@@ -96,6 +96,7 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
                     // description that absorbs the apparent allowed-tools key.
                     let scalar = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
                     guard scalar.hasPrefix("\""),
+                          scalar.range(of: #"[\u007f-\u009f\u2028\u2029\ufffe\uffff]"#, options: .regularExpression) == nil,
                           scalar.range(of: #"(?<!\\)(?:\\\\)*\\u[dD][89a-fA-F][0-9a-fA-F]{2}"#, options: .regularExpression) == nil,
                           let decoded = try? JSONSerialization.jsonObject(with: Data(scalar.utf8), options: .fragmentsAllowed),
                           decoded is String else {
@@ -243,7 +244,9 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
     func testShippedArchiveRecipes() throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", Self.repoRoot.appendingPathComponent("plugin/tests/test-archive-mail-recipes.py").path]
+        process.arguments = ["python3", "-c",
+            "import runpy, signal, sys; p=sys.argv[1]; sys.argv=[p]; signal.signal(signal.SIGALRM, signal.SIG_DFL); signal.alarm(30); runpy.run_path(p, run_name='__main__')",
+            Self.repoRoot.appendingPathComponent("plugin/tests/test-archive-mail-recipes.py").path]
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output

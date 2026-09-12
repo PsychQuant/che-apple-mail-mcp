@@ -6,6 +6,7 @@ import re
 import string
 import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from urllib.parse import unquote, urlsplit
@@ -14,12 +15,17 @@ from urllib.parse import unquote, urlsplit
 DOCUMENT = Path(__file__).resolve().parents[1] / "commands/archive-mail.md"
 
 
-def recipe(name):
+def recipe_code(name):
     text = DOCUMENT.read_text()
     block = text.split(f"<!-- archive-mail-{name}-recipe:start -->", 1)[1]
     block = block.split(f"<!-- archive-mail-{name}-recipe:end -->", 1)[0]
     code = re.fullmatch(r"\s*```python\n(.*?)\n```\s*", block, re.S).group(1)
-    namespace = {}
+    return code
+
+
+def recipe(name):
+    code = recipe_code(name)
+    namespace = {"__name__": "archive_recipe"}
     exec(compile(code, str(DOCUMENT) + ":" + name, "exec"), namespace)
     return namespace
 
@@ -85,6 +91,23 @@ class ArchiveRecipesTests(unittest.TestCase):
         self.assertIn("📎", scalar)
         self.assertNotIn(r"\ud83d", scalar)
         scalar.encode("utf-8")
+
+    def test_yaml_scalar_escapes_reader_controls_and_line_separators(self):
+        for codepoint in list(range(32)) + list(range(127, 160)) + [0x2028, 0x2029, 0xFFFE, 0xFFFF]:
+            char = chr(codepoint)
+            value = "a" + char + "📎b"
+            scalar = self.paths["yaml_scalar"](value)
+            self.assertNotIn(char, scalar)
+            self.assertEqual(json.loads(scalar), value)
+
+    def test_inline_cli_uses_data_files_and_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script, source, result = root / "recipe.py", root / "input.html", root / "output.json"
+            script.write_text(recipe_code("inline"))
+            source.write_text('<img alt="name&#9;.png" src="cid:item">')
+            subprocess.run([sys.executable, str(script), str(source), str(result)], check=True, timeout=5)
+            self.assertEqual(json.loads(result.read_text()), [{"cid": "item", "alt": "name\t.png"}])
 
     def test_inline_attribute_order_empty_alt_and_dedup(self):
         html = '<IMG ALT="first &amp; image.png" SRC="CID:one"><img src="cid:one" alt="ignored">'

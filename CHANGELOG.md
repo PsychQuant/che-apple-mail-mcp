@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attachment lookup keys separate from safe filenames, transports inline
   metadata as JSON, and encodes Markdown labels and link destinations separately.
   Executable recipe tests cover path, control-character and markup edge cases.
+  Migration command grants now use separate mkdir, mv and find permission
+  entries, making those intended filesystem operations pre-approved.
 
 - **Exited osascript children no longer leave a false unreaped count**
   ([#417](https://github.com/PsychQuant/che-apple-mail-mcp/issues/417)).
