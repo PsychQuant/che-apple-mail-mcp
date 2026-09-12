@@ -79,3 +79,11 @@ signed MCP binary 自持 Automation 授權（TCC identity 綁 binary 簽章身�
 - `#404` — draft 的 Cc/Bcc 顯示名（AX 定位聚焦 + 貼上，Bcc 自動揭露不還原，存檔後 recipients_verified）
 - 全域鏡像：`che-claude-config/rules/common-mail-compose.md`；
   plugin 副本：`plugin/rules/compose-wrapper-free.md`。**三份要一起改。**
+
+## 具名收件人：逗號格式與剪貼簿
+
+顯示名含 ASCII 逗號時必須加引號，例如 `"Doe, Jane" <jane@example.test>`；也可改用裸位址。這是輸入格式驗證，不是新增第七種資格理由。[mail #411](https://github.com/PsychQuant/che-apple-mail-mcp/issues/411)
+
+`create_draft`／`update_draft` 的 To／Cc／Bcc 任一份清單只要有具名項目，**該份完整清單**（包含混合的裸位址與 Bcc 位址）就會在 GUI 填入期間短暫經過系統剪貼簿。其他剪貼簿工具或 Universal Clipboard 可能依系統設定取得內容；程式嘗試還原原剪貼簿，不能撤回已被讀取或同步的資料。
+
+若不能接受這條路徑，將該份清單全部改用裸位址，或在 Mail 手動輸入。不要把剪貼簿還原當成保密保證。AXValue 的單一 token 寫入結果不足以證明可逐次追加多個 token；目前保留已使用的 paste／token-count 流程，不宣稱 AX 替代已驗證。
