@@ -9,6 +9,10 @@ import SQLite3
 /// concurrent readers, so this class does not need actor serialization.
 public final class EnvelopeIndexReader {
 
+    // Detected once during initialization; never changed after the reader opens.
+    private var hasMessageType = false
+    private var draftTypeColumnSQL: String { hasMessageType ? "m.type" : "NULL" }
+
     // MARK: - Constants
 
     private static let mailDataVersion = "V10"
@@ -103,12 +107,59 @@ public final class EnvelopeIndexReader {
                 FullDiskAccessHelp.guidance(reason: "Failed to open database: \(msg).")
             )
         }
+        do { hasMessageType = try Self.messageTypeColumnExists(db) }
+        catch {
+            sqlite3_close(db)
+            db = nil
+            throw error
+        }
+
     }
 
     deinit {
         if let db = db {
             sqlite3_close(db)
         }
+    }
+
+    private static func messageTypeColumnExists(_ db: OpaquePointer?) throws -> Bool {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(messages)", -1, &statement, nil) == SQLITE_OK else {
+            throw MailSQLiteError.queryFailed("Cannot inspect message type capability")
+        }
+        defer { sqlite3_finalize(statement) }
+        var status = sqlite3_step(statement)
+        while status == SQLITE_ROW {
+            if let name = sqlite3_column_text(statement, 1), String(cString: name).lowercased() == "type" { return true }
+            status = sqlite3_step(statement)
+        }
+        guard status == SQLITE_DONE else { throw MailSQLiteError.queryFailed("Message schema inspection failed") }
+        return false
+    }
+
+    private static func draftFlag(_ statement: OpaquePointer?, column: Int32) -> Bool? {
+        guard sqlite3_column_type(statement, column) == SQLITE_INTEGER else { return nil }
+        switch sqlite3_column_int64(statement, column) {
+        case 0: return false
+        case 5: return true
+        default: return nil
+        }
+    }
+
+    /// Read a per-message fact, not a mailbox-role inference. Unknown is nil.
+    public func messageIsDraft(messageId: Int) throws -> Bool? {
+        guard let db else { throw MailSQLiteError.queryFailed("Database not open") }
+        let sql = "SELECT \(draftTypeColumnSQL) FROM messages m WHERE m.ROWID = ?"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw MailSQLiteError.queryFailed("Draft status query failed: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, Int64(messageId))
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            throw MailSQLiteError.queryFailed("Draft status unavailable for message \(messageId)")
+        }
+        return Self.draftFlag(statement, column: 0)
     }
 
     // MARK: - Account Mapping
@@ -291,7 +342,7 @@ public final class EnvelopeIndexReader {
         conditions.append(Self.rowIdInCondition("m.mailbox", mailboxIds))
 
         let sql = """
-            SELECT m.ROWID, s.subject, a.address, a.comment, m.date_received
+            SELECT m.ROWID, s.subject, a.address, a.comment, m.date_received, \(draftTypeColumnSQL)
             FROM messages m
             JOIN subjects s ON m.subject = s.ROWID
             JOIN addresses a ON m.sender = a.ROWID
@@ -326,7 +377,8 @@ public final class EnvelopeIndexReader {
             results.append([
                 "id": String(rowId),
                 "subject": subject,
-                "sender": sender
+                "sender": sender,
+                "is_draft": Self.draftFlag(stmt, column: 5).map { $0 as Any } ?? NSNull()
             ])
         }
         let truncated = results.count > limit
@@ -408,7 +460,7 @@ public final class EnvelopeIndexReader {
 
         let sql = """
             SELECT m.read, m.flagged, m.deleted, m.size, m.date_received,
-                   m.conversation_id, s.subject, a.address, mb.url
+                   m.conversation_id, s.subject, a.address, mb.url, \(draftTypeColumnSQL)
             FROM messages m
             JOIN subjects s ON m.subject = s.ROWID
             JOIN addresses a ON m.sender = a.ROWID
@@ -428,6 +480,7 @@ public final class EnvelopeIndexReader {
 
         let dateReceived = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 4)))
         return [
+            "is_draft": Self.draftFlag(stmt, column: 9).map { $0 as Any } ?? NSNull(),
             "read": sqlite3_column_int(stmt, 0) != 0,
             "flagged": sqlite3_column_int(stmt, 1) != 0,
             "deleted": sqlite3_column_int(stmt, 2) != 0,
@@ -499,7 +552,7 @@ public final class EnvelopeIndexReader {
 
         let sql = """
             SELECT m.ROWID, s.subject, a.address, a.comment,
-                   m.date_received, m.read, m.flagged, mb.url
+                   m.date_received, m.read, m.flagged, mb.url, \(draftTypeColumnSQL)
             FROM messages m
             JOIN subjects s ON m.subject = s.ROWID
             JOIN addresses a ON m.sender = a.ROWID
@@ -557,7 +610,8 @@ public final class EnvelopeIndexReader {
                 mailboxPath: mbPath,
                 isRead: isRead,
                 isFlagged: isFlagged,
-                toRecipients: toAddrs
+                toRecipients: toAddrs,
+                isDraft: Self.draftFlag(stmt, column: 8)
             ))
         }
 
@@ -571,7 +625,7 @@ public final class EnvelopeIndexReader {
         try searchPage(params).results
     }
 
-    /// #177: triage (`summary`) projection — `id/subject/sender/date/mailbox`
+    /// #177: triage (`summary`) projection — `id/subject/sender/date/mailbox/is_draft`
     /// only, performing **no** per-row recipient subquery (the cost `full` pays).
     /// With `dedup`, collapses mailbox-duplicate rows via `GROUP BY` + `MIN(ROWID)`
     /// (SQLite's single-aggregate bare-column rule returns each group's
@@ -589,7 +643,7 @@ public final class EnvelopeIndexReader {
         let rowIdExpr = dedup ? "MIN(m.ROWID)" : "m.ROWID"
         let groupBy = dedup ? "GROUP BY s.subject, a.address, m.date_received" : ""
         let sql = """
-            SELECT \(rowIdExpr), s.subject, a.address, a.comment, m.date_received, mb.url
+            SELECT \(rowIdExpr), s.subject, a.address, a.comment, m.date_received, mb.url, \(draftTypeColumnSQL)
             FROM messages m
             JOIN subjects s ON m.subject = s.ROWID
             JOIN addresses a ON m.sender = a.ROWID
@@ -631,7 +685,8 @@ public final class EnvelopeIndexReader {
             results.append(SearchResult(
                 id: rowId, subject: subject, senderAddress: senderAddr, senderName: senderName,
                 dateReceived: dateReceived, accountName: acctName, accountId: acctId,
-                mailboxPath: mbPath, isRead: false, isFlagged: false, toRecipients: []
+                mailboxPath: mbPath, isRead: false, isFlagged: false, toRecipients: [],
+                isDraft: Self.draftFlag(stmt, column: 6)
             ))
         }
 

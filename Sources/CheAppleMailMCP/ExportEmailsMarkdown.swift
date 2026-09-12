@@ -4,11 +4,11 @@ import MailSQLite
 /// One per-email entry in the `export_emails_markdown` manifest.
 struct ExportManifestItem {
     let id: String                   // input message id (SQLite rowId as string)
-    let messageId: String?           // resolved RFC 5322 Message-ID (nil on fetch error)
+    let messageId: String?           // resolved RFC 5322 Message-ID (nil before fetch, including draft exclusion)
     let writtenPath: String?         // absolute path of the written .md (nil on error)
     let attachments: [String]        // paths of saved attachments (relative to output_dir)
     let attachmentErrors: [String]   // per-attachment failures (never silently dropped)
-    let status: String               // "written" | "error" | "skipped" (#177 dedup)
+    let status: String               // "written" | "error" | "skipped" (dedup or explicit draft exclusion)
                                      //   | "header_only" (#283 skip_partial)
     let error: String?
     // #283 — negative-only partial-`.emlx` signal (#274 contract parity):
@@ -43,9 +43,13 @@ struct ExportManifestItem {
     // signal useless. The alias gap needs a real address source (the AppleScript
     // `list_accounts` path enumerates them), not a broader guess.
     var directionInferred: Bool? = nil
+    var isDraft: Bool? = nil
+    var skipReason: String? = nil
 
     var jsonObject: [String: Any] {
         var o: [String: Any] = ["id": id, "status": status, "attachments": attachments]
+        o["is_draft"] = isDraft.map { $0 as Any } ?? NSNull()
+        if let skipReason { o["skip_reason"] = skipReason }
         if let m = messageId { o["message_id"] = m }
         if let p = writtenPath { o["written_path"] = p }
         if !attachmentErrors.isEmpty { o["attachment_errors"] = attachmentErrors }
@@ -137,7 +141,7 @@ struct ExportManifest {
 
     var written: Int { items.filter { $0.status == "written" }.count }
     var errors: Int { items.filter { $0.status == "error" }.count }
-    /// #177: dedup-skipped (already-archived Message-ID) count.
+    /// Skipped items (already-archived IDs, or explicit draft exclusions).
     var skipped: Int { items.filter { $0.status == "skipped" }.count }
     /// #283: items whose content came from a partial `.emlx` with the body
     /// absent (`body_downloaded: false`) — written-but-header-only by default,
@@ -438,6 +442,8 @@ enum ExportEmailsMarkdown {
         attachmentData: (String, String) throws -> Data,
         skipMessageIds: Set<String> = [],
         skipPartial: Bool = false,
+        skipDrafts: Bool = false,
+        draftStatusFor: (String) throws -> Bool? = { _ in nil },
         fileManager: FileManager = .default
     ) throws -> ExportManifest {
         try? fileManager.createDirectory(at: outputDir, withIntermediateDirectories: true)
@@ -494,6 +500,28 @@ enum ExportEmailsMarkdown {
         }
 
         for id in ids {
+            let isDraft: Bool?
+            do { isDraft = try draftStatusFor(id) }
+            catch {
+                Diagnostics.emit("export draft status lookup failed for id \(id): \(error.localizedDescription)\n")
+                isDraft = nil
+            }
+            // Stamp this iteration's observation, including duplicate input IDs.
+            let itemIndex = items.count
+            defer { if items.count > itemIndex { items[itemIndex].isDraft = isDraft } }
+            if skipDrafts, isDraft != false {
+                if isDraft == true {
+                    items.append(ExportManifestItem(
+                        id: id, messageId: nil, writtenPath: nil, attachments: [],
+                        attachmentErrors: [], status: "skipped", error: nil, skipReason: "draft"))
+                } else {
+                    items.append(ExportManifestItem(
+                        id: id, messageId: nil, writtenPath: nil, attachments: [],
+                        attachmentErrors: [], status: "error",
+                        error: "draft_status_unknown: skip_drafts requires a known non-draft message"))
+                }
+                continue
+            }
             let content: EmailContent
             do {
                 content = try fetch(id)
