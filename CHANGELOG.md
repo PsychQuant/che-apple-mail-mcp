@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Archive mail treats message content as data and narrows command grants**
+  ([#395](https://github.com/PsychQuant/che-apple-mail-mcp/issues/395)).
+  Archive and repair commands enumerate their required mail tools. Guards
+  reject alternate authorization metadata and unknown named calls, and lock
+  the archive and repair commands against extra grants. The SOP preserves valid user authorization across turns, keeps raw
+  attachment lookup keys separate from safe filenames, transports inline
+  metadata as JSON, and encodes Markdown labels and link destinations separately.
+  Executable recipe tests cover path, control-character and markup edge cases.
+  Migration command grants now use separate mkdir, mv and find permission
+  entries, making those intended filesystem operations pre-approved.
+
 - **Exited osascript children no longer leave a false unreaped count**
   ([#417](https://github.com/PsychQuant/che-apple-mail-mcp/issues/417)).
   Registration and exit now update each child's lifecycle and the total under

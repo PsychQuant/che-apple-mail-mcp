@@ -1,7 +1,7 @@
 ---
-description: 一次性把所有舊 archive 的 indices + config 搬到 .claude/.mail/ namespace
-argument-hint: [--dry-run]
-allowed-tools: Read, Write, Glob, Bash(mkdir:*, mv:*, find:*)
+description: "一次性把所有舊 archive 的 indices + config 搬到 .claude/.mail/ namespace"
+argument-hint: "[--dry-run]"
+allowed-tools: Read, Write, Glob, Bash(mkdir:*), Bash(mv:*), Bash(find:*)
 ---
 
 # Archive Mail — Migrate to `.claude/.mail/` Namespace（v2.8.0+）
