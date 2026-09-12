@@ -391,7 +391,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "save_attachment",
-                description: "Save an email attachment to disk. Optionally accepts `account_id` (UUID) for disambiguation when multiple Mail.app accounts share the same `display_name` (e.g., iCloud catch-all alias + Gmail with the same address — #101). When provided, the AppleScript fallback path uses Mail.app's globally-unique `account id` selector; when omitted, falls back to the legacy `account_name` (display_name) form for backward compatibility.",
+                description: "Save an email attachment to disk within CHE_MAIL_EXPORT_ALLOWED_ROOTS (colon-separated configured roots replace home; default: home excluding sensitive paths). Unsafe path components and paths escaping the policy are rejected before Mail work. SQLite and AppleScript share safe atomic publication; AppleScript first saves to a private temporary file. Existing symlinks are allowed only when their canonical target passes the policy. Optionally accepts `account_id` (UUID) for disambiguation when multiple Mail.app accounts share the same `display_name` (e.g., iCloud catch-all alias + Gmail with the same address — #101). When provided, the AppleScript fallback path uses Mail.app's globally-unique `account id` selector; when omitted, falls back to the legacy `account_name` (display_name) form for backward compatibility.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -400,7 +400,7 @@ class CheAppleMailMCPServer {
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account (display_name). Required, but may be ambiguous if multiple accounts share the same display_name — prefer passing `account_id` alongside for disambiguation.")]),
                         "account_id": .object(["type": .string("string"), "description": .string("Optional: Mail.app account UUID for disambiguation. Discoverable from search_emails results (the `account_id` field) or from list_accounts (the `id` / `uuid` field). When non-empty, takes precedence over account_name in the AppleScript fallback path.")]),
                         "attachment_name": .object(["type": .string("string"), "description": .string("Name of the attachment to save")]),
-                        "save_path": .object(["type": .string("string"), "description": .string("Full path where to save the file")]),
+                        "save_path": .object(["type": .string("string"), "description": .string("Absolute file path within CHE_MAIL_EXPORT_ALLOWED_ROOTS (same policy as export; default home excluding sensitive paths). No dot/dot-dot, empty, backslash, or control-character components. Missing parents are created safely; existing regular files are atomically replaced. destination_rejected / destination_write_failed are terminal errors, not missing attachments.")]),
                         "download_if_missing": .object(["type": .string("boolean"), "description": .string("Optional (default false). BEST-EFFORT, NOT GUARANTEED (#272): when the attachment is server-side only (savable_reason 'not_downloaded'), first nudge Mail to fetch the full message, then re-attempt the save for up to ~30s. Mail exposes no real per-attachment download command, so this relies on materializing the message to pull its content — an undocumented, version-/account-dependent side effect that may not work (notably on accounts where the save simply errors). On timeout it fails honestly with the not_downloaded guidance (never a false success); if it does not help, open the message in Mail manually. Scope: effective only for accounts with local .emlx message storage (IMAP/POP) whose not_downloaded state was detected locally — it is a silent no-op on Exchange/EWS accounts (no .emlx) and when the local index is unavailable. Leave off for normal saves.")]),
                         "allow_empty": .object(["type": .string("boolean"), "description": .string("Optional (default false). Accept a 0-byte write as success, for an attachment that is GENUINELY empty (#347). Leave off unless you have positive reason to believe the attachment has no content: a 0-byte result is normally Mail failing to produce the bytes (#314), and that failure is invisible to a count-based archive audit — which is why it is rejected by default. Nothing in the envelope distinguishes the two cases (list_attachments carries no size), so this is your attestation, not a check. When it is used, the success string says so explicitly — 'Attachment saved to … (0 bytes — empty write accepted via allow_empty)' — so an archive manifest records which files were accepted this way. Does NOT relax anything else: a missing file or a non-regular save_path is still rejected.")])
                     ]),
@@ -1473,67 +1473,30 @@ class CheAppleMailMCPServer {
             // not_downloaded / -10000 path below.
             let downloadIfMissing = arguments["download_if_missing"]?.boolValue ?? false
             let allowEmpty = arguments["allow_empty"]?.boolValue ?? false
-            // #178: ensure the save_path's parent directory exists before EITHER
-            // tier. Both fail on a missing parent — Tier 1's Data.write throws
-            // (AttachmentExtractor.saveAttachment requires the parent to exist),
-            // and Tier 2's Mail.app `save att in POSIX file` raises a misleading
-            // -10000 reported as an IMAP-cache problem. Creating it up front makes
-            // the missing-dir case vanish; an un-creatable path errors here with
-            // an actionable message instead of the opaque -10000.
-            try ensureSaveDestinationDirectory(savePath)
-            // Tier 1: SQLite + .emlx fast path (see openspec/changes/save-attachment-fast-path).
-            // Wraps in its own do/catch so any failure falls through to the
-            // AppleScript tier in the trailing `mailController.saveAttachment`
-            // call — matches the two-tier pattern used by get_email (#9's
-            // lesson: never collapse the tiers into one catch).
-            // #103: when Tier 1 throws `attachmentNotFound`, the MCP has *proved*
-            // from local `.emlx` state that the binary is absent — thread that
-            // into the Tier-2 -10000 hint so the message can be definitive.
+            // #402: authorize and pin the destination before lookup or Mail work.
+            // Publication is outside the extraction catch: it must never fallback.
+            let destination = try AttachmentDestination(savePath: savePath)
             var localCopyConfirmedMissing = false
             var localCopyNotDownloaded = false
             if let reader = indexReader, let rowId = Int(id) {
+                var localData: Data?
                 do {
                     if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
-                        let destination = URL(fileURLWithPath: savePath)
                         // #183: thread the Envelope Index attachment_id so the
                         // name-free part-dir probe can rescue a degraded disk
                         // filename (best-effort lookup; nil keeps prior behavior).
                         let partId = (try? reader.listAttachments(messageId: rowId))?
                             .first { ($0["name"] as? String) == attachmentName }?["attachment_id"] as? String
-                        try EmlxParser.saveAttachment(
+                        localData = try EmlxParser.attachmentData(
                             rowId: rowId,
                             mailboxURL: mailboxUrl,
                             attachmentName: attachmentName,
-                            destination: destination,
                             partId: partId
                         )
-                        // #314: Tier 1 already guards emptiness pre-write
-                        // (#66/#238), so this is defense-in-depth — and it adds
-                        // the same `(N bytes)` suffix as the AppleScript tier,
-                        // so both paths' success strings carry a size signal.
-                        return try MailController.verifySavedAttachmentOnDisk(
-                            "Attachment saved to \(savePath)", savePath: savePath,
-                            allowEmpty: allowEmpty)
                     }
-                } catch MailSQLiteError.attachmentEmpty(let name) where allowEmpty {
-                    // #347 verify round 1 — `allow_empty` used to be inert on
-                    // this, the ONLY path that can actually establish "genuinely
-                    // empty". Tier 1 refuses an empty part before writing
-                    // anything, so the flag only ever reached the post-write
-                    // verifier — i.e. only when Tier 2 happened to run and
-                    // happened to succeed. With Mail unavailable the attested
-                    // override could not work at all.
-                    //
-                    // Honored here and nowhere broader: `attachmentEmpty` means
-                    // a part with this name exists and is empty. A typo'd name
-                    // still throws `attachmentNotFound` and can never be
-                    // answered with a 0-byte file.
-                    try Data().write(to: URL(fileURLWithPath: savePath))
-                    Diagnostics.emit(
-                        "save_attachment: '\(name)' is an empty MIME part; wrote 0 bytes "
-                        + "under allow_empty (#347)\n")
-                    return "Attachment saved to \(savePath) "
-                        + "(0 bytes — empty write accepted via allow_empty)"
+                } catch MailSQLiteError.attachmentEmpty where allowEmpty {
+                    // Only the extractor's attested empty-part result permits this.
+                    localData = Data()
                 } catch {
                     if case MailSQLiteError.attachmentNotFound = error {
                         localCopyConfirmedMissing = true
@@ -1559,6 +1522,9 @@ class CheAppleMailMCPServer {
                         + "falling through to AppleScript\n"
                     Diagnostics.emit(message)
                 }
+                if let localData {
+                    return try destination.publish(localData, allowEmpty: allowEmpty)
+                }
             }
             // Tier 2: AppleScript fallback. Use the #101 6-arg overload (preferring
             // account_id when provided) — when account_id is nil/empty, behavior
@@ -1576,7 +1542,7 @@ class CheAppleMailMCPServer {
                     accountId: resolvedAccountId,
                     accountName: accountName,
                     attachmentName: attachmentName,
-                    savePath: savePath,
+                    destination: destination,
                     allowEmpty: allowEmpty
                 )
             } catch MailError.attachmentWriteUnverified(let path, let problem) {
@@ -1599,7 +1565,7 @@ class CheAppleMailMCPServer {
                     accountId: resolvedAccountId,
                     accountName: accountName,
                     attachmentName: attachmentName,
-                    savePath: savePath,
+                    destination: destination,
                     allowEmpty: allowEmpty,
                     enteredAfterUnverifiedWrite: problem
                 )
@@ -1619,7 +1585,7 @@ class CheAppleMailMCPServer {
                         accountId: resolvedAccountId,
                         accountName: accountName,
                         attachmentName: attachmentName,
-                        savePath: savePath,
+                        destination: destination,
                         allowEmpty: allowEmpty
                     )
                 }
@@ -2878,74 +2844,6 @@ func saveAttachmentAppleEventHint(code: Int, accountName: String, rawMessage: St
         """
     default:
         return nil
-    }
-}
-
-/// Validate and prepare the `save_attachment` destination (#178).
-///
-/// Both tiers fail on a missing parent directory: Tier 1's `Data.write` throws
-/// (`AttachmentExtractor.saveAttachment` documents "parent directory MUST already
-/// exist"), and Tier 2's Mail.app `save att in POSIX file "<path>"` raises a
-/// generic `-10000` that `saveAttachmentAppleEventHint` translates IMAP-cache-first
-/// — sending the user to synchronize/rebuild dead-ends for what is just a missing
-/// `mkdir -p` (the 2026-06-11 repro in #178).
-///
-/// This function removes the **missing-parent** source of that misleading `-10000`,
-/// and surfaces the two adjacent destination problems as actionable errors instead
-/// of letting them reach Tier 2's `-10000` (verify PR #189 review):
-///
-///  1. **Path shape** — `save_path` must be a well-formed absolute file path. An
-///     empty / relative / trailing-slash value makes `deletingLastPathComponent`
-///     resolve to the process cwd or strip the intended leaf, so the wrong tree
-///     would be created and a later `-10000` would *still* mislead. Rejected as
-///     `invalidParameter`.
-///  2. **Missing parent** — created with `mkdir -p`. **Accepted trade-off** (the
-///     issue explicitly asked for "binary 自己 mkdir -p"): a typo'd absolute path
-///     silently materialises the wrong tree rather than failing fast. We bound the
-///     blast radius to *absolute* paths (shape check above) and prefer this over
-///     the opaque `-10000` dead-end.
-///  3. **Existing-but-unwritable parent** — `createDirectory` is a no-op success
-///     when the dir already exists, but the write would still fail → Tier 2
-///     `-10000`. A post-create writability check surfaces it as `operationFailed`.
-///
-/// **Scope of the guarantee**: this removes only the *missing-parent* and the two
-/// problems above as sources of a misleading `-10000`. A `-10000` after this
-/// returns reflects a destination-independent cause (e.g. the attachment binary is
-/// not in the local Mail cache) — which is exactly what the (unchanged, byte-locked)
-/// `saveAttachmentAppleEventHint` describes.
-///
-/// Free function (not a method) so it's unit-testable without the MCP server.
-func ensureSaveDestinationDirectory(_ savePath: String) throws {
-    // 1. Path shape — must be an absolute file path (not empty / relative /
-    //    directory-form), so the parent we create is the one the caller intends.
-    guard savePath.hasPrefix("/"), !savePath.hasSuffix("/") else {
-        throw MailError.invalidParameter(
-            "save_attachment: save_path must be an absolute file path "
-            + "(start with '/' and name a file, not end with '/'); got \"\(savePath)\"."
-        )
-    }
-    let fm = FileManager.default
-    let parent = URL(fileURLWithPath: savePath).deletingLastPathComponent()
-    // 2. Missing parent — mkdir -p (accepted trade-off, see docstring).
-    do {
-        try fm.createDirectory(at: parent, withIntermediateDirectories: true)
-    } catch {
-        throw MailError.operationFailed(
-            "save_attachment: cannot create the save_path parent directory "
-            + "\(parent.path): \(error.localizedDescription). "
-            + "Check the path is valid and that you have write permission."
-        )
-    }
-    // 3. Existing-but-unwritable parent — createDirectory no-ops when the dir is
-    //    already present, so verify it is actually a writable directory; otherwise
-    //    the write would fail downstream as a misleading -10000.
-    var isDir: ObjCBool = false
-    guard fm.fileExists(atPath: parent.path, isDirectory: &isDir), isDir.boolValue,
-          fm.isWritableFile(atPath: parent.path) else {
-        throw MailError.operationFailed(
-            "save_attachment: the save_path parent \(parent.path) is not a "
-            + "writable directory. Check it exists, is a directory, and is writable."
-        )
     }
 }
 

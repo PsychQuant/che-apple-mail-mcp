@@ -102,7 +102,7 @@ enum RaceFreeFileWriter {
                 }
                 // Open without following symlinks (still guards a swap after the
                 // stat above — O_NOFOLLOW makes that open fail too).
-                let fd = openat(parentFd, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+                let fd = openat(parentFd, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
                 if fd < 0 {
                     let e = errno
                     throw e == ELOOP
@@ -169,6 +169,51 @@ enum RaceFreeFileWriter {
         }
     }
 
+    /// Attachment publishing uses a unique sibling temp: concurrent saves must
+    /// never unlink or publish another call's temporary file (#402).
+    static func withAtomicAttachmentFile(dirFd: Int32, name: String,
+                                         body: (Int32) throws -> Void) throws {
+        let temporary = ".attachment-" + UUID().uuidString + ".tmp"
+        let fd = openat(dirFd, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else {
+            throw RaceFreeWriteError.createFailed(name: name, errno: errno)
+        }
+        defer {
+            close(fd)
+            _ = unlinkat(dirFd, temporary, 0)
+        }
+        try body(fd)
+        guard renameat(dirFd, temporary, dirFd, name) == 0 else {
+            throw RaceFreeWriteError.writeFailed(name: name, errno: errno)
+        }
+    }
+
+    static func writeAttachment(dirFd: Int32, name: String, data: Data) throws {
+        try withAtomicAttachmentFile(dirFd: dirFd, name: name) { fd in
+            try writeAll(fd: fd, name: name, data: data)
+        }
+    }
+
+    /// Copy precisely the size verified on the open regular source descriptor.
+    /// Bounded memory preserves the AppleScript fallback for >100 MB parts.
+    static func copyAttachment(dirFd: Int32, name: String, sourceFd: Int32,
+                               byteCount: Int64) throws {
+        try withAtomicAttachmentFile(dirFd: dirFd, name: name) { fd in
+            var remaining = byteCount
+            var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+            while remaining > 0 {
+                let requested = Int(min(remaining, Int64(buffer.count)))
+                let count = read(sourceFd, &buffer, requested)
+                if count < 0 && errno == EINTR { continue }
+                guard count > 0 else {
+                    throw RaceFreeWriteError.writeFailed(name: name, errno: count < 0 ? errno : EIO)
+                }
+                try writeAll(fd: fd, name: name, data: Data(buffer.prefix(count)))
+                remaining -= Int64(count)
+            }
+        }
+    }
+
     /// Rename `from` → `to` inside `dirFd`, refusing if `to` already exists.
     ///
     /// Three tiers, because **exclusive rename is a volume capability, not a
@@ -226,9 +271,9 @@ enum RaceFreeFileWriter {
             var offset = 0
             while offset < buffer.count {
                 let written = write(fd, base.advanced(by: offset), buffer.count - offset)
-                if written < 0 {
-                    if errno == EINTR { continue }
-                    throw RaceFreeWriteError.writeFailed(name: name, errno: errno)
+                if written <= 0 {
+                    if written < 0 && errno == EINTR { continue }
+                    throw RaceFreeWriteError.writeFailed(name: name, errno: written == 0 ? EIO : errno)
                 }
                 offset += written
             }

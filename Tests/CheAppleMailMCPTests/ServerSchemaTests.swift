@@ -749,7 +749,7 @@ final class ServerSchemaTests: XCTestCase {
         }
     }
 
-    // MARK: - ensureSaveDestinationDirectory (#178 — mkdir -p before both tiers)
+    // MARK: - attachment destination (#178, #402 — authorize and safely create before either tier)
 
     func testEnsureSaveDestinationDirectory_createsMissingParent() throws {
         let fm = FileManager.default
@@ -760,7 +760,7 @@ final class ServerSchemaTests: XCTestCase {
         let parent = URL(fileURLWithPath: savePath).deletingLastPathComponent().path
         XCTAssertFalse(fm.fileExists(atPath: parent), "precondition: parent absent")
 
-        try ensureSaveDestinationDirectory(savePath)
+        try AttachmentDestination(savePath: savePath, allowedRoots: [NSTemporaryDirectory()])
 
         var isDir: ObjCBool = false
         XCTAssertTrue(fm.fileExists(atPath: parent, isDirectory: &isDir) && isDir.boolValue,
@@ -774,8 +774,8 @@ final class ServerSchemaTests: XCTestCase {
         addTeardownBlock { try? fm.removeItem(at: base) }
         let savePath = base.appendingPathComponent("report.pdf").path
         // Parent (base) already exists — must not throw, must not disturb it.
-        XCTAssertNoThrow(try ensureSaveDestinationDirectory(savePath))
-        XCTAssertNoThrow(try ensureSaveDestinationDirectory(savePath))  // twice = idempotent
+        XCTAssertNoThrow(try AttachmentDestination(savePath: savePath, allowedRoots: [NSTemporaryDirectory()]))
+        XCTAssertNoThrow(try AttachmentDestination(savePath: savePath, allowedRoots: [NSTemporaryDirectory()]))  // twice = idempotent
     }
 
     func testEnsureSaveDestinationDirectory_rejectsMalformedPaths() throws {
@@ -784,13 +784,13 @@ final class ServerSchemaTests: XCTestCase {
         // claimed "mkdir -p makes a later -10000 trustworthy" invariant would be
         // false. These must be rejected at the boundary as invalidParameter.
         for bad in ["", "report.pdf", "relative/sub/report.pdf", "/tmp/wantdir/"] {
-            XCTAssertThrowsError(try ensureSaveDestinationDirectory(bad),
+            XCTAssertThrowsError(try AttachmentDestination(savePath: bad, allowedRoots: [NSTemporaryDirectory()]),
                                  "must reject malformed save_path \"\(bad)\"") { error in
-                guard let mailErr = error as? MailError,
-                      case .invalidParameter(let msg) = mailErr else {
-                    XCTFail("expected MailError.invalidParameter for \"\(bad)\", got \(error)")
+                guard case AttachmentDestinationError.rejected = error else {
+                    XCTFail("expected AttachmentDestinationError.rejected for \"\(bad)\", got \(error)")
                     return
                 }
+                let msg = error.localizedDescription
                 XCTAssertTrue(msg.contains("save_path") && msg.contains("absolute"),
                               "error must explain the absolute-file-path requirement; got: \(msg)")
             }
@@ -812,12 +812,12 @@ final class ServerSchemaTests: XCTestCase {
         }
         let savePath = ro.appendingPathComponent("report.pdf").path
 
-        XCTAssertThrowsError(try ensureSaveDestinationDirectory(savePath)) { error in
-            guard let mailErr = error as? MailError,
-                  case .operationFailed(let msg) = mailErr else {
-                XCTFail("expected MailError.operationFailed, got \(error)")
+        XCTAssertThrowsError(try AttachmentDestination(savePath: savePath, allowedRoots: [NSTemporaryDirectory()])) { error in
+            guard case AttachmentDestinationError.io = error else {
+                XCTFail("expected AttachmentDestinationError.io, got \(error)")
                 return
             }
+            let msg = error.localizedDescription
             XCTAssertTrue(msg.contains("writable"),
                           "error must name the writability problem; got: \(msg)")
         }
@@ -834,12 +834,12 @@ final class ServerSchemaTests: XCTestCase {
         try Data("x".utf8).write(to: blocker)
         let savePath = blocker.appendingPathComponent("sub/report.pdf").path
 
-        XCTAssertThrowsError(try ensureSaveDestinationDirectory(savePath)) { error in
-            guard let mailErr = error as? MailError,
-                  case .operationFailed(let msg) = mailErr else {
-                XCTFail("expected MailError.operationFailed, got \(error)")
+        XCTAssertThrowsError(try AttachmentDestination(savePath: savePath, allowedRoots: [NSTemporaryDirectory()])) { error in
+            guard case AttachmentDestinationError.io = error else {
+                XCTFail("expected AttachmentDestinationError.io, got \(error)")
                 return
             }
+            let msg = error.localizedDescription
             XCTAssertTrue(msg.contains("save_path"),
                           "error must name the save_path parent problem; got: \(msg)")
             XCTAssertTrue(msg.lowercased().contains("permission") || msg.contains("directory"),
@@ -860,13 +860,13 @@ final class ServerSchemaTests: XCTestCase {
         }
         let tail = source[caseStart.upperBound...]
         let caseBody = tail.range(of: "\n        case \"").map { String(tail[..<$0.lowerBound]) } ?? String(tail)
-        guard let ensureIdx = caseBody.range(of: "ensureSaveDestinationDirectory(")?.lowerBound else {
-            XCTFail("handler must call ensureSaveDestinationDirectory"); return
+        guard let ensureIdx = caseBody.range(of: "AttachmentDestination(savePath:")?.lowerBound else {
+            XCTFail("handler must construct AttachmentDestination"); return
         }
         // Must come before the Tier 1 fast-path call.
-        if let tier1Idx = caseBody.range(of: "EmlxParser.saveAttachment(")?.lowerBound {
+        if let tier1Idx = caseBody.range(of: "EmlxParser.attachmentData(")?.lowerBound {
             XCTAssertTrue(ensureIdx < tier1Idx,
-                          "ensureSaveDestinationDirectory must run BEFORE Tier 1 EmlxParser.saveAttachment")
+                          "AttachmentDestination must be prepared BEFORE Tier 1 extraction")
         }
     }
 
