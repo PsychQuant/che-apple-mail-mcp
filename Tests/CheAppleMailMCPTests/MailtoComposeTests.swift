@@ -66,8 +66,9 @@ final class MailtoComposeTests: XCTestCase {
         XCTAssertFalse(s.contains("keystroke \"s\" using command down"), s)
         XCTAssertTrue(s.contains("Email sent successfully (mailto path)"))
         XCTAssertTrue(s.contains(url))
-        // window-count first gate + window-IDENTITY guard (#175 verify hardening):
-        XCTAssertTrue(s.contains("count of windows"), "missing window-count first gate")
+        // #333: identity guards work even when another window closes.
+        XCTAssertTrue(s.contains("_beforeIds does not contain (id of _cw)"))
+        XCTAssertTrue(s.contains("if _ourMatches is 0 then error"))
         XCTAssertTrue(s.contains("if title of _cand is _t then"),
                       "dispatch must locate the compose window by title (= subject)")
         XCTAssertTrue(s.contains("if _w is missing value then error"),
