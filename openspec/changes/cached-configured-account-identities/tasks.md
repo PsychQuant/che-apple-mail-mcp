@@ -7,4 +7,4 @@
 
 - [x] 2.1 Export confidence：Preserve truthful export direction，以 EWS／alias／external／partial／failure fixtures 驗證 manifest 與推論。
 - [x] 2.2 更新讀取規則例外、選項／工具描述與 manifest；以既有 export／stdio 測試及完整 Swift suite 驗證相容性。
-- [ ] 2.3 Spectra validation、獨立 review 與完整 IDD ensemble；依實際證據更新 PR／issue。
+- [x] 2.3 Spectra validation、獨立 review 與完整 IDD ensemble；依實際證據更新 PR／issue。

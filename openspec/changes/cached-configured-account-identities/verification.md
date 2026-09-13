@@ -1,6 +1,6 @@
 ## Status
 
-Implementation complete; final independent re-verification and the full IDD ensemble remain pending. Claude weekly quota is unavailable. No merge, deployment, account-setting change, address-cache file, archive migration or verified tag.
+Verified on 2026-09-14 after the full five-Claude-plus-Codex ensemble; no blocking findings. No merge, deployment, account-setting change, address-cache file, archive migration or verified tag.
 
 ## Source and native evidence
 
@@ -24,3 +24,9 @@ Codex round 1 passed the cache/export design but noted missing address-parser co
 ## Limits
 
 The cache represents Mail-configured addresses at refresh time, not every SMTP From permission or historical ownership. TTL is 300 seconds; explicit refresh invalidates the old view and joins existing work. Five seconds is the caller wait budget, not a promise that every underlying queued/native operation has terminated. A permanently stuck loader remains one flight and can require a server restart. Partial/failed metadata is disclosed; fallback positive matches also carry direction_inferred. Once export writes have begun, this change does not add cancellation/rollback semantics. New fixtures perform no real archive writes; existing broader tests retain their prior startup behavior.
+
+## 2026-09-14 completion audit
+
+All four Claude lenses, Claude adversarial review and independent Codex completed. The reviewed #375 PR delta is unchanged after merging the #329 macOS 13 executor-witness correction (delta SHA-256 b0fd123ddc3e255ae7f135d9a655fa0578735470fcba4c3757f9872561c88438). The current Swift 6.3.3 full suite passed: 1,257 tests, 10 skipped, zero failures. A test-only timing ceiling was subsequently relaxed from 0.1 to 0.5 seconds for scheduler headroom; the source-call count remains the correctness assertion.
+
+No blocking findings survived triage. Claims that targetNotRunning is mapped to the grant error are false: preflightAutomation throws the dedicated not-running report before returning a Bool; only granted returns true. The broad fallback inference and forced invalidation are explicit design choices, already documented. Late successful refresh requires the native subprocess to finish within its own execution deadline (queue/start delay can outlive the caller budget). Unrepresented historical accounts remain inferred even when the current-account snapshot is complete. These limitations do not establish a failed requirement.

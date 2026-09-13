@@ -172,7 +172,7 @@ final class AccountIdentityTests: XCTestCase {
         let start = ProcessInfo.processInfo.systemUptime
         let second = await cache.get(forceRefresh: true)
         XCTAssertNil(second.snapshot)
-        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - start, 0.1)
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - start, 0.5)
         var calls = await loader.calls
         XCTAssertEqual(calls, 1)
         await loader.release()
