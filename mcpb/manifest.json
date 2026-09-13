@@ -135,7 +135,7 @@
       "name" : "get_email_headers"
     },
     {
-      "description" : "Get email metadata (was forwarded, replied, redirected, size)",
+      "description" : "Get email metadata (was forwarded, replied, redirected, size). Includes is_draft: true (SQLite integer type 5), false (type 0), or null when evidence is unknown/unsupported or AppleScript fallback is used.",
       "name" : "get_email_metadata"
     },
     {
@@ -187,7 +187,7 @@
       "name" : "list_drafts"
     },
     {
-      "description" : "List emails in a mailbox. Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204).",
+      "description" : "Each result includes nullable is_draft (integer type 5=true, 0=false, otherwise null; AppleScript fallback is null). Do not infer draft status from mailbox names. List emails in a mailbox. Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204).",
       "name" : "list_emails"
     },
     {
@@ -239,7 +239,7 @@
       "name" : "save_attachment"
     },
     {
-      "description" : "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101). Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204). For BULK collection (e.g. feeding export_emails_markdown), use `projection: \"ids\"` to get just rowId strings (far smaller payload, no per-row recipient fetch) and `dedup: \"logical\"` to collapse Gmail mailbox duplicates server-side; `projection: \"count\"` returns just the total match count for scoping (#208).",
+      "description" : "Result objects include is_draft: true for observed integer type 5, false for type 0, null for unknown/unsupported evidence or AppleScript fallback. It is a per-message fact, not a mailbox inference; ids/count projections are unchanged. Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101). Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204). For BULK collection (e.g. feeding export_emails_markdown), use `projection: \"ids\"` to get just rowId strings (far smaller payload, no per-row recipient fetch) and `dedup: \"logical\"` to collapse Gmail mailbox duplicates server-side; `projection: \"count\"` returns just the total match count for scoping (#208).",
       "name" : "search_emails"
     },
     {

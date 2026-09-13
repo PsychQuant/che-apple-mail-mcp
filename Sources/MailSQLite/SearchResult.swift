@@ -19,6 +19,8 @@ public struct SearchResult: Sendable {
     public let isRead: Bool
     public let isFlagged: Bool
     public let toRecipients: [String]
+    /// Observed type: 5=true, 0=false; unavailable/unsupported evidence=nil.
+    public let isDraft: Bool?
 
     public init(
         id: Int,
@@ -31,7 +33,8 @@ public struct SearchResult: Sendable {
         mailboxPath: String,
         isRead: Bool,
         isFlagged: Bool,
-        toRecipients: [String]
+        toRecipients: [String],
+        isDraft: Bool? = nil
     ) {
         self.id = id
         self.subject = subject
@@ -44,6 +47,7 @@ public struct SearchResult: Sendable {
         self.isRead = isRead
         self.isFlagged = isFlagged
         self.toRecipients = toRecipients
+        self.isDraft = isDraft
     }
 }
 
