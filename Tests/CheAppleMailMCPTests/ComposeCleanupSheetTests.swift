@@ -33,7 +33,8 @@ final class ComposeCleanupSheetTests: XCTestCase {
         var clicks = 0
         for (i, line) in lines.enumerated() where line.trimmingCharacters(in: .whitespaces) == "click _b" {
             clicks += 1
-            let guardLine = lines[i - 1].trimmingCharacters(in: .whitespaces)
+            XCTAssertTrue(lines[i - 1].contains("assertComposeWindowOwner"), "discard must recheck native owner")
+            let guardLine = lines[i - 2].trimmingCharacters(in: .whitespaces)
             XCTAssertEqual(guardLine, "if _bt is \"不儲存\" or _bt is \"Don't Save\" or _bt is \"Don’t Save\" then",
                            "click _b at line \(i + 1) is not guarded by the discard condition")
         }
@@ -64,6 +65,18 @@ final class ComposeCleanupSheetTests: XCTestCase {
         XCTAssertTrue(s.contains("cleanup refused to dismiss its discard sheet because"), s)
         XCTAssertTrue(s.contains("windows carry this subject"), s)
         XCTAssertTrue(s.contains("its discard sheet could not be dismissed"), s)
+    }
+
+    func testCleanup_revalidates_native_identity_for_every_error_path() throws {
+        let source = draftScript()
+        let begin = try XCTUnwrap(source.range(of: "cleanup could not verify original id/title"))
+        let close = try XCTUnwrap(source.range(of: "then close _cw saving no"))
+        XCTAssertLessThan(begin.lowerBound, close.lowerBound)
+        let afterClose = source[close.upperBound...]
+        let guardAfter = try XCTUnwrap(afterClose.range(of: "my assertComposeWindowOwner"))
+        let axLookup = try XCTUnwrap(afterClose.range(of: "if _cleanupMayClick then"))
+        XCTAssertLessThan(guardAfter.lowerBound, axLookup.lowerBound)
+        XCTAssertTrue(source.contains("original window ownership changed after close; no discard was clicked"))
     }
 
     func testCleanup_sendPath_keepsPostDispatchBranchUntouched() {

@@ -1646,7 +1646,8 @@ actor MailController {
     }
 
     /// Compose and send a new email
-    func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, fromAddress: String? = nil) throws -> String {
+    func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, fromAddress: String? = nil, signature: ComposeSignatureSelection = .mailDefault) throws -> String {
+        _ = try signature.validated()
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41: validate every recipient field (to / cc / bcc) at the boundary.
         try validateEmailAddresses(to, field: "to")
@@ -1679,7 +1680,7 @@ actor MailController {
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
-                    attachments: attachments, send: true, fromAddress: fromAddress)
+                    attachments: attachments, send: true, fromAddress: fromAddress, signature: signature)
             },
             // #242: once the send keystroke has been dispatched the send state
             // is UNKNOWN — say so rather than letting a raw POSTDISPATCH token
@@ -1727,7 +1728,7 @@ actor MailController {
     private func composeViaMailto(
         to: [String], subject: String, body: String,
         cc: [String]?, bcc: [String]?, attachments: [String]?, send: Bool,
-        fromAddress: String? = nil
+        fromAddress: String? = nil, signature: ComposeSignatureSelection = .mailDefault
     ) throws -> String {
         // #277/#404: a display name can't ride the mailto URL (RFC 6068). Any
         // list carrying a display name is omitted from the URL as a whole and
@@ -1764,7 +1765,7 @@ actor MailController {
         let popupAddress = fromAddress.map { parseRecipient($0).address }
         let script = buildMailtoComposeScript(
             url: url, subject: subject, attachments: attachments ?? [], send: send,
-            fromAddress: popupAddress, fill: partition.fill)
+            fromAddress: popupAddress, fill: partition.fill, signature: signature)
         let needsClipboard = attachments?.isEmpty == false || !partition.fill.isEmpty
         // #301: the whole keystroke flow is ONE script with deliberate per-phase
         // delays — on a large mailbox a HEALTHY run crosses the 45s default, so
@@ -1783,6 +1784,16 @@ actor MailController {
         if result.hasSuffix(bccFieldRevealedScriptTag) {
             result.removeLast(bccFieldRevealedScriptTag.count)
             bccRevealed = true
+        }
+        do {
+            if let receipt = try ComposeSignatureReceipt.extract(from: &result, requested: signature) {
+                result += receipt.disclosure
+            }
+        } catch {
+            if send {
+                throw MailError.scriptFailed(message: "POSTDISPATCH: signature receipt unavailable or invalid after send; inspect Mail before retrying", code: -1)
+            }
+            throw MailError.operationFailed("Draft may already be saved, but its signature receipt is unavailable or invalid; inspect Mail before retrying")
         }
         // #219/#277: disclose what the GUI verified/filled so the caller can
         // see the clean path handled the extras (parity with the legacy
@@ -2019,8 +2030,9 @@ actor MailController {
         draftId: String?, subjectMatch: String?, accountName: String?, accountId: String?,
         to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil,
         attachments: [String]? = nil, format: BodyFormat = .plain,
-        fromAddress: String? = nil
+        fromAddress: String? = nil, signature: ComposeSignatureSelection = .mailDefault
     ) throws -> [String: Any] {
+        _ = try signature.validated()
         // Verify R2 (Codex): presence = key PROVIDED — an explicitly-empty
         // value is validated as a provided-but-invalid value, never silently
         // downgraded to "absent" (that let draft_id + subject_match:"" slip
@@ -2115,7 +2127,7 @@ actor MailController {
         let createResult = try createDraft(
             to: to, subject: subject, body: body, cc: cc, bcc: bcc,
             attachments: attachments, accountName: nil, format: format,
-            fromAddress: fromAddress)
+            fromAddress: fromAddress, signature: signature)
 
         // 2.5 RECEIPT (verify R3, DA-2): the GUI mailto create path can
         //     report success after firing keystrokes without the draft
@@ -2227,7 +2239,8 @@ actor MailController {
     }
 
     /// Create a draft
-    func createDraft(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, fromAddress: String? = nil) throws -> String {
+    func createDraft(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, fromAddress: String? = nil, signature: ComposeSignatureSelection = .mailDefault) throws -> String {
+        _ = try signature.validated()
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41: validate every recipient field (to / cc / bcc) at the boundary (#107).
         try validateEmailAddresses(to, field: "to")
@@ -2250,7 +2263,7 @@ actor MailController {
             cleanPath: {
                 try composeViaMailto(
                     to: to, subject: subject, body: body, cc: cc, bcc: bcc,
-                    attachments: attachments, send: false, fromAddress: fromAddress)
+                    attachments: attachments, send: false, fromAddress: fromAddress, signature: signature)
             })
         // A draft flow deliberately does NOT map timeouts to unknown-send-state:
         // nothing is sent, and a duplicated draft is visible and recoverable
