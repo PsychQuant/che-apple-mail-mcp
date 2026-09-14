@@ -1,0 +1,71 @@
+name: MailKitEncoder309
+options:
+  deploymentTarget:
+    macOS: '13.0'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    CURRENT_PROJECT_VERSION: '1'
+    MARKETING_VERSION: '0.0.1'
+    CODE_SIGNING_ALLOWED: NO
+    GENERATE_INFOPLIST_FILE: YES
+    ENABLE_APP_SANDBOX: YES
+    PROBE_RECIPIENT: ''
+    PROBE_RUN_ID: ''
+targets:
+  EncoderProbe:
+    type: app-extension
+    platform: macOS
+    sources: [Extension, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.psychquant.experimental.encoder309.extension
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+    info:
+      path: Generated/Extension-Info.plist
+      properties:
+        ProbeRecipient: $(PROBE_RECIPIENT)
+        ProbeRunID: $(PROBE_RUN_ID)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.email.extension
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).MailExtension
+          NSExtensionAttributes:
+            MEExtensionCapabilities: [MEMessageSecurityHandler]
+    entitlements:
+      path: Generated/Extension.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+  ProbeHost:
+    type: application
+    platform: macOS
+    sources: [Host]
+    dependencies:
+      - target: EncoderProbe
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.psychquant.experimental.encoder309
+    entitlements:
+      path: Generated/Host.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+  ProbeTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.psychquant.experimental.encoder309.tests
+        MACOSX_DEPLOYMENT_TARGET: '14.0'
+schemes:
+  ProbeTests:
+    build:
+      targets:
+        ProbeTests: test
+    test:
+      targets: [ProbeTests]
+  ProbeHost:
+    build:
+      targets:
+        ProbeHost: all
