@@ -5,12 +5,22 @@
      it when the upstream rule changes materially. Imported by plugin-upgrade,
      shell v2.43.0; re-synced for #304 and #404. -->
 
-# 建立信件：cite-block 已在結構上不可能發生（#304）
+# 建立信件：已移除觸發上游引文問題的注入路徑（#304 / #310）
 
 > **這條規則從「行為約束」降級為「背景說明 + 失敗處置」。**
-> 產生 `<blockquote type="cite">` 的程式碼**已經不存在**。呼叫端不再需要記得帶什麼旗標、
+> 本專案觸發多餘 `<blockquote type="cite">` 的 body 注入路徑**已經移除**。呼叫端不再需要記得帶什麼旗標、
 > 不再需要判讀 result string、也不再有「這次比較方便就接受 wrapped body」這個選項——
 > 那條路已經被拆掉，不是被禁止。
+
+## 上游問題與證據界線（#310）
+
+AppleScript 注入新正文後產生多餘引文，是已通報的上游 regression **FB11734014**，不是 Mail 必須永久維持的格式限制。[Apple Developer Forums 738842](https://developer.apple.com/forums/thread/738842) 的 2023-10 貼文附腳本與收信 raw MIME，作者表示該回報當時仍為 Open；2024-03 有 macOS 13.3.1 / Mail 16.0 無法重現的回覆，2025-01 另有 macOS 15.2 使用者回報相同症狀。
+
+2026-09-14 核對的是公開討論，**無法確認私人 Feedback Assistant 回報目前是否仍 Open，也不能推論所有 Ventura 以後版本都會發生**。Apple 可能修正它；重評 #308 / #309 的架構取捨時，應以目標版本的收信 MIME 重驗。本專案目前仍維持 #304 移除注入路徑的決定，不因公開回覆而恢復 legacy。原生回覆／轉寄保留原信的正常引文，與這個新正文被包成引文的問題不同。
+
+## Rich paste 的既有實驗（#306）
+
+[#306 的 2026-07-29 結果](https://github.com/PsychQuant/che-apple-mail-mcp/issues/306#issuecomment-5112852813)記錄四種 rich variant 的草稿通過；其中 HTML 組合也在寄件備份與實收副本保留粗體、斜體、連結，且沒有多餘 wrapper。這是該次 ASCII 探針的實驗紀錄，本輪未重跑，也未驗證其他版本、CJK 或所有 flavor 的送出結果。HTML 組合含 `public.html`、Apple HTML type 與 plain-text companion，不能推廣成 HTML-only flavor 也通過。產品目前仍只接受 `plain`；實驗成功不等於已完成產品整合。
 
 ## 現況（#304 落地後）
 
@@ -26,7 +36,7 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 **全部移除**，並由 `Tests/CheAppleMailMCPTests/NoBodyInjectionGuardTests.swift` 整檔掃描把關——
 任何人把它們寫回來，測試就紅。
 
-**已移除的參數**：`require_wrapper_free`（沒有 wrapper 可以「要求免於」）、
+**已移除的參數**：`require_wrapper_free`（已移除已知觸發方式，不再提供選擇該路徑的旗標）、
 `sanitize_links`（只服務 markdown 渲染）、`format` 的 `markdown` / `html`、
 以及兩個 env hatch（`CHE_MAIL_DISABLE_MAILTO_COMPOSE` / `CHE_MAIL_DISABLE_PASTE_REPLY`）。
 
@@ -37,7 +47,7 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 
 | # | 原因 | 處置 |
 |---|---|---|
-| 1 | `format` 是 `markdown` / `html` | 改 `plain`。**目前沒有任何已出貨路徑**能在不注入 body 的前提下送 rich text —— 這是「現況」不是「不可能」（#310）：paste path（#218）是第二條 wrapper-free 路徑、`NSPasteboard` 也能承載 rich flavor，但它產出的 MIME 沒人驗過，由 #306 定案。替代架構見 #308 / #309 |
+| 1 | `format` 是 `markdown` / `html` | 改 `plain`。產品尚未整合 rich paste；#306 已有草稿及 HTML 組合寄送通過的實驗紀錄，不能再稱為不可能或完全未驗證。證據範圍見上節；替代架構見 #308 / #309 |
 | 2 | subject 為空 | 給一個 subject（乾淨路徑靠視窗標題辨識自己的視窗）|
 | 3 | Accessibility 未授權 | 去授權；或改用 `open_mailto`（零 TCC、**不能帶附件**、需自己存檔／寄出）|
 | 4 | `from_address` 非 bare addr-spec | 給純位址；或省略後在 Mail 手動切寄件人 |

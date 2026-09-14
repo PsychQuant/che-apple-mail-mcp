@@ -54,15 +54,11 @@ final class ComposeRefusalTests: XCTestCase {
             XCTAssertTrue(msg.contains("'plain'"), "must direct the caller to plain: \(msg)")
             XCTAssertTrue(msg.contains("#308") && msg.contains("#309"),
                           "must point at the rich-text follow-ups: \(msg)")
-            // #310: the message must NOT claim rich text is impossible without
-            // injection. That was never verified — the paste path (#218) is a
-            // second wrapper-free route and NSPasteboard can carry rich
-            // flavors; nobody has checked the MIME it produces. #306 settles
-            // it, so the message states what EXISTS and names the spike.
-            XCTAssertTrue(msg.contains("UNVERIFIED"),
-                          "must not overstate a shipped-state fact as impossibility: \(msg)")
-            XCTAssertTrue(msg.contains("#306"),
-                          "must name the spike that settles it (#310): \(msg)")
+            // #310: distinguish the recorded #306 experiment from product support.
+            XCTAssertTrue(msg.contains("experiment reports"))
+            XCTAssertTrue(msg.contains("not integrated"))
+            XCTAssertTrue(msg.contains("other OS versions, CJK"))
+            XCTAssertTrue(msg.contains("#306"))
             XCTAssertFalse(msg.contains("can only"),
                            "the 'only' framing is the #310 defect: \(msg)")
         }
