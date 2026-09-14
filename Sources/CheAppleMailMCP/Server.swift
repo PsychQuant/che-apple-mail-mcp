@@ -800,6 +800,12 @@ class CheAppleMailMCPServer {
                     "refresh_identity": .object(["type": .string("boolean"), "description": .string("Default false. True refreshes the in-memory Mail configured-address cache, bypassing its 300s TTL and 60s failure backoff while sharing any active refresh. Caller wait budget is 5s; late completion may populate the cache. Requires an existing Automation grant and running Mail; this does not request a new grant. Failure uses disclosed SQLite-primary fallback. Manifests report identity_source, identity_complete and cache age when available. Only actual booleans are accepted.")]),
                     "skip_drafts": .object(["type": .string("boolean"), "description": .string("Default false preserves existing exports. Set true to exclude known drafts before content/attachment fetch (status skipped, skip_reason draft); unknown draft status produces a per-item draft_status_unknown error. Every manifest item includes is_draft: true (type 5), false (type 0), or null (unknown). No mailbox-name inference. Explicit non-boolean values, including null, are rejected.")]),
                     "skip_partial": .object(["type": .string("boolean"), "description": .string("Opt-in (#283): when an email's on-disk .emlx is a partial (Mail stores it as <rowid>.partial.emlx) AND the body the .md would carry is empty, do NOT write a header-only .md; record it as status 'header_only' with body_downloaded:false instead. Default false = still written but annotated (manifest item gets body_downloaded:false, summary gets body_not_downloaded count) so bulk archives are never silently header-only. With skip_partial:true the clean re-export loop is: re-fetch flagged ids via single get_email (its fallback nudges Mail to download the body), then re-run export for just those ids — nothing stale is on disk and the skipped email's filename slot is reserved, so the re-export lands on its original name. Under the DEFAULT mode that loop is NOT safe as-is: the header-only .md was really written, so a re-export collides into a -N-suffixed duplicate next to the stale file — delete each flagged item's written_path first (or use skip_partial:true from the start).")]),
+                    "filename_style": .object([
+                        "type": .string("string"),
+                        "enum": .array([.string("default"), .string("archive-mail")]),
+                        "default": .string("default"),
+                        "description": .string("Default preserves legacy naming. archive-mail preserves raw reply prefixes, Unicode and dash runs, truncates to 50 graphemes then trims dashes. Date uses the same offset-preserving Date-header value as frontmatter; values without a YYYY-MM-DD prefix use unknown-date (existing date-parser behavior is unchanged). Per-id filenames and filename_template take priority. Read final names from manifest written_path.")
+                    ]),
                     "filename_template": .object(["type": .string("string"), "description": .string("Override filename with placeholders {date}/{subject}/{sender}/{message_id}")]),
                     "filenames": .object(["type": .string("object"), "description": .string("Per-id filename override map { id: name }")]),
                     "extra_frontmatter": .object(["type": .string("object"), "description": .string("Static key/value pairs appended to every file's frontmatter after the six core fields")])
@@ -2038,6 +2044,7 @@ class CheAppleMailMCPServer {
             let skipPartial = exportOpts["skip_partial"]?.boolValue ?? false
             let skipDrafts = try parseSkipDraftsOption(exportOpts["skip_drafts"])
             let refreshIdentity = try parseRefreshIdentityOption(exportOpts["refresh_identity"])
+            let filenameStyle = try parseExportFilenameStyle(exportOpts["filename_style"])
             let filenameTemplate = exportOpts["filename_template"]?.stringValue
             var filenameOverrides: [String: String] = [:]
             if let fmap = exportOpts["filenames"]?.objectValue {
@@ -2104,6 +2111,7 @@ class CheAppleMailMCPServer {
                 ownAddresses: exportIdentity.ownAddresses, fallbackDirection: exportFallbackDirection,
                 includeAttachments: includeAttachments, filenameTemplate: filenameTemplate,
                 filenameOverrides: filenameOverrides, extraFrontmatter: extraFrontmatter,
+                filenameStyle: filenameStyle,
                 identityResolvable: { id in
                     guard exportIdentity.complete else { return false }
                     // Fail CLOSED: anything we cannot resolve to a known
@@ -2635,6 +2643,14 @@ func parseBodyFormat(_ raw: String?) throws -> BodyFormat {
 /// Unlike the legacy optional Bool helper, an explicit null is not an opt-out.
 func parseSkipDraftsOption(_ value: Value?) throws -> Bool {
     try parseExportBooleanOption(value, name: "skip_drafts")
+}
+
+func parseExportFilenameStyle(_ value: Value?) throws -> ExportFilenameStyle {
+    guard let value else { return .default }
+    if case .string(let raw) = value, let style = ExportFilenameStyle(rawValue: raw) {
+        return style
+    }
+    throw MailError.invalidParameter("opts.filename_style must be default or archive-mail")
 }
 
 func parseRefreshIdentityOption(_ value: Value?) throws -> Bool {
