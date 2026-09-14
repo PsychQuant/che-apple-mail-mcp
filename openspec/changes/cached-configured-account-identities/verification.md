@@ -1,6 +1,6 @@
 ## Status
 
-Verified on 2026-09-14 after the full five-Claude-plus-Codex ensemble; no blocking findings. No merge, deployment, account-setting change, address-cache file, archive migration or verified tag.
+Verified on 2026-09-14 after the full five-Claude-plus-Codex ensemble; no blocking findings. No merge, deployment, account-setting change, address-cache file or archive migration. The verified code snapshot is tagged idd-375-verified.
 
 ## Source and native evidence
 
