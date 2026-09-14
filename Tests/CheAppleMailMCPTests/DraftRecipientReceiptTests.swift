@@ -26,7 +26,62 @@ final class DraftRecipientReceiptTests: XCTestCase {
         XCTAssertEqual(r.bccFound, ["c@x.org"])
         let empty = try XCTUnwrap(parseRecipientReceipt("\u{1D}"))
         XCTAssertEqual(empty.ccFound, []); XCTAssertEqual(empty.bccFound, [])
-        XCTAssertNil(parseRecipientReceipt("NOTFOUND"))
+        XCTAssertNil(try parseRecipientReceipt("NOTFOUND"))
+    }
+
+    func testMalformedReceiptCannotBecomeFoundOrNotFound() {
+        let gs = "\u{1D}", rs = "\u{1E}"
+        let malformed = ["", "malformed receipt", "a@b.c", gs + gs,
+                         gs + " ", " " + gs, "\ta@b.c" + gs, gs + "a@b.c\n",
+                         "\u{A0}a@b.c" + gs, gs + "a@b.c\u{2003}",
+                         "a@b.c" + gs + "c@d.e" + gs,
+                         rs + "a@b.c" + gs, "a@b.c" + rs + gs,
+                         "a@b.c" + rs + rs + "c@d.e" + gs,
+                         "NOTFOUND" + gs, "malformed receipt" + gs,
+                         "a@b.c\u{0}" + gs, "a@b.c\nother@b.c" + gs,
+                         "Name <a@b.c>" + gs, "a b@c.d" + gs, "@b.c" + gs,
+                         "a@" + gs, "a@b@c" + gs]
+        for raw in malformed {
+            XCTAssertThrowsError(try parseRecipientReceipt(raw), "invalid payload must throw: \(raw.debugDescription)")
+        }
+    }
+
+    func testValidReceiptRetainsAddressFormsAndEmptyGroups() throws {
+        let addresses = ["a+b@example.com", "收件人@例子.台灣", "\"a b\"@example.com", "\"a@b\"@example.com", "a@[IPv6:2001:db8::1]"]
+        let raw = addresses.joined(separator: "\u{1E}") + "\u{1D}"
+        let result = try XCTUnwrap(parseRecipientReceipt(raw))
+        XCTAssertEqual(result.ccFound, addresses)
+        XCTAssertEqual(result.bccFound, [])
+        XCTAssertEqual(try parseRecipientReceipt("\u{1D}x@y.z")?.bccFound, ["x@y.z"])
+        XCTAssertNil(try parseRecipientReceipt(" \nNOTFOUND\n "))
+    }
+
+    func testCreateDraft_malformedReceiptIsUnavailableWithoutRetryOrMismatch() async throws {
+        for raw in ["malformed receipt", "\u{1D}\u{1D}", "bad address\u{1D}", "\u{1D} ", "\ta@b.c\u{1D}", "\u{1D}a@b.c\n"] {
+            let scripts = await seams(receipt: raw)
+            let result = try await MailController.shared.createDraft(
+                to: ["a@b.c"], subject: "s", body: "b", cc: ["Name <c@d.e>"], bcc: nil)
+            XCTAssertTrue(result.contains("recipients_receipt: unavailable"), result)
+            XCTAssertFalse(result.contains("recipients_diff"), result)
+            XCTAssertFalse(result.contains("not found"), result)
+            XCTAssertEqual(scripts().filter { $0.contains("#404 recipient receipt") }.count, 1)
+        }
+    }
+
+    func testCreateDraft_notFoundStillPollsAndCanFindReceipt() async throws {
+        final class Counter: @unchecked Sendable { var count = 0 }
+        let c = Counter()
+        await MailController.shared.setTestSeams(scriptRunner: { script in
+            if script.contains("#404 recipient receipt") {
+                c.count += 1
+                return c.count == 1 ? "NOTFOUND" : "c@d.e\u{1D}"
+            }
+            return "Draft created successfully (mailto path)"
+        }, refusal: { nil })
+        let result = try await MailController.shared.createDraft(
+            to: ["a@b.c"], subject: "s", body: "b", cc: ["Name <c@d.e>"], bcc: nil)
+        XCTAssertTrue(result.contains("recipients_verified: true"), result)
+        XCTAssertEqual(c.count, 2)
     }
 
     // MARK: verdict (three-state, PR #407 R1 #3)

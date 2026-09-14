@@ -1821,7 +1821,7 @@ actor MailController {
         lastRecipientReceiptOutcome = nil
         if !send && filledCcOrBcc {
             let receiptScript = buildDraftRecipientReceiptScript(subject: subject)
-            // Three states (PR #407 R1 #3): a script FAILURE is recorded as
+            // Three states (PR #407 R1 #3 / #427): read or parse failure is recorded as
             // `unavailable` and never retried — retrying a 45 s timeout three
             // times stacked ~135 s onto the call (#406) and still said nothing;
             // only NOTFOUND polls, because the save can land asynchronously.
@@ -1830,7 +1830,7 @@ actor MailController {
                 if attempt > 0 { Thread.sleep(forTimeInterval: 0.4) }
                 do {
                     let raw = try runDraftScanScript(receiptScript)
-                    if let parsed = parseRecipientReceipt(raw) {
+                    if let parsed = try parseRecipientReceipt(raw) {
                         fetch = .found(parsed)
                         break
                     }
@@ -1838,7 +1838,7 @@ actor MailController {
                 } catch {
                     let reason = error.localizedDescription
                     _ = Diagnostics.emit(
-                        "recipient receipt for subject \"\(subject)\" could not run: \(reason)\n")
+                        "recipient receipt for subject \"\(subject)\" could not be read or parsed: \(reason)\n")
                     fetch = .unavailable(reason)
                     break
                 }
