@@ -41,14 +41,17 @@ enum EmailMarkdownRenderer {
     ///     resolved by the caller (not surfaced on `EmailContent`).
     ///   - extraFrontmatter: optional `(key, value)` pairs appended after the
     ///     core six fields.
+    ///   - convertedDate: the exporter's Date-header conversion, shared with
+    ///     its filename prefix. Standalone rendering computes the same helper.
     static func render(
         _ content: EmailContent,
         direction: String,
         inReplyTo: String,
-        extraFrontmatter: [(String, String)] = []
+        extraFrontmatter: [(String, String)] = [],
+        convertedDate: String? = nil
     ) -> String {
         let threadKey = stripReplyPrefixes(content.subject)
-        let isoDate = rfc822ToISO8601(content.date)
+        let isoDate = convertedDate ?? rfc822ToISO8601(content.date)
         let bareSender = bareEmail(content.sender)
 
         var out = "---\n"
