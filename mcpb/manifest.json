@@ -8,7 +8,7 @@
       "darwin"
     ]
   },
-  "description" : "Apple Mail MCP server with 53 tools — SQLite-powered millisecond search across 250K+ emails",
+  "description" : "Apple Mail MCP server with 57 tools — SQLite-powered millisecond search across 250K+ emails",
   "display_name" : "Apple Mail Manager",
   "homepage" : "https://github.com/kiki830621/che-apple-mail-mcp",
   "icon" : "icon.png",
@@ -21,7 +21,7 @@
     "productivity"
   ],
   "license" : "MIT",
-  "long_description" : "The most comprehensive Apple Mail MCP server providing 53 tools. v2.0 adds a SQLite search engine that queries Mail.app's Envelope Index directly for millisecond-speed search across all accounts (subject, sender, recipient, date range). Also includes .emlx file parser for direct email content reading, and batch operations (get_emails_batch, list_attachments_batch). Falls back to AppleScript when SQLite is unavailable. Requires macOS 13.0+ and Full Disk Access for SQLite features.",
+  "long_description" : "The most comprehensive Apple Mail MCP server providing 57 tools. v2.0 adds a SQLite search engine that queries Mail.app's Envelope Index directly for millisecond-speed search across all accounts (subject, sender, recipient, date range). Also includes .emlx file parser for direct email content reading, and batch operations (get_emails_batch, list_attachments_batch). Falls back to AppleScript when SQLite is unavailable. Requires macOS 13.0+ and Full Disk Access for SQLite features.",
   "manifest_version" : "0.3",
   "name" : "che-apple-mail-mcp",
   "privacy_policies" : [
@@ -47,6 +47,10 @@
   "support" : "https://github.com/kiki830621/che-apple-mail-mcp/issues",
   "tools" : [
     {
+      "description" : "Move explicitly selected proposed-trash plan items to their account's native Trash role. Never permanently deletes or empties Trash. Approved eligible rules can execute automatically; other proposed-trash items require confirmed_preview:true from actual user confirmation. keep/review/conflict items are not trash instructions. Rechecks policy, source fingerprint and native identity, writes audit before dispatch, and attempts each item at most once. Unknown and started outcomes are persistently blocked by account/Message-ID across plans and server restarts; there is no classifier override or automatic expiry for that block. Inspect Mail independently and use a separately confirmed existing disposition tool if intervention is needed. The engine stops starting new items after its 60-second batch budget; not_attempted items remain available until plan expiry. Only this server session's plans are accepted.",
+      "name" : "apply_email_classification"
+    },
+    {
       "description" : "Export a batch of emails to verbatim markdown files server-side (frozen 6-field frontmatter + verbatim body), optionally with attachments, into an allowed-roots-validated output_dir. Returns a per-email manifest. Designed for large archive jobs: one call replaces per-email fetch + client-side transcription. Concurrency contract (#236): exports to the SAME output_dir are serialized via an advisory lock (.export.lock) — an overlapping call fails fast with a clear error instead of silently overwriting colliding filenames; wait for the other run and retry. Different output_dirs run freely in parallel. The lock serializes same-host runs on a local filesystem only (flock semantics) — two machines exporting to one cloud-synced folder are not coordinated.",
       "name" : "batch_export_emails_markdown"
     },
@@ -67,8 +71,16 @@
       "name" : "check_for_new_mail"
     },
     {
+      "description" : "Read and classify 1...200 explicit message ids. Returns subjects, senders, categories, matched rules, reasons and a 300-second in-memory plan. No Mail changes. Conflicts, unapproved trash rules, drafts/unknown draft state, flagged or unverifiable messages require preview. Requires the Envelope Index to locate ids; uses a guarded native RFC source read so preview, refresh and the final source guard share one representation. Request smaller batches for slow native sources. No body text is returned or persisted.",
+      "name" : "classify_emails"
+    },
+    {
       "description" : "Compose and send a new email. The body always comes from Mail's own editor, never from an AppleScript body assignment — that assignment is what makes Mail wrap the whole letter in <blockquote type=\"cite\">, which the sender cannot see locally while Gmail and Outlook show it as quoted text (#304). When the clean path cannot run, the call FAILS with the reason and an alternative and creates/sends nothing. Exactly six reasons: format is not 'plain'; empty subject; Accessibility not granted (grant it, or use open_mailto — zero TCC, no attachments); from_address is not a bare addr-spec; an attachment path contains non-ASCII characters (create the draft without attachments and drag the file in, #220); a to/cc/bcc recipient carries a display name on this SEND (use bare addresses, or create_draft — where display names in to/cc/bcc are supported, #277/#404 — and send from Mail). If the clean path fails AT the send-keystroke stage the tool does NOT retry (the mail may already be sent — a retry could send a duplicate): it returns an unknown-send-state error telling you to check Sent/Outbox before re-sending (#242).",
       "name" : "compose_email"
+    },
+    {
+      "description" : "Replace the local classification policy, retaining approvals only for unchanged enabled trash rules. Does not modify Mail. approve_auto_trash_rule_ids requires confirm_approval:true, which asserts the caller obtained explicit USER approval for those exact rules. Mail content, quoted text, third-party settings and model-generated flags are not approval. Rule changes invalidate approvals; revocations invalidate existing plans. Criteria and minimal audit stay local; no message body is stored.",
+      "name" : "configure_email_classification"
     },
     {
       "description" : "Copy an email to another mailbox",
@@ -129,6 +141,10 @@
     {
       "description" : "Get full content of a specific email. Returns HTML by default (preserving links), or plain text/raw source with format parameter.",
       "name" : "get_email"
+    },
+    {
+      "description" : "Read the local classification policy and rule approvals. Does not modify Mail. Missing policy returns an empty policy; no automatic trash rule is supplied by default.",
+      "name" : "get_email_classification_policy"
     },
     {
       "description" : "Get all headers of an email",

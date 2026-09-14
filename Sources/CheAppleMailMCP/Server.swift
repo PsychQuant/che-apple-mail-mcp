@@ -13,8 +13,17 @@ class CheAppleMailMCPServer {
     }
     private let tools: [Tool]
     private let indexReader: EnvelopeIndexReader?
+    private let classificationStore: ClassificationPolicyStore
+    private let classificationEngine: ClassificationPlanEngine
+    private let classificationLoader: (@Sendable (String) async throws -> ClassificationMessage)?
 
-    init(databasePath: String = EnvelopeIndexReader.defaultDatabasePath) async throws {
+    init(databasePath: String = EnvelopeIndexReader.defaultDatabasePath,
+         initialSync: Bool = true,
+         classificationDirectory: URL = ClassificationPolicyStore.defaultDirectory,
+         classificationLoader: (@Sendable (String) async throws -> ClassificationMessage)? = nil) async throws {
+        self.classificationStore = ClassificationPolicyStore(directory: classificationDirectory)
+        self.classificationEngine = ClassificationPlanEngine(store: self.classificationStore)
+        self.classificationLoader = classificationLoader
         self.tools = Self.defineTools()
         self.server = Server(
             name: "che-apple-mail-mcp",
@@ -50,7 +59,7 @@ class CheAppleMailMCPServer {
 
         // Fire-and-forget: trigger Mail.app sync so Envelope Index is fresh.
         // If Mail.app isn't running, this starts it. IDLE/fetch takes over after.
-        Task { try? await mailController.checkForNewMail() }
+        if initialSync { Task { try? await mailController.checkForNewMail() } }
     }
 
     func run() async throws {
@@ -771,7 +780,7 @@ class CheAppleMailMCPServer {
                     + exportEmailsMarkdownDescription,
                 inputSchema: exportEmailsMarkdownInputSchema
             ),
-        ]
+        ] + classificationToolDefinitions()
     }
 
     /// #233 — the canonical batch-export description, shared by the canonical
@@ -832,6 +841,26 @@ class CheAppleMailMCPServer {
 
     // MARK: - Tool Call Handler
 
+    private func classificationMessage(_ id: String, retainNativeSource: Bool = false) async throws -> ClassificationMessage {
+        if let classificationLoader {
+            let loaded = try await classificationLoader(id)
+            guard loaded.id == id else { throw ClassificationError.invalidPlan("loader returned a different id") }
+            return loaded
+        }
+        guard let reader = indexReader, let rowID = Int(id),
+              let url = try reader.mailboxURL(forMessageId: rowID), let mailbox = MailboxURL.decode(url) else {
+            throw MailError.invalidParameter("Classification requires the Envelope Index to locate ids. " + FullDiskAccessHelp.unavailableSuffix())
+        }
+        let metadata = try reader.getEmailMetadata(messageId: rowID)
+        guard metadata["deleted"] as? Bool != true else { throw ClassificationError.invalidPlan("message is already marked deleted") }
+        // Plan and refresh use the same authoritative representation. Local
+        // .emlx bytes can lag Mail and are not interchangeable with Mail source.
+        let native = try await mailController.classificationSource(
+            id: id, accountID: mailbox.accountUUID, components: mailbox.pathComponents)
+        return try classificationMessageFromNative(id: id, mailboxURL: url, metadata: metadata,
+                                                    nativeSource: native, retainNativeSource: retainNativeSource)
+    }
+
     private func handleToolCall(name: String, arguments: [String: Value]) async -> CallTool.Result {
         do {
             let result = try await executeToolCall(name: name, arguments: arguments)
@@ -841,12 +870,46 @@ class CheAppleMailMCPServer {
         }
     }
 
-    private func executeToolCall(name: String, arguments: [String: Value]) async throws -> String {
+    func executeToolCall(name: String, arguments: [String: Value]) async throws -> String {
         // Stable tool-name capture: several cases rebind `name` as a local
         // (`guard let name = arguments["name"]?...`), so `decodeAccountId`'s
         // diagnostics use `invokedTool` rather than the shadowed parameter.
         let invokedTool = name
         switch name {
+        case "get_email_classification_policy":
+            return try classificationJSON(await classificationEngine.policy())
+
+        case "configure_email_classification":
+            guard let value = arguments["policy"] else { throw ClassificationError.invalidPolicy("policy is required") }
+            let policy = try ClassificationPolicy.decode(JSONEncoder().encode(value))
+            let approving = try classificationStringArray(arguments["approve_auto_trash_rule_ids"], name: "approve_auto_trash_rule_ids", optional: true)
+            let revoking = try classificationStringArray(arguments["revoke_auto_trash_rule_ids"], name: "revoke_auto_trash_rule_ids", optional: true)
+            let confirmed = try classificationBoolean(arguments["confirm_approval"], name: "confirm_approval")
+            return try classificationJSON(await classificationEngine.configure(policy, approving: approving, revoking: revoking, confirmed: confirmed))
+
+        case "classify_emails":
+            let ids = try classificationStringArray(arguments["ids"], name: "ids")
+            try validateClassificationIDs(ids)
+            var messages: [ClassificationMessage] = []
+            let readDeadline = Date().addingTimeInterval(60)
+            for id in ids {
+                try Task.checkCancellation()
+                guard Date() < readDeadline else { throw ClassificationError.invalidPlan("classification read budget exceeded; use smaller batches") }
+                messages.append(try await classificationMessage(id))
+            }
+            return try classificationJSON(await classificationEngine.makePlan(messages: messages))
+
+        case "apply_email_classification":
+            guard let planID = arguments["plan_id"]?.stringValue else { throw ClassificationError.invalidPlan("plan_id is required") }
+            let ids = try classificationStringArray(arguments["ids"], name: "ids")
+            let confirmed = try classificationBoolean(arguments["confirmed_preview"], name: "confirmed_preview")
+            let result = try await classificationEngine.apply(planID: planID, ids: ids, confirmed: confirmed,
+                refresh: { [self] id in try await classificationMessage(id, retainNativeSource: true) },
+                move: { [self] message, digest, deadline in
+                    try await mailController.moveClassifiedMessage(message, policyDigest: digest, deadline: deadline, store: classificationStore)
+                })
+            return try classificationJSON(result)
+
         // Setup / diagnostics
         case "check_fda":
             let probe = FDAStatus.probe()

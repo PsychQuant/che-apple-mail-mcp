@@ -25,6 +25,8 @@ actor MailController {
     /// compose/reply/forward methods with a fake script runner (no live Mail).
     private var scriptRunnerOverride: ((String) throws -> String)?
     private var scriptListRunnerOverride: ((String) throws -> [String])?
+    private var automationGrantedOverride: Bool?
+    private var subprocessCommandOverride: (URL, [String])?
     /// When set, both pre-flight refusal probes return this closure's value
     /// (nil = proceed) instead of probing Accessibility — lets tests select the
     /// branch deterministically.
@@ -50,10 +52,14 @@ actor MailController {
         refusal: (() -> ComposeRefusal?)?,
         openURL: ((URL) -> Bool)? = nil,
         scriptTimeout: TimeInterval? = nil,
-        scriptListRunner: ((String) throws -> [String])? = nil
+        scriptListRunner: ((String) throws -> [String])? = nil,
+        automationGranted: Bool? = nil,
+        subprocessCommand: (URL, [String])? = nil
     ) {
         scriptRunnerOverride = scriptRunner
         scriptListRunnerOverride = scriptListRunner
+        automationGrantedOverride = automationGranted
+        subprocessCommandOverride = subprocessCommand
         refusalOverride = refusal
         openURLOverride = openURL
         scriptTimeoutOverride = scriptTimeout
@@ -317,7 +323,7 @@ actor MailController {
             return try runGuarded(timeout: timeout,
                                   automationGranted: true) { try override(source) }
         }
-        let granted = try preflightAutomation()
+        let granted = try automationGrantedOverride ?? preflightAutomation()
         guard !requireExistingGrant || granted else {
             throw MailError.operationFailed("Account identity refresh requires an existing Mail Automation grant; use check_automation and the explicit account-access setup flow first.")
         }
@@ -344,11 +350,11 @@ actor MailController {
         let deadline = scriptTimeoutOverride ?? timeout
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.executableURL = subprocessCommandOverride?.0 ?? URL(fileURLWithPath: "/usr/bin/osascript")
         // Script via stdin ("-"), not -e: no argv length limit, and the script
         // text (which embeds email bodies/recipients) never appears in the
         // process table for same-uid observers. Do not "simplify" this to -e.
-        process.arguments = ["-"]
+        process.arguments = subprocessCommandOverride?.1 ?? ["-"]
         // Copy-then-override env (never a fresh dictionary — that would strip
         // HOME/TMPDIR): pin a UTF-8 locale so osascript's error text (which
         // embeds CJK mailbox names/subjects) decodes losslessly (Lens A P2-7).
@@ -370,6 +376,18 @@ actor MailController {
                 code: -1)
         }
 
+        // Registration and deadline precede stdin delivery, which can itself
+        // block for large source comparisons or a child that stops reading.
+        let absoluteDeadline = DispatchTime.now() + deadline
+        let waitSem = DispatchSemaphore(value: 0)
+        let child = guiChildAccounting.trackChild()
+        Thread.detachNewThread {
+            process.waitUntilExit()
+            child.didExit()
+            waitSem.signal()
+        }
+        try? stdinPipe.fileHandleForReading.close()
+
         // Drain stdout/stderr CONCURRENTLY, and START the drains BEFORE feeding
         // stdin — osascript happens to read the whole program before emitting
         // anything, but ordering the drains first removes that load-bearing
@@ -389,31 +407,20 @@ actor MailController {
             drainGroup.leave()
         }
 
-        // Feed the script. THROWING variants: the non-throwing FileHandle
-        // write/closeFile raise an uncatchable ObjC exception on a broken pipe
-        // and would abort the whole MCP server (Lens A P1-2).
+        var feedError: Error?
         do {
-            try stdinPipe.fileHandleForWriting.write(contentsOf: Data(source.utf8))
+            try BoundedPipeWriter.write(Data(source.utf8), to: stdinPipe.fileHandleForWriting.fileDescriptor,
+                                        deadline: absoluteDeadline)
             try stdinPipe.fileHandleForWriting.close()
         } catch {
-            process.terminate()
-            throw MailError.scriptFailed(
-                message: "could not feed the script to osascript: \(error.localizedDescription)",
-                code: -1)
+            feedError = error
+            try? stdinPipe.fileHandleForWriting.close()
         }
-
-        let waitSem = DispatchSemaphore(value: 0)
-        let child = guiChildAccounting.trackChild()
-        Thread.detachNewThread {
-            process.waitUntilExit()
-            child.didExit()
-            waitSem.signal()
-        }
-        if waitSem.wait(timeout: .now() + deadline) == .timedOut {
+        if feedError != nil || waitSem.wait(timeout: absoluteDeadline) == .timedOut {
             // REAL cancellation (the #297 in-process guard could only abandon):
             // SIGTERM, brief grace, then SIGKILL — the GUI flow stops driving
             // Mail the moment the interpreter dies.
-            process.terminate()
+            if process.isRunning { process.terminate() }
             var exitConfirmed = waitSem.wait(timeout: .now() + 2) == .success
             if !exitConfirmed {
                 // Guard the raw kill: the waiter may have reaped the child in
@@ -434,6 +441,14 @@ actor MailController {
             // swallows every subsequent keystroke, making the next attempt fail
             // confusingly — send one Escape to dismiss it (Lens B P2).
             if guiFlow { Self.dismissLingeringGuiMenu() }
+            if let feedError {
+                switch feedError {
+                case BoundedPipeWriteError.timedOut: break
+                case BoundedPipeWriteError.cancelled: throw CancellationError()
+                default:
+                    throw MailError.scriptFailed(message: "could not deliver script input; child termination requested (exit confirmed: \(exitConfirmed))", code: -1)
+                }
+            }
             throw MailError.scriptTimedOut(
                 seconds: Int(deadline), automationGranted: granted,
                 execution: .subprocess(exitConfirmed: exitConfirmed))
@@ -441,9 +456,9 @@ actor MailController {
         // Join the drains with a REAL barrier. On timeout, throw — never return
         // a truncated stdout as the script result (a grandchild inheriting the
         // pipe's write end can hold EOF open past osascript's exit).
-        if drainGroup.wait(timeout: .now() + 5) == .timedOut {
+        if drainGroup.wait(timeout: min(absoluteDeadline, .now() + 5)) == .timedOut {
             throw MailError.scriptFailed(
-                message: "osascript exited but its output pipes did not close within 5s "
+                message: "osascript exited but its output pipes did not close within the remaining deadline "
                     + "(a grandchild may be holding them) — refusing to return partial output",
                 code: -1)
         }
@@ -1375,6 +1390,37 @@ actor MailController {
             accountId: accountId, accountName: accountName
         )
         return try runScript(script)
+    }
+
+    func classificationSource(id: String, accountID: String, components: [String]) throws -> String {
+        let script = try buildClassificationSourceReadScript(id: id, accountID: accountID, components: components)
+        return try runSubprocessScript(script, timeout: 10, guiFlow: false, requireExistingGrant: true)
+    }
+
+    /// #356: explicit native Trash role, exact source guards, bounded non-GUI
+    /// transport. A timeout propagates as uncertainty; never retry here.
+    func moveClassifiedMessage(_ message: ClassificationMessage, policyDigest: String,
+                               deadline: Date, store: ClassificationPolicyStore) throws -> ClassificationMoveReceipt {
+        try Task.checkCancellation()
+        guard deadline > Date(), try store.load().fingerprint() == policyDigest else { return .refused }
+        let script = try buildClassificationTrashScript(message, deadline: deadline)
+        let remaining = deadline.timeIntervalSinceNow
+        guard remaining > 0 else { return .refused }
+        let raw: String
+        do {
+            raw = try runSubprocessScript(script, timeout: min(10, remaining), guiFlow: false, requireExistingGrant: true)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+            // The script contains a transient encoded source comparison. Never
+            // expose compiler/AppleEvent diagnostics that might echo it.
+            throw MailError.operationFailed("Classification native operation did not produce a conclusive receipt; outcome unknown")
+        }
+        switch raw {
+        case "CLASSIFY_MOVED": return .moved
+        case "CLASSIFY_ALREADY_TRASH": return .alreadyInTrash
+        case "CLASSIFY_REFUSED": return .refused
+        default: throw MailError.operationFailed("Unrecognized classification move receipt; outcome unknown")
+        }
     }
 
     /// Delete email (move to trash)

@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**The most comprehensive Apple Mail MCP server** - 53 tools with SQLite-powered millisecond search across 250K+ emails.
+**The most comprehensive Apple Mail MCP server** - 57 tools with SQLite-powered millisecond search across 250K+ emails.
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +15,7 @@
 
 | Feature | Other MCPs | che-apple-mail-mcp |
 |---------|------------|-------------------|
-| Total Tools | ~20 | **53** |
+| Total Tools | ~20 | **57** |
 | Language | Python | **Swift (Native)** |
 | Search Speed | Seconds (AppleScript) | **Milliseconds (SQLite)** |
 | Search Fields | Subject/Sender | **Subject/Sender/Recipient/Date** |
@@ -61,7 +61,7 @@ you these are missing (#353):
 
 | Shipped by the plugin | Present with MCP-only |
 |---|---|
-| All 53 MCP tools | ✅ yes |
+| All 57 MCP tools | ✅ yes |
 | `/archive-mail` + `-migrate` / `-rebuild-threads` / `-repair-synthetic-ids` / `-view` | ❌ the archiving SOP does not exist |
 | `rules/compose-wrapper-free.md` — what the cite-block was, and what a refused compose call means | ⚠️ background: since [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304) the wrapper is structurally impossible, so this rule now explains the six refusal reasons and their recipes rather than guarding against a silent fallback |
 | `rules/confirmation-triggers.md`, `rules/false-positive-detection.md` | ❌ no confirmation discipline on destructive operations |
@@ -129,7 +129,19 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## All 53 Tools
+## All 57 Tools
+
+<details>
+<summary><b>Email Classification (4)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `get_email_classification_policy` | Read local policy and approvals |
+| `configure_email_classification` | Configure criteria and explicitly approve/revoke rules |
+| `classify_emails` | Read-only classification and expiring explicit-id plan |
+| `apply_email_classification` | Guarded move to native Trash with audit; no permanent deletion |
+
+</details>
 
 <details>
 <summary><b>Accounts (2)</b></summary>

@@ -1,0 +1,16 @@
+{
+  "full": {
+    "tests": 1317,
+    "skipped": 11,
+    "failures": 0
+  },
+  "focused_transport_and_classification": {
+    "tests": 78,
+    "failures": 0
+  },
+  "native_script_compiled": true,
+  "foundation_handlers_executed_with_synthetic_data": true,
+  "real_unread_stdin_child_tested": true,
+  "live_mail_move_tested": false,
+  "claude_review": "pending_authentication"
+}
