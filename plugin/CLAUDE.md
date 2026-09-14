@@ -162,6 +162,10 @@ AI: [直接執行,沒 confirmation]
 
 compose/create_draft/update_draft 支援 signature 物件（mail_default／none／named + name），由目標視窗原生 popup 選取，不手工拼接簽名。收據證明選取，不證明正文插入；首次設定先確認草稿，再正式送出。詳見 [compose-signature](rules/compose-signature.md)。
 
+## 長正文預檢（mail#388）
+
+`check_compose_length` 以與真 mailto builder 相同的 UTF-8 encoding／recipient partition 回傳精確 total/body/overhead 與 8000 預算。超限時 compose/create/update 在 Mail 作業前回 MAILTO_URL_TOO_LONG，提供手動貼上或經確認拆信指引；不截斷、不改走 legacy。fits=true 只代表長度，其他資格仍需各自通過。
+
 ## Configuration
 
 > **路徑遷移**:v2.7.0 ↓ 用 `.claude/emails.md`,v2.8.0+ 改用 `.claude/.mail/config.md`(auto-migrate),**v2.16.0+ 改用 `.claude/.mail/config.yaml`** 副檔名(silent rename per #47;legacy `.md` 仍 fallback,v3.0 移除)。下述 schema 三者通用。

@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**最完整的 Apple Mail MCP 伺服器** - 57 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
+**最完整的 Apple Mail MCP 伺服器** - 58 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +15,7 @@
 
 | 功能 | 其他 MCP | che-apple-mail-mcp |
 |------|----------|-------------------|
-| 工具總數 | ~20 | **57** |
+| 工具總數 | ~20 | **58** |
 | 開發語言 | Python | **Swift (原生)** |
 | 搜尋速度 | 秒級 (AppleScript) | **毫秒級 (SQLite)** |
 | 搜尋欄位 | 主旨/寄件人 | **主旨/寄件人/收件人/日期** |
@@ -57,7 +57,7 @@ claude plugin install che-apple-mail-mcp@che-apple-mail-mcp
 
 | plugin 提供 | 只裝 MCP |
 |---|---|
-| 全部 57 個 MCP 工具 | ✅ 有 |
+| 全部 58 個 MCP 工具 | ✅ 有 |
 | `/archive-mail` 與 `-migrate` / `-rebuild-threads` / `-repair-synthetic-ids` / `-view` | ❌ 整套歸檔 SOP 不存在 |
 | `rules/compose-wrapper-free.md`——正式信件的 cite-block 紀律 | ❌ **影響最大**：對正式信件產生 `<blockquote type="cite">` 本文是 CRITICAL 缺陷，而這條規則正是防它的 |
 | `rules/confirmation-triggers.md`、`rules/false-positive-detection.md` | ❌ 破壞性操作沒有確認紀律 |
@@ -91,11 +91,20 @@ OneDrive）——同步活動會造成 MCP 連線逾時。
 
 ---
 
-## 全部 57 個工具
+## 全部 58 個工具
 
 ### 新建郵件的簽名
 
 compose_email、create_draft、update_draft 支援 signature 物件：`{"mode":"mail_default"}`、`{"mode":"none"}`、`{"mode":"named","name":"Professional"}`。工具在 From 之後選取 Mail 原生簽名，不手工將簽名拼進 body。**選取收據不是正文插入證據**；首次在該 Mail 設定使用時先確認草稿，再正式寄送，或選 none 並自行提供署名。交給 Mail 插入時不要再重複手寫同一份簽名。介面／名稱無法安全辨識時 explicit mode 會拒絕，不回退到已移除的 body-assignment 路徑。
+
+<details>
+<summary><b>組信預檢 (1)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `check_compose_length` | 不存取 Mail 的精確 URL／body 編碼長度；fits 不是完整資格保證 |
+
+</details>
 
 <details>
 <summary><b>郵件分類 (4)</b></summary>

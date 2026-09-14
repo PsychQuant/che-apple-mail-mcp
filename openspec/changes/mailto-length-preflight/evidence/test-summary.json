@@ -1,0 +1,13 @@
+{
+  "full": {
+    "tests": 1337,
+    "skipped": 11,
+    "failures": 0
+  },
+  "length_tests": 6,
+  "focused_with_disclosure": 9,
+  "codex": "static PASS",
+  "claude": "pending_authentication",
+  "global_mirror_pr": "https://github.com/PsychQuant/che-claude-config/pull/17",
+  "mail_mutations": 0
+}

@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**The most comprehensive Apple Mail MCP server** - 57 tools with SQLite-powered millisecond search across 250K+ emails.
+**The most comprehensive Apple Mail MCP server** - 58 tools with SQLite-powered millisecond search across 250K+ emails.
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +15,7 @@
 
 | Feature | Other MCPs | che-apple-mail-mcp |
 |---------|------------|-------------------|
-| Total Tools | ~20 | **57** |
+| Total Tools | ~20 | **58** |
 | Language | Python | **Swift (Native)** |
 | Search Speed | Seconds (AppleScript) | **Milliseconds (SQLite)** |
 | Search Fields | Subject/Sender | **Subject/Sender/Recipient/Date** |
@@ -61,7 +61,7 @@ you these are missing (#353):
 
 | Shipped by the plugin | Present with MCP-only |
 |---|---|
-| All 57 MCP tools | ✅ yes |
+| All 58 MCP tools | ✅ yes |
 | `/archive-mail` + `-migrate` / `-rebuild-threads` / `-repair-synthetic-ids` / `-view` | ❌ the archiving SOP does not exist |
 | `rules/compose-wrapper-free.md` — what the cite-block was, and what a refused compose call means | ⚠️ background: since [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304) the wrapper is structurally impossible, so this rule now explains the six refusal reasons and their recipes rather than guarding against a silent fallback |
 | `rules/confirmation-triggers.md`, `rules/false-positive-detection.md` | ❌ no confirmation discipline on destructive operations |
@@ -129,11 +129,20 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## All 57 Tools
+## All 58 Tools
 
 ### Compose signatures
 
 `compose_email`, `create_draft`, and `update_draft` accept `signature: {"mode":"mail_default"}`, `{"mode":"none"}`, or `{"mode":"named","name":"Professional"}`. The server selects Mail's native signature after From selection; it never appends a handwritten signature to body. A selection receipt is **not proof of body insertion**. Verify a draft on first use of this Mail setup before a formal send, or use `none` with caller-supplied signature text. Do not append the same signature manually when choosing Mail-managed insertion. Explicit selection refuses unsupported UI rather than guessing; no legacy body-assignment fallback exists.
+
+<details>
+<summary><b>Compose Preflight (1)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `check_compose_length` | Exact encoded URL/body length without Mail access; fits is not full eligibility |
+
+</details>
 
 <details>
 <summary><b>Email Classification (4)</b></summary>
