@@ -70,22 +70,79 @@ func buildDraftRecipientReceiptScript(subject: String) -> String {
     """
 }
 
-/// Parse the receipt script's return value; `nil` when the draft was not found.
-func parseRecipientReceipt(_ raw: String) -> RecipientReceipt? {
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmed == "NOTFOUND" { return nil }
-    let halves = trimmed.split(separator: "\u{1D}", maxSplits: 1, omittingEmptySubsequences: false)
-    func addresses(_ s: Substring?) -> [String] {
-        guard let s, !s.isEmpty else { return [] }
-        return s.split(separator: "\u{1E}", omittingEmptySubsequences: true).map(String.init)
+/// Only NOTFOUND means absence. Malformed transport data is an unavailable
+/// receipt, never a found address list or a reason to poll again (#427).
+private enum RecipientReceiptParseError: LocalizedError {
+    case malformed
+    var errorDescription: String? { "Recipient receipt payload is malformed; cc/bcc could not be parsed" }
+}
+
+func parseRecipientReceipt(_ raw: String) throws -> RecipientReceipt? {
+    if raw.trimmingCharacters(in: .whitespacesAndNewlines) == "NOTFOUND" { return nil }
+    // Found payloads have no whitespace framing: preserve every address byte.
+    let halves = raw.split(separator: "\u{1D}", omittingEmptySubsequences: false)
+    guard halves.count == 2 else { throw RecipientReceiptParseError.malformed }
+    func addresses(_ group: Substring) throws -> [String] {
+        if group.isEmpty { return [] }
+        let values = group.split(separator: "\u{1E}", omittingEmptySubsequences: false).map(String.init)
+        guard values.allSatisfy(hasReceiptAddressShape) else { throw RecipientReceiptParseError.malformed }
+        return values
     }
-    return RecipientReceipt(
-        ccFound: addresses(halves.first),
-        bccFound: addresses(halves.count > 1 ? halves[1] : nil))
+    return try RecipientReceipt(ccFound: addresses(halves[0]), bccFound: addresses(halves[1]))
+}
+
+/// Validate the producer's bare-address shape, preserving quoted local parts
+/// and international addresses. This is not a DNS/deliverability validator.
+private func hasReceiptAddressShape(_ address: String) -> Bool {
+    let scalars = Array(address.unicodeScalars)
+    guard !scalars.isEmpty,
+          !scalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return false }
+    var at: Int
+    if scalars[0] == "\"" {
+        var cursor = 1
+        var escaped = false
+        while cursor < scalars.count {
+            let scalar = scalars[cursor]
+            if escaped { escaped = false }
+            else if scalar == "\\" { escaped = true }
+            else if scalar == "\"" { break }
+            cursor += 1
+        }
+        guard !escaped, cursor < scalars.count - 2,
+              scalars[cursor] == "\"", scalars[cursor + 1] == "@" else { return false }
+        at = cursor + 1
+    } else {
+        guard let separator = scalars.firstIndex(of: "@"), separator > 0 else { return false }
+        at = separator
+        let local = scalars[..<at]
+        let atomPunctuation = Set("!#$%&'*+-/=?^_`{|}~".unicodeScalars)
+        guard local.first != ".", local.last != ".",
+              !String(String.UnicodeScalarView(local)).contains(".."),
+              local.allSatisfy({ scalar in
+                  if scalar == "." || atomPunctuation.contains(scalar) { return true }
+                  if scalar.value < 128 { return CharacterSet.alphanumerics.contains(scalar) }
+                  return !CharacterSet.whitespacesAndNewlines.contains(scalar)
+              }) else { return false }
+    }
+    guard at < scalars.count - 1 else { return false }
+    let domain = Array(scalars[(at + 1)...])
+    if domain.first == "[" {
+        guard domain.count > 2, domain.last == "]" else { return false }
+        return domain.dropFirst().dropLast().allSatisfy { scalar in
+            (33...126).contains(scalar.value) && scalar != "[" && scalar != "]" && scalar != "\\"
+        }
+    }
+    guard domain.first != ".", domain.last != ".",
+          !String(String.UnicodeScalarView(domain)).contains("..") else { return false }
+    return domain.allSatisfy { scalar in
+        if scalar == "." || scalar == "-" || scalar == "_" { return true }
+        if scalar.value < 128 { return CharacterSet.alphanumerics.contains(scalar) }
+        return !CharacterSet.whitespacesAndNewlines.contains(scalar)
+    }
 }
 
 /// What the receipt script run produced. Three states, not two (PR #407 R1 #3):
-/// a script that could not run (timeout, Automation refusal, runtime error) is
+/// a script that could not run or a payload that could not be parsed is
 /// NOT evidence of absence and must never be reported as "not found" — the
 /// same distinction `ListDraftsScriptBuilder` draws with its 9276 / 9277 codes.
 enum RecipientReceiptFetch: Equatable {
@@ -102,7 +159,7 @@ enum RecipientReceiptOutcome: Equatable {
     case mismatch(diffJSON: String)
     /// No draft with the subject was found after polling.
     case notFound(diffJSON: String)
-    /// The receipt script could not run; nothing is established either way.
+    /// The receipt could not be read or parsed; nothing is established either way.
     case unavailable(reason: String)
 
     /// Only a read draft whose addresses differ is definitive; `update_draft`
@@ -152,7 +209,7 @@ func recipientReceiptDisclosure(_ outcome: RecipientReceiptOutcome) -> String {
             + "mailbox after saving; any draft that did land is KEPT; recipients_diff: \(json)]"
     case .unavailable(let reason):
         return " [recipients_verified: false — recipients_receipt: unavailable (\(reason)); the "
-            + "receipt script could not run, so nothing is established about the saved recipients "
+            + "receipt could not be read or parsed, so nothing is established about the saved recipients "
             + "— this is NOT a not-found; draft KEPT; check cc/bcc in Mail]"
     }
 }
