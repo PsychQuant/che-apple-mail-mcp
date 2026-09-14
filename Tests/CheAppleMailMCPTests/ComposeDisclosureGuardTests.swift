@@ -83,8 +83,8 @@ final class ComposeDisclosureGuardTests: XCTestCase {
             }
             XCTAssertTrue(window.contains("FAILS"),
                 "\(tool) description must say the call fails rather than degrades: \(window.prefix(240))")
-            XCTAssertTrue(window.contains("six"),
-                "\(tool) description must state the enumeration is closed at six: \(window.prefix(240))")
+            XCTAssertTrue(window.contains("Seven named input/eligibility reasons") && window.contains("MAILTO_URL_TOO_LONG"),
+                "\(tool) description must state the enumeration is closed with the named seventh length reason: \(window.prefix(240))")
         }
     }
 }

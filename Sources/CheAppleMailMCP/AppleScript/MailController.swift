@@ -1648,6 +1648,9 @@ actor MailController {
     /// Compose and send a new email
     func composeEmail(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, fromAddress: String? = nil, signature: ComposeSignatureSelection = .mailDefault) throws -> String {
         _ = try signature.validated()
+        if let refusal = composeLengthPreflight(to: to, subject: subject, body: body, cc: cc, bcc: bcc).refusal {
+            throw MailError.invalidParameter(refusal.message)
+        }
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41: validate every recipient field (to / cc / bcc) at the boundary.
         try validateEmailAddresses(to, field: "to")
@@ -1750,12 +1753,13 @@ actor MailController {
                 "internal: display-name recipient on a send reached the clean path — refusing "
                 + "(display-name recipients are draft-only on the clean path, #277)")
         }
+        let length = measureMailtoURL(to: partition.urlTo, subject: subject, body: body, cc: partition.urlCc, bcc: partition.urlBcc)
+        if let refusal = length.refusal { throw MailError.invalidParameter(refusal.message) }
         let url = buildMailtoURL(to: partition.urlTo, subject: subject, body: body,
                                  cc: partition.urlCc, bcc: partition.urlBcc)
         guard url.count <= maxMailtoURLLength else {
-            throw MailError.scriptFailed(
-                message: "mailto URL too long (\(url.count) > \(maxMailtoURLLength) chars)",
-                code: -1)
+            throw MailError.invalidParameter(ComposeRefusal.mailtoURLTooLong(
+                encodedLength: url.count, bodyEncodedLength: length.bodyEncodedLength, limit: maxMailtoURLLength).message)
         }
         // #219 verify (Codex R1/R2): the popup match is EXACT addr-spec, so
         // pass the bare addr-spec (a `Name <addr>` from_address is normalized
@@ -2033,6 +2037,9 @@ actor MailController {
         fromAddress: String? = nil, signature: ComposeSignatureSelection = .mailDefault
     ) throws -> [String: Any] {
         _ = try signature.validated()
+        if let refusal = composeLengthPreflight(to: to, subject: subject, body: body, cc: cc, bcc: bcc).refusal {
+            throw MailError.invalidParameter(refusal.message)
+        }
         // Verify R2 (Codex): presence = key PROVIDED — an explicitly-empty
         // value is validated as a provided-but-invalid value, never silently
         // downgraded to "absent" (that let draft_id + subject_match:"" slip
@@ -2241,6 +2248,9 @@ actor MailController {
     /// Create a draft
     func createDraft(to: [String], subject: String, body: String, cc: [String]? = nil, bcc: [String]? = nil, attachments: [String]? = nil, accountName: String? = nil, format: BodyFormat = .plain, fromAddress: String? = nil, signature: ComposeSignatureSelection = .mailDefault) throws -> String {
         _ = try signature.validated()
+        if let refusal = composeLengthPreflight(to: to, subject: subject, body: body, cc: cc, bcc: bcc).refusal {
+            throw MailError.invalidParameter(refusal.message)
+        }
         if let attachments = attachments { try validateAttachmentPaths(attachments) }
         // Issue #41: validate every recipient field (to / cc / bcc) at the boundary (#107).
         try validateEmailAddresses(to, field: "to")

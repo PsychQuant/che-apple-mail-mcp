@@ -30,10 +30,10 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 `sanitize_links`（只服務 markdown 渲染）、`format` 的 `markdown` / `html`、
 以及兩個 env hatch（`CHE_MAIL_DISABLE_MAILTO_COMPOSE` / `CHE_MAIL_DISABLE_PASTE_REPLY`）。
 
-## 呼叫失敗時怎麼辦（封閉六類，不得依性質相似類推第七類）
+## 呼叫失敗時怎麼辦（封閉七類，新增類別須有可驗證的作業前條件）
 
 前提不滿足時工具**直接失敗、零副作用**（不建草稿、不寄出、不刪既有草稿），
-訊息會具名原因與替代做法。六類與各自的處置：
+訊息會具名原因與替代做法。七類與各自的處置：
 
 | # | 原因 | 處置 |
 |---|---|---|
@@ -43,6 +43,7 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 | 4 | `from_address` 非 bare addr-spec | 給純位址；或省略後在 Mail 手動切寄件人 |
 | 5 | 附件路徑含非 ASCII | 建**不帶 `attachments`** 的草稿 + 請使用者手動拖曳。**不要改成 ASCII 檔名**——收件人看到的就是那個檔名 |
 | 6 | 寄出（`compose_email`）時任一收件人帶顯示名（`Name <addr>`） | 改用純位址寄出；或改建草稿（`create_draft`，**to/cc/bcc 顯示名皆支援**，#404）確認收件人後手動寄出 |
+| 7 | `MAILTO_URL_TOO_LONG`：percent-encoded URL 超過 8000 字元（CJK 常見字約佔 9 個） | 先用 `check_compose_length` 精確計量 total/body/overhead。保留完整正文到本機文字檔，建立短／空正文草稿後在 Mail 手動貼上；或經使用者確認拆成多封。不要截斷、不要復活 legacy。此檢查在 Mail 作業前拒絕，update_draft 不掃描／替換／刪除舊草稿。 |
 
 > 第 5、6 類的配方與 #304 之前的規則一致——差別是現在**工具自己會說**，不必靠人記得。
 
@@ -79,3 +80,8 @@ signed MCP binary 自持 Automation 授權（TCC identity 綁 binary 簽章身�
 - `#404` — draft 的 Cc/Bcc 顯示名（AX 定位聚焦 + 貼上，Bcc 自動揭露不還原，存檔後 recipients_verified）
 - 全域鏡像：`che-claude-config/rules/common-mail-compose.md`；
   plugin 副本：`plugin/rules/compose-wrapper-free.md`。**三份要一起改。**
+
+
+## mailto 預檢（mail#388）
+
+`check_compose_length({to, cc?, bcc?, subject, body})` 是只讀長度檢查，回傳 encoded_url_length、body_encoded_length、other_encoded_length、limit、remaining、fits。長度依 UTF-8 percent-encoding 精算，不是 body 字元數；display-name 清單依真實 URL/GUI partition 計算。`other_requirements_checked:false` 明示沒有驗證其他資格，fits=true 不是可送出承諾。
