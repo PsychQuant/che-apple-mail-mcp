@@ -1,6 +1,6 @@
 ---
 description: "從 per-email md 的 frontmatter 重建 .threads.json"
-argument-hint: "[archive-dir]"
+argument-hint: "[archive-dir] [--index-dir absolute-directory]"
 allowed-tools: Read, Write, Glob, Bash(mkdir:*)
 ---
 
@@ -20,6 +20,7 @@ allowed-tools: Read, Write, Glob, Bash(mkdir:*)
 ```
 /archive-mail-rebuild-threads
 /archive-mail-rebuild-threads communications/emails
+/archive-mail-rebuild-threads /absolute/archive --index-dir /absolute/state-directory
 ```
 
 - 第一個參數（可選）：archive 目錄，預設 `communication/emails`
@@ -29,6 +30,7 @@ allowed-tools: Read, Write, Glob, Bash(mkdir:*)
 ### Step 1: 解析參數
 
 - `archive_dir`: 預設 `communication/emails`
+- 先從參數取出可選的 `--index-dir <absolute-directory>`，存為 `INDEX_DIR_OVERRIDE`；值缺少或不是絕對路徑即報錯，不把旗標當 archive_dir。未提供時設為空字串，沿用原本 slug 路徑。已登錄樹狀流程使用 registry 的 index_file 所在目錄；直接呼叫則以使用者明確指定的目錄為準。
 
 若目錄不存在，報錯退出。
 
@@ -37,7 +39,7 @@ allowed-tools: Read, Write, Glob, Bash(mkdir:*)
 ```bash
 NAMESPACE_DIR=".claude/.mail"
 SLUG=$(echo "${archive_dir}" | tr '/' '-' | sed 's/^[-.]*//;s/[-.]*$//')
-INDEX_DIR="${NAMESPACE_DIR}/state/archives/${SLUG}"
+INDEX_DIR="${INDEX_DIR_OVERRIDE:-${NAMESPACE_DIR}/state/archives/${SLUG}}"
 THREADS_FILE="${INDEX_DIR}/threads.json"
 
 mkdir -p "${INDEX_DIR}"

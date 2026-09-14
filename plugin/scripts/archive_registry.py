@@ -49,6 +49,7 @@ class Registry:
     FIELDS = {"id", "parent_id", "workspace", "config_file", "output_dir", "index_file",
               "purpose", "filter_axis"}
     PATHS = ("workspace", "config_file", "output_dir", "index_file")
+    OPTIONAL_FIELDS = {"attachment_roots"}
 
     def __init__(self, data, digest=None):
         if (not isinstance(data, dict) or set(data) != {"version", "targets"}
@@ -57,9 +58,10 @@ class Registry:
             raise RegistryError("registry requires version: 1 and targets array, no extra fields")
         self.digest = digest or hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()
         self.targets = {}
-        used_paths, used_inodes = set(), set()
+        used_paths, used_inodes, used_index_parents = set(), set(), set()
         for source in data["targets"]:
-            if not isinstance(source, dict) or set(source) != self.FIELDS:
+            if (not isinstance(source, dict) or not self.FIELDS <= set(source)
+                    or not set(source) <= self.FIELDS | self.OPTIONAL_FIELDS):
                 raise RegistryError("each target requires exactly " + ", ".join(sorted(self.FIELDS)))
             target = dict(source)
             tid = _text(target["id"], "id")
@@ -95,6 +97,27 @@ class Registry:
                     used_paths.add(target[field])
                     if inode is not None:
                         used_inodes.add(inode)
+            index_parent = Path(target["index_file"]).parent
+            try:
+                info = index_parent.stat()
+                parent_key = (info.st_dev, info.st_ino)
+            except FileNotFoundError:
+                parent_key = str(index_parent)
+            if parent_key in used_index_parents:
+                raise RegistryError(f"{tid}: index directories must be distinct (threads.json ownership)")
+            used_index_parents.add(parent_key)
+            attachment_roots = target.get("attachment_roots", [])
+            if not isinstance(attachment_roots, list):
+                raise RegistryError(f"{tid}.attachment_roots must be an array")
+            normalized_roots = []
+            for value in attachment_roots:
+                path = Path(_text(value, f"{tid}.attachment_roots"))
+                if not path.is_absolute():
+                    raise RegistryError(f"{tid}.attachment_roots must be absolute")
+                normalized_roots.append(str(path.resolve()))
+            if len(set(normalized_roots)) != len(normalized_roots):
+                raise RegistryError(f"{tid}.attachment_roots contains duplicate paths")
+            target["attachment_roots"] = normalized_roots
             self.targets[tid] = target
         for tid in self.targets:
             self.ancestors(tid)  # validate every parent and cycle, including unrelated trees
@@ -127,6 +150,9 @@ class Registry:
             valid = path.is_dir() if field in {"workspace", "output_dir"} else path.is_file()
             if not valid:
                 errors.append(f"{tid}.{field}: missing or wrong path type")
+        for path in target["attachment_roots"]:
+            if not Path(path).is_dir():
+                errors.append(f"{tid}.attachment_roots: missing directory {path}")
         return errors
 
     def inventory(self):
@@ -213,6 +239,9 @@ def main(argv=None):
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("list")
     commands.add_parser("validate")
+    match = commands.add_parser("match")
+    match.add_argument("--workspace", type=Path, required=True)
+    match.add_argument("--output-dir", type=Path, required=True)
     for name in ("snapshot", "plan"):
         sub = commands.add_parser(name)
         sub.add_argument("--target", required=True)
@@ -220,8 +249,28 @@ def main(argv=None):
             sub.add_argument("--candidates", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
+        if args.command == "match":
+            try:
+                args.registry.lstat()
+            except FileNotFoundError:
+                print(json.dumps({"registered": False, "reason": "registry_absent"}))
+                return 0
         registry = Registry.load(args.registry)
-        if args.command == "list":
+        if args.command == "match":
+            output = args.output_dir.resolve()
+            matches = [target for target in registry.targets.values()
+                       if Path(target["output_dir"]) == output
+                       or (output.exists() and Path(target["output_dir"]).exists() and output.samefile(target["output_dir"]))]
+            if not matches:
+                result = {"registered": False, "reason": "target_unregistered"}
+            else:
+                target = matches[0]
+                workspace = args.workspace.resolve()
+                if workspace != Path(target["workspace"]) and not workspace.samefile(target["workspace"]):
+                    raise RegistryError("registered output belongs to a different workspace")
+                result = {"registered": True, "target_id": target["id"],
+                          "root_id": registry.ancestors(target["id"])[-1]}
+        elif args.command == "list":
             result = {"targets": registry.inventory()}
         elif args.command == "validate":
             errors = [error for target in registry.inventory() for error in target["errors"]]

@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Complete explicit target registry
-The registry SHALL store version 1 and a targets array, each with id, parent_id, workspace, config_file, output_dir, index_file, purpose, and filter_axis. Parents SHALL be explicit organizational relationships independent of filesystem nesting. The registry SHALL reject duplicate ids, cycles, missing parents, unknown fields, nonabsolute paths, and shared canonical config, output, or index paths. It SHALL NOT automatically register discovered directories.
+The registry SHALL store version 1 and a targets array, each with id, parent_id, workspace, config_file, output_dir, index_file, purpose, and filter_axis. Parents SHALL be explicit organizational relationships independent of filesystem nesting. An optional attachment_roots array SHALL declare additional absolute attachment directories; omitted SHALL mean no additional roots. The registry SHALL reject duplicate ids, cycles, missing parents, unknown fields, nonabsolute paths, and shared canonical config, output, or index paths. Index parent directories SHALL be distinct so derived threads.json files cannot overlap. It SHALL NOT automatically register discovered directories.
 
 #### Scenario: Sibling directories have a parent relationship
 - **WHEN** two targets in sibling filesystem directories declare a parent relationship
@@ -38,3 +38,11 @@ archive-mail SHALL consult the registry before registered capture, preview root 
 #### Scenario: Unregistered archive
 - **WHEN** the registry is absent or the selected archive is unregistered
 - **THEN** existing workspace behavior SHALL remain available without inferred registration
+
+
+### Requirement: Preserve historical filename ownership
+The executor SHALL reject new file paths reserved by existing index entries, including index-only tombstones, using Unicode-normalized case-insensitive comparison. It SHALL NOT make an old Message-ID appear present by assigning its former filename to a new message.
+
+#### Scenario: Reusing an intake tombstone filename
+- **WHEN** a historical ID reserves MAIL.md and a new ID proposes mail.md in that output
+- **THEN** preparation SHALL fail without creating mail.md and require a different filename

@@ -6,8 +6,8 @@
 
 ## 2. 完整執行流程
 
-- [ ] 2.1 寫入與復原：實作 Recoverable distribution，以每個持久階段的 failure injection 與重試測試驗證不丟檔、不覆寫舊檔。
-- [ ] 2.2 實作 Workflow integration and legacy compatibility，串接 SOP、registry command、schema 與完整暫存 archive 演練，驗證相容與目的地 preview。
+- [x] 2.1 寫入與復原：實作 Recoverable distribution，並實作 Preserve historical filename ownership，以每個持久階段的 failure injection 與重試測試驗證不丟檔、不覆寫舊檔。
+- [x] 2.2 實作 Workflow integration and legacy compatibility，串接 SOP、registry command、schema 與完整暫存 archive 演練，驗證相容與目的地 preview。
 
 ## 3. 驗證
 

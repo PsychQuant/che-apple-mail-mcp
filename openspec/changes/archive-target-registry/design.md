@@ -40,3 +40,26 @@
 - legacy index-only 是歷史證據、不是檔案存在證據 → 明確揭露，不自動重抓補檔。
 - 舊 workflow 不懂新樹鎖 → 新 workflow 執行時需避免並行 legacy 寫入，並以快照重驗偵測已知衝突；完整 executor 必須留下誠實限制。
 - Claude OAuth 過期 → 先完成可執行測試與 Codex 審查，完整驗證 gate 保留。
+
+
+## Executor 介面（2026-09-14 實作）
+
+`archive_distribution.py execute --plan <json> --manifest <json>` 接受已預覽的 plan 與完整 stage bundle；`resume --job-id <uuid>` 接續同一工作。暫存目錄內的 Markdown 與附件會先封存到私有 journal blobs，之後不依賴原始 stage。
+
+manifest 的 messages 含 message_id、markdown（stage 相對路徑）、filename（單一 .md 名稱）、entry（date/subject/thread_key）、attachments（file/intake_path/destination_path）。附件目的地相對 workspace；若為絕對路徑，必須位於該 target 的 workspace／output 或明確登錄的 `attachment_roots`。新 optional attachment_roots 為絕對目錄陣列，缺省為空；不擴張到 home 任意位置。
+
+executor 驗證 staged Message-ID，並依已知附件清單改寫兩份 Markdown 的 canonical inline URL。非標準附件 URL 拼法、title 或 reference-style link 會在 preparation 拒絕，不能成功提交卻留失效連結。原始內文中與 stage 附件無關的連結不改。來源、目的地各按自己的 routing 準備路徑，不以固定 layout 取代各目標設定。
+
+持久階段為 prepared → intake_files → intake_index → destination_files → destination_indexes → tombstones → source_cleanup → complete。scope 內所有 index 指紋在每階段重驗，允許值僅為原始 snapshot 或本交易已知寫入結果。檔案採獨占建立 + hard-link 發布，同一 parent 的 temp/file 不跨 filesystem；inode 與 hash 證明本輪所有權。目的地全部成功後才清除 intake，完成後清除已知 temp/blob，保留 state.json。無法證明所有權的 temp 保留在 unclaimed_temps，不自動刪除。
+
+`complete` 僅代表檔案／history 分派完成；回傳 `reconcile_targets`，SOP 必須對這些目標跑既有 thread rebuild 與 date/index reconcile gate 才回報整體歸檔完成。未完成準備的 private journal 不曾寫入 archive；輸入修正後可重新 execute。中斷後修改任何 scope index 則拒絕 resume，保留已產生內容供明確調解，不覆寫外部變更。
+
+
+## 第二輪審查修正與整合綁定
+
+歷史 index（包含 tombstone）保留的檔名不能讓新信或附件重用，避免舊 ID 被誤標為檔案仍存在；preparation 以 Unicode／大小寫摺疊檢查歷史保留路徑。共用附件的所有 private blob 都列入 journal，成功時全部清理；非 canonical 的多行附件 link 也必須拒絕。
+
+registry 要求各 target 的 index parent 不共用，確保 threads.json 唯一歸屬。rebuild-threads 新增明確 --index-dir，tree SOP 傳入 registry index_file 的 parent，避免以不同 slug 寫錯 state。分派回傳 reconcile_required 與 reconcile_targets，完整成功仍待既有 date/index/thread gate。
+
+
+準備階段也先建立 `state.json`（phase=preparing），每個 blob 的 inode 與目錄項 fsync 後、寫入私人內容之前，先持久記錄所有權。preparation 失敗會依 inode 清理；程序退出後，下次 execute 先清理舊 preparing 工作再開始。未知 inode 的檔案保留且回報，不從名稱或 hash 猜所有權。測試包含在附件已複製但 prepared 尚未提交時以 os._exit 終止，重試後清掉舊工作已知 blob，保留未知檔案。

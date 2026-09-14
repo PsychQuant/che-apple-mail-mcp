@@ -1,7 +1,7 @@
 ---
 description: "歸檔指定聯絡人的 Apple Mail 郵件到 Markdown 檔案"
 argument-hint: "[email-filter] [output-dir]  # 零參數時讀 .claude/.mail/config.yaml"
-allowed-tools: mcp__plugin_che-apple-mail-mcp_mail__search_emails, mcp__plugin_che-apple-mail-mcp_mail__get_email, mcp__plugin_che-apple-mail-mcp_mail__get_email_headers, mcp__plugin_che-apple-mail-mcp_mail__list_accounts, mcp__plugin_che-apple-mail-mcp_mail__get_special_mailboxes, mcp__plugin_che-apple-mail-mcp_mail__list_attachments, mcp__plugin_che-apple-mail-mcp_mail__list_attachments_batch, mcp__plugin_che-apple-mail-mcp_mail__save_attachment, mcp__plugin_che-apple-mail-mcp_mail__batch_export_emails_markdown, Bash(mkdir:*), Read, Write, Glob
+allowed-tools: mcp__plugin_che-apple-mail-mcp_mail__search_emails, mcp__plugin_che-apple-mail-mcp_mail__get_email, mcp__plugin_che-apple-mail-mcp_mail__get_email_headers, mcp__plugin_che-apple-mail-mcp_mail__list_accounts, mcp__plugin_che-apple-mail-mcp_mail__get_special_mailboxes, mcp__plugin_che-apple-mail-mcp_mail__list_attachments, mcp__plugin_che-apple-mail-mcp_mail__list_attachments_batch, mcp__plugin_che-apple-mail-mcp_mail__save_attachment, mcp__plugin_che-apple-mail-mcp_mail__batch_export_emails_markdown, Bash(mkdir:*), Bash(python3:*), Read, Write, Glob
 ---
 
 # Archive Mail
@@ -209,6 +209,9 @@ def yaml_scalar(value):
 ```
 TaskCreate(subject="resolve_filter_and_paths",
            description="Step 1 + 1.6: 解析 $ARGUMENTS → filter + output_dir. 計算 .claude/.mail/state/archives/{slug} 路徑。Auto-migrate legacy .email_index.json / .threads.json / .claude/emails.md。")
+
+TaskCreate(subject="registered_archive_route",
+           description="Step 1.3: 只讀比對全域 registry；已登錄則保留本次 filter 範圍，轉入 archive-mail-tree 並由其完成，不繼續 legacy 寫入。未登錄沿用現有流程。")
 
 TaskCreate(subject="load_participant_identity",
            description="Step 1.4: 在消歧義之前讀全域 identity.yaml 與 workspace aliases，保留全域優先及衝突／格式警告；不寫入身份檔、不新增確認授權。")
@@ -418,6 +421,18 @@ fi
 #### 模糊 filter
 
 不論來源(命令列 / config),若 filter 為模糊詞 → 進 Step 1.5 disambiguation。
+
+### Step 1.3: 已登錄歸檔的入口（mail#363）
+
+先解析 workspace root、`${CONFIG_FILE}` 與最終 `output_dir`（僅解析，不先建立／修改 index），以目前載入 plugin 的固定 helper 做只讀比對：
+
+```bash
+python3 "<plugin-root>/scripts/archive_registry.py" match --workspace "/absolute/workspace" --output-dir "/absolute/output"
+```
+
+`registered: false` 時沿用以下既有流程，不建立 registry。`registered: true` 時確認 registry 的 config_file 與本次選取的 config 相同，將 target_id、原 filter／範圍及已取得的確認交給 `archive-mail-tree.md`，**由該流程完成本次操作後返回，不再繼續下方 legacy 寫入步驟**。不可因登錄而默默擴張成整棵樹的搜尋範圍。
+
+helper 非零 exit（例如 registry 壞掉或路徑歸屬衝突）就揭露並停止，不把錯誤當成未登錄繞過全域去重。樹狀流程仍需原有本文／附件規則與最終 reconcile，但由 registry 明確指定各目標 index 路徑。
 
 ### Step 1.4: 跨工作區參與者別名（mail#334）
 

@@ -176,6 +176,43 @@ class ArchiveRegistryTests(unittest.TestCase):
         self.index('a', {'<a@b>': {'file': 'a.md'}})
         self.assertNotEqual(before, registry.snapshot('a')['index_sha256'])
 
+    def test_shared_index_directory_is_rejected(self):
+        path=self.base/'root/second-index.json'
+        path.write_text('{"version":"1.0","emails":{}}')
+        self.data['targets'][1]['index_file']=str(path)
+        with self.assertRaisesRegex(RegistryError,'index directories'):
+            Registry(self.data)
+
+    def test_cli_match_missing_unregistered_registered_and_corrupt(self):
+        command=[sys.executable,str(SCRIPT),'--registry',str(self.registry_path),'match',
+                 '--workspace',str(self.base/'root'),'--output-dir',str(self.base/'root/output')]
+        result=subprocess.run(command,capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertEqual(json.loads(result.stdout)['target_id'],'root')
+        self.registry_path.unlink()
+        result=subprocess.run(command,capture_output=True,text=True)
+        self.assertEqual(json.loads(result.stdout)['reason'],'registry_absent')
+        self.registry_path.write_text('{bad')
+        result=subprocess.run(command,capture_output=True,text=True)
+        self.assertNotEqual(result.returncode,0)
+        self.save_registry()
+        command[-1]=str(self.base/'not-registered')
+        result=subprocess.run(command,capture_output=True,text=True)
+        self.assertEqual(json.loads(result.stdout)['reason'],'target_unregistered')
+
+    def test_shipped_rebuild_recipe_honors_explicit_index_directory(self):
+        import os,re
+        document=SCRIPT.parents[1]/'commands/archive-mail-rebuild-threads.md'
+        section=document.read_text().split('### Step 2:',1)[1].split('### Step 3:',1)[0]
+        code=re.search(r'```bash\n(.*?)\n```',section,re.S)[1]
+        custom=self.base/'custom-state'
+        env=dict(os.environ,INDEX_DIR_OVERRIDE=str(custom),archive_dir=str(self.base/'root/output'))
+        code+='\nexport THREADS_FILE\npython3 -c \'import os; print(os.environ["THREADS_FILE"])\''
+        run=subprocess.run(['bash','-c',code],cwd=self.base,env=env,capture_output=True,text=True,check=True)
+        self.assertEqual(run.stdout.strip(),str(custom/'threads.json'))
+        self.assertTrue(custom.is_dir())
+        self.assertFalse((self.base/'.claude').exists())
+
     def test_cli_reads_only_and_reports_json_errors(self):
         before = {str(p): p.read_bytes() for p in self.base.rglob('*') if p.is_file()}
         command = [sys.executable, str(SCRIPT), '--registry', str(self.registry_path)]
