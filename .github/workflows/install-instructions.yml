@@ -1,0 +1,22 @@
+name: Install instructions
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 1 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  resolve-marketplaces:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Offline regression tests
+        run: python3 plugin/tests/test-install-instructions.py
+      - name: Resolve documented remote marketplaces
+        run: python3 scripts/check-install-instructions.py
