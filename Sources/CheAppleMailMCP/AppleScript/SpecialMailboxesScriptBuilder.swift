@@ -49,17 +49,9 @@ let perAccountSpecialMailboxes: [(key: String, container: String)] = [
 ///     `id` (globally unique, no collision) — takes precedence over accountName.
 ///   - accountName: Matched against `name of account` (Mail's account description)
 ///     in the fallback path; NOT necessarily the email (#173/#176).
-/// - Returns: a complete AppleScript returning ONE list:
-///   `{matchedId, matchedName, matchCount, n0…n4, p0…p4}` where `n0…n4` are the
-///   matched child's leaf names parallel to `perAccountSpecialMailboxes`
-///   (`""` = no such child), and `p0…p4` (#268) are the corresponding FULL mailbox
-///   paths (`[Gmail]/草稿`, container-walk-joined to match `MailboxURL.mailboxPath` /
-///   `search_emails`'s `mailbox`; `""` = absent or walk failed). Paths are appended
-///   AFTER all names so the n0…n4 positions stay stable. Both the account-finding
-///   loop and each container enumeration are `try`-guarded, and each path walk has
-///   its own `try`, so an account-less child, an absent unified container, or a
-///   failed walk is non-fatal (design D3). Parse with `resolveSpecialMailboxesResult`.
-func buildSpecialMailboxNamesScript(accountId: String?, accountName: String) -> String {
+/// - Returns: `[matchedId, matchedName, matchCount, n0...n4]` as text fields.
+///   These are leaf names only. Paths require separate native identity proof.
+func buildSpecialMailboxNamesScript(accountId: String?, accountName: String, jsonOutput: Bool = false) -> String {
     let accountCond: String   // on `acc`
     let childCond: String      // on `mb`
     if let aid = accountId, !aid.isEmpty {
@@ -119,8 +111,17 @@ func buildSpecialMailboxNamesScript(accountId: String?, accountName: String) -> 
     // Leaf names in stable n0…n(N-1) positions (the #179 fixed-tuple
     // discipline). No p0…p(N-1) any more (#315): paths come from the index.
     let names = (0..<perAccountSpecialMailboxes.count).map { "n\($0)" }.joined(separator: ", ")
+    let prefix = jsonOutput ? "use framework \"Foundation\"\nuse scripting additions\n" : ""
+    let resultLine = jsonOutput
+        ? "set resultValues to {matchedId, matchedName, (matchCount as string), \(names)}"
+        : "return {matchedId, matchedName, (matchCount as string), \(names)}"
+    let suffix = jsonOutput ? """
+    set jsonData to current application's NSJSONSerialization's dataWithJSONObject:resultValues options:0 |error|:(missing value)
+    if jsonData is missing value then error "special mailbox names serialization failed"
+    return (current application's NSString's alloc()'s initWithData:jsonData encoding:(current application's NSUTF8StringEncoding)) as string
+    """ : ""
     return """
-    tell application "Mail"
+    \(prefix)tell application "Mail"
         set matchedId to ""
         set matchedName to ""
         set matchCount to 0
@@ -136,8 +137,9 @@ func buildSpecialMailboxNamesScript(accountId: String?, accountName: String) -> 
             end try
         end repeat
     \(blocks.joined(separator: "\n"))
-        return {matchedId, matchedName, (matchCount as string), \(names)}
+        \(resultLine)
     end tell
+    \(suffix)
     """
 }
 
@@ -182,113 +184,12 @@ enum SpecialMailboxesResolution: Equatable {
 ///   fail-safe promised but never delivered
 ///
 /// #345 — this single-leaf form is UNCORROBORATED: a lone nested candidate is
-/// not proof of identity. The server calls `joinSpecialMailboxPaths` instead.
-/// Kept as the candidate-selection building block and for the cases where leaf
-/// uniqueness genuinely is decisive.
-func joinSpecialMailboxPath(leaf: String, mailboxPaths: [String]) -> String? {
+/// not proof of identity. This legacy helper discovers a candidate only; the
+/// server uses native proof before emitting any path.
+func uniqueSpecialMailboxPathCandidate(leaf: String, mailboxPaths: [String]) -> String? {
     guard !leaf.isEmpty else { return nil }
     let candidates = mailboxPaths.filter { $0 == leaf || $0.hasSuffix("/" + leaf) }
     return candidates.count == 1 ? candidates[0] : nil
-}
-
-/// #345 — resolve ALL of an account's special-mailbox leaves together, so a
-/// nested candidate can be corroborated before it is believed.
-///
-/// The defect this closes: "exactly one candidate" was decided purely by string
-/// shape. With the real Drafts mailbox missing from the index (fresh account,
-/// lagging sync) and an ordinary `Projects/Drafts` folder present, that folder
-/// won uncontested and was returned as `drafts_path` — a value
-/// wire-indistinguishable from a correct one, with #315's omission fail-safe
-/// never firing because nothing had failed.
-///
-/// Neither remedy the issue proposed is available:
-/// - "omit when the only candidate is nested" would break Gmail, whose real
-///   drafts mailbox IS `[Gmail]/草稿` — the most common configuration there is.
-/// - "cross-check against the index's role data" — there is none. Per
-///   `.claude/rules/r-must-direct-db.md` the `mailboxes` table carries only
-///   `url / total_count / unread_count`; special-mailbox role is app-level
-///   metadata that exists in AppleScript's object model and nowhere else.
-///
-/// So corroboration comes from data already in hand. A genuine provider
-/// container holds SEVERAL special mailboxes — `[Gmail]` is the parent of
-/// drafts, sent, junk and trash — while an ordinary folder that happens to
-/// share one leaf name is the parent of exactly one. Convergence is the signal:
-///
-/// - exact top-level match (`path == leaf`) → accepted outright
-/// - a single nested candidate → accepted only if ≥1 OTHER special leaf also
-///   resolves to a single candidate under the SAME parent
-/// - zero candidates, or an ambiguous leaf → omitted, exactly as in #315
-///
-/// Conservative on purpose: an account whose ONLY indexed special mailbox is
-/// nested gets an omitted `_path`. The leaf is still returned, and omission is
-/// the documented, observable contract — whereas a confident wrong path is the
-/// failure #268 and #315 were both about.
-///
-/// Residue: two ordinary folders under one parent that happen to carry two
-/// special leaf names (`Projects/Drafts` + `Projects/Sent`, with the real ones
-/// absent) would corroborate each other. Strictly more contrived than the
-/// reported case, and no data available here distinguishes it.
-func joinSpecialMailboxPaths(
-    leaves: [(key: String, leaf: String)],
-    mailboxes: [(path: String, components: [String])]
-) -> [String: String] {
-    // Parent key from COMPONENTS, never from the joined string (#345 verify):
-    // `MailboxURL.mailboxPath` decodes `%2F` inside a name into a `/`, so two
-    // unrelated TOP-LEVEL mailboxes named `Projects/Drafts` and `Projects/Sent`
-    // would appear to share a parent and corroborate each other. NUL-joined
-    // because no mailbox name can contain it.
-    func parentKey(_ components: [String]) -> String {
-        components.dropLast().joined(separator: "\u{0}")
-    }
-
-    var accepted: [String: String] = [:]
-    var pending: [(key: String, candidates: [(path: String, parent: String)])] = []
-
-    for entry in leaves where !entry.leaf.isEmpty {
-        // A leaf that is ALREADY a multi-component path needs no join —
-        // AppleScript handed us the whole thing, so nothing is inferred (#315).
-        // Restricted to `components.count > 1` on purpose: a top-level name
-        // trivially equals its own path, so without that guard this shortcut
-        // silently reinstates "accept any unique top-level match", which is the
-        // positional acceptance this issue exists to remove.
-        if let exact = mailboxes.first(where: { $0.path == entry.leaf && $0.components.count > 1 }) {
-            accepted[entry.key] = exact.path
-            continue
-        }
-        let candidates = mailboxes.filter { $0.components.last == entry.leaf }
-        guard !candidates.isEmpty else { continue }
-
-        // RFC 3501 §5.1: INBOX is the one special mailbox the spec pins, and it
-        // lives at the path root. That is a rule, not a guess about position.
-        if entry.leaf.compare("INBOX", options: .caseInsensitive) == .orderedSame,
-           let root = candidates.first(where: { $0.components.count == 1 }) {
-            accepted[entry.key] = root.path
-            continue
-        }
-        pending.append((entry.key, candidates.map { ($0.path, parentKey($0.components)) }))
-    }
-
-    // Which containers hold SEVERAL special mailboxes. Only unambiguous
-    // resolutions vote — an entry that is itself undecided cannot be evidence —
-    // and votes are counted per DISTINCT PATH (#345 verify): two roles that
-    // report the same leaf would otherwise let one folder corroborate itself.
-    var pathsByParent: [String: Set<String>] = [:]
-    for item in pending where item.candidates.count == 1 {
-        let only = item.candidates[0]
-        pathsByParent[only.parent, default: []].insert(only.path)
-    }
-
-    for item in pending {
-        let corroborated = item.candidates.filter { (pathsByParent[$0.parent]?.count ?? 0) >= 2 }
-        // Exactly one supported reading resolves the entry; zero or several
-        // omit, as #315 did. Position is never the tiebreak — "prefer the
-        // top-level candidate" would pick a user folder named 垃圾桶 over the
-        // real `[Gmail]/垃圾桶`, which is the same class of confident-wrong
-        // answer this issue exists to remove. The root is just another
-        // container: several specials sitting at it corroborate each other.
-        if corroborated.count == 1 { accepted[item.key] = corroborated[0].path }
-    }
-    return accepted
 }
 
 func resolveSpecialMailboxesResult(_ raw: [String]) -> SpecialMailboxesResolution {
@@ -303,21 +204,14 @@ func resolveSpecialMailboxesResult(_ raw: [String]) -> SpecialMailboxesResolutio
     if matchCount == 0 || matchedId.isEmpty { return .noMatch }
     if matchCount > 1 { return .ambiguous(matchCount) }
     var obj: [String: String] = ["account_id": matchedId, "account_name": matchedName]
-    // Tuple after the 3-element metadata header: the N leaf real names, then
-    // (#268) the N full mailbox paths appended in the SAME order —
-    // `[n0…n(N-1), p0…p(N-1)]`. The full path (`[Gmail]/草稿`) reproduces
-    // `search_emails`'s `mailbox` field so a consumer can compare full-path ==
-    // full-path directly instead of the #109 leaf-suffix heuristic. Purely
-    // additive: an old-shape result carrying only names leaves `paths` empty →
-    // no `_path` keys (back-compat); a per-mailbox container-walk failure yields
-    // an empty path slot → that `_path` key is omitted (leaf `<key>` still set).
+    // Only the fixed leaf slots are consumed. Historical container-walk path
+    // slots are not evidence and must not bypass native identity confirmation.
     let count = perAccountSpecialMailboxes.count
     let rest = Array(raw.dropFirst(3))
     let names = Array(rest.prefix(count))
-    let paths = Array(rest.dropFirst(count))
+    // Legacy container-walk path slots are untrusted; only native proof may emit paths.
     for (idx, special) in perAccountSpecialMailboxes.enumerated() {
         if idx < names.count, !names[idx].isEmpty { obj[special.key] = names[idx] }              // leaf real name (D3: omit absent)
-        if idx < paths.count, !paths[idx].isEmpty { obj[special.key + "_path"] = paths[idx] }     // #268 full path (omit absent)
     }
     return .resolved(obj)
 }
