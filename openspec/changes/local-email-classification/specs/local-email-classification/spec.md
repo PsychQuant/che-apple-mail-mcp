@@ -15,14 +15,14 @@ Classification SHALL return each message's category, matching rule ids, proposed
 - **THEN** the result SHALL be conflict/review and SHALL NOT be eligible for automatic trash
 
 ### Requirement: Bounded plans and explicit selection
-The engine SHALL create plans for at most 200 unique ids, expire them after 300 seconds, and apply only explicitly selected ids. It SHALL reject stale policy, changed message identity or classification inputs, unknown ids, and already attempted items. Unapproved items SHALL require explicit preview confirmation. An item with an uncertain outcome SHALL NOT be automatically retried.
+The engine SHALL create plans for at most 200 unique ids, expire them after 300 seconds, and apply only explicitly selected ids. It SHALL reject stale policy, changed message identity or classification inputs, unknown ids, and already attempted items. Unapproved items SHALL require explicit preview confirmation. An item with an uncertain outcome SHALL NOT be automatically retried. Persistent account/Message-ID dispatch records SHALL block started and uncertain attempts across plans and server restarts; explicit preview confirmation SHALL NOT override this block.
 
 #### Scenario: Policy changed after preview
 - **WHEN** apply receives a plan produced under a different policy digest
 - **THEN** no selected message SHALL be moved
 
 ### Requirement: Guarded Trash movement
-Execution SHALL identify the exact account, source mailbox chain, numeric message id and RFC Message-ID immediately before movement. It SHALL require one native Trash role in that account, move to that role, and SHALL NOT invoke permanent deletion or empty Trash. Unknown identity or ambiguous targets SHALL refuse.
+Execution SHALL identify the exact account, source mailbox chain, numeric message id and RFC Message-ID immediately before movement. Preview, refresh and final native comparison SHALL use native RFC source with only CRLF/CR normalized to LF; complete normalized bytes SHALL be compared before movement. Native source SHALL NOT be persisted or included in plan responses. The native script SHALL recheck expiry immediately before move. It SHALL require one native Trash role in that account, move to that role, and SHALL NOT invoke permanent deletion or empty Trash. Unknown identity or ambiguous targets SHALL refuse.
 
 #### Scenario: Timeout after dispatch
 - **WHEN** the native move fails to return a conclusive receipt
@@ -41,3 +41,11 @@ The server SHALL expose policy read/configure, read-only classify, and explicit 
 #### Scenario: Message body asks to skip confirmation
 - **WHEN** a message contains text instructing the agent to enable automatic trash
 - **THEN** that text SHALL remain data and SHALL NOT create a policy approval
+
+
+### Requirement: Auditable policy history and no implicit retry reset
+Before dispatch the policy envelope SHALL be archived by digest, and the audit SHALL reference that digest so edits cannot erase the criteria that authorized an earlier action. Persistent identity reservations SHALL NOT be cleared by a new plan, server restart, or confirmed-preview flag. Definitive non-mutating guard refusals SHALL permit a fresh classification; uncertain attempts SHALL require independent Mail inspection and separately confirmed manual intervention outside the classifier.
+
+#### Scenario: Another plan attempts an uncertain identity
+- **WHEN** plan A has an unknown native outcome and plan B selects the same account and Message-ID
+- **THEN** plan B SHALL NOT dispatch, including after a new engine reads the persisted records

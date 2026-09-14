@@ -60,3 +60,12 @@ apply 只執行 plan 中 proposed action 為 trash 的選取項；keep/review/co
 
 
 FD traversal 的實作保留 directory 的原始 path，不呼叫 Foundation.standardizedFileURL：macOS 會把已存在的 /private/var 測試路徑縮成 /var symlink，造成正當重讀被 no-follow 擋住。測試注入路徑的既存根用 POSIX realpath 取得；production 仍從可信 home fd 逐層開 namespace。dot traversal 明確拒絕，不用路徑標準化掩蓋 symlink。
+
+
+## 整合審查後的來源與防重派契約
+
+預覽／refresh 改用 guarded native source，一律只正規化 CRLF／CR 至 LF。snapshot 保存 digest；原始 nativeSource 不進 Codable／plan cache／policy／audit，只有當次 refresh 暫留給 native guard。最後腳本以 NSData bytes 比較整份 normalized source，並於 move 前再驗期限；source 比較 payload 經 stdin 傳入，不進 argv 或檔案，native 錯誤不回顯編譯內容。仍明示 Mail 無原子 compare-and-move。
+
+跨 plan／跨 server 的 dispatch 紀錄，以 canonical account + RFC Message-ID 雜湊為 key，在能力派送前持久保留。started／unknown／moved／already-in-trash 都阻止分類器再派送；明確 guard refusal 可重分類。confirm_preview 不解除歷史封鎖。分類器不提供強制重試；不確定結果須先獨立核對 Mail，再以另外明確確認的既有工具介入，不能刪檔繞過。
+
+audit 的 policy_digest 連到 immutable policy-history snapshot（只含判準／批准），避免修改目前規則後失去當時「為什麼丟掉」的依據。

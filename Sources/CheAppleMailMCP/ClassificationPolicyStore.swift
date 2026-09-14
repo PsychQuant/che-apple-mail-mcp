@@ -16,6 +16,7 @@ struct ClassificationAuditEvent: Codable, Sendable {
     enum Outcome: String, Codable, Sendable {
         case started, moved, refused
         case outcomeUnknown = "outcome_unknown"
+        case alreadyInTrash = "already_in_trash"
     }
     var timestamp: String
     var planID: String
@@ -24,14 +25,26 @@ struct ClassificationAuditEvent: Codable, Sendable {
     var ruleIDs: [String]
     var category: String
     var outcome: Outcome
+    var policyDigest: String? = nil
     var accountID: String? = nil
     var sourceMailbox: [String]? = nil
 
     enum CodingKeys: String, CodingKey {
         case timestamp, category, outcome
         case planID = "plan_id", itemID = "item_id", messageIDDigest = "message_id_digest"
+        case policyDigest = "policy_digest"
         case ruleIDs = "rule_ids", accountID = "account_id", sourceMailbox = "source_mailbox"
     }
+}
+
+private struct ClassificationDispatchRecord: Codable {
+    var identity: String
+    var planID: String
+    var itemID: String
+    var contentDigest: String
+    var policyDigest: String
+    var outcome: ClassificationAuditEvent.Outcome
+    var updatedAt: String
 }
 
 /// Fixed production namespace; tests inject an isolated directory. No policy
@@ -100,6 +113,121 @@ struct ClassificationPolicyStore: Sendable {
         }
     }
 
+    /// Preserve the exact criteria/approvals used by an action even after
+    /// current policy changes. Contains policy data only, never message text.
+    @discardableResult
+    func archivePolicy(_ envelope: ClassificationPolicyEnvelope) throws -> String {
+        let data = try classificationCanonicalData(envelope)
+        guard data.count <= maximumPolicyBytes else { throw ClassificationError.storage("policy history too large") }
+        let digest = classificationDigest(data)
+        guard let root = try openDirectory(create: true) else { throw ClassificationError.storage("directory unavailable") }
+        defer { close(root) }
+        return try locked(root) {
+            let name = "classification-policy-history"
+            if mkdirat(root, name, 0o700) != 0 && errno != EEXIST { throw posixFailure("create policy history") }
+            guard fsync(root) == 0 else { throw posixFailure("persist policy history directory") }
+            let fd = openat(root, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            guard fd >= 0 else { throw posixFailure("open policy history") }
+            defer { close(fd) }
+            try validateDirectory(fd)
+            let filename = digest + ".json"
+            let existing = openat(fd, filename, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+            if existing >= 0 {
+                defer { close(existing) }
+                let info = try validateFile(existing)
+                guard info.st_size == data.count else { throw ClassificationError.storage("policy history mismatch") }
+                let handle = FileHandle(fileDescriptor: existing, closeOnDealloc: false)
+                guard try handle.readToEnd() == data else { throw ClassificationError.storage("policy history mismatch") }
+            } else {
+                guard errno == ENOENT else { throw posixFailure("read policy history") }
+                try atomicWrite(data, name: filename, directoryFD: fd)
+            }
+            return digest
+        }
+    }
+
+    func dispatchBlocked(_ message: ClassificationMessage) throws -> Bool {
+        guard let root = try openDirectory(create: false) else { return false }
+        defer { close(root) }
+        return try locked(root) {
+            guard let folder = try dispatchDirectory(root, create: false) else { return false }
+            defer { close(folder) }
+            guard let record = try readDispatch(folder, key: dispatchKey(message)) else { return false }
+            return record.outcome != .refused
+        }
+    }
+
+    /// The persistent identity key deliberately excludes rowId/mailbox: both
+    /// can change after a move. A new plan or server process cannot erase it.
+    func reserveDispatch(_ message: ClassificationMessage, planID: String, policyDigest: String, now: Date) throws {
+        guard let root = try openDirectory(create: true) else { throw ClassificationError.storage("directory unavailable") }
+        defer { close(root) }
+        try locked(root) {
+            let folder = try dispatchDirectory(root, create: true)!
+            defer { close(folder) }
+            let key = try dispatchKey(message)
+            if let previous = try readDispatch(folder, key: key), previous.outcome != .refused {
+                throw ClassificationError.invalidPlan("identity_already_attempted")
+            }
+            let record = ClassificationDispatchRecord(identity: key, planID: planID, itemID: message.id,
+                contentDigest: message.contentDigest, policyDigest: policyDigest, outcome: .started,
+                updatedAt: ISO8601DateFormatter().string(from: now))
+            try atomicWrite(classificationCanonicalData(record), name: key + ".json", directoryFD: folder)
+        }
+    }
+
+    func finishDispatch(_ message: ClassificationMessage, planID: String,
+                        outcome: ClassificationAuditEvent.Outcome, now: Date) throws {
+        guard let root = try openDirectory(create: false) else { throw ClassificationError.storage("dispatch record missing") }
+        defer { close(root) }
+        try locked(root) {
+            guard let folder = try dispatchDirectory(root, create: false) else { throw ClassificationError.storage("dispatch record missing") }
+            defer { close(folder) }
+            let key = try dispatchKey(message)
+            guard var record = try readDispatch(folder, key: key), record.planID == planID, record.itemID == message.id else {
+                throw ClassificationError.storage("dispatch owner changed")
+            }
+            record.outcome = outcome
+            record.updatedAt = ISO8601DateFormatter().string(from: now)
+            try atomicWrite(classificationCanonicalData(record), name: key + ".json", directoryFD: folder)
+        }
+    }
+
+    private func dispatchKey(_ message: ClassificationMessage) throws -> String {
+        let account = UUID(uuidString: message.accountID)?.uuidString ?? message.accountID
+        return classificationDigest(try classificationCanonicalData([account, message.messageID]))
+    }
+
+    private func dispatchDirectory(_ root: Int32, create: Bool) throws -> Int32? {
+        let name = "classification-dispatch"
+        if create {
+            if mkdirat(root, name, 0o700) != 0 && errno != EEXIST { throw posixFailure("create dispatch directory") }
+            guard fsync(root) == 0 else { throw posixFailure("persist dispatch directory") }
+        }
+        let fd = openat(root, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        if fd < 0 {
+            if !create && errno == ENOENT { return nil }
+            throw posixFailure("open dispatch directory")
+        }
+        do { try validateDirectory(fd) } catch { close(fd); throw error }
+        return fd
+    }
+
+    private func readDispatch(_ directoryFD: Int32, key: String) throws -> ClassificationDispatchRecord? {
+        let file = openat(directoryFD, key + ".json", O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        if file < 0 {
+            if errno == ENOENT { return nil }
+            throw posixFailure("read dispatch record")
+        }
+        defer { close(file) }
+        let info = try validateFile(file)
+        guard info.st_size >= 0, info.st_size <= 64 * 1024 else { throw ClassificationError.storage("invalid dispatch record size") }
+        let data = try FileHandle(fileDescriptor: file, closeOnDealloc: false).readToEnd() ?? Data()
+        let record = try JSONDecoder().decode(ClassificationDispatchRecord.self, from: data)
+        guard record.identity == key else { throw ClassificationError.storage("dispatch identity mismatch") }
+        return record
+    }
+
     func appendAudit(_ event: ClassificationAuditEvent) throws {
         func validID(_ value: String) -> Bool {
             value.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"#, options: .regularExpression) != nil
@@ -111,6 +239,12 @@ struct ClassificationPolicyStore: Sendable {
               event.messageIDDigest.utf8.count == 64,
               event.messageIDDigest.range(of: #"^[0-9a-f]{64}$"#, options: .regularExpression) != nil else {
             throw ClassificationError.storage("invalid audit identifiers")
+        }
+        if let policyDigest = event.policyDigest {
+            guard policyDigest.utf8.count == 64,
+                  policyDigest.range(of: #"^[0-9a-f]{64}$"#, options: .regularExpression) != nil else {
+                throw ClassificationError.storage("invalid audit policy digest")
+            }
         }
         var data = try classificationCanonicalData(event)
         guard data.count <= 64 * 1024 else { throw ClassificationError.storage("audit record too large") }

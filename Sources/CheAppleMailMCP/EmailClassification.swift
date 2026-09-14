@@ -26,6 +26,10 @@ func classificationDigest(_ data: Data) -> String {
     SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 }
 
+func normalizedClassificationSource(_ source: String) -> String {
+    source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+}
+
 enum ClassificationAction: String, Codable, Sendable { case keep, review, trash }
 enum ClassificationField: String, Codable, Sendable { case sender, subject; case listID = "list_id" }
 enum ClassificationMatch: String, Codable, Sendable { case equals, contains }
@@ -163,6 +167,9 @@ struct ClassificationMessage: Codable, Equatable, Sendable {
     var isDraft: Bool?
     var isFlagged: Bool
     var contentDigest: String
+    // Transient native source for the final compare-and-move guard. Deliberately
+    // excluded from Codable, plan responses, persisted audit, and policy files.
+    var nativeSource: String? = nil
 
     var hasVerifiableIdentity: Bool {
         func noControls(_ value: String) -> Bool {

@@ -152,6 +152,12 @@ user: get_email id=12345
 AI: [直接執行,沒 confirmation]
 ```
 
+## 郵件分類（mail#356）
+
+`/classify-mail` 使用 get_email_classification_policy／configure_email_classification／classify_emails／apply_email_classification。自訂判準存於 `~/.claude/.mail/classification-policy.json`；只有真正批准且指紋未變的規則可自動移到原生 Trash，其餘先預覽。不是永久刪除、不建立背景規則。完整流程與授權來源見 [分類命令](commands/classify-mail.md) 和 [分類授權規則](rules/email-classification.md)。
+
+本機 audit 先於移動寫入，並以 policy_digest 對應不可變的當時規則快照。audit 不存主旨／本文；未知結果不盲重試。plan 300 秒有效、每次最多 200 個明確 ids；同一筆已開始派送就不可重試同 plan。
+
 ## Configuration
 
 > **路徑遷移**:v2.7.0 ↓ 用 `.claude/emails.md`,v2.8.0+ 改用 `.claude/.mail/config.md`(auto-migrate),**v2.16.0+ 改用 `.claude/.mail/config.yaml`** 副檔名(silent rename per #47;legacy `.md` 仍 fallback,v3.0 移除)。下述 schema 三者通用。
