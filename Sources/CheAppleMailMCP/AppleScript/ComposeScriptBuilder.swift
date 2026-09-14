@@ -139,8 +139,12 @@ func buildMailtoComposeScript(
     attachments: [String],
     send: Bool,
     fromAddress: String? = nil,
-    fill: [RecipientFill] = []
+    fill: [RecipientFill] = [],
+    signature: ComposeSignatureSelection = .mailDefault
 ) -> String {
+    guard (try? signature.validated()) != nil else {
+        return "error \"SIGNATURE: invalid selection; no compose opened\""
+    }
     let windowDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_WINDOW_DELAY", fallback: 1.8)
     let stepDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_STEP_DELAY", fallback: 0.7)
     let attachDrain = resolvedDelay(envKey: "CHE_MAIL_MAILTO_ATTACH_DRAIN", fallback: 1.5)
@@ -151,8 +155,8 @@ func buildMailtoComposeScript(
     let subjEsc = appleScriptEscape(subject)
 
     // raiseOnly (runs inside `tell process "Mail"`): re-locate the compose window
-    // BY TITLE (= subject) and best-effort raise it so the NEXT keystroke lands on
-    // OUR window. Re-applied before EVERY keystroke phase (each attach + dispatch)
+    // after native id/title validation, then best-effort raise it so the NEXT keystroke lands on
+    // OUR window. Native front-window id is checked after raising. Re-applied before EVERY phase
     // — focus the user/system stole during a delay is reclaimed. Hard-errors if
     // our window is gone (→ safe fallback). Keys off the target `_w`, never
     // `front window` (that evaluated unreliably under the actor's in-process
@@ -160,6 +164,7 @@ func buildMailtoComposeScript(
     // best-effort (wrapped) so an AX quirk can't break the path.
     let raiseOnly = """
                 set _t to "\(subjEsc)"
+                my assertComposeWindowOwner(_ourId, _t, false)
                 set _w to missing value
                 set _wMatches to 0
                 repeat with _cand in windows
@@ -174,6 +179,7 @@ func buildMailtoComposeScript(
                     perform action "AXRaise" of _w
                 end try
                 delay 0.25
+                my assertComposeWindowOwner(_ourId, _t, true)
     """
     // verifyNoSheet: raiseOnly + assert no open sheet (the File▸Attach panel must
     // have closed) — used immediately before dispatch.
@@ -302,7 +308,7 @@ func buildMailtoComposeScript(
     end senderMatches
 
     """ : ""
-    var s = fillHandlers + senderMatchHandler + """
+    var s = "use framework \"Foundation\"\nuse scripting additions\n\n" + composeSignatureHandlers + fillHandlers + senderMatchHandler + signatureDefinitionPreflight(signature) + """
     tell application "Mail"
         set _wc to (count of windows)
         set _beforeIds to (id of every window)
@@ -561,6 +567,8 @@ func buildMailtoComposeScript(
         """
     }
 
+    s += buildComposeSignaturePhase(signature, guardWindow: verifyNoSheet, stepDelay: stepDelay)
+
     // 2. Attachments: re-raise OUR window, then one File ▸ Attach (⇧⌘A) cycle each,
     // path pasted into the Go-to-folder (⇧⌘G) field (clipboard set here, restored by
     // the caller in Swift). ASCII-only paths reach this flow: the sheet hangs
@@ -660,14 +668,28 @@ func buildMailtoComposeScript(
     // re-checks that our window is gone, and otherwise appends a
     // WINDOWLEFTOPEN note to the error so the caller knows to close it.
     let cleanupBody = """
+            try
+                my assertComposeWindowOwner(_ourId, "\(subjEsc)", false)
+            on error
+                error (_mErr as text) & " — WINDOWLEFTOPEN: cleanup could not verify original id/title; no window was discarded"
+            end try
             tell application "Mail"
                 repeat with _cw in windows
                     try
-                        if (id of _cw) is _ourId then close _cw saving no
+                        considering case
+                            if (id of _cw) is _ourId and (name of _cw as string) is "\(subjEsc)" then close _cw saving no
+                        end considering
                     end try
                 end repeat
             end tell
             delay 0.4
+            set _titleMatches to 0
+            set _cleanupMayClick to false
+            try
+                my assertComposeWindowOwner(_ourId, "\(subjEsc)", false)
+                set _cleanupMayClick to true
+            end try
+            if _cleanupMayClick then
             tell application "System Events"
                 tell process "Mail"
                     -- PR #407 R1 #11: System Events cannot see Mail's window
@@ -687,12 +709,17 @@ func buildMailtoComposeScript(
                             if (title of _cw2) is "\(subjEsc)" and (count of sheets of _cw2) > 0 then
                                 set _sh to sheet 1 of _cw2
                                 if (value of attribute "AXIdentifier" of _sh) is "Mail.sendMessageAlert" then
+                                    try
+                                        perform action "AXRaise" of _cw2
+                                    end try
+                                    my assertComposeWindowOwner(_ourId, "\(subjEsc)", true)
                                     repeat with _b in buttons of _sh
                                         set _bt to ""
                                         try
                                             set _bt to (title of _b as text)
                                         end try
                                         if _bt is "不儲存" or _bt is "Don't Save" or _bt is "Don’t Save" then
+                                            my assertComposeWindowOwner(_ourId, "\(subjEsc)", true)
                                             click _b
                                             exit repeat
                                         end if
@@ -704,6 +731,7 @@ func buildMailtoComposeScript(
                     end if
                 end tell
             end tell
+            end if
             delay 0.4
             set _stillOpen to false
             tell application "Mail"
@@ -714,8 +742,9 @@ func buildMailtoComposeScript(
                 end repeat
             end tell
             set _leftOpenReason to "its discard sheet could not be dismissed"
-            if _titleMatches is greater than 1 then set _leftOpenReason to "cleanup refused to dismiss its discard sheet because " & _titleMatches & " windows carry this subject and only one can be ours"
-            if _titleMatches is 0 then set _leftOpenReason to "no window carrying this subject was visible to System Events, so nothing was clicked"
+            if not _cleanupMayClick then set _leftOpenReason to "original window ownership changed after close; no discard was clicked"
+            if _cleanupMayClick and _titleMatches is greater than 1 then set _leftOpenReason to "cleanup refused to dismiss its discard sheet because " & _titleMatches & " windows carry this subject and only one can be ours"
+            if _cleanupMayClick and _titleMatches is 0 then set _leftOpenReason to "no window carrying this subject was visible to System Events, so nothing was clicked"
             if _stillOpen then set _mErr to (_mErr as text) & " — WINDOWLEFTOPEN: the compose window titled \\"\(subjEsc)\\" was left open (" & _leftOpenReason & "); close it in Mail before retrying"
     """
     // send:true handler: three branches, all rethrow — sentinel-marked errors
@@ -743,13 +772,18 @@ func buildMailtoComposeScript(
             tell process "Mail"
                 set frontmost to true
     \(verifyNoSheet)
+    \(composeSignatureDispatchCheck(signature))
+                my assertComposeWindowOwner(_ourId, _t, true)
     \(dispatchBlock)
             end tell
         end tell\(preHandlerTail)
     on error _mErr
+        if (_mErr as text) starts with "COMPOSEIDENTITY:" then
+            error (_mErr as text) & " — WINDOWLEFTOPEN: original compose identity changed; no window was discarded; inspect Mail before retrying"
+        end if
     \(handlerBlock)
     end try\(postTryTail)
-    \(fillsBcc ? "set _bccTag to \"\"\n    if _bccRevealed then set _bccTag to \" [bcc-field-revealed]\"\n    return \"\(dispatchLabel)\" & _bccTag" : "return \"\(dispatchLabel)\"")
+    \(fillsBcc ? "set _bccTag to \"\"\n    if _bccRevealed then set _bccTag to \" [bcc-field-revealed]\"\n    return \"\(dispatchLabel)\" & _signatureTag & _bccTag" : "return \"\(dispatchLabel)\" & _signatureTag")
     """
     return s
 }

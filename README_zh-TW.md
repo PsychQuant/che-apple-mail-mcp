@@ -93,6 +93,10 @@ OneDrive）——同步活動會造成 MCP 連線逾時。
 
 ## 全部 57 個工具
 
+### 新建郵件的簽名
+
+compose_email、create_draft、update_draft 支援 signature 物件：`{"mode":"mail_default"}`、`{"mode":"none"}`、`{"mode":"named","name":"Professional"}`。工具在 From 之後選取 Mail 原生簽名，不手工將簽名拼進 body。**選取收據不是正文插入證據**；首次在該 Mail 設定使用時先確認草稿，再正式寄送，或選 none 並自行提供署名。交給 Mail 插入時不要再重複手寫同一份簽名。介面／名稱無法安全辨識時 explicit mode 會拒絕，不回退到已移除的 body-assignment 路徑。
+
 <details>
 <summary><b>郵件分類 (4)</b></summary>
 

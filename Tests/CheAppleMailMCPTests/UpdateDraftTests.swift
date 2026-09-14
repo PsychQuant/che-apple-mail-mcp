@@ -22,6 +22,7 @@ final class UpdateDraftTests: XCTestCase {
         rowsSequence: [String],
         createThrows: Bool = false,
         deleteError: Error? = nil,
+        signatureReceipt: ComposeSignatureReceipt? = nil,
         log: (@Sendable (String) -> Void)? = nil
     ) async {
         let counter = SeqCounter()
@@ -34,6 +35,10 @@ final class UpdateDraftTests: XCTestCase {
                 }
                 if script.contains("mailto:") || script.contains("make new outgoing message") {
                     if createThrows { throw MailError.scriptFailed(message: "create boom", code: -1) }
+                    if let signatureReceipt {
+                        return "Draft created successfully" + ComposeSignatureReceipt.marker
+                            + (try JSONEncoder().encode(signatureReceipt).base64EncodedString()) + "]"
+                    }
                     return "Draft created successfully"
                 }
                 if script.contains("drafts mailbox") {
@@ -93,6 +98,20 @@ final class UpdateDraftTests: XCTestCase {
         XCTAssertTrue((result["new_draft"] as? String ?? "").contains("Draft created"))
         XCTAssertEqual(order.entries, ["create", "delete"],
                        "create-then-delete ordering (design D1) — never delete first")
+    }
+
+    func testUpdateDraft_forwards_signature_to_replacement_before_delete() async throws {
+        addTeardownBlock { await self.teardownSeam() }
+        let receipt = ComposeSignatureReceipt(mode: .named, selection: "Professional", selectionVerified: true, selectionApplied: true)
+        await installSeam(rowsSequence: ["101\(GS)Old", "101\(GS)Old", "101\(RS)999\(GS)Old\(RS)s"],
+                          signatureReceipt: receipt, log: { script in
+            if script.contains("mailto:") { XCTAssertTrue(script.contains("signatureReceipt(\"named\"")) }
+        })
+        let result = try await MailController.shared.updateDraft(draftId: "101", subjectMatch: nil,
+            accountName: "Account", accountId: nil, to: ["a@example.invalid"], subject: "s", body: "body",
+            signature: .init(mode: .named, name: "Professional"))
+        XCTAssertEqual(result["deleted_old"] as? Bool, true)
+        XCTAssertTrue((result["new_draft"] as? String ?? "").contains("signature_mode: named"))
     }
 
     // MARK: - refuse paths (spec: identify selector semantics)
