@@ -645,7 +645,7 @@ class CheAppleMailMCPServer {
             // Special Mailboxes
             Tool(
                 name: "get_special_mailboxes",
-                description: "Get special mailbox names. Without account_id/account_name: the app-level unified names (inbox, drafts, sent, trash, junk, outbox). With an account selector: that account's per-account special-mailbox real (localized/provider) LEAF names (inbox, drafts, sent, trash, junk) — e.g. a Gmail account returns drafts \"草稿\", junk \"垃圾郵件\"; an Exchange account's inbox can localize (收件匣) (#179/#249). outbox stays unified-only. In the per-account mode each present type ALSO carries a `<type>_path` field with the FULL mailbox path (e.g. drafts_path \"[Gmail]/草稿\") derived from the Mail Envelope Index — the same representation `search_emails`'s `mailbox` field uses (#315; requires Full Disk Access). `<type>_path` is OMITTED whenever it cannot be resolved unambiguously: no index access (e.g. EWS accounts / missing FDA), an unknown leaf, or a leaf whose match cannot be corroborated. Corroboration matters because a unique leaf match is NOT proof of identity (#345): an ordinary `Projects/Drafts` folder matches the leaf `Drafts` uncontested when the real drafts mailbox is not in the index yet. A NESTED path is therefore returned only when another special mailbox of the same account resolves under the SAME parent container — which is what makes `[Gmail]/草稿` trustworthy (`[Gmail]` also holds sent/junk/trash) and `Projects/Drafts` not. Position is never used as evidence. Consumers MUST keep a leaf-based fallback for the absent-`_path` case — an absent path is an honest signal, not an error (the leaf `<type>` is always present when the mailbox exists). A present path equals the leaf exactly when the mailbox is genuinely top-level.",
+                description: "Get special mailbox names. Without an account selector, returns the unchanged unified inbox/drafts/sent/trash/junk/outbox names. With account_id or account_name, returns canonical account metadata and that account's real leaf names for inbox/drafts/sent/trash/junk. Optional <type>_path fields are discovered from Envelope Index path components and returned only after Mail confirms the exact candidate object matches the account's native special-mailbox child. Shared parent names, a unique leaf, INBOX position and legacy tuple paths are not proof. No index, unavailable/ambiguous native evidence or literal slash components leave the path absent while preserving the leaf. Path verification is one additional bounded non-GUI metadata operation with an existing Automation grant; it does not read message contents. Consumers must retain a leaf-based fallback when a path is absent.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -1945,29 +1945,28 @@ class CheAppleMailMCPServer {
             // signal the #268 design promised — while the leaf stays present.
             if hasSelector, let reader = indexReader,
                let matchedId = mailboxes["account_id"] as? String, !matchedId.isEmpty {
-                let mailboxRows = (try? reader.listMailboxes(accountId: matchedId)) ?? []
-                let mailboxEntries: [(path: String, components: [String])] = mailboxRows
-                    .compactMap { row in
-                        guard let name = row["name"] as? String else { return nil }
-                        // Fall back to a single component only if the reader
-                        // somehow omitted them — never re-split `name`, which
-                        // is exactly the lossy step #344/#345 warn about.
-                        let comps = (row["path_components"] as? [String]) ?? [name]
-                        return (path: name, components: comps)
+                do {
+                    let mailboxRows = try reader.listMailboxes(accountId: matchedId)
+                    let mailboxEntries: [(path: String, components: [String])] = mailboxRows.compactMap { row in
+                        guard let path = row["name"] as? String else { return nil }
+                        return (path, (row["path_components"] as? [String]) ?? [path])
                     }
-                // #345: resolve every leaf TOGETHER. A lone nested candidate is
-                // not proof of identity — an ordinary `Projects/Drafts` matched
-                // the leaf uncontested when the real drafts mailbox was missing
-                // from the index. A nested path is now believed only when
-                // another special mailbox shares its parent container.
-                let leafPairs: [(key: String, leaf: String)] = perAccountSpecialMailboxes
-                    .compactMap { special in
+                    let leaves = perAccountSpecialMailboxes.compactMap { special -> (key: String, leaf: String)? in
                         guard let leaf = mailboxes[special.key] as? String else { return nil }
-                        return (key: special.key, leaf: leaf)
+                        return (special.key, leaf)
                     }
-                for (key, path) in joinSpecialMailboxPaths(leaves: leafPairs,
-                                                           mailboxes: mailboxEntries) {
-                    mailboxes[key + "_path"] = path
+                    let candidates = specialMailboxPathCandidates(leaves: leaves, mailboxes: mailboxEntries)
+                    if !candidates.isEmpty {
+                        let proof = try await mailController.confirmSpecialMailboxPaths(accountId: matchedId, candidates: candidates)
+                        for (key, path) in confirmedSpecialMailboxPaths(candidates: candidates, proof: proof) {
+                            mailboxes[key + "_path"] = path
+                        }
+                        if proof.results.contains(where: { !$0.available }) {
+                            Diagnostics.emit("Some special-mailbox path candidates could not be verified; only native-confirmed paths are returned\n")
+                        }
+                    }
+                } catch {
+                    Diagnostics.emit("Native special-mailbox path verification unavailable: \(error.localizedDescription); returning leaf names only\n")
                 }
             }
             return formatJSON(mailboxes)
