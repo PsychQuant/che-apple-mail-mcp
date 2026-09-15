@@ -1694,9 +1694,16 @@ def parse_archive_date(value):
         return None
     value = value.strip()
     if re.match(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:$|[Tt ])", value):
+        # fromisoformat normalizes +08:60 into +09:00; reject malformed
+        # source components before delegating the remaining ISO grammar.
+        offset = re.search(r"[+-]([0-9]{2})(?::?([0-9]{2}))?(?::?([0-9]{2}))?(?:[.,][0-9]+)?$", value[10:])
+        if offset:
+            hours, minutes, seconds = (int(part or 0) for part in offset.groups())
+            if hours > 23 or minutes > 59 or seconds > 59:
+                return None
         try:
             return (date.fromisoformat(value) if len(value) == 10
-                    else datetime.fromisoformat(value.replace("Z", "+00:00")))
+                    else datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value))
         except ValueError:
             return None
     value = _without_date_comments(value)
