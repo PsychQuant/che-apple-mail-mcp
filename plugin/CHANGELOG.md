@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `plugin.json` description field. Section categorization is best-effort —
 > review and refine `Added` / `Changed` / `Fixed` etc. as needed.
 
+## [Unreleased]
+
+### Added
+
+- `archive-mail` 從 `~/.claude/.mail/identity.yaml` 讀取 `participant_aliases`，workspace 僅補充新地址，衝突採全域值並具名揭露。缺檔靜默、解析失敗警告後沿用 workspace。消歧義候選與 audit 共用同一結果；不新增 own_addresses 或 frontmatter 欄位。（#334）
+
+### Changed
+
+- **BREAKING**：`attachment_routing` 改為逐子欄位覆寫內建預設。未提及 sub-key 沿用預設，明寫的清單完整 replace、不 append。舊設定若靠省略清單來停用，請補顯式 `[]`；完整六鍵設定不受影響。未知鍵與錯誤型別警告後忽略該鍵，不再把 typo 當有效設定。未自動改寫使用者 config。（#334）
+
 ## [2.48.0] - 2026-09-08
 
 ### Changed
