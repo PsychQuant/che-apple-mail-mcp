@@ -50,6 +50,26 @@ class ArchiveDateRecipesTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(parse(value), "2026-06-30")
 
+    def test_iso_offsets_reject_overflow_without_normalizing_or_mutating(self):
+        bad = ["2026-06-30T12:00:00" + zone for zone in
+               ["+08:60", "-08:60", "+0860", "-0060", "+08:59:60",
+                "+085960", "+08:60:00.25", "+24:00", "Z:60", "Z:00", "Z.5"]]
+        entries = {str(i): {"date": value, "file": "kept.md"} for i, value in enumerate(bad)}
+        before = json.loads(json.dumps(entries))
+        for value in bad:
+            with self.subTest(value=value):
+                self.assertIsNone(self.dates["to_ymd"](value))
+                self.assertIsNone(self.dates["normalize_archive_timestamp"](value))
+        audit = self.dates["reconcile_dates"](entries)
+        self.assertEqual(audit["date_excluded_count"], len(bad))
+        self.assertEqual(audit["last_updated"], "")
+        self.assertEqual(entries, before)
+        for zone in ["+08", "+0800", "+08:00", "-23:59", "+08:59:59.5"]:
+            with self.subTest(zone=zone):
+                value = "2026-06-30T12:00:00" + zone
+                self.assertEqual(self.dates["to_ymd"](value), "2026-06-30")
+                self.assertIsNotNone(self.dates["normalize_archive_timestamp"](value))
+
     def test_calendar_validation_and_nonstring_values_do_not_crash_or_guess(self):
         parse = self.dates["to_ymd"]
         for value in [None, "", "  ", 20260630, False, [], {}, "2026-02-31",
