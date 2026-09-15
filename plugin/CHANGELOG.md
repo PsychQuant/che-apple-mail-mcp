@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- 全域 archive registry、index tombstone 去重、目的地規劃與可恢復的分派 executor；新增 registry／tree 命令，原 archive-mail 對已登錄目標導入樹狀流程並保留本次 filter 範圍。分派 complete 後仍須完成各目標 reconcile。（#363）
+
 - `archive-mail` 從 `~/.claude/.mail/identity.yaml` 讀取 `participant_aliases`，workspace 僅補充新地址，衝突採全域值並具名揭露。缺檔靜默、解析失敗警告後沿用 workspace。消歧義候選與 audit 共用同一結果；不新增 own_addresses 或 frontmatter 欄位。（#334）
 
 ### Changed

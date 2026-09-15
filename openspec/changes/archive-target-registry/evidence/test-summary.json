@@ -1,0 +1,19 @@
+{
+  "distribution": {
+    "tests": 27,
+    "failures": 0
+  },
+  "registry": {
+    "tests": 19,
+    "failures": 0
+  },
+  "legacy_recipes": {
+    "tests": 21,
+    "failures": 0
+  },
+  "total": 67,
+  "actual_process_exit_tested": true,
+  "physical_power_loss_tested": false,
+  "live_mail_tested": false,
+  "claude_review": "pending_authentication"
+}

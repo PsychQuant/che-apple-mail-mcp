@@ -108,6 +108,12 @@ archive-mail v2.17.0+ 會:
 
 詳細 spec 見 [`commands/archive-mail.md`](commands/archive-mail.md)。完整 changelog 見 [`CHANGELOG.md`](CHANGELOG.md)。
 
+### `/archive-mail-registry` 與 `/archive-mail-tree`
+
+全域 `~/.claude/.mail/archives.json` 記錄完整歸檔目標與組織父子關係。`/archive-mail-registry list` 列出全部目標；`validate` 檢查路徑／階層，`snapshot` 讀取包含 tombstone 的跨層歷史。登錄由使用者維護，不自動掃描或註冊。
+
+`/archive-mail-tree <target-id>` 預覽 corpus 與目的地，先捕捉到上層 intake，再分派；未知或歧義留 intake。分派有 journal 可 resume，完整流程還包含各目標的 threads/date/index reconcile。原 archive-mail 會辨識已登錄目標並保留原 filter 限制；未登錄維持舊行為。詳見 [registry](commands/archive-mail-registry.md) 與 [階層歸檔](commands/archive-mail-tree.md)。
+
 ### `/archive-mail-view` — 生成 thread 聚合視圖（v2.6.0+）
 
 ```bash
