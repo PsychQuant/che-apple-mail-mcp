@@ -8,6 +8,14 @@ import AppKit  // #175: NSPasteboard for full-fidelity clipboard preserve/restor
 actor MailController {
     static let shared = MailController()
 
+    // #329: synchronous AppleScript/preflight/subprocess waits must not occupy
+    // Swift's cooperative pool, which also drives the SDK's stdio receive loop.
+    // Retain one executor for the actor's lifetime; actor isolation stays serial.
+    private nonisolated let executor = MailControllerExecutor()
+    nonisolated var unownedExecutor: UnownedSerialExecutor {
+        executor.asUnownedSerialExecutor()
+    }
+
     private init() {}
 
     // MARK: - #254 test seams (production never sets these)
