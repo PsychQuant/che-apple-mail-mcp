@@ -115,3 +115,9 @@ return try await mailController.fallback(...)
 - live-test 找已存草稿的 .emlx：用 disk `grep`（檔案系統，不載入 Mail body）或 subject-match，不要 `whose content contains`。
 
 **Regression guard**：`Tests/CheAppleMailMCPTests/NoContentContainsScanGuardTests.swift` 掃 `Sources/CheAppleMailMCP/`，任何 `whose content contains` 出現即 fail。注意這條鎖的是**「shipped read 路徑」**；`MailAppIntegrationTests.swift` 的 `content of m` 迴圈 scope 在 Drafts 小匣、有界，不在此禁令範圍（但若日後 batch 場景變大，同樣改走 subject/id 路徑）。
+
+## 帳號寄件身分 metadata 的快取例外（#375）
+
+Mail 已設定的 `email addresses`（含 EWS 與 configured aliases）是 app-level 設定，AccountsMap／SQLite 的單一 AccountURL 不能提供完整清單。batch export 可使用每個 server process 的原生 metadata snapshot cache：300 秒 TTL、同時更新合併成一份、60 秒失敗退避、5 秒 caller wait budget。這是帳號設定 metadata 的有限例外；郵件正文、headers、附件、搜尋仍依本規則直讀，禁止為每封信增加 Apple Event。
+
+更新使用現有 Automation grant；不自動跳出新授權提示，也不將地址清單落盤。`opts.refresh_identity: true` 可略過 TTL／退避，但仍共用正在執行的更新。來源不完整或不可用時必須揭露 identity_source／identity_complete 與 direction_inferred，不得以「找到一個 primary 地址」宣稱已檢查所有 configured aliases。
