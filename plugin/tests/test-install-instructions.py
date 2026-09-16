@@ -286,6 +286,13 @@ class InstallInstructionsTests(unittest.TestCase):
                 if len(tail)>check.MAX_LINE_BYTES:self.assertNotEqual(result.returncode,0)
                 else:self.assertEqual(result.returncode,0,result.stderr)
 
+    def test_ansi_c_installation_wrappers_fail_explicitly(self):
+        for command in ["bash -c $'claude plugin install removed@external'",
+                        "bash -c $'clau"+chr(92)+"x64e plugin install removed@external'",
+                        "claude $'plu"+chr(92)+"x67in' install removed@external"]:
+            with self.subTest(command=command),self.assertRaises(check.Invalid):
+                self.resolve(README+'\n```bash\n'+command+'\n```')
+
     def test_current_readme_against_local_fixture(self):
         data=(ROOT/'.claude-plugin/marketplace.json').read_bytes()
         self.assertEqual(self.resolve((ROOT/'README.md').read_text(),data),

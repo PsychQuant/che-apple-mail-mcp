@@ -51,6 +51,8 @@ def shell_comment_prefix(line):
 
 def looks_like_install(line, depth=0):
     text = shell_comment_prefix(line)
+    if "$'" in text and re.search(r'claude|/plugin|plugin\s+(?:install|marketplace\s+add)', text):
+        raise Invalid('ANSI-C-quoted installation-looking commands are unsupported')
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars='();&|')
         lexer.whitespace_split = True
