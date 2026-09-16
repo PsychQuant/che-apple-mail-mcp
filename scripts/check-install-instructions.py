@@ -54,7 +54,9 @@ def looks_like_install(line):
         words = shlex.split(text, comments=False)
     except ValueError:
         # Malformed quotes must not hide an installation-looking command.
-        text = text.replace('"', '').replace("'", '')
+        text = text.replace('"', '').replace("'", '').replace('`', '')
+        if not re.search(r'(?:^|\s)(?:\S*/)?claude\s+|(?:^|\s)/plugin\s+', text):
+            return False
         return re.search(r'(?<![\w-])/?plugin\s+(?:install|marketplace\s+add)\b', text) is not None
     cli_words = [word.strip('`') for word in words]
     has_cli = any(word == '/plugin' or word.rsplit('/', 1)[-1] == 'claude' for word in cli_words)
@@ -63,7 +65,7 @@ def looks_like_install(line):
         return False  # Ordinary prose such as 'the plugin install step'.
     # Shell quoting can split a keyword (plu"gin") or quote it entirely.
     # Inspect parsed words rather than requiring the raw spelling to match.
-    normalized = ['plugin' if word == '/plugin' else word for word in words]
+    normalized = ['plugin' if word.strip('`') == '/plugin' else word.strip('`') for word in words]
     for index, word in enumerate(normalized):
         if word == 'plugin' and normalized[index + 1:index + 2] == ['install']:
             return True
