@@ -108,6 +108,10 @@ archive-mail v2.17.0+ 會:
 
 詳細 spec 見 [`commands/archive-mail.md`](commands/archive-mail.md)。完整 changelog 見 [`CHANGELOG.md`](CHANGELOG.md)。
 
+### `/classify-mail` — 依個人判準分類與清理
+
+支援自訂類別及本機保存的 sender／subject／List-ID 判準。明確批准的規則可以自動移至垃圾桶，其餘先預覽；不永久刪除、不儲存郵件本文。處置使用短效計畫與明確 ids，先寫稽核、重驗信件，未知結果不盲目重試。詳見 [分類命令](commands/classify-mail.md)。
+
 ### `/archive-mail-view` — 生成 thread 聚合視圖（v2.6.0+）
 
 ```bash

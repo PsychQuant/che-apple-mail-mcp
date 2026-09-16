@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `plugin.json` description field. Section categorization is best-effort —
 > review and refine `Added` / `Changed` / `Fixed` etc. as needed.
 
+## [Unreleased]
+
+### Added
+
+- 四個郵件分類 MCP 工具與 `/classify-mail`：本機自訂判準、規則內容指紋批准、read-only plan、guarded Trash move 與最小化 audit／政策歷史。只有明確批准規則的適用 subset 可自動處置；其餘先預覽，不清空垃圾桶。（#356）
+
 ## [2.48.0] - 2026-09-08
 
 ### Changed
