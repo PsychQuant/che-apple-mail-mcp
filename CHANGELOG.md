@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Native signature selection handles missing AX values and menu tracking**
+  ([#322](https://github.com/PsychQuant/che-apple-mail-mcp/issues/322)).
+  Typed missing labels/marks remain distinct from literal signature names;
+  incomplete accessibility reads cannot establish a unique control. Signature
+  menus use a captured AX window identity while open, avoiding Mail scripting
+  calls that block during native menu tracking. Cleanup cancels only an owned
+  menu and confirms closure before querying Mail; uncertain ownership leaves
+  the window intact. Final named/none native replay remains a verification gate.
+
 - **FDA assistance preserves its one-time offer when status is unknown**
   ([#403](https://github.com/PsychQuant/che-apple-mail-mcp/issues/403)).
   Setup is offered only after an explicit denial; no Mail data, undetermined
