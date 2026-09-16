@@ -63,6 +63,18 @@ class InstallInstructionsTests(unittest.TestCase):
             with self.subTest(line=line), self.assertRaises(check.Invalid):
                 self.resolve(README.replace('claude plugin install mail@external', line))
 
+    def test_interleaved_redirections_cannot_hide_installation_commands(self):
+        for extra in [
+            'claude plugin >/dev/null install removed@external',
+            'claude > /dev/null plugin install removed@external',
+            '>/dev/null claude plugin install removed@external',
+            'claude plugin marketplace 2>/dev/null add other/removed',
+            '/plugin < /dev/null install removed@external',
+            'claude plugin > /dev/null install "removed@external',
+        ]:
+            with self.subTest(extra=extra), self.assertRaises(check.Invalid):
+                self.resolve(README + '\n```sh\n' + extra + '\n```')
+
     def test_missing_instructions_and_unterminated_fence_refused(self):
         for text in ['', 'claude plugin install mail@external', README[:-3]]:
             with self.assertRaises(check.Invalid): self.resolve(text)
@@ -71,7 +83,7 @@ class InstallInstructionsTests(unittest.TestCase):
         for data in [b'{', b'[]', b'{}', manifest(plugins=('mail','mail')),
                      b'{"name":"external","plugins":[{}]}',
                      b'{"name":"external","name":"other","plugins":[]}']:
-            with self.subTest(data=data), self.assertRaises(check.Invalid): self.resolve(data=data)
+            with self.subTest(data=data), self.assertRaises((check.Invalid, check.Uncertain)): self.resolve(data=data)
 
     def test_transient_error_is_not_green(self):
         with self.assertRaises(check.Uncertain):
@@ -196,6 +208,117 @@ class InstallInstructionsTests(unittest.TestCase):
                 self.assertEqual(check.main(['--readme',str(ROOT/'README.md')]),code)
             self.assertEqual(stdout.getvalue(),'')
             self.assertIn(marker,stderr.getvalue())
+
+    def test_wrapped_and_global_option_commands_cannot_hide_in_valid_subset(self):
+        for extra in ['env claude plugin install removed@external',
+                      'claude --debug plugin install removed@external',
+                      '/usr/local/bin/claude plugin install removed@external']:
+            with self.subTest(extra=extra),self.assertRaises(check.Invalid):
+                self.resolve(README.rsplit('```',1)[0]+extra+'\n```')
+        with self.assertRaises(check.Invalid):
+            self.resolve(README+'\n```json\nclaude plugin install removed@external\n```')
+        self.assertEqual(self.resolve(README.replace('```bash','```console')),['mail@external via other/aggregator'])
+
+    def test_checkout_override_is_exact_and_external_sources_still_remote(self):
+        import contextlib,io,tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);readme=root/'README.md';local=root/'marketplace.json'
+            readme.write_text('```sh\nclaude plugin marketplace add owner/self\nclaude plugin install new@new-market\nclaude plugin marketplace add other/aggregator\nclaude plugin install mail@external\n```')
+            local.write_bytes(manifest('new-market',('new',)))
+            with patch.object(check,'fetch_manifest',return_value=manifest()) as fetch,contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(check.main(['--readme',str(readme),'--checkout-repo','owner/self','--checkout-manifest',str(local)]),0)
+                self.assertEqual([c.args[0] for c in fetch.call_args_list],['other/aggregator'])
+            local.write_bytes(manifest('new-market',()))
+            with patch.object(check,'fetch_manifest',return_value=manifest()),contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(check.main(['--readme',str(readme),'--checkout-repo','owner/self','--checkout-manifest',str(local)]),1)
+            # No override in ordinary mode: every source must remain remote.
+            with patch.object(check,'fetch_manifest',return_value=manifest('old-market',('old',))) as fetch,contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(check.main(['--readme',str(readme)]),1)
+                self.assertEqual(fetch.call_args.args[0],'owner/self')
+
+    def test_dotted_marketplace_and_plugin_names(self):
+        readme=README.replace('mail@external','mail.v2@external.v2')
+        self.assertEqual(self.resolve(readme,data=manifest('external.v2',('mail.v2',))),['mail.v2@external.v2 via other/aggregator'])
+
+    def test_continuations_and_outside_fence_commands_do_not_hide(self):
+        continued = "claude plugin " + chr(92) + "\n install removed@external"
+        split_word = "claude plu" + chr(92) + "\ngin install removed@external"
+        for extra in [continued,split_word]:
+            with self.assertRaises(check.Invalid): self.resolve(README+'\n```sh\n'+extra+'\n```')
+        for extra in ['    claude plugin install removed@external','Use `claude plugin install removed@external`.']:
+            with self.assertRaises(check.Invalid): self.resolve(README+'\n'+extra)
+
+    def test_missing_checkout_manifest_is_definite_failure(self):
+        import contextlib,io,tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            missing=Path(directory)/'missing.json'
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(check.main(['--checkout-repo','PsychQuant/che-apple-mail-mcp','--checkout-manifest',str(missing)]),1)
+
+    def test_quoted_shell_keywords_are_checked_as_real_tokens(self):
+        for command in ['claude "plugin" install removed@external',
+                        "claude plugin 'install' removed@external",
+                        'claude plu"gin" in"stall" removed@external']:
+            with self.subTest(command=command),self.assertRaisesRegex(check.Invalid,'removed.*missing'):
+                self.resolve(README+'\n```sh\n'+command+'\n```')
+        readme=README.replace('claude plugin marketplace add','claude "plugin" "marketplace" "add"')
+        self.assertEqual(self.resolve(readme),['mail@external via other/aggregator'])
+
+    def test_unrelated_schema_details_do_not_hide_or_invalidate_target(self):
+        data=b'{"name":"external","metadata":{"x":1,"x":2},"plugins":[{},"future-form",{"name":"other space"},{"name":"mail"}]}'
+        self.assertEqual(self.resolve(data=data),['mail@external via other/aggregator'])
+        with self.assertRaises(check.Uncertain):
+            self.resolve(data=b'{"name":"external","plugins":[{},"future-form"]}')
+        with self.assertRaises(check.Uncertain):
+            self.resolve(data=b'{"name":"external","plugins":[{"name":"mail","name":"other"}]}')
+        with self.assertRaises(check.Invalid):self.resolve(data=manifest(plugins=('other',)))
+
+    def test_prose_without_cli_prefix_is_not_an_install_command(self):
+        self.assertEqual(self.resolve(README+"\nRun the plugin install step after setup. Don't skip the plugin install step.\n"),['mail@external via other/aggregator'])
+        with self.assertRaises(check.Invalid):
+            self.resolve(README+'\nUse `claude plugin install removed@external`.\n')
+        with self.assertRaises(check.Invalid):
+            self.resolve(README+'\nUse `/plugin install removed@external`.\n')
+
+    def test_shell_operator_wrappers_do_not_hide_in_valid_subset(self):
+        for command in ['(claude plugin install removed@external)',
+                        '("claude" "plugin" install removed@external)',
+                        'sh -c "(claude plugin install removed@external)"',
+                        "sh -c \"('claude' 'plugin' 'install' removed@external)\""]:
+            with self.subTest(command=command),self.assertRaises(check.Invalid):
+                self.resolve(README+'\n```sh\n'+command+'\n```')
+
+    def test_path_runs_and_malformed_quote_paths_are_bounded(self):
+        import subprocess,tempfile
+        for tail in ['/'*500_000, "'"+'/'*500_000, '/'*50_000, "'"+'/'*50_000]:
+            with tempfile.TemporaryDirectory() as directory:
+                path=Path(directory)/'input.md';path.write_text(README+'\n```sh\n'+tail+'\n```')
+                code="import importlib.util,sys; sys.dont_write_bytecode=True; s=importlib.util.spec_from_file_location('c',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.commands(open(sys.argv[2]).read())"
+                result=subprocess.run([sys.executable,'-c',code,str(ROOT/'scripts/check-install-instructions.py'),str(path)],capture_output=True,text=True,timeout=5)
+                if len(tail)>check.MAX_LINE_BYTES:self.assertNotEqual(result.returncode,0)
+                else:self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_ansi_c_installation_wrappers_fail_explicitly(self):
+        for command in ["bash -c $'claude plugin install removed@external'",
+                        'bash -c $"claude plugin install removed@external"',
+                        "bash -c $'clau\"de\" plu\"gin\" install removed@external'",
+                        'claude $"plugin" install removed@external',
+                        "bash -c $'clau"+chr(92)+"x64e plugin install removed@external'",
+                        "claude $'plu"+chr(92)+"x67in' install removed@external",
+                        'clau"de" '+"$'plu"+chr(92)+"x67in' install removed@external"]:
+            with self.subTest(command=command),self.assertRaises(check.Invalid):
+                self.resolve(README+'\n```bash\n'+command+'\n```')
+
+    def test_readme_special_file_and_oversized_acquisition_refuse(self):
+        import os,tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);fifo=root/'pipe';os.mkfifo(fifo)
+            result=subprocess.run([sys.executable,str(ROOT/'scripts/check-install-instructions.py'),'--readme',str(fifo)],capture_output=True,text=True,timeout=3)
+            self.assertEqual(result.returncode,1,result.stderr)
+            large=root/'large.md';large.write_bytes(b'x'*(check.MAX_BYTES+1))
+            with self.assertRaises(check.Invalid):check.read_bounded_document(large,'README')
+            link=root/'link';link.symlink_to(large)
+            with self.assertRaises(OSError):check.read_bounded_document(link,'README')
 
     def test_current_readme_against_local_fixture(self):
         data=(ROOT/'.claude-plugin/marketplace.json').read_bytes()
