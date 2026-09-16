@@ -62,7 +62,8 @@ is unsupported; variables and fully encoded shell programs are not interpreted.
 Console/shellsession fences are supported. The remote check requires curl 8.4.0+ so unknown-length responses are also
 bounded; an older or unavailable curl returns exit 2 before downloading. Each source has
 at most three attempts, a 10-second request limit and 1 MiB response limit;
-README input is capped at 1 MiB and each physical line at 64 KiB for inspection; all
+README and checkout inputs must be regular files (no final-component symlinks);
+reads are bounded before parsing. README input is capped at 1 MiB and each physical line at 64 KiB for inspection; all
 sources share a 90-second network budget (plus subprocess termination grace).
 Scheduled monitoring depends on GitHub Actions remaining enabled; it is not a
 guarantee that inactive repositories will continue to receive scheduled runs.

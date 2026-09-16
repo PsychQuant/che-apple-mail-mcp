@@ -297,6 +297,17 @@ class InstallInstructionsTests(unittest.TestCase):
             with self.subTest(command=command),self.assertRaises(check.Invalid):
                 self.resolve(README+'\n```bash\n'+command+'\n```')
 
+    def test_readme_special_file_and_oversized_acquisition_refuse(self):
+        import os,tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);fifo=root/'pipe';os.mkfifo(fifo)
+            result=subprocess.run([sys.executable,str(ROOT/'scripts/check-install-instructions.py'),'--readme',str(fifo)],capture_output=True,text=True,timeout=3)
+            self.assertEqual(result.returncode,1,result.stderr)
+            large=root/'large.md';large.write_bytes(b'x'*(check.MAX_BYTES+1))
+            with self.assertRaises(check.Invalid):check.read_bounded_document(large,'README')
+            link=root/'link';link.symlink_to(large)
+            with self.assertRaises(OSError):check.read_bounded_document(link,'README')
+
     def test_current_readme_against_local_fixture(self):
         data=(ROOT/'.claude-plugin/marketplace.json').read_bytes()
         self.assertEqual(self.resolve((ROOT/'README.md').read_text(),data),

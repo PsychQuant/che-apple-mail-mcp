@@ -276,17 +276,17 @@ def resolve(readme, fetch):
             resolved.append(f'{target} via {repo}')
     return resolved
 
-def read_checkout_manifest(path):
+def read_bounded_document(path, label):
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError as exc:
-        raise Invalid('checkout marketplace manifest is missing') from exc
+        raise Invalid(f'{label} is missing') from exc
     with os.fdopen(fd, 'rb') as source:
         if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
-            raise Invalid('checkout manifest must be a regular file')
+            raise Invalid(f'{label} must be a regular file')
         data = source.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
-        raise Invalid('checkout manifest exceeds 1 MiB')
+        raise Invalid(f'{label} exceeds 1 MiB')
     return data
 
 
@@ -297,16 +297,14 @@ def main(argv=None):
     parser.add_argument('--checkout-manifest', type=Path)
     args = parser.parse_args(argv)
     try:
-        if args.readme.stat().st_size > MAX_BYTES:
-            raise Invalid('README exceeds 1 MiB')
-        readme = args.readme.read_text(encoding='utf-8')
+        readme = read_bounded_document(args.readme, 'README').decode('utf-8')
         deadline = time.monotonic() + 90
         if args.checkout_manifest is not None and not args.checkout_repo:
             raise Invalid('--checkout-manifest requires --checkout-repo')
         checkout = repository(args.checkout_repo) if args.checkout_repo else None
         def fetch(repo):
             if checkout and repo.lower() == checkout.lower():
-                return read_checkout_manifest(args.checkout_manifest or Path(__file__).resolve().parents[1] / ".claude-plugin/marketplace.json")
+                return read_bounded_document(args.checkout_manifest or Path(__file__).resolve().parents[1] / ".claude-plugin/marketplace.json", "checkout marketplace manifest")
             return fetch_manifest(repo, deadline)
         results = resolve(readme, fetch)
     except Invalid as exc:
