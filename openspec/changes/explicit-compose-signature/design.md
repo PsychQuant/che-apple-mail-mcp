@@ -43,3 +43,17 @@ R2 視窗身分修正：title→AX bridge 前先核對 Mail 原 _ourId 與 subje
 
 
 Cleanup 亦不依 error label 猜所有權：所有 pre-dispatch 清理先檢查原 ID＋原標題，關閉後仍存續且標題相符才進入 AX discard；AXRaise 後及 discard 點擊前需 native front ID 相同。原視窗消失即不再依標題點另一視窗，原視窗改名則保留。已觀察先前 #405 fixture 的 outgoing matches=0、指定 window id/title 不存在，僅解除該舊視窗清理待辦，不當成新簽名 live gate 證據。
+
+
+### 2026-09-17 實機修正：分隔線型別與選單追蹤期間的身分查核
+
+預設模式已分別觀察到「無」與帳號預設簽名，原生 saved body 都保留 caller 正文與手動署名標記；有設定簽名的帳號只插入一份。named 最初在 None 區段判斷被拒絕：AppleScript 把型別化 `missing value` 強制轉字串會得到字面 `"missing value"`，因此改為轉型前處理缺值，並區分真的使用此名稱的簽名。AX 屬性讀取拋錯不是缺值，不再吞成空字串；選項匹配的三個入口共用同一處理。
+
+另有直接對照：簽名選單開啟時，Mail 的原生視窗查詢在 2 秒後 -1712；Escape 關閉選單後，同一查詢約 0.13 秒成功。原先選單內的 native guard 因 NSMenu tracking 等待而造成整個 90 秒 GUI deadline。這不是提高 timeout 能解決的正常延遲。
+
+調整查核時機：每次開選單前核對 native id／title／front，接著記錄 System Events 的 process PID、該唯一標題視窗的非空 AXIdentifier，以及 focused-window AXIdentifier。選單開啟期間只使用 AX 查核，要求上述值及 foreground 仍一致，再點選該 popup 的選單項；點選關閉選單後立即恢復 native 查核。若 AXIdentifier 缺失、改變、同標題多窗或 focus 改變，explicit 模式拒絕，不退回 title-only 點選。
+
+AXIdentifier 僅作本次視窗操作的短期身分證據，不是跨重存的 message selector；#409 的 saved-message creation binding 仍未解決。跨 API 與 UI 動作仍不是原子交易，保留既有 TOCTOU 限制。不同 Mail/macOS 的未知屬性形狀應明確拒絕，不能推測可用性。
+
+
+失敗路徑同樣追蹤選單：在檢查開啟條件前設為 unknown，在 click 前保存 popup／AX pin；選取後須確認選單消失才恢復 native 查核。錯誤收尾先用相同 pin 檢查，再對該 popup 的精確選單執行 AXCancel。若無法確認所有權／取消／消失，就直接回報 WINDOWLEFTOPEN，不查詢 Mail、不丟棄視窗、不送全域 Escape。Popup 掃描只略過已明確不存在的 AXIdentifier；任何 candidate 或 attribute 讀取錯誤讓整份結果不可用，不能把不完整掃描當成唯一匹配。
