@@ -1,0 +1,14 @@
+[
+  {
+    "case": "correct",
+    "count": 4,
+    "available": 4,
+    "matches": 4
+  },
+  {
+    "case": "wrong_parent",
+    "count": 4,
+    "available": 4,
+    "matches": 0
+  }
+]

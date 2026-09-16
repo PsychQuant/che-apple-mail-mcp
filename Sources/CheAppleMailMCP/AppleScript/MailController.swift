@@ -2821,6 +2821,15 @@ actor MailController {
 
     // MARK: - Special Mailboxes
 
+    /// Confirm exact account-scoped index candidates against native role objects.
+    func confirmSpecialMailboxPaths(accountId: String, candidates: [SpecialMailboxPathCandidate]) throws -> SpecialMailboxPathProof {
+        guard !candidates.isEmpty else { return SpecialMailboxPathProof(version: 1, count: 0, results: []) }
+        let script = try buildSpecialMailboxPathProofScript(accountId: accountId, candidates: candidates)
+        let raw = try runSubprocessScript(script, timeout: Self.defaultScriptTimeout,
+                                          guiFlow: false, requireExistingGrant: true)
+        return try SpecialMailboxPathProof.parse(raw, candidateCount: candidates.count)
+    }
+
     /// Get special mailboxes (inbox, drafts, sent, trash, junk, outbox)
     /// Special mailbox names.
     ///
@@ -2833,8 +2842,9 @@ actor MailController {
         // Per-account mode (#179): an account selector is supplied.
         let hasAccount = !(accountId ?? "").isEmpty || !(accountName ?? "").isEmpty
         if hasAccount {
-            let script = buildSpecialMailboxNamesScript(accountId: accountId, accountName: accountName ?? "")
-            let raw = try runScriptAsList(script)  // [matchedId, matchedName, matchCount, n0…n4 (leaf)] for drafts/sent/trash/junk/inbox (#249 lifted the inbox deferral; #315 removed the vacuous path walk)
+            let script = buildSpecialMailboxNamesScript(accountId: accountId, accountName: accountName ?? "", jsonOutput: true)
+            let encoded = try runSubprocessScript(script, timeout: Self.defaultScriptTimeout, guiFlow: false)
+            let raw = try JSONDecoder().decode([String].self, from: Data(encoded.utf8))
             // Pure parse + pure throw-translation (both unit-tested without the actor):
             // .resolved → canonical metadata + present special names (absent omitted, D3);
             // .noMatch → operationFailed; .ambiguous → invalidParameter (#179).
@@ -2844,8 +2854,8 @@ actor MailController {
             // AppleScript container walk succeeded vacuously (references from
             // the unified container have a non-mailbox `container` on first
             // probe) and returned leaf-for-nested — 4/5 wrong on every live
-            // account. Paths are joined from the Envelope Index at the Server
-            // layer (`joinSpecialMailboxPath`), where `indexReader` lives.
+            // account. Index paths are candidates only; the Server layer separately
+            // confirms them against native role objects before returning paths.
             return obj.reduce(into: [String: Any]()) { $0[$1.key] = $1.value }
         }
 

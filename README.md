@@ -658,6 +658,23 @@ this manifest. These are configured addresses observed at refresh time, not a
 claim about unconfigured SMTP From permissions or permanent address ownership.
 
 
+### Verified special-mailbox paths
+
+Per-account `get_special_mailboxes` keeps its leaf names and optional `_path`
+fields. Index paths are candidates only: a path is returned after the exact
+account-scoped Mail object matches the account's native special-mailbox child.
+Two ordinary sibling names, root position and old tuple path slots cannot supply
+that proof. Missing index/proof, ambiguity or a literal slash within a component
+leaves the path absent; consumers must keep the leaf fallback.
+
+The read-only native regression gate is
+`SpecialMailboxNativeProofLiveTests.testRecordedNativeCandidatesMatchExpectedRoles`.
+It requires `MAIL_APP_INTEGRATION_TESTS=1` and a private
+`MAIL_SPECIAL_MAILBOX_FIXTURE` JSON file with account, role, leaf, components,
+expectedMatch and expectedAvailable per record. Include a known positive; no
+folders or messages are created. Do not commit private account/path fixtures.
+
+
 ## Technical Details
 
 - **Framework**: [MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) v0.10.0
