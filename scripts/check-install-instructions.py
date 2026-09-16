@@ -76,6 +76,8 @@ def looks_like_install(line, depth=0):
         raise Invalid('nested installation command exceeds inspection depth')
     cli_words = [word.strip('`') for word in words]
     has_cli = any(word == '/plugin' or word.rsplit('/', 1)[-1] == 'claude' for word in cli_words)
+    if has_cli and "$'" in text:
+        raise Invalid('ANSI-C-quoted CLI arguments are unsupported')
     if not has_cli:
         return False  # Ordinary prose such as 'the plugin install step'.
     # Shell quoting can split a keyword (plu"gin") or quote it entirely.
