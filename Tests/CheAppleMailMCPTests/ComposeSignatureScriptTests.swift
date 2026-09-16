@@ -69,6 +69,153 @@ final class ComposeSignatureScriptTests: XCTestCase {
         }
     }
 
+    func test_native_missing_values_are_empty_without_erasing_literal_signature_names() throws {
+        let helpers = "use framework \"Foundation\"\nuse scripting additions\n" + composeSignatureHandlers
+        let enabled = "{true, false, true, false, true}"
+        let fixtures = [
+            ("{\"None\", missing value, \"Professional\", missing value, \"Edit Signatures…\"}",
+             "{missing value, missing value, \"✓\", missing value, missing value}", "Professional", "3"),
+            ("{\"None\", missing value, \"missing value\", missing value, \"Edit Signatures…\"}",
+             "{missing value, missing value, \"✓\", missing value, missing value}", "missing value", "3"),
+            ("{\"None\", \"missing value\", \"Professional\", missing value, \"Edit Signatures…\"}",
+             "{missing value, missing value, \"✓\", missing value, missing value}", "Professional", "0"),
+            ("{\"None\", missing value, \"Professional\", missing value, \"Edit Signatures…\"}",
+             "{missing value, missing value, \"✓\", missing value, \"✓\"}", "Professional", "0"),
+            ("{\"None\", 42, \"Professional\", missing value, \"Edit Signatures…\"}",
+             "{missing value, missing value, \"✓\", missing value, missing value}", "Professional", "0"),
+            ("{\"None\", missing value, \"Professional\", missing value, \"Edit Signatures…\"}",
+             "{missing value, missing value, 42, missing value, missing value}", "Professional", "0")
+        ]
+        for (labels, marks, wanted, expected) in fixtures {
+            let source = helpers + "\nreturn my signatureChoiceIndex(" + labels + ", " + enabled + ", " + marks
+                + ", \"named\", \"" + wanted + "\")"
+            let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", source]
+            let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
+            try process.run(); process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+            XCTAssertEqual(String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines), expected)
+        }
+    }
+
+    func test_named_matching_never_coerces_an_unlabeled_enabled_item() throws {
+        let helpers = "use framework \"Foundation\"\nuse scripting additions\n" + composeSignatureHandlers
+        for (label, expected) in [("missing value", "false"), ("\"missing value\"", "true")] {
+            let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", helpers + "\nreturn my signatureNameMatches(" + label + ", true, \"missing value\")"]
+            let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
+            try process.run(); process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+            XCTAssertEqual(String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines), expected)
+        }
+    }
+
+    func test_signature_verification_propagates_attribute_read_failures() throws {
+        // Execute the real verification handler with only native operations
+        // replaced by deterministic fixtures. A valid-looking menu must never
+        // hide a failed label/mark read and reach the final selection click.
+        let start = try XCTUnwrap(composeSignatureHandlers.range(of: "on verifySignatureMenuChoice("))
+        let end = try XCTUnwrap(composeSignatureHandlers.range(of: "end verifySignatureMenuChoice", range: start.lowerBound..<composeSignatureHandlers.endIndex))
+        let handler = String(composeSignatureHandlers[start.lowerBound..<end.upperBound])
+        for failedRead in ["label", "mark"] {
+            var source = handler
+                .replacingOccurrences(of: "set _signatureMenuState to my openedSignatureMenu(_popup, _expectedId, _expectedTitle)", with: "set _signatureMenuState to {missing value, missing value, {}}")
+                .replacingOccurrences(of: "repeat with _i from 1 to (count of menu items of _menu)", with: "repeat with _i from 1 to 1")
+                .replacingOccurrences(of: "set _entry to menu item _i of _menu", with: "set _entry to missing value")
+                .replacingOccurrences(of: "set _label to name of _entry", with: failedRead == "label" ? "error \"fixture attribute read failed\" number -9876" : "set _label to \"None\"")
+                .replacingOccurrences(of: "set _mark to value of attribute \"AXMenuItemMarkChar\" of _entry", with: failedRead == "mark" ? "error \"fixture attribute read failed\" number -9876" : "set _mark to \"✓\"")
+                .replacingOccurrences(of: "set end of _enabled to enabled of _entry", with: "set end of _enabled to true")
+                .replacingOccurrences(of: "set _index to my signatureChoiceIndex(_labels, _enabled, _marks, _mode, _wanted)", with: "set _index to 1")
+                .replacingOccurrences(of: "my assertComposeWindowOwner(_expectedId, _expectedTitle, true)", with: "set _ownerFixture to true")
+                .replacingOccurrences(of: "my assertSignatureMenuOwner(_signatureMenuState)", with: "set _ownerFixture to true")
+                .replacingOccurrences(of: "click menu item _index of _menu", with: "return \"incorrectly accepted\"")
+            source += "\ntry\nmy verifySignatureMenuChoice(missing value, \"none\", \"\", 1, \"Title\")\nreturn \"incorrectly accepted\"\non error _message number _code\nreturn _code as text\nend try"
+            let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", source]
+            let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
+            try process.run(); process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+            XCTAssertEqual(String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines), "-9876", failedRead)
+        }
+    }
+
+    func test_menu_owner_pin_rejects_replacement_process_window_title_and_focus() throws {
+        let helpers = "use framework \"Foundation\"\nuse scripting additions\n" + composeSignatureHandlers
+        let expected = "{44, \"_NS:4\", \"Title\", true, \"_NS:4\"}"
+        let cases = [
+            (expected, "true"),
+            ("{45, \"_NS:4\", \"Title\", true, \"_NS:4\"}", "false"),
+            ("{44, \"_NS:5\", \"Title\", true, \"_NS:5\"}", "false"),
+            ("{44, \"_NS:4\", \"title\", true, \"_NS:4\"}", "false"),
+            ("{44, \"_NS:4\", \"Title\", false, \"_NS:4\"}", "false"),
+            ("{44, \"_NS:4\", \"Title\", true, \"_NS:5\"}", "false"),
+            ("{44, missing value, \"Title\", true, missing value}", "false")]
+        for (actual, result) in cases {
+            let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", helpers + "\nreturn my signatureAXOwnerMatches(" + actual + ", " + expected + ")"]
+            let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
+            try process.run(); process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+            XCTAssertEqual(String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines), result)
+        }
+    }
+
+    func test_popup_discovery_does_not_accept_a_partial_identifier_scan() throws {
+        let start = try XCTUnwrap(composeSignatureHandlers.range(of: "on signaturePopupFor("))
+        let end = try XCTUnwrap(composeSignatureHandlers.range(of: "end signaturePopupFor", range: start.lowerBound..<composeSignatureHandlers.endIndex))
+        let handler = String(composeSignatureHandlers[start.lowerBound..<end.upperBound])
+            .replacingOccurrences(of: "set _total to count of pop up buttons of _window", with: "set _total to 2")
+            .replacingOccurrences(of: "set _candidate to pop up button _i of _window", with: "set _candidate to _i")
+            .replacingOccurrences(of: "if exists attribute \"AXIdentifier\" of _candidate then", with: "if true then")
+            .replacingOccurrences(of: "if (value of attribute \"AXIdentifier\" of _candidate) is \"popup_signature\" then",
+                with: "if _i is 2 and my fixtureShouldFail then error \"fixture read failed\" number -9877\nset _identifier to \"other\"\nif _i is 1 then set _identifier to \"popup_signature\"\nif _identifier is \"popup_signature\" then")
+        for (fault, expected) in [("false", "1"), ("true", "missing value")] {
+            let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", "property fixtureShouldFail : " + fault + "\n" + handler + "\nreturn my signaturePopupFor(missing value)"]
+            let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
+            try process.run(); process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+            XCTAssertEqual(String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines), expected)
+        }
+    }
+
+    func test_unconfirmed_menu_dismissal_blocks_native_cleanup() throws {
+        let full = script(.init(mode: .none))
+        let start = try XCTUnwrap(full.range(of: "if not (my dismissSignatureTracking())"))
+        let end = try XCTUnwrap(full.range(of: "tell application \"Mail\"", range: start.upperBound..<full.endIndex))
+        let prefix = String(full[start.lowerBound..<end.lowerBound])
+        for (dismissed, expectedCalls) in [("false", "0"), ("true", "1")] {
+            let source = """
+            property nativeCalls : 0
+            on dismissSignatureTracking()
+                return \(dismissed)
+            end dismissSignatureTracking
+            on assertComposeWindowOwner(_id, _title, _front)
+                set my nativeCalls to my nativeCalls + 1
+                error "stop before any native API" number -9878
+            end assertComposeWindowOwner
+            set _mErr to "fixture read failure"
+            set _ourId to 42
+            try
+                \(prefix)
+            end try
+            return my nativeCalls
+            """
+            let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            process.arguments = ["-e", source]
+            let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
+            try process.run(); process.waitUntilExit()
+            XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+            XCTAssertEqual(String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines), expectedCalls)
+        }
+    }
+
     func test_native_window_identity_rejects_disappearance_rename_and_replacement() throws {
         let helpers = "use framework \"Foundation\"\nuse scripting additions\n" + composeSignatureHandlers
         let fixtures = [
