@@ -76,6 +76,8 @@ error: <保留實際工具錯誤；沒有有效 envelope 時說明實際回應�
 
 另外唯讀盤點本 target 的 `duplicates/**/*.md`（不追 symlink；不得跨到其他 target），記錄開始時數量與檔名；不將這些隔離檔混入修復候選或主 index。若可用工具無法確認列舉結果均在本 target 的實體路徑下，也視為盤點不可用，不猜成 0。無法列舉／讀取時在duplicates盤點欄位報原因 `quarantine-inventory-unavailable`（不是頂層status）及原因，數量標 `unknown`，不得假報 0。
 
+若已解析的 index 不存在，同樣停止為 `apply-unavailable`、`stage: file-inspection`，明列 `index-missing`；本修復不把缺少的 index 當作空物件重建。先由使用者確認正確索引位置或另行完成索引重建，再重跑本流程。
+
 ### Step 2: 重新定位真 Message-ID（完整候選流程）
 
 每檔必須依序完成下列 1–4 階段，不能在前面的查詢成功時提前接受；任何歧義都不進入寫入：
@@ -132,6 +134,8 @@ error: <缺少的能力或授權>
 ### Step 4: 套用已確認的隔離計畫
 
 每次搬移前重新核對已驗證的 duplicates 目錄身分／範圍及目的檔不存在；有變動就 apply-incomplete。只執行 Step 2 已確認的完整內容重複計畫，其餘檔案**移入 `duplicates/` 子目錄**（不刪除——人工確認後自行清理），隔離目的檔必須不存在，若同名已存在即停止為 `apply-incomplete`，不得覆寫隔離證據；再提交指向保留檔的 index entry。若套用期間發現來源變動或寫入／搬移失敗，停止並報 `apply-incomplete`，列出已完成操作與待辦，不得沿用 lookup 階段的 `repaired: 0` 或假報 completed；報告須明列每個殘留舊 index key、對應檔案與已改寫的 frontmatter。特別是 frontmatter 已改成真 ID、index 還是 synthetic 的狀態，重跑本命令不會重新掃到它，既有 append-only reconcile 也不會移除舊 key；需依操作紀錄人工核對修復，不宣稱自動收斂。
+
+每次搬移後、提交 index 前，必須重新核對來源已不存在，目的檔是 target 內的非 symlink regular file，且完整內容與該檔已驗證的改寫結果一致，才可計入隔離成功。不能只看命令退出碼：例如 `mv -n` 遇到既有目的檔可能回傳 0 卻沒有搬移。來源仍在、目的檔缺少／型別不符、內容不符或無法確認時，一律停止為 `apply-incomplete`，保留現況並列出差異，不提交 index、不覆寫目的檔、不再刪來源來補作。
 
 若套用途中失敗，使用下列格式，不把部分操作回報成全部成功：
 
