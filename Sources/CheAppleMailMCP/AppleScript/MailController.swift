@@ -2009,11 +2009,18 @@ actor MailController {
             ? rows.filter { $0.id == draftId }
             : rows.filter { $0.subject == subjectMatch }
         guard !matches.isEmpty else {
+            let guidance = hasId
+                ? ". The numeric draft id may have changed during autosave or synchronization, "
+                    + "or the draft may no longer be in this scope. Use list_accounts if needed to choose the "
+                    + "intended account, then run list_drafts and inspect candidates in the same account scope. If its exact subject is unchanged and unique in that "
+                    + "scope, use subject_match instead of draft_id; it is not a permanent identity key. "
+                    + "No replacement was created and no draft was deleted."
+                : ". update requires an existing draft — use list_drafts to discover ids, "
+                    + "or create_draft for a brand-new draft."
             throw MailError.operationFailed(
                 "update_draft: no existing draft matched "
                 + (hasId ? "draft_id \(draftId ?? "")" : "subject_match \"\(subjectMatch ?? "")\"")
-                + ". update requires an existing draft — use list_drafts to discover ids, "
-                + "or create_draft for a brand-new draft.")
+                + guidance)
         }
         guard matches.count == 1 else {
             let candidates = matches
