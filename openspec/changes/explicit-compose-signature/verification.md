@@ -40,3 +40,13 @@ Codex R1 要求 None 勾選驗證與可操作的正文指引；R2 發現既有 t
 - 最新 named 重跑在簽名 phase 前因 AX 看不到新 compose title 而拒絕。接著 CUA 明確回報 Mac locked、automatic unlock failed，已請使用者手動解鎖。該唯一 UUID 專用草稿仍待收尾；不能標 live gate 完成。其餘本輪先前 fixture 均已驗證從 compose／outgoing／Drafts 消失；未寄送或清空 Trash。
 
 尚待：解鎖後先收尾最新專用草稿，再跑最終 named／none 正文及失敗取消流程；完整角色審查。Claude session 額度於 02:10 後已恢復，後續排程中。OAuth 已恢復，不再以登入過期為原因。
+
+## 2026-09-17 AX 屬性檢查的證據界線
+
+較早的 AX 屬性探測與後來 named-r5 都取得 `_NS:41`，但前者沒有保存 window title／native id，因此不能由兩份紀錄宣稱已重現識別字重用或錯誤視窗操作。named-r5 取得指定 title 的 snapshot，AXIdentifier 與 focused identifier 相同，但 foreground 為 false，符合目前拒絕條件；尚未證實為 activation 程式錯誤。named-r4 與 named-r5 都已核對並清理，window／outgoing／Drafts 的精確比對均為 0。
+
+目前 tracking 期間檢查的是 PID、非空 AXIdentifier、唯一精確 title、foreground 與 focused identifier；原生 window id 在選單開啟前及關閉後核對。這不是已證明的視窗生命週期身分，也未獨立證明 stored popup specifier 在視窗替換後的行為。若替代視窗保留所有比較欄位，單靠 comparator 無法分辨；後置檢查也不能撤銷先前點擊。現有單元測試只證明欄位變動會遭拒，已更正測試名稱及註解，未降低任何 runtime guard 或規格要求。
+
+[Apple 的 accessibilityIdentifier 文件](https://developer.apple.com/documentation/appkit/nsaccessibility-c.protocol/accessibilityidentifier) 描述元素識別與自動測試用途；本案不據此推定字串跨視窗生命週期永不重用。限定 Codex 靜態審查將此裁定為 coverage／assurance gap，沒有宣稱已證實現行 Mail 可操作到錯誤視窗。
+
+仍須完成正常 named／none／正文與取消的實機驗證，並釐清 same-title replacement／失效 popup target 的實際行為；必要時應以公開 AX API 的實體 element reference 與 ownership relationship 取代字串推定，不可用永久拒絕代替功能，也不可把假想替換當作已執行的實機測試。此處只修正證據敘述，原規格及驗收門檻維持未完成。

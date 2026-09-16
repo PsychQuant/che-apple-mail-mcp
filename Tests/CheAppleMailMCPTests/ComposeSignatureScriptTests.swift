@@ -142,7 +142,9 @@ final class ComposeSignatureScriptTests: XCTestCase {
         }
     }
 
-    func test_menu_owner_pin_rejects_replacement_process_window_title_and_focus() throws {
+    func test_menu_property_guard_rejects_changed_process_identifier_title_and_focus() throws {
+        // These fixtures prove changed-field rejection, not lifetime identity:
+        // a replacement preserving every compared field is indistinguishable.
         let helpers = "use framework \"Foundation\"\nuse scripting additions\n" + composeSignatureHandlers
         let expected = "{44, \"_NS:4\", \"Title\", true, \"_NS:4\"}"
         let cases = [
