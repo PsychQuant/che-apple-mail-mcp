@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `plugin.json` description field. Section categorization is best-effort —
 > review and refine `Added` / `Changed` / `Fixed` etc. as needed.
 
+## [Unreleased]
+
+### Fixed
+- Synthetic-ID repair checks SQLite capability before work, distinguishes lookup failure from no match, and reports quarantine inventory. Candidate uniqueness now uses complete uncollapsed rows and actual Message-IDs, with explicit sender/time normalization and pre-write collision planning. This is source preparation; plugin version changes remain part of release preparation. (#389)
+
 ## [2.48.0] - 2026-09-08
 
 ### Changed
