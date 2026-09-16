@@ -57,7 +57,7 @@ using `owner/repo` or GitHub HTTPS repository sources and `plugin@marketplace`
 install targets; recognized installation-looking commands in unsupported forms
 (including wrappers or global options) fail explicitly, as do such commands in
 unsupported fence languages or outside a supported fence. Shell continuations
-are rejected rather than silently skipped. Installation-looking ANSI-C quoting
+are rejected rather than silently skipped. Installation-looking ANSI-C or locale-translated dollar quoting
 is unsupported; variables and fully encoded shell programs are not interpreted.
 Console/shellsession fences are supported. The remote check requires curl 8.4.0+ so unknown-length responses are also
 bounded; an older or unavailable curl returns exit 2 before downloading. Each source has

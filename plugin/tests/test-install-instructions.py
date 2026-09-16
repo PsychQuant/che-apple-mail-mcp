@@ -288,6 +288,8 @@ class InstallInstructionsTests(unittest.TestCase):
 
     def test_ansi_c_installation_wrappers_fail_explicitly(self):
         for command in ["bash -c $'claude plugin install removed@external'",
+                        'bash -c $"claude plugin install removed@external"',
+                        'claude $"plugin" install removed@external',
                         "bash -c $'clau"+chr(92)+"x64e plugin install removed@external'",
                         "claude $'plu"+chr(92)+"x67in' install removed@external",
                         'clau"de" '+"$'plu"+chr(92)+"x67in' install removed@external"]:

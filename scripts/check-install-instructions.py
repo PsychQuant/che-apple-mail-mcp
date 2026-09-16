@@ -51,8 +51,9 @@ def shell_comment_prefix(line):
 
 def looks_like_install(line, depth=0):
     text = shell_comment_prefix(line)
-    if "$'" in text and re.search(r'claude|/plugin|plugin\s+(?:install|marketplace\s+add)', text):
-        raise Invalid('ANSI-C-quoted installation-looking commands are unsupported')
+    dollar_quoted = "$'" in text or '$"' in text
+    if dollar_quoted and re.search(r'claude|/plugin|plugin\s+(?:install|marketplace\s+add)', text):
+        raise Invalid('Dollar-quoted installation-looking commands are unsupported')
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars='();&|')
         lexer.whitespace_split = True
@@ -76,8 +77,8 @@ def looks_like_install(line, depth=0):
         raise Invalid('nested installation command exceeds inspection depth')
     cli_words = [word.strip('`') for word in words]
     has_cli = any(word == '/plugin' or word.rsplit('/', 1)[-1] == 'claude' for word in cli_words)
-    if has_cli and "$'" in text:
-        raise Invalid('ANSI-C-quoted CLI arguments are unsupported')
+    if has_cli and dollar_quoted:
+        raise Invalid('Dollar-quoted CLI arguments are unsupported')
     if not has_cli:
         return False  # Ordinary prose such as 'the plugin install step'.
     # Shell quoting can split a keyword (plu"gin") or quote it entirely.
