@@ -197,6 +197,37 @@ class InstallInstructionsTests(unittest.TestCase):
             self.assertEqual(stdout.getvalue(),'')
             self.assertIn(marker,stderr.getvalue())
 
+    def test_wrapped_and_global_option_commands_cannot_hide_in_valid_subset(self):
+        for extra in ['env claude plugin install removed@external',
+                      'claude --debug plugin install removed@external',
+                      '/usr/local/bin/claude plugin install removed@external']:
+            with self.subTest(extra=extra),self.assertRaises(check.Invalid):
+                self.resolve(README.rsplit('```',1)[0]+extra+'\n```')
+        with self.assertRaises(check.Invalid):
+            self.resolve(README+'\n```json\nclaude plugin install removed@external\n```')
+        self.assertEqual(self.resolve(README.replace('```bash','```console')),['mail@external via other/aggregator'])
+
+    def test_checkout_override_is_exact_and_external_sources_still_remote(self):
+        import contextlib,io,tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);readme=root/'README.md';local=root/'marketplace.json'
+            readme.write_text('```sh\nclaude plugin marketplace add owner/self\nclaude plugin install new@new-market\nclaude plugin marketplace add other/aggregator\nclaude plugin install mail@external\n```')
+            local.write_bytes(manifest('new-market',('new',)))
+            with patch.object(check,'fetch_manifest',return_value=manifest()) as fetch,contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(check.main(['--readme',str(readme),'--checkout-repo','owner/self','--checkout-manifest',str(local)]),0)
+                self.assertEqual([c.args[0] for c in fetch.call_args_list],['other/aggregator'])
+            local.write_bytes(manifest('new-market',()))
+            with patch.object(check,'fetch_manifest',return_value=manifest()),contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(check.main(['--readme',str(readme),'--checkout-repo','owner/self','--checkout-manifest',str(local)]),1)
+            # No override in ordinary mode: every source must remain remote.
+            with patch.object(check,'fetch_manifest',return_value=manifest('old-market',('old',))) as fetch,contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(check.main(['--readme',str(readme)]),1)
+                self.assertEqual(fetch.call_args.args[0],'owner/self')
+
+    def test_dotted_marketplace_and_plugin_names(self):
+        readme=README.replace('mail@external','mail.v2@external.v2')
+        self.assertEqual(self.resolve(readme,data=manifest('external.v2',('mail.v2',))),['mail.v2@external.v2 via other/aggregator'])
+
     def test_current_readme_against_local_fixture(self):
         data=(ROOT/'.claude-plugin/marketplace.json').read_bytes()
         self.assertEqual(self.resolve((ROOT/'README.md').read_text(),data),

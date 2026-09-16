@@ -2,6 +2,8 @@
 """Check documented GitHub marketplace membership; never run installation commands."""
 import argparse
 import json
+import os
+import stat
 from pathlib import Path
 import re
 import shlex
@@ -11,7 +13,7 @@ import tempfile
 import time
 
 MAX_BYTES = 1_048_576
-NAME = re.compile(r'[A-Za-z0-9_-]+\Z')
+NAME = re.compile(r'[A-Za-z0-9_.-]+\Z')
 REPO = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z')
 
 class Invalid(Exception):
@@ -58,15 +60,18 @@ def commands(readme):
             token, language = mark.groups()
             if fence is None:
                 fence = token
-                shell = language in ('', 'bash', 'sh', 'shell', 'zsh')
+                shell = language in ('', 'bash', 'sh', 'shell', 'zsh', 'console', 'shellsession')
             elif token[0] == fence[0] and len(token) >= len(fence) and not language:
                 fence = None
             continue
-        if fence is None or not shell:
+        if fence is None:
             continue
         line = re.sub(r'^\s*\$\s+', '', line).strip()
-        if not re.match(r'(?:claude\s+plugin|/plugin)\s+', line):
+        candidate = shell_comment_prefix(line)
+        if not re.search(r'(?<![\w-])/?plugin\s+(?:install|marketplace\s+add)\b', candidate):
             continue
+        if not shell:
+            raise Invalid(f'README:{number}: installation instruction in unsupported fence language')
         try:
             words = shlex.split(shell_comment_prefix(line), comments=False)
         except ValueError as exc:
@@ -197,16 +202,36 @@ def resolve(readme, fetch):
             resolved.append(f'{target} via {repo}')
     return resolved
 
+def read_checkout_manifest(path):
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, 'rb') as source:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            raise Invalid('checkout manifest must be a regular file')
+        data = source.read(MAX_BYTES + 1)
+    if len(data) > MAX_BYTES:
+        raise Invalid('checkout manifest exceeds 1 MiB')
+    return data
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--readme', type=Path, default=Path(__file__).resolve().parents[1] / 'README.md')
+    parser.add_argument('--checkout-repo', help='Explicit PR-only repository whose manifest comes from the checkout')
+    parser.add_argument('--checkout-manifest', type=Path)
     args = parser.parse_args(argv)
     try:
         if args.readme.stat().st_size > MAX_BYTES:
             raise Invalid('README exceeds 1 MiB')
         readme = args.readme.read_text(encoding='utf-8')
         deadline = time.monotonic() + 90
-        results = resolve(readme, lambda repo: fetch_manifest(repo, deadline))
+        if args.checkout_manifest is not None and not args.checkout_repo:
+            raise Invalid('--checkout-manifest requires --checkout-repo')
+        checkout = repository(args.checkout_repo) if args.checkout_repo else None
+        def fetch(repo):
+            if checkout and repo.lower() == checkout.lower():
+                return read_checkout_manifest(args.checkout_manifest or Path(__file__).resolve().parents[1] / ".claude-plugin/marketplace.json")
+            return fetch_manifest(repo, deadline)
+        results = resolve(readme, fetch)
     except Invalid as exc:
         print(f'INSTALL_RESOLUTION_INVALID: {exc}', file=sys.stderr)
         return 1
@@ -215,7 +240,11 @@ def main(argv=None):
         return 2
     for result in results:
         print(f'MEMBERSHIP_RESOLVED: {result}')
-    print('Scope: remote marketplace membership only; Claude loader/install not executed or verified.')
+    if args.checkout_repo:
+        print(f'Scope: checkout membership for {checkout}; remote membership for other repositories.')
+    else:
+        print('Scope: remote marketplace membership only.')
+    print('Claude loader/install not executed or verified.')
     return 0
 
 if __name__ == '__main__':
