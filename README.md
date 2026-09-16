@@ -63,8 +63,11 @@ Console/shellsession fences are supported. The remote check requires curl 8.4.0+
 bounded; an older or unavailable curl returns exit 2 before downloading. Each source has
 at most three attempts, a 10-second request limit and 1 MiB response limit;
 README and checkout inputs must be regular files (no final-component symlinks);
-reads are bounded before parsing. README input is capped at 1 MiB and each physical line at 64 KiB for inspection; all
+reads are bounded before parsing. README input is capped at 1 MiB and each physical or continued logical line at 64 KiB for inspection; all
 sources share a 90-second network budget (plus subprocess termination grace).
+LF/CRLF lines and tabs are accepted; other control and line-separator characters
+are rejected. A published remote manifest may briefly lag a recent update due to
+caching or propagation; confirm the remote state and rerun a failed check.
 Scheduled monitoring depends on GitHub Actions remaining enabled; it is not a
 guarantee that inactive repositories will continue to receive scheduled runs.
 
