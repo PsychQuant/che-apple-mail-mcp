@@ -8,5 +8,5 @@
 
 - [x] 2.1 加入惡意與正常控制組，更新既有附件測試並執行 focused 與完整 Swift 測試。
 - [x] 2.2 更新工具描述及設定文件，執行一次獨立 candidate bypass review 並處理確認的問題。
-- [ ] 2.3 實際 Mail staging 整合驗證。
+- [x] 2.3 實際 Mail staging 整合驗證：唯一合成本機信箱、真 Mail save → production stage／publish，45 bytes 一致；成功與寫後中斷皆清理 stage，原輸出保留。專用信箱以 UI 移除並原生查無；見 docs/testing/attachment-staging.md。
 - [ ] 2.4 完整 IDD ensemble、PR 與 issue 狀態更新。

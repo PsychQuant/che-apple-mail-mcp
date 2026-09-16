@@ -38,4 +38,4 @@ SQLite 只取得 Data；AppleScript 每次 attempt 建立新的 0700 UUID 暫存
 
 ## Open Questions
 
-等待可用的 Mail GUI 驗證實際 staging 儲存；Claude weekly quota 恢復後補完整 ensemble。
+2026-09-17 已以本機合成信箱通過 Mail 原生 staging 驗證，見 docs/testing/attachment-staging.md；Claude session 額度恢復後仍須補完整 ensemble。
