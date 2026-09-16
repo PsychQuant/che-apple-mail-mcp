@@ -131,33 +131,40 @@ def commands(readme):
         raise Invalid('more than 8 marketplace sources; review checker budget')
     return result
 
-def unique_object(pairs):
-    value = {}
-    for key, item in pairs:
-        if key in value:
-            raise Invalid(f'duplicate JSON key: {key}')
-        value[key] = item
-    return value
+class ManifestObject(dict):
+    def __init__(self, pairs):
+        super().__init__()
+        self.duplicates = set()
+        for key, value in pairs:
+            if key in self:
+                self.duplicates.add(key)
+            self[key] = value
+
 
 def decode_manifest(data, repo):
     if len(data) > MAX_BYTES:
         raise Invalid(f'{repo}: manifest exceeds 1 MiB')
     try:
-        value = json.loads(data.decode('utf-8'), object_pairs_hook=unique_object)
+        value = json.loads(data.decode('utf-8'), object_pairs_hook=ManifestObject)
     except (UnicodeError, ValueError, RecursionError) as exc:
         raise Invalid(f'{repo}: malformed marketplace JSON') from exc
     if not isinstance(value, dict) or not isinstance(value.get('name'), str) or not NAME.fullmatch(value['name']):
-        raise Invalid(f'{repo}: manifest must contain a valid marketplace name')
+        raise Uncertain(f'{repo}: unsupported marketplace name/schema')
+    if value.duplicates.intersection({'name', 'plugins'}):
+        raise Uncertain(f'{repo}: ambiguous marketplace identity or plugin list')
     plugins = value.get('plugins')
     if not isinstance(plugins, list):
-        raise Invalid(f'{repo}: manifest plugins must be a list')
-    names = set()
+        raise Uncertain(f'{repo}: unsupported plugins collection')
+    names, unknown_entries = {}, False
     for plugin in plugins:
         name = plugin.get('name') if isinstance(plugin, dict) else None
-        if not isinstance(name, str) or not NAME.fullmatch(name) or name in names:
-            raise Invalid(f'{repo}: invalid or duplicate plugin name')
-        names.add(name)
-    return value['name'], names
+        if not isinstance(name, str) or not name or 'name' in getattr(plugin, 'duplicates', set()):
+            unknown_entries = True
+            continue
+        # Unrelated entry shapes/metadata do not decide membership of our target.
+        names[name] = names.get(name, 0) + 1
+    return value['name'], names, unknown_entries
+
 
 def require_curl():
     # 8.4.0 introduced max-filesize enforcement for unknown-length transfers.
@@ -223,17 +230,21 @@ def resolve(readme, fetch):
             key = target.lower()
             if key in seen_repos:
                 continue
-            name, plugins = decode_manifest(fetch(target), target)
+            name, plugins, unknown = decode_manifest(fetch(target), target)
             if name in marketplaces:
                 raise Invalid(f'README:{line}: ambiguous marketplace name {name} from multiple sources')
-            marketplaces[name] = (target, plugins)
+            marketplaces[name] = (target, plugins, unknown)
             seen_repos[key] = name
         else:
             plugin, name = target.split('@')
             if name not in marketplaces:
                 raise Invalid(f'README:{line}: marketplace {name} not added under that name before install')
-            repo, plugins = marketplaces[name]
+            repo, plugins, unknown = marketplaces[name]
+            if plugins.get(plugin, 0) > 1:
+                raise Invalid(f'README:{line}: ambiguous duplicate target plugin {plugin} in {repo}')
             if plugin not in plugins:
+                if unknown:
+                    raise Uncertain(f'{repo}: target {plugin} not confirmed; some entry names are unreadable')
                 raise Invalid(f'README:{line}: plugin {plugin} missing from {name} ({repo}); update README target or restore the entry')
             resolved.append(f'{target} via {repo}')
     return resolved

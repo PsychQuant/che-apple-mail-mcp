@@ -48,7 +48,9 @@ remote manifests. Thus a coordinated local rename can pass PR review, and change
 marketplace can also be detected. A missing entry or invalid source fails with
 `INSTALL_RESOLUTION_INVALID` (exit 1); bounded network failures report
 `INSTALL_RESOLUTION_UNCERTAIN` (exit 2), also a failing check. Neither is silently
-skipped. This checks remote marketplace membership; it does not execute or verify
+skipped. Unrelated entry metadata is ignored; an unreadable entry name prevents
+a definite absence claim when the requested target was not otherwise found.
+This checks remote marketplace membership; it does not execute or verify
 the Claude loader, download the plugin, or install anything. Offline regression
 fixtures run with `make test-plugin`. The resolver accepts fenced shell commands
 using `owner/repo` or GitHub HTTPS repository sources and `plugin@marketplace`

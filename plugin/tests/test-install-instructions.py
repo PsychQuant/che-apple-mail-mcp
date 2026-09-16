@@ -71,7 +71,7 @@ class InstallInstructionsTests(unittest.TestCase):
         for data in [b'{', b'[]', b'{}', manifest(plugins=('mail','mail')),
                      b'{"name":"external","plugins":[{}]}',
                      b'{"name":"external","name":"other","plugins":[]}']:
-            with self.subTest(data=data), self.assertRaises(check.Invalid): self.resolve(data=data)
+            with self.subTest(data=data), self.assertRaises((check.Invalid, check.Uncertain)): self.resolve(data=data)
 
     def test_transient_error_is_not_green(self):
         with self.assertRaises(check.Uncertain):
@@ -251,6 +251,15 @@ class InstallInstructionsTests(unittest.TestCase):
                 self.resolve(README+'\n```sh\n'+command+'\n```')
         readme=README.replace('claude plugin marketplace add','claude "plugin" "marketplace" "add"')
         self.assertEqual(self.resolve(readme),['mail@external via other/aggregator'])
+
+    def test_unrelated_schema_details_do_not_hide_or_invalidate_target(self):
+        data=b'{"name":"external","metadata":{"x":1,"x":2},"plugins":[{},"future-form",{"name":"other space"},{"name":"mail"}]}'
+        self.assertEqual(self.resolve(data=data),['mail@external via other/aggregator'])
+        with self.assertRaises(check.Uncertain):
+            self.resolve(data=b'{"name":"external","plugins":[{},"future-form"]}')
+        with self.assertRaises(check.Uncertain):
+            self.resolve(data=b'{"name":"external","plugins":[{"name":"mail","name":"other"}]}')
+        with self.assertRaises(check.Invalid):self.resolve(data=manifest(plugins=('other',)))
 
     def test_current_readme_against_local_fixture(self):
         data=(ROOT/'.claude-plugin/marketplace.json').read_bytes()
