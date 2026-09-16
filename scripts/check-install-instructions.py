@@ -75,7 +75,7 @@ def looks_like_install(line, depth=0):
                     return True
     elif any(word != text and ('claude' in word or '/plugin' in word) for word in words):
         raise Invalid('nested installation command exceeds inspection depth')
-    cli_words = [word.strip('`') for word in words]
+    cli_words = [word.strip('`').lstrip('$') for word in words]
     has_cli = any(word == '/plugin' or word.rsplit('/', 1)[-1] == 'claude' for word in cli_words)
     if has_cli and dollar_quoted:
         raise Invalid('Dollar-quoted CLI arguments are unsupported')
@@ -83,7 +83,7 @@ def looks_like_install(line, depth=0):
         return False  # Ordinary prose such as 'the plugin install step'.
     # Shell quoting can split a keyword (plu"gin") or quote it entirely.
     # Inspect parsed words rather than requiring the raw spelling to match.
-    normalized = ['plugin' if word.strip('`') == '/plugin' else word.strip('`') for word in words]
+    normalized = ['plugin' if word.strip('`').lstrip('$') == '/plugin' else word.strip('`').lstrip('$') for word in words]
     for index, word in enumerate(normalized):
         if word == 'plugin' and normalized[index + 1:index + 2] == ['install']:
             return True
