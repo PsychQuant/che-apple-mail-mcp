@@ -41,18 +41,32 @@ claude plugin install che-apple-mail-mcp@che-apple-mail-mcp
 
 Maintainers can run `make check-install` to verify that these documented public GitHub
 marketplaces still list the requested plugins. The **Install instructions** CI
-runs on pull requests, pushes to main, and daily, so changes in an external
+runs on pull requests, pushes to main, and daily. PR checks use the checkout
+manifest only for this repository (`--checkout-repo`), while external sources
+are always fetched remotely; main/scheduled/manual checks inspect published
+remote manifests. Thus a coordinated local rename can pass PR review, and changes in an external
 marketplace can also be detected. A missing entry or invalid source fails with
 `INSTALL_RESOLUTION_INVALID` (exit 1); bounded network failures report
 `INSTALL_RESOLUTION_UNCERTAIN` (exit 2), also a failing check. Neither is silently
-skipped. This checks remote marketplace membership; it does not execute or verify
+skipped. Unrelated entry metadata is ignored; an unreadable entry name prevents
+a definite absence claim when the requested target was not otherwise found.
+This checks remote marketplace membership; it does not execute or verify
 the Claude loader, download the plugin, or install anything. Offline regression
 fixtures run with `make test-plugin`. The resolver accepts fenced shell commands
 using `owner/repo` or GitHub HTTPS repository sources and `plugin@marketplace`
-install targets; unsupported command options fail explicitly. The remote check requires curl 8.4.0+ so unknown-length responses are also
+install targets; recognized installation-looking commands in unsupported forms
+(including wrappers or global options) fail explicitly, as do such commands in
+unsupported fence languages or outside a supported fence. Shell continuations
+are rejected rather than silently skipped. Installation-looking ANSI-C or locale-translated dollar quoting
+is unsupported; variables and fully encoded shell programs are not interpreted.
+Console/shellsession fences are supported. The remote check requires curl 8.4.0+ so unknown-length responses are also
 bounded; an older or unavailable curl returns exit 2 before downloading. Each source has
-at most three attempts, a 10-second request limit and 1 MiB response limit; all
+at most three attempts, a 10-second request limit and 1 MiB response limit;
+README and checkout inputs must be regular files (no final-component symlinks);
+reads are bounded before parsing. README input is capped at 1 MiB and each physical line at 64 KiB for inspection; all
 sources share a 90-second network budget (plus subprocess termination grace).
+Scheduled monitoring depends on GitHub Actions remaining enabled; it is not a
+guarantee that inactive repositories will continue to receive scheduled runs.
 
 Then grant permissions — the setup window shows live status and links straight
 to the right System Settings pane:

@@ -18,5 +18,11 @@ jobs:
           persist-credentials: false
       - name: Offline regression tests
         run: python3 plugin/tests/test-install-instructions.py
-      - name: Resolve documented remote marketplaces
+      - name: Resolve PR checkout and external marketplaces
+        if: github.event_name == 'pull_request'
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+        run: python3 scripts/check-install-instructions.py --checkout-repo "$CHECKOUT_REPO"
+      - name: Resolve published remote marketplaces
+        if: github.event_name != 'pull_request'
         run: python3 scripts/check-install-instructions.py
