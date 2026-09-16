@@ -2,7 +2,7 @@
 
 Refs #409、#405、#427。現有 createDraft 回傳字串並把 recipient verdict 留在 actor property；updateDraft 再掃一次草稿，以新 ID＋主旨決定是否刪舊稿。這會混淆資料列與建立事件。
 
-目前 Mail AX 視窗不可操作。#405 的未寄送 fixture 只取得未發生重存的快照；不能據此選定 Message-ID 作為穩定鍵。正式接線前需要受控 spike，而不是把假 adapter 的成功當成實機證據。
+2026-09-17 已恢復可操作 Mail 介面。#405 透過真正 create_draft（mailto path）建立未寄送 fixture，在同一 native window 編輯正文 A→B 並儲存，獨立原生讀回證明 ROWID 與 RFC Message-ID 皆改變，實際帳號不變。mailto compose 未出現在 outgoing messages 集合；不能依賴該集合取得本次建立 handle。這是穩定鍵候選的反例，不是 creation adapter 的完成證據。詳見 docs/testing/draft-resave-identity.md；fixture 已關窗並從 Drafts 移至 Trash，原生查無視窗／草稿，未寄送。
 
 ## Goals / Non-Goals
 
@@ -65,4 +65,4 @@ Post-create receipt 只列舉該帳號的 drafts containers。先驗證所有候
 
 最大的風險是 Mail 沒有可取得且足以證明建立關聯的 adapter。此風險不能用規格文字消除；接線依賴 live spike 的具體 API／輸出／反例紀錄。缺 scope 或可信 receipt 時多保留草稿，是失敗處理而非最終正常路徑。
 
-ID-only baseline 仍可能需要跨帳號準備讀取；效能驗收要分開計算 baseline、定位與 receipt，不把「單次合併 receipt」冒稱所有流程只有一個 Mail 呼叫。已知的 GUI／授權 gate 與 #405 fixture 收尾仍需可操作桌面。
+ID-only baseline 仍可能需要跨帳號準備讀取；效能驗收要分開計算 baseline、定位與 receipt，不把「單次合併 receipt」冒稱所有流程只有一個 Mail 呼叫。Mail GUI 目前可操作，#405 fixture 收尾已完成。剩餘 adapter gate 是建立關聯本身：default／explicit sender、competing drafts 與正常同主旨更新仍須直接證據，不能用舊的 AX0／收尾待辦掩蓋此缺口。

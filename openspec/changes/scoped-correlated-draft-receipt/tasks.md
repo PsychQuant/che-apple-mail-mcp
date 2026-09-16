@@ -6,7 +6,7 @@
 
 ## 2. 實機證據與 adapter 關卡
 
-- [ ] 2.1 完成 Creation adapter has live evidence before completion：先收尾 #405 專用 fixture，再於可操作桌面驗證同一 GUI 草稿確實重存、預設／明確 sender 與 competing drafts；留下 API、觀測值及失敗反例，決定可用 creation binding。未通過不得開始正式接線。
+- [ ] 2.1 完成 Creation adapter has live evidence before completion：2026-09-17 已確認預設 sender 的同一 GUI 草稿確實重存，且 ROWID／Message-ID 皆改變；fixture 已收尾。仍須驗證明確 sender 與 competing drafts，並取得可用建立關聯；留下 API、觀測值及失敗反例，決定可用 creation binding。未通過不得開始正式接線。
 - [ ] 2.2 完成 Trusted creation context scopes the receipt：依 2.1 已驗證的 adapter 從本次 compose 取得 actual account 與 binding，不接受猜測；以 adapter tests 與受控 live 記錄確認 wrong-account／無 binding 不查地址。
 - [ ] 2.3 實作「帳號範圍與建立前快照」，pre-create ID 依帳號分組且早於建立；以 scoped-baseline tests 驗證缺 baseline 不讀地址、不同帳號相同數字不互相污染，準備階段只讀必要 metadata。
 
