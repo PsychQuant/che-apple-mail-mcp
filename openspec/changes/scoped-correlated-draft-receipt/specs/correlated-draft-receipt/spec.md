@@ -45,7 +45,7 @@ Each receipt attempt SHALL use one script to locate the uniquely bound draft and
 
 ### Requirement: Receipt payloads are strictly decoded
 
-The internal payload SHALL be one JSON object whose version is exactly the string "1", with status found, not_found, ambiguous, or unavailable. Found SHALL contain account_id, id, subject, to, cc, and bcc with the documented types; id SHALL be a non-empty ASCII-numeric string and account_id SHALL match the trusted context. Other statuses SHALL carry only their status-specific fields. Ambiguous candidate_count SHALL be a canonical ASCII decimal string representing an integer from 2 through 9223372036854775807, without leading zeros. Numeric JSON tokens, decimal strings, and exponent strings SHALL be rejected for version and candidate_count; validation SHALL NOT depend on a previously rounded number. Unknown fields, unknown versions or statuses, missing fields, wrong types, wrong scope, or malformed JSON SHALL produce unavailable, not mismatch. Invalid raw payloads SHALL NOT be echoed in user results or logs.
+The internal payload SHALL be one UTF-8 JSON object with no duplicate object member names, including escaped aliases, whose version is exactly the string "1", with status found, not_found, ambiguous, or unavailable. Found SHALL contain account_id, id, subject, to, cc, and bcc with the documented types; id SHALL be a non-empty ASCII-numeric string and account_id SHALL match the trusted context. Other statuses SHALL carry only their status-specific fields. Ambiguous candidate_count SHALL be a canonical ASCII decimal string representing an integer from 2 through 9223372036854775807, without leading zeros. Numeric JSON tokens, decimal strings, and exponent strings SHALL be rejected for version and candidate_count; validation SHALL NOT depend on a previously rounded number. Unknown fields, unknown versions or statuses, missing fields, wrong types, wrong scope, or malformed JSON SHALL produce unavailable, not mismatch. Invalid raw payloads SHALL NOT be echoed in user results or logs.
 
 #### Scenario: Broken payload
 
@@ -61,6 +61,8 @@ The internal payload SHALL be one JSON object whose version is exactly the strin
 | ambiguous with candidate_count="2" | ambiguous |
 | ambiguous with candidate_count=2.5 | unavailable: invalid_payload |
 | not_found with an extra to array | unavailable: invalid_payload |
+| duplicate to members, including an escaped alias | unavailable: invalid_payload |
+| UTF-16/32 payload instead of UTF-8 | unavailable: invalid_payload |
 
 #### Scenario: Wrong account payload
 

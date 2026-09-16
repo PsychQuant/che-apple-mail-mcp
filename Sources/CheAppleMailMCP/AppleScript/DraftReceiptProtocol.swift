@@ -30,7 +30,7 @@ enum DraftReceiptWireOutcome: Equatable {
 /// until the creation adapter has passed its live evidence gate.
 func decodeDraftReceiptWire(_ data: Data, expectedAccountID: UUID) -> DraftReceiptWireOutcome {
     let invalid = DraftReceiptWireOutcome.unavailable(.invalidPayload)
-    guard let value = try? JSONSerialization.jsonObject(with: data),
+    guard let value = decodeUniqueMemberJSON(data),
           let object = value as? [String: Any],
           object["version"] as? String == "1",
           let status = object["status"] as? String else { return invalid }

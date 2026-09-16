@@ -44,6 +44,14 @@ Post-create receipt 只列舉該帳號的 drafts containers。先驗證所有候
 
 解碼拒絕未知 version/status、缺欄位、錯型別、未知欄位、錯誤帳號、非數字 ID 與破損 JSON；失敗轉 unavailable，不建立 mismatch。原始破損 payload 不回顯到對話或 log。JSON 格式正確不等於 creation identity 正確：binding 必須由 adapter／選擇器實際驗證，不能靠回傳一個 true 或原樣 echo token 冒充。
 
+Wire data 為 UTF-8；拒絕同一 JSON object 的重複欄位名稱，包括 Unicode escape 的同名寫法。Foundation 會接受 UTF-16／32 並折疊重複 key，因此先確認 UTF-8／無 literal NUL，再驗語法並掃描原始 member names；不能只對 materialized dictionary 檢查欄位集合。合法字串內的引號、括號與 escaped NUL 仍是資料。
+
+### ID-only baseline 元件（尚未接線）
+
+`readDraftIDBaseline(accountIDs:)` 接受非空 `Set<UUID>`，以一次 bounded drafts scan 先讀 role/account metadata，再只取指定帳號的 message IDs。每個要求的帳號必須至少有一個已成功觀測的 Drafts container；多個 container 取 ID 聯集。成功的空 ID 集合與未取得該帳號嚴格區分，任一列舉／metadata／ID 失敗拒絕整份結果，不重試、不回傳部分資料。
+
+內部 payload 為 `{"version":"1","status":"complete","accounts":[{"account_id":"UUID","ids":["101"]}]}`。decoder 拒絕重複 account records、額外／缺少 scope、未知欄位及非 ASCII 數字字串；相同數字在不同帳號保留為不同集合。這些 ID 不是 creation binding，列舉也不是 Mail 的原子 snapshot。元件尚未接入正式 create/update；2.1 的 adapter 實機關卡與 2.3 的 pre-create 順序驗證維持未完成。
+
 ### 刪除門檻與相容性
 
 只有身分已確認、且 To／Cc／Bcc 均匹配的 receipt 可允許 update 刪除原稿。其餘狀態保留原稿。這改變原先「recipient unavailable 仍可刪」的策略，必須在 tool descriptions 揭露。
