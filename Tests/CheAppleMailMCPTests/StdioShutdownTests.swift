@@ -19,11 +19,13 @@ final class StdioShutdownTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         do {
             let products = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
-            let linkList = try String(contentsOf: products.appendingPathComponent("CheAppleMailMCP.product/Objects.LinkFileList"))
-            let objects = linkList.split(separator: "\n").filter { !$0.contains("CheAppleMailMCP.build/main.swift.o") }
-            XCTAssertEqual(linkList.split(separator: "\n").count - objects.count, 1)
-            let objectsURL = directory.appendingPathComponent("Objects.LinkFileList")
-            try (objects.joined(separator: "\n") + "\n").write(to: objectsURL, atomically: true, encoding: .utf8)
+            let build = try StdioProbeBuildPlan.load(products: products)
+            var objectArguments = build.objects
+            if let responseContents = build.responseContents {
+                let objectsURL = directory.appendingPathComponent("Objects.LinkFileList")
+                try responseContents.write(to: objectsURL, atomically: true, encoding: .utf8)
+                objectArguments = ["@" + objectsURL.path]
+            }
             let source = directory.appendingPathComponent("Probe.swift")
             try #"""
             import Foundation
@@ -53,19 +55,10 @@ final class StdioShutdownTests: XCTestCase {
             let compiler = Process()
             // Use the exact compiler/SDK that produced these binary modules.
             // xcrun can select a different installed toolchain (e.g. 6.3 vs 6.2).
-            let descriptionData = try Data(contentsOf: products.appendingPathComponent("description.json"))
-            let description = try XCTUnwrap(try JSONSerialization.jsonObject(with: descriptionData) as? [String: Any])
-            let commands = try XCTUnwrap(description["swiftCommands"] as? [String: [String: Any]])
-            let command = try XCTUnwrap(commands.values.first { $0["moduleName"] as? String == "CheAppleMailMCP" })
-            let compilerPath = try XCTUnwrap(command["executable"] as? String)
-            let arguments = try XCTUnwrap(command["otherArguments"] as? [String])
-            let targetIndex = try XCTUnwrap(arguments.firstIndex(of: "-target"))
-            let sdkIndex = try XCTUnwrap(arguments.firstIndex(of: "-sdk"))
-            compiler.executableURL = URL(fileURLWithPath: compilerPath)
-            compiler.arguments = ["-parse-as-library", "-target", arguments[targetIndex + 1],
-                                  "-sdk", arguments[sdkIndex + 1],
-                                  "-I", products.appendingPathComponent("Modules").path, source.path,
-                                  "@" + objectsURL.path, "-lsqlite3", "-o", directory.appendingPathComponent("probe").path]
+            compiler.executableURL = URL(fileURLWithPath: build.compiler)
+            compiler.arguments = ["-parse-as-library", "-target", build.target,
+                                  "-sdk", build.sdk, "-I", build.modules.path, source.path]
+                + objectArguments + ["-lsqlite3", "-o", directory.appendingPathComponent("probe").path]
             compiler.standardOutput = output
             compiler.standardError = output
             try compiler.run()
