@@ -228,6 +228,21 @@ class InstallInstructionsTests(unittest.TestCase):
         readme=README.replace('mail@external','mail.v2@external.v2')
         self.assertEqual(self.resolve(readme,data=manifest('external.v2',('mail.v2',))),['mail.v2@external.v2 via other/aggregator'])
 
+    def test_continuations_and_outside_fence_commands_do_not_hide(self):
+        continued = "claude plugin " + chr(92) + "\n install removed@external"
+        split_word = "claude plu" + chr(92) + "\ngin install removed@external"
+        for extra in [continued,split_word]:
+            with self.assertRaises(check.Invalid): self.resolve(README+'\n```sh\n'+extra+'\n```')
+        for extra in ['    claude plugin install removed@external','Use `claude plugin install removed@external`.']:
+            with self.assertRaises(check.Invalid): self.resolve(README+'\n'+extra)
+
+    def test_missing_checkout_manifest_is_definite_failure(self):
+        import contextlib,io,tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            missing=Path(directory)/'missing.json'
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(check.main(['--checkout-repo','PsychQuant/che-apple-mail-mcp','--checkout-manifest',str(missing)]),1)
+
     def test_current_readme_against_local_fixture(self):
         data=(ROOT/'.claude-plugin/marketplace.json').read_bytes()
         self.assertEqual(self.resolve((ROOT/'README.md').read_text(),data),

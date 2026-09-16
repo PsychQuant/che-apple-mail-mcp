@@ -48,9 +48,27 @@ def shell_comment_prefix(line):
     return line
 
 
+def looks_like_install(line):
+    return re.search(r'(?<![\w-])/?plugin\s+(?:install|marketplace\s+add)\b', shell_comment_prefix(line)) is not None
+
+
 def commands(readme):
     if len(readme.encode('utf-8')) > MAX_BYTES:
         raise Invalid('README exceeds 1 MiB')
+    # Detect unsupported shell continuation as a logical line, but never
+    # accept the joined text as executable syntax (quotes may change meaning).
+    pending, continued = '', False
+    for line in readme.splitlines():
+        pending += line
+        if line.endswith('\\'):
+            pending = pending[:-1]
+            continued = True
+            continue
+        if continued and looks_like_install(pending):
+            raise Invalid('unsupported continued installation command; use a single line')
+        pending, continued = '', False
+    if continued and looks_like_install(pending):
+        raise Invalid('unfinished installation continuation')
     fence = None
     shell = False
     result = []
@@ -65,10 +83,12 @@ def commands(readme):
                 fence = None
             continue
         if fence is None:
+            if looks_like_install(line):
+                raise Invalid(f'README:{number}: installation instruction outside a supported fence')
             continue
         line = re.sub(r'^\s*\$\s+', '', line).strip()
         candidate = shell_comment_prefix(line)
-        if not re.search(r'(?<![\w-])/?plugin\s+(?:install|marketplace\s+add)\b', candidate):
+        if not looks_like_install(candidate):
             continue
         if not shell:
             raise Invalid(f'README:{number}: installation instruction in unsupported fence language')
@@ -203,7 +223,10 @@ def resolve(readme, fetch):
     return resolved
 
 def read_checkout_manifest(path):
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError as exc:
+        raise Invalid('checkout marketplace manifest is missing') from exc
     with os.fdopen(fd, 'rb') as source:
         if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
             raise Invalid('checkout manifest must be a regular file')
