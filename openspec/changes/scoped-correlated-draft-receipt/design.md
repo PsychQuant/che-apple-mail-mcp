@@ -18,6 +18,8 @@ Refs #409、#405、#427。現有 createDraft 回傳字串並把 recipient verdic
 
 候選 adapter 依序調查：建立動作直接取得的 Mail message handle；或從本次擁有的 compose 物件取得、且已驗證重存語意的識別值。不能先以主旨搜尋任一草稿再將其識別值命名為 binding。`from_address` 只代表請求，不代表實際落地帳號。
 
+2026-09-17 原生 constructor 探測：SDEF 的 outgoing `id` 對應 `uniqueID`，stored message `id` 對應 `libraryID`；實際建立／儲存的合成訊息兩個 ID 不同。`save` 沒有取得可用回值，outgoing 的 Message-ID／mailbox-account 讀取回 `-1700`，指定 save-to-file 路徑未出現輸出。`visible=true` 後仍未觀察到匹配視窗，因此 `window.document` 並未驗證，不能將此解讀為該 API 永遠不可用。詳見 `docs/testing/native-constructor-binding.md`。保存的草稿已核對後移至 Trash，視窗／Drafts／Outbox 為 0；隱藏 scripting handle 仍待使用者重開 Mail 後查核或選擇保留，沒有宣稱完全收尾。
+
 這個 **adapter 選擇尚未完成**。如果兩種來源都無法證明關聯，維持 gate，重新設計建立路徑；不能以永久拒絕正常同主旨更新來宣布完成。
 
 ### 帳號範圍與建立前快照
