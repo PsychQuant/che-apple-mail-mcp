@@ -67,7 +67,7 @@ TaskCreate(subject="phase2_3_preview_and_confirm",
            description="Step 4.5: 若待歸檔 ≥ 5 封 OR 有 ⚠⚠ flag OR destructive op → Phase 2 preview (thread breakdown + flags) + Phase 3 operation confirmation (file count + attachment size)。等 user 確認(a)/排除(b)/改 filter(c)/取消(d)。User skip 條件見 confirmation-triggers.md。")
 
 TaskCreate(subject="fetch_and_write_markdown",
-           description="Step 5: 主路徑 Step 5.0 — 待歸檔 ≥ 5 封且非 enriched → batch_export_emails_markdown 整個 corpus 一批伺服器端匯出(direction 由工具 per-email sender-identity 判定, binary v2.26.0+ mail#316; 帶 opts.filenames 保留命名慣例, 不帶 include_attachments), 留存 manifest 供 Step 8.5。Fallback Step 5.1 — 對每封 get_email(format='text', 用 display name) → 同 6-field frontmatter + body markdown, 檔名規則(YYYY-MM-DD_subject-hyphenated[-N].md, 截 50 graphemes) 寫到 ${output_dir}/。")
+           description="Step 5: 主路徑 Step 5.0 — 待歸檔 ≥ 5 封且非 enriched → batch_export_emails_markdown 整個 corpus 一批伺服器端匯出(direction 由工具 per-email sender-identity 判定, binary v2.26.0+ mail#316; 確認 schema 支援後帶 opts.filename_style=archive-mail 保留命名慣例, 不帶 include_attachments), 留存 manifest 供 Step 8.5。Fallback Step 5.1 — 對每封 get_email(format='text', 用 display name) → 同 6-field frontmatter + body markdown, 檔名規則(YYYY-MM-DD_subject-hyphenated[-N].md, 截 50 graphemes) 寫到 ${output_dir}/。")
 
 TaskCreate(subject="download_and_classify_attachments",
            description="Step 5.5: list_attachments → 用 classify() 分 data/document → save_attachment 到 data_dir / documents_dir/{email_stem}/。Markdown 插 Attachments: 區塊。回覆信無 byte 附件但引用原信附件 → cross-reference。")
@@ -812,7 +812,7 @@ False-positive flagging 規則見 `rules/false-positive-detection.md`:
 batch_export_emails_markdown(
   ids: [<corpus 全部 ids>],
   output_dir: "${output_dir}",
-  opts: { filenames: <見下 filename map> }
+  opts: { filename_style: "archive-mail" }
 )
 ```
 
@@ -822,9 +822,9 @@ batch_export_emails_markdown(
 
 > **版本邊界**：binary **< v2.26.0** 無 per-email 判定（`mailbox` 參數 substring 標整批、manifest 無 `direction_inferred` 鍵）→ 必須沿用舊「依 direction 拆兩批」紀律（見本檔 git history 的舊版 Step 5.0），或先升級 binary。偵測法：manifest item 全無 `direction_inferred` 且 binary 版本 < 2.26.0。
 
-**`opts.filenames`（保留歷史命名慣例，必傳——但只是「請求」名，不是最終權威）**：工具**預設** filename 吃已 `stripReplyPrefixes` 的 threadKey **且合併連續 dash**（`Re: x` → `x`），會偏離本 SOP 的 50 檔命名慣例（保留 `Re--`、不合併）。故對每個 id 用 **Step 5.1 的 filename 規則**（見下方「檔名格式」——從 raw subject 算，保留 `Re:`→`Re--`、不合併連續 `-`、截 50 graphemes、`-N` 碰撞後綴）算出檔名，組成 `{ id: "YYYY-MM-DD_{subject}.md", … }` 傳入。所需 (id, date, subject) 在 Step 4.5 preview 已有，**不需 body fetch**。
+**伺服器命名能力檢查（mail#340）**：呼叫前確認目前 tool schema 的 `opts.filename_style` enum 含 `archive-mail`。支援時傳 `opts.filename_style: "archive-mail"`；**不需產生逐 id filename map**。伺服器從 raw subject 保留回覆前綴、連續 dash 與 Unicode，截至 50 graphemes，再去首尾 dash。日期前綴使用與 frontmatter `date` **同一次 Date-header 轉換的結果**，不使用 Step 4.5 的 UTC preview 或本機時區。轉換結果缺少 `YYYY-MM-DD` 形式的前綴時使用 `unknown-date`，保留原始 frontmatter 日期供檢視；沿用既有 parser，不額外驗證其接受的日期。schema 未宣告此能力或無法確認時，走 Step 5.1 per-email fallback，從取得的原始 Date header 推導與 frontmatter 一致的日期；不可把新選項傳給舊工具後假設它有生效。`opts.filenames` 只留給特殊自訂檔名需求，仍優先於 `filename_template`，兩者均優先於樣式。
 
-> **最終檔名以 manifest `written_path` 為準（關鍵）**：工具對**每個** filename branch（含 `opts.filenames` override）都會 seed 自 output_dir 既存 `.md`（不分大小寫）再套 `uniquify()`，故傳入的名字若與**磁碟既存**或**跨兩批（批 A 先寫、批 B 後寫）**撞名，工具會自行加 `-N` 後綴寫成另一個檔。因此 `opts.filenames[id]` 只是**請求**名——client 端算的 `-N`（下方 Glob）是 best-effort，工具的 cross-call、case-insensitive `uniquify` **贏**。**任何 downstream 用途（Step 5.5 的 stem、Step 6 index 的 `file`）一律讀回 manifest item 的 `written_path`（basename），絕不用 `opts.filenames` map**。client 端仍算 `-N`（同一 (date,subject) 先 Glob 磁碟現有最大 `-N`、本批內多封依序遞增）只是為了讓請求名盡量命中、減少工具再改名，非最終權威。
+> **最終檔名以 manifest `written_path` 為準（關鍵）**：所有 filename 分支皆以 output_dir 既存 `.md` 建立不分大小寫的碰撞集合，再套 `uniquify()`，跨批撞名也會加 `-N`。**批次匯出不在 client 計算後綴**；Step 5.5 的 stem 與 Step 6 index 的 `file` 一律取 manifest item 的 `written_path` basename。特殊 `opts.filenames` override 也只是請求名，不能當作實際路徑。
 
 **不帶 `opts.include_attachments`**：工具的附件分流只按副檔名（data ext → `output_dir/data/`、其餘 → `output_dir/attachments/<stem>/`），**缺** SOP Step 5.5 的 keyword classify、inline `cid:` 圖片、cross-reference。附件仍走 client-side **Step 5.5**（對 batch 已寫出的每封 md 照跑）。
 
@@ -837,7 +837,7 @@ batch_export_emails_markdown(
 - `status: "skipped"`（dedup 命中）item 通常**無新** `written_path`。
 - `direction_inferred: true`（binary v2.26.0+，mail#316）為**條件性**欄位：只在 fail-open 回退時出現於 written item（見上方消費規則）；缺席 = sender-identity 判定成功（或 binary 過舊，鍵不存在——以版本邊界區分）。
 - manifest **不帶** `date`／`subject`／`thread_key`。故 Step 6 index / Step 8.5 Phase 0 若要這些欄位：`date`／`thread_key` 取自**寫出的 md frontmatter**（工具已寫入這兩個 frozen 欄位）；`subject` **不在** frontmatter（只在 body `Subject:` 行）→ 取自 **Step 4.5 preview** 的 `id→subject`（乾淨，非 body-line heuristic）。manifest 只提供「哪個 id → 哪個 message_id → 哪個 written_path」的骨架。
-  > **`id→subject` preview slice 必須保留到 Step 8.5 Phase 0**：此為 Step 5.0 已依賴的同一份記憶體狀態（`opts.filenames` 也用它，見上方），Phase 0 只是延長其存活期（4.5→8.5）。若 agent 未保留、Phase 0 取不到某 id 的乾淨 subject → **fallback 讀該 md 的 body `Subject:` 行**（即 Phase 1 的 heuristic），而非寫空 subject。
+  > **`id→subject` preview slice 必須保留到 Step 8.5 Phase 0**：這份 Step 4.5 preview 狀態須保留至 Phase 0（4.5→8.5），即使批次命名已交由伺服器處理。若 agent 未保留、Phase 0 取不到某 id 的乾淨 subject → **fallback 讀該 md 的 body `Subject:` 行**（即 Phase 1 的 heuristic），而非寫空 subject。
 - **Step 8.5 本次由 plugins#110 改為兩 phase**：Phase 0 消費本 run manifest 做機械化 reconciliation（乾淨、零 body-heuristic），Phase 1 仍全量重掃 `${output_dir}` frontmatter 收斂歷史孤兒——manifest 消費是**本次已落地**的能力。
 
 - **partial-`.emlx` 訊號（binary v2.23.0+，mail#283 — mail#274 的 bulk 路徑閉環）**：body 尚未從伺服器下載的信（Mail 存成 `<rowid>.partial.emlx`）過去會被**靜默寫成 header-only md**。v2.23.0+ 的 manifest 帶負向訊號：item `body_downloaded: false`（僅 false 或缺席，絕不 true）+ 頂層 `body_not_downloaded` 計數（O(1) 檢查）。**SOP 消費規則**：
@@ -870,8 +870,8 @@ mcp__plugin_che-apple-mail-mcp_mail__get_email(
 **檔名格式**（fixes #16）：`YYYY-MM-DD_{subject-hyphenated}.md`
 
 Subject → filename 轉換規則（依此順序執行）：
-1. **標點轉 `-`**：空白、冒號、斜線、反斜線、引號、問號、驚嘆號、中英標點（`,`、`。`、`、`、`:`、`；`、`(`、`)`、`[`、`]`、`?`、`!`）→ `-`
-2. **路徑字元移除**：`.` 開頭的檔名加底線前綴 `_`；`..` 保留為字面（標點轉換已把 `/` 變 `-`，不會路徑越界）
+1. **標點轉 `-`**：逐 extended grapheme cluster 將標點、空白、C0/C1 控制字元及路徑分隔符轉成一個 `-`；例如冒號、斜線、反斜線、引號、問號、驚嘆號、中英標點（`,`、`。`、`、`、`:`、`；`、`(`、`)`、`[`、`]`、`?`、`!`）→ `-`
+2. **路徑安全**：`.`、`/`、`\` 已在前一步轉成 dash，不保留相對路徑片段；完整檔名以日期（或 `unknown-date`）加底線開始。
 3. **連續 dash 保留**：**不**合併連續 `-`（實務上 `Re:` + 空白 = `Re--`，符合 50 個歷史歸檔慣例）
 4. **截斷至 50 個字元**（extended grapheme clusters，即 Swift `String.count` 的語意；非 Unicode code points、非 UTF-8 byte。`é` / `🇹🇼` / 中日韓字各算 1）
 5. **首尾 `-` 去除**（截斷後若尾部是 `-`，再次去除；最終檔名不應以 `-` 結尾）
@@ -995,7 +995,7 @@ direction: received
 
 對每封已歸檔的新郵件,**處理兩類**:explicit MIME attachments(由 `list_attachments` 回傳)+ inline `cid:` 圖片(由 HTML body 解析,v2.15.0+ 加,issue #45)。
 
-> **批次路徑（Step 5.0）的 stem 來源**：走 batch 匯出時，每封信的 `email_md_stem` **一律取自 manifest item 的 `written_path`（basename 去 `.md`）**，**不可**用 Step 5.0 傳入的 `opts.filenames` map——工具可能因撞名而把請求名加 `-N`（見 Step 5.0），只有 `written_path` 是實際寫出的檔名。`status:"error"` 的 item 無 `written_path`（該 id 已轉 Step 5.1 補抓），不在此處理。附件分流邏輯不變（batch 不帶 `include_attachments`，附件一律由本 step 對 batch 已寫出的每封 md 照跑）。
+> **批次路徑（Step 5.0）的 stem 來源**：走 batch 匯出時，每封信的 `email_md_stem` **一律取自 manifest item 的 `written_path`（basename 去 `.md`）**，**不可**從 preview 重算檔名或使用特殊 `opts.filenames` override map——工具可能因撞名而把請求名加 `-N`（見 Step 5.0），只有 `written_path` 是實際寫出的檔名。`status:"error"` 的 item 無 `written_path`（該 id 已轉 Step 5.1 補抓），不在此處理。附件分流邏輯不變（batch 不帶 `include_attachments`，附件一律由本 step 對 batch 已寫出的每封 md 照跑）。
 
 #### Step 5.5.0: Inline `cid:` images(v2.15.0+,resolves #45)
 

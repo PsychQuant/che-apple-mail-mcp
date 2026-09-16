@@ -181,6 +181,11 @@ enum ExportIdentity {
     }
 }
 
+enum ExportFilenameStyle: String {
+    case `default`
+    case archiveMail = "archive-mail"
+}
+
 /// Server-side batch email → markdown export (issue #193, design D1/D5/D6).
 ///
 /// The orchestration takes injected `fetch` / `attachmentNamesFor` /
@@ -349,6 +354,23 @@ enum ExportEmailsMarkdown {
         return truncated.isEmpty ? "no-subject" : truncated
     }
 
+    /// Archive-mail uses the raw subject, preserving replies, emoji, and dash
+    /// runs. Map whole Characters so truncation never splits a grapheme; ZWJ
+    /// inside emoji is deliberately not treated as a C0/C1 control scalar.
+    static func archiveMailSlug(_ subject: String) -> String {
+        let mapped = subject.map { character -> Character in
+            let unsafeScalar = character.unicodeScalars.contains {
+                $0.value < 0x20 || (0x7f...0x9f).contains($0.value)
+                    || $0 == "/" || $0 == "\\"
+            }
+            return character.isWhitespace || character.isPunctuation || unsafeScalar
+                ? "-" : character
+        }
+        let trimmed = String(mapped.prefix(50))
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return trimmed.isEmpty ? "no-subject" : trimmed
+    }
+
     /// Compute the default filename for an email given the running collision
     /// counter. `localDate` is the `YYYY-MM-DD` prefix; the first file for a
     /// given `(localDate, slug)` has no suffix, the next `-1`, then `-2`, …
@@ -408,6 +430,7 @@ enum ExportEmailsMarkdown {
     ///     cannot be determined, so the doubt is disclosed rather than hidden.
     ///   - includeAttachments: also export each email's attachments.
     ///   - filenameTemplate / filenameOverrides: optional overrides (per design D4).
+    ///   - filenameStyle: default preserves legacy names; archiveMail uses raw subject.
     ///   - extraFrontmatter: optional extra frontmatter fields.
     ///   - fetch: id → `EmailContent` (caller wires `EmlxParser.readEmail`, format "text").
     ///   - attachmentNamesFor: id → attachment filenames.
@@ -423,6 +446,7 @@ enum ExportEmailsMarkdown {
         filenameTemplate: String?,
         filenameOverrides: [String: String],
         extraFrontmatter: [(String, String)],
+        filenameStyle: ExportFilenameStyle = .default,
         identityResolvable: (String) -> Bool = { _ in true },
         authoritativeIdentityEvidence: Bool = true,
         fetch: (String) throws -> EmailContent,
@@ -596,7 +620,7 @@ enum ExportEmailsMarkdown {
                 directionInferred = nil
             }
 
-            // Resolve filename: per-id override > template > default(+collision).
+            // Resolve filename: per-id override > template > selected style (+collision).
             // Every branch yields a single sanitized segment, then `uniquify`
             // guarantees no two emails ever write to the same path.
             var filename: String
@@ -606,6 +630,10 @@ enum ExportEmailsMarkdown {
             } else if let template = filenameTemplate {
                 filename = applyTemplate(template, localDate: localDate, threadKey: threadKey,
                                          sender: bareSender, messageId: content.messageId)
+            } else if filenameStyle == .archiveMail {
+                // One collision authority: uniquify below includes on-disk
+                // names; an extra seen counter would produce nested suffixes.
+                filename = "\(localDate)_\(archiveMailSlug(content.subject)).md"
             } else {
                 filename = defaultFilename(localDate: localDate, threadKey: threadKey, seen: &seen)
             }
@@ -658,7 +686,8 @@ enum ExportEmailsMarkdown {
                 : (content.htmlBody != nil ? "html" : "text")
             var md = EmailMarkdownRenderer.render(
                 content, direction: direction, inReplyTo: content.inReplyTo,
-                extraFrontmatter: extraFrontmatter + [("body_type", bodyType)])
+                extraFrontmatter: extraFrontmatter + [("body_type", bodyType)],
+                convertedDate: iso)
 
             var savedAttachments: [String] = []
             var savedAttachmentURLs: [URL] = []   // for orphan cleanup on .md write failure
