@@ -271,7 +271,8 @@ class InstallInstructionsTests(unittest.TestCase):
     def test_shell_operator_wrappers_do_not_hide_in_valid_subset(self):
         for command in ['(claude plugin install removed@external)',
                         '("claude" "plugin" install removed@external)',
-                        'sh -c "(claude plugin install removed@external)"']:
+                        'sh -c "(claude plugin install removed@external)"',
+                        "sh -c \"('claude' 'plugin' 'install' removed@external)\""]:
             with self.subTest(command=command),self.assertRaises(check.Invalid):
                 self.resolve(README+'\n```sh\n'+command+'\n```')
 

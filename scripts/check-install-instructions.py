@@ -48,7 +48,7 @@ def shell_comment_prefix(line):
     return line
 
 
-def looks_like_install(line):
+def looks_like_install(line, depth=0):
     text = shell_comment_prefix(line)
     try:
         lexer = shlex.shlex(text, posix=True, punctuation_chars='();&|')
@@ -61,6 +61,15 @@ def looks_like_install(line):
         if not re.search(r'(?<![\w.-])(?:\S*/)?claude(?=[\s();&|]|$)|(?<![\w.-])/plugin(?=[\s();&|]|$)', text):
             return False
         return re.search(r'(?<![\w-])/?plugin\s+(?:install|marketplace\s+add)\b', text) is not None
+    # Shell wrappers may carry another literal command as one quoted argument.
+    # Parse only those strings, never evaluate variables or execute the wrapper.
+    if depth < 6:
+        for word in words:
+            if word != text and any(ch in word for ch in (' ', '\t', '\n', '"', "'", '(')):
+                if looks_like_install(word, depth + 1):
+                    return True
+    elif any(word != text and ('claude' in word or '/plugin' in word) for word in words):
+        raise Invalid('nested installation command exceeds inspection depth')
     cli_words = [word.strip('`') for word in words]
     has_cli = any(word == '/plugin' or word.rsplit('/', 1)[-1] == 'claude' for word in cli_words)
     has_cli = has_cli or any(re.search(r'(?<![\w.-])(?:\S*/)?claude(?=[\s();&|]|$)', word) for word in words)
