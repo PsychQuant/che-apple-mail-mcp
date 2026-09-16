@@ -49,6 +49,24 @@ def shell_comment_prefix(line):
     return line
 
 
+def is_literal_cli(word):
+    return word.casefold() == '/plugin' or word.rsplit('/', 1)[-1].casefold() == 'claude'
+
+
+def has_install_words(words):
+    """Conservative linear candidate scan, separate from exact acceptance."""
+    plugin = marketplace = False
+    for word in words:
+        word = word.casefold()
+        if word in ('plugin', '/plugin'):
+            plugin = True
+        elif plugin and word == 'marketplace':
+            marketplace = True
+        elif plugin and (word == 'install' or (marketplace and word == 'add')):
+            return True
+    return False
+
+
 def looks_like_install(line, depth=0):
     text = shell_comment_prefix(line)
     dollar_quoted = "$'" in text or '$"' in text
@@ -63,11 +81,11 @@ def looks_like_install(line, depth=0):
         # Malformed quotes must not hide an installation-looking command.
         text = text.replace('"', '').replace("'", '').replace('`', '')
         pieces = re.split(r'[\s();&|<>]+', text)
-        if not any(piece == '/plugin' or piece.rsplit('/', 1)[-1] == 'claude' for piece in pieces):
+        if not any(is_literal_cli(piece) for piece in pieces):
             return False
         if any(piece in ('plugin', '/plugin') for piece in pieces) and any(ch in text for ch in '<>'):
             raise Invalid('redirected plugin commands are unsupported')
-        return re.search(r'(?<![\w-])/?plugin\s+(?:install|marketplace\s+add)\b', text) is not None
+        return has_install_words(pieces)
     # Shell wrappers may carry another literal command as one quoted argument.
     # Parse only those strings, never evaluate variables or execute the wrapper.
     if depth < 6:
@@ -78,7 +96,7 @@ def looks_like_install(line, depth=0):
     elif any(word != text and ('claude' in word or '/plugin' in word) for word in words):
         raise Invalid('nested installation command exceeds inspection depth')
     cli_words = [word.strip('`').lstrip('$') for word in words]
-    has_cli = any(word == '/plugin' or word.rsplit('/', 1)[-1] == 'claude' for word in cli_words)
+    has_cli = any(is_literal_cli(word) for word in cli_words)
     if has_cli and dollar_quoted:
         raise Invalid('Dollar-quoted CLI arguments are unsupported')
     if not has_cli:
@@ -90,11 +108,8 @@ def looks_like_install(line, depth=0):
     # plugin form rather than trying to reconstruct shell execution order.
     if 'plugin' in normalized and any('<' in word or '>' in word for word in words):
         raise Invalid('redirected plugin commands are unsupported')
-    for index, word in enumerate(normalized):
-        if word == 'plugin' and normalized[index + 1:index + 2] == ['install']:
-            return True
-        if word == 'plugin' and normalized[index + 1:index + 3] == ['marketplace', 'add']:
-            return True
+    if has_install_words(normalized):
+        return True
     # Strings passed to wrappers (e.g. sh -c) are unsupported, not ignored.
     return any(re.search(r'(?<![\w-])/?plugin\s+(?:install|marketplace\s+add)\b', word) for word in words)
 
@@ -102,13 +117,19 @@ def looks_like_install(line, depth=0):
 def commands(readme):
     if len(readme.encode('utf-8')) > MAX_BYTES:
         raise Invalid('README exceeds 1 MiB')
-    if any(len(line.encode('utf-8')) > MAX_LINE_BYTES for line in readme.splitlines()):
+    readme = readme.replace('\r\n', '\n')
+    if re.search(r'[\x00-\x08\x0b-\x1f\x7f-\x9f\u2028\u2029]', readme):
+        raise Invalid('README contains unsupported control or line-separator characters')
+    lines = readme.split('\n')
+    if any(len(line.encode('utf-8')) > MAX_LINE_BYTES for line in lines):
         raise Invalid('README line exceeds 64 KiB inspection limit')
     # Detect unsupported shell continuation as a logical line, but never
     # accept the joined text as executable syntax (quotes may change meaning).
     pending, continued = '', False
-    for line in readme.splitlines():
+    for line in lines:
         pending += line
+        if len(pending.encode('utf-8')) > MAX_LINE_BYTES:
+            raise Invalid('README continued line exceeds 64 KiB inspection limit')
         if line.endswith('\\'):
             pending = pending[:-1]
             continued = True
@@ -121,7 +142,7 @@ def commands(readme):
     fence = None
     shell = False
     result = []
-    for number, line in enumerate(readme.splitlines(), 1):
+    for number, line in enumerate(lines, 1):
         mark = re.fullmatch(r'\s{0,3}(`{3,}|~{3,})([\w-]*)\s*', line)
         if mark:
             token, language = mark.groups()

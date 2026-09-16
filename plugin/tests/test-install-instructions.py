@@ -75,6 +75,29 @@ class InstallInstructionsTests(unittest.TestCase):
             with self.subTest(extra=extra), self.assertRaises(check.Invalid):
                 self.resolve(README + '\n```sh\n' + extra + '\n```')
 
+    def test_interleaved_options_cannot_hide_installation_commands(self):
+        for command in ['claude plugin -- install removed@external',
+                        'claude plugin --debug install removed@external',
+                        'claude plugin marketplace --debug add other/removed',
+                        '/plugin --scope local install removed@external',
+                        'claude plugin -- install "removed@external']:
+            with self.subTest(command=command), self.assertRaises(check.Invalid):
+                self.resolve(README+'\n```sh\n'+command+'\n```')
+
+    def test_case_variants_of_literal_cli_do_not_hide(self):
+        for command in ['Claude plugin install removed@external',
+                        '/usr/local/bin/CLAUDE plugin install removed@external',
+                        '/PLUGIN install removed@external']:
+            with self.subTest(command=command), self.assertRaises(check.Invalid):
+                self.resolve(README+'\n```sh\n'+command+'\n```')
+
+    def test_exotic_line_separators_refuse_but_lf_crlf_and_tabs_work(self):
+        for separator in ['\v','\f','\x1c','\x1d','\x1e','\x85','\u2028','\u2029','\r']:
+            with self.subTest(separator=repr(separator)), self.assertRaises(check.Invalid):
+                self.resolve(README+'\n```sh\nclaude plugin'+separator+'install removed@external\n```')
+        self.assertEqual(self.resolve(README.replace('\n','\r\n')), ['mail@external via other/aggregator'])
+        self.assertEqual(self.resolve(README.replace('claude plugin','claude\tplugin')), ['mail@external via other/aggregator'])
+
     def test_missing_instructions_and_unterminated_fence_refused(self):
         for text in ['', 'claude plugin install mail@external', README[:-3]]:
             with self.assertRaises(check.Invalid): self.resolve(text)
@@ -290,7 +313,7 @@ class InstallInstructionsTests(unittest.TestCase):
 
     def test_path_runs_and_malformed_quote_paths_are_bounded(self):
         import subprocess,tempfile
-        for tail in ['/'*500_000, "'"+'/'*500_000, '/'*50_000, "'"+'/'*50_000]:
+        for tail in ['/'*500_000, "'"+'/'*500_000, '/'*50_000, "'"+'/'*50_000, '/'*50_000+chr(92)+'\n'+'/'*50_000]:
             with tempfile.TemporaryDirectory() as directory:
                 path=Path(directory)/'input.md';path.write_text(README+'\n```sh\n'+tail+'\n```')
                 code="import importlib.util,sys; sys.dont_write_bytecode=True; s=importlib.util.spec_from_file_location('c',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.commands(open(sys.argv[2]).read())"
