@@ -149,7 +149,7 @@ archive-mail v2.17.0+ 會:
 
 掃歸檔目錄中 `message_id` 匹配 `^synthetic:` 的 md，從 Mail 重新解析**真實** RFC 5322 Message-ID 並就地修復 frontmatter 與 `email_index.json`。**保守優先：寧可留 unparseable 交人工，絕不錯誤合併兩封不同的信。**
 
-本指令需要可用的 SQLite envelope index，Step 0.5 以唯讀 summary/logical 查詢檢查。未就緒時整批停止並報 `environment-unavailable`，不把檔案誤列為 `still-unparseable`；依實際工具錯誤修復宿主的 Full Disk Access、MCP 連線或版本問題。`duplicates/` 的既存與本輪新增數量會分開揭露，隔離檔仍由人工確認。
+本指令需要可用的 SQLite envelope index，Step 0.5 以唯讀 summary/none 查詢檢查。未就緒時整批停止並報 `environment-unavailable`，不把檔案誤列為 `still-unparseable`；依實際工具錯誤修復宿主的 Full Disk Access、MCP 連線或版本問題。`duplicates/` 的既存與本輪新增數量會分開揭露，隔離檔仍由人工確認。
 
 背景（[#319](https://github.com/PsychQuant/che-apple-mail-mcp/issues/319)、[#389](https://github.com/PsychQuant/che-apple-mail-mcp/issues/389)）：曾有 session 在缺真 Message-ID 時建立 synthetic 佔位符。已觀察到以信件日期、寄件人、截斷主旨產生的 deterministic 格式；同一 target 內可能穩定去重，但不能與跨 target／重新取得的真 ID 對齊，也有截斷碰撞風險。不能由目前 5 個樣本推定所有歷史格式都使用執行時間。SOP 禁止新增任何 synthetic 佔位符。
 
