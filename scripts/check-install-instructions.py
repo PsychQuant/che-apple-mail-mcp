@@ -55,7 +55,7 @@ def looks_like_install(line, depth=0):
     if dollar_quoted and re.search(r'claude|/plugin|plugin\s+(?:install|marketplace\s+add)', text):
         raise Invalid('Dollar-quoted installation-looking commands are unsupported')
     try:
-        lexer = shlex.shlex(text, posix=True, punctuation_chars='();&|')
+        lexer = shlex.shlex(text, posix=True, punctuation_chars='();&|<>')
         lexer.whitespace_split = True
         lexer.commenters = ''
         words = list(lexer)
@@ -65,6 +65,8 @@ def looks_like_install(line, depth=0):
         pieces = re.split(r'[\s();&|<>]+', text)
         if not any(piece == '/plugin' or piece.rsplit('/', 1)[-1] == 'claude' for piece in pieces):
             return False
+        if any(piece in ('plugin', '/plugin') for piece in pieces) and any(ch in text for ch in '<>'):
+            raise Invalid('redirected plugin commands are unsupported')
         return re.search(r'(?<![\w-])/?plugin\s+(?:install|marketplace\s+add)\b', text) is not None
     # Shell wrappers may carry another literal command as one quoted argument.
     # Parse only those strings, never evaluate variables or execute the wrapper.
@@ -84,6 +86,10 @@ def looks_like_install(line, depth=0):
     # Shell quoting can split a keyword (plu"gin") or quote it entirely.
     # Inspect parsed words rather than requiring the raw spelling to match.
     normalized = ['plugin' if word.strip('`').lstrip('$') == '/plugin' else word.strip('`').lstrip('$') for word in words]
+    # Redirections can occur between any command words. Reject this literal
+    # plugin form rather than trying to reconstruct shell execution order.
+    if 'plugin' in normalized and any('<' in word or '>' in word for word in words):
+        raise Invalid('redirected plugin commands are unsupported')
     for index, word in enumerate(normalized):
         if word == 'plugin' and normalized[index + 1:index + 2] == ['install']:
             return True

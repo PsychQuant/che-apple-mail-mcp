@@ -63,6 +63,18 @@ class InstallInstructionsTests(unittest.TestCase):
             with self.subTest(line=line), self.assertRaises(check.Invalid):
                 self.resolve(README.replace('claude plugin install mail@external', line))
 
+    def test_interleaved_redirections_cannot_hide_installation_commands(self):
+        for extra in [
+            'claude plugin >/dev/null install removed@external',
+            'claude > /dev/null plugin install removed@external',
+            '>/dev/null claude plugin install removed@external',
+            'claude plugin marketplace 2>/dev/null add other/removed',
+            '/plugin < /dev/null install removed@external',
+            'claude plugin > /dev/null install "removed@external',
+        ]:
+            with self.subTest(extra=extra), self.assertRaises(check.Invalid):
+                self.resolve(README + '\n```sh\n' + extra + '\n```')
+
     def test_missing_instructions_and_unterminated_fence_refused(self):
         for text in ['', 'claude plugin install mail@external', README[:-3]]:
             with self.assertRaises(check.Invalid): self.resolve(text)
