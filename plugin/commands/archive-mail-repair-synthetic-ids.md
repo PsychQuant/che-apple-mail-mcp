@@ -8,7 +8,7 @@ allowed-tools: mcp__plugin_che-apple-mail-mcp_mail__search_emails, mcp__plugin_c
 
 掃描歸檔目錄中 `message_id` 匹配 `^synthetic:` 的 markdown 檔，嘗試從 Mail 重新解析**真實** RFC 5322 Message-ID 並就地修復 frontmatter + `email_index.json`。**保守優先：寧可留 unparseable 交人工，絕不錯誤合併兩封不同的信。**
 
-**執行需求**：本修復流程需要可用的 SQLite envelope index（通常需替實際執行 MCP server 的宿主授予 Full Disk Access）。一般歸檔的 AppleScript fallback 不代表本修復流程也能使用；Step 0.5 會先探測所需能力，失敗即停止整批。
+**執行需求**：本修復流程需要可用的 SQLite envelope index（通常需替實際執行 MCP server 的宿主授予 Full Disk Access）。一般歸檔的 AppleScript fallback 不代表本修復流程也能使用；Step 0.5 會先探測所需的 SQLite summary 能力（不保證後續headers或檔案操作成功），失敗即停止整批。
 
 ## 背景（為什麼存在）
 
@@ -66,9 +66,9 @@ error: <保留實際工具錯誤；沒有有效 envelope 時說明實際回應�
 
 ### Step 1: 掃描
 
-僅頂層 `*.md`（同 Step 8.5 紀律，不深入子目錄）。抓 frontmatter `message_id` 匹配 `^synthetic:` 者，連同其 `date`、`thread_key`、`sender`、body `Subject:` 行入清單。
+僅頂層 `*.md`（同 Step 8.5 紀律，不深入子目錄），也不追 symlink；逐檔必須能確認為本 target 實體範圍內的 regular file，不能確認者不納入寫入計畫並列出原因。抓 frontmatter `message_id` 匹配 `^synthetic:` 者，連同其 `date`、`thread_key`、`sender`、body `Subject:` 行入清單。
 
-另外唯讀盤點本 target 的 `duplicates/**/*.md`（不追 symlink；不得跨到其他 target），記錄開始時數量與檔名；不將這些隔離檔混入修復候選或主 index。若可用工具無法確認列舉結果均在本 target 的實體路徑下，也視為盤點不可用，不猜成 0。無法列舉／讀取時報 `quarantine-inventory-unavailable` 及原因，數量標 `unknown`，不得假報 0。
+另外唯讀盤點本 target 的 `duplicates/**/*.md`（不追 symlink；不得跨到其他 target），記錄開始時數量與檔名；不將這些隔離檔混入修復候選或主 index。若可用工具無法確認列舉結果均在本 target 的實體路徑下，也視為盤點不可用，不猜成 0。無法列舉／讀取時在duplicates盤點欄位報原因 `quarantine-inventory-unavailable`（不是頂層status）及原因，數量標 `unknown`，不得假報 0。
 
 ### Step 2: 重新定位真 Message-ID（完整候選流程）
 
@@ -78,7 +78,7 @@ error: <保留實際工具錯誤；沒有有效 envelope 時說明實際回應�
 
 1. **先固定比對語意**：bare subject來源為本文Subject行，不能用歷史thread_key直接替代；來源與候選subject兩邊均採archive-mail.md的thread_key／stripReplyPrefixes同一規則，反覆去除回覆／轉寄前綴，保留其餘大小寫與標點。缺少／空 bare subject 先記 `still-unparseable: subject-unavailable`，不發空查詢。兩邊 sender 都解析為單一裸 email 位址後不分大小寫比對，不能拿 display name 當位址或做 substring 比對；缺少可用位址記 `still-unparseable: sender-unavailable`。frontmatter date 必須能解析為具明確 offset 的完整 timestamp，再以絕對時刻比較；缺 offset 記 `still-unparseable: date-offset-missing`，格式不明記 `still-unparseable: date-unparseable`，不得猜時區。summary 的 date 是收信時間、frontmatter date 通常是 Date header 的寄出時間，傳遞延遲或歷史 offset 汙染可能造成保守漏配，不能因零候選自動放寬時間窗。
 2. **取得完整原始候選**：`search_emails(field: "subject", query: <bare subject>, projection: "summary", dedup: "none", limit: 200)`。不要用 logical 去重判定唯一，因為同 subject/sender/date_received 的不同 Message-ID 也可能被塌成一列。若 `truncated: true`，相同查詢最多再以 `limit: 1000` 讀一次；仍不完整就記 `still-unparseable: search-truncated`，不使用部分結果宣稱唯一。以 bare subject 精確相同、上述 sender 相同、絕對時間差 < 2 分鐘篩選。先排除能確定不符任一條件的列；對仍可能匹配的列，sender無法解析為單一位址或date無法解析為帶offset時間時，不得忽略該列來宣稱唯一，整組分別記 `still-unparseable: candidate-sender-unparseable`／`candidate-date-unparseable`；零候選記 `still-unparseable: no-match`。
-3. **補齊每個候選的定位資訊**：summary 沒有 account_name；用同條件 `projection: "full", dedup: "none", limit: 1000` 補查，必須取得完整 envelope。full 的時間欄位為 `date_received`（對應 summary 的 `date`），不可改用寄出時間欄位。只對照原候選 id 的列，並核對相同 predicate 重新計算後的候選 id 集合；缺列、重複 id、集合變動或 `truncated: true` 都停止本批並報 `lookup-unavailable`，不改挑別封。每列須有 id、mailbox、account_name；有 account_id 時必須一併傳給後續headers呼叫。必要欄位缺失即停止。
+3. **補齊每個候選的定位資訊**：summary 沒有 account_name；用同條件 `projection: "full", dedup: "none", limit: 1000` 補查，必須取得完整 envelope。full 的時間欄位為 `date_received`（對應 summary 的 `date`），不可改用寄出時間欄位。只對照原候選 id 的列，並核對相同 predicate 重新計算後的候選 id 集合；缺列、重複 id、集合變動或 `truncated: true` 都停止本批並報 `lookup-unavailable`，不改挑別封。完整回應還須符合目前SQLite full schema：每列有 `to` 陣列與ISO `date_received`；目前AppleScript fallback不提供 `to`，其本地化時間與best-effort截斷資訊不能替代這個契約。缺少此形狀即 `lookup-unavailable`，不僅依truncated:false放行。每列須有 id、mailbox、account_name；有 account_id 時必須一併傳給後續headers呼叫。必要欄位缺失即停止。
 4. **用真 Message-ID 分辨多匣副本與真碰撞**：對每個候選以該列完整定位呼叫 `get_email_headers`。Header欄位名稱不分大小寫，先依header folding規則展開，再解析單一Message-ID；不能自造缺少的值。工具失敗依 lookup-unavailable 停止整批；成功但任一候選缺可用的真 Message-ID，整組記 `still-unparseable: candidate-message-id-missing`，不能忽略未知列。所有候選的真 Message-ID（需為單一可解析的 RFC 5322 Message-ID；多值、格式歧義、控制字元或 synthetic 皆不可用；移除外圍空白／角括號、其餘大小寫保留）恰好一種時才可定位：同一 Message-ID 的 Gmail 多信箱副本可視為同一候選；兩種以上記 `still-unparseable: message-id-collision`，不修復。這仍是受限的歷史匹配方法，不是原信身分的密碼學證明。
 
 中途工具／回應失效的固定報告：
@@ -95,7 +95,7 @@ error: <實際錯誤或回應問題>
 
 全部定位完成後，先建立「舊 synthetic key → 所有來源檔及既有 index entry」對照。舊 key 若仍被未納入成功修復計畫的檔案使用，或 entry 指向該檔案，不得刪除／改寫；無法安全分割時，所有相關組都記 `still-unparseable: rekey-collision` 並保持原狀。接著對計畫中的真 Message-ID 分組並檢查 index 已有的同 key。不能先逐檔換 key 再用事後去重修補覆蓋。多檔／既有 entry 同 key 時，須讀取本 target 內相關檔案，除 message_id 欄位與換行表示法外，完整 frontmatter 與正文均相同才可確認為重複；前 500 字相同不足以放行。資料不全、內容不同、檔案在 target 外或無法確認，整組記 `still-unparseable: rekey-collision`，保留原檔／index。以上完整性與實體路徑檢查必須先通過，才可採用下方的保留檔規則。
 
-確認重複者先產生唯一保留檔與隔離對應計畫：已有合法 index entry 時保留其原檔；否則保留檔名日期最早者，同日以檔名排序固定選擇。後續每個真 key 只寫一次，明確指向保留檔。這是寫入前檢查，不宣稱跨多個檔案已有交易／鎖定保證。
+確認重複者先產生唯一保留檔與隔離對應計畫：已有合法 index entry 時保留其原檔；否則保留檔名日期最早者，同日以檔名排序固定選擇。計畫階段也須確認每個隔離目的檔均不存在（包括symlink等既有項目），使用Step 1盤點與必要的實際路徑核對；已有目的檔或無法確認者記 `still-unparseable: quarantine-destination-conflict`，整個相關組不進入寫入。套用時仍需不可覆寫primitive防止其後競爭。後續每個真 key 只寫一次，明確指向保留檔。這是寫入前檢查，不宣稱跨多個檔案已有交易／鎖定保證。
 
 > mail#319 issue 作者自證：ad-hoc `(sender, bare_subject, ±時間窗)` 三元組在密集 thread 中不可靠——所以匹配窗刻意窄（2 分鐘、恰好一封），寬鬆匹配寧可失敗。
 
@@ -147,7 +147,7 @@ duplicates quarantined this run: 3 → duplicates/（列出原檔與隔離檔對
 duplicates awaiting manual review: before 5 / after 8（列出目前隔離檔）
 ```
 
-`repaired` 計算成功改寫 frontmatter 的 synthetic 檔案數（包括其後隔離者），不是最終 index key 數。上例的 repaired 與 still-unparseable 合計等於 synthetic 數量；本輪隔離是 repaired 的子集合，不能再當成額外修復數。結尾重新唯讀盤點 `duplicates/`，分開報告本輪新增與現存待人工確認總數，即使本輪新增為 0 也不能省略；盤點失敗則數量為 `unknown` 並列原因。這不授權清理隔離檔，也不變更全域 archive registry／階層語意（mail#363）。
+在 `apply-incomplete` 中，`repaired` 僅表示frontmatter已改寫的數量，絕不表示index或隔離已提交，必須連同completed/pending/residual欄位閱讀。`repaired` 計算成功改寫 frontmatter 的 synthetic 檔案數（包括其後隔離者），不是最終 index key 數。上例的 repaired 與 still-unparseable 合計等於 synthetic 數量；本輪隔離是 repaired 的子集合，不能再當成額外修復數。結尾重新唯讀盤點 `duplicates/`，分開報告本輪新增與現存待人工確認總數，即使本輪新增為 0 也不能省略；盤點失敗則數量為 `unknown` 並列原因。這不授權清理隔離檔，也不變更全域 archive registry／階層語意（mail#363）。
 
 只有 `status: completed` 才建議接 `/archive-mail-rebuild-threads`（index key 大量變動，threads.json 需全量重算）。
 
