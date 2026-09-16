@@ -70,14 +70,14 @@ error: <保留實際工具錯誤；沒有有效 envelope 時說明實際回應�
 
 另外唯讀盤點本 target 的 `duplicates/**/*.md`（不追 symlink；不得跨到其他 target），記錄開始時數量與檔名；不將這些隔離檔混入修復候選或主 index。若可用工具無法確認列舉結果均在本 target 的實體路徑下，也視為盤點不可用，不猜成 0。無法列舉／讀取時報 `quarantine-inventory-unavailable` 及原因，數量標 `unknown`，不得假報 0。
 
-### Step 2: 重新定位真 Message-ID（保守階梯）
+### Step 2: 重新定位真 Message-ID（完整候選流程）
 
-對每檔依序嘗試，**第一個成功即停**：
+每檔必須依序完成下列 1–4 階段，不能在前面的查詢成功時提前接受；任何歧義都不進入寫入：
 
-先完成本批所有重新定位，再進入 Step 3 寫入。任一搜尋／headers 工具錯誤或無法辨識的回應 → 停止本批，報 `status: lookup-unavailable`、錯誤與受影響檔案／尚未評估清單，本批 `repaired: 0`；不得當成零候選繼續。只有成功查詢後的零／多候選、或成功取得 headers 後仍缺真 Message-ID 才屬於 `still-unparseable`。
+先完成本批所有重新定位，再進入 Step 3 寫入。任一搜尋／headers 工具錯誤或無法辨識的回應 → 停止本批，報 `status: lookup-unavailable`、錯誤與受影響檔案／尚未評估清單，本批 `repaired: 0`；不得當成零候選繼續。來源欄位不足、成功查詢後的無匹配／歧義、候選資料不可解析、headers缺真Message-ID及寫入前碰撞，都屬於具名的 `still-unparseable`；工具／回應本身失效則是整批 `lookup-unavailable`，兩者不可混用。
 
 1. **先固定比對語意**：缺少／空 bare subject 先記 `still-unparseable: subject-unavailable`，不發空查詢。兩邊 sender 都解析為單一裸 email 位址後不分大小寫比對，不能拿 display name 當位址或做 substring 比對；缺少可用位址記 `still-unparseable: sender-unavailable`。frontmatter date 必須能解析為具明確 offset 的完整 timestamp，再以絕對時刻比較；缺 offset 記 `still-unparseable: date-offset-missing`，格式不明記 `still-unparseable: date-unparseable`，不得猜時區。summary 的 date 是收信時間、frontmatter date 通常是 Date header 的寄出時間，傳遞延遲或歷史 offset 汙染可能造成保守漏配，不能因零候選自動放寬時間窗。
-2. **取得完整原始候選**：`search_emails(field: "subject", query: <bare subject>, projection: "summary", dedup: "none", limit: 200)`。不要用 logical 去重判定唯一，因為同 subject/sender/date_received 的不同 Message-ID 也可能被塌成一列。若 `truncated: true`，相同查詢最多再以 `limit: 1000` 讀一次；仍不完整就記 `still-unparseable: search-truncated`，不使用部分結果宣稱唯一。以 bare subject 精確相同、上述 sender 相同、絕對時間差 < 2 分鐘篩選；零候選記 `still-unparseable: no-match`。
+2. **取得完整原始候選**：`search_emails(field: "subject", query: <bare subject>, projection: "summary", dedup: "none", limit: 200)`。不要用 logical 去重判定唯一，因為同 subject/sender/date_received 的不同 Message-ID 也可能被塌成一列。若 `truncated: true`，相同查詢最多再以 `limit: 1000` 讀一次；仍不完整就記 `still-unparseable: search-truncated`，不使用部分結果宣稱唯一。以 bare subject 精確相同、上述 sender 相同、絕對時間差 < 2 分鐘篩選。先排除能確定不符任一條件的列；對仍可能匹配的列，sender無法解析為單一位址或date無法解析為帶offset時間時，不得忽略該列來宣稱唯一，整組分別記 `still-unparseable: candidate-sender-unparseable`／`candidate-date-unparseable`；零候選記 `still-unparseable: no-match`。
 3. **補齊每個候選的定位資訊**：summary 沒有 account_name；用同條件 `projection: "full", dedup: "none", limit: 1000` 補查，必須取得完整 envelope。full 的時間欄位為 `date_received`（對應 summary 的 `date`），不可改用寄出時間欄位。只對照原候選 id 的列，並核對相同 predicate 重新計算後的候選 id 集合；缺列、重複 id、集合變動或 `truncated: true` 都停止本批並報 `lookup-unavailable`，不改挑別封。每列須有 id、mailbox、account_name；有 account_id 時必須一併傳給後續headers呼叫。必要欄位缺失即停止。
 4. **用真 Message-ID 分辨多匣副本與真碰撞**：對每個候選以該列完整定位呼叫 `get_email_headers`。工具失敗依 lookup-unavailable 停止整批；成功但任一候選缺可用的真 Message-ID，整組記 `still-unparseable: candidate-message-id-missing`，不能忽略未知列。所有候選的真 Message-ID（需為單一可解析的 RFC 5322 Message-ID；多值、格式歧義、控制字元或 synthetic 皆不可用；移除外圍空白／角括號、其餘大小寫保留）恰好一種時才可定位：同一 Message-ID 的 Gmail 多信箱副本可視為同一候選；兩種以上記 `still-unparseable: message-id-collision`，不修復。這仍是受限的歷史匹配方法，不是原信身分的密碼學證明。
 
@@ -116,8 +116,8 @@ Synthetic-ID Repair Report
 ═══════════════════════════════
 status: completed
 scanned: 120 md — 20 synthetic
-repaired: 16（frontmatter + index re-keyed）
-still-unparseable: 4 ⚠（成功查詢但匹配不唯一／無匹配／缺真 ID／結果仍截斷——列出檔名與原因）
+repaired: 16（frontmatter re-keyed；index 每個真 key 僅保留一筆）
+still-unparseable: 4 ⚠（來源欄位不足／候選不可解析／匹配不唯一／無匹配／缺真 ID／結果仍截斷／rekey-collision——列出檔名與原因）
 pending: 0
 duplicates quarantined this run: 3 → duplicates/（列出原檔與隔離檔對應）
 duplicates awaiting manual review: before 5 / after 8（列出目前隔離檔）
