@@ -296,12 +296,11 @@ enum AddressField: String, CaseIterable, Equatable {
         }
     }
 
-    /// The View-menu item name fragments that reveal this field when Mail
-    /// hides it. Only Bcc is hidden by default; `to` is always shown.
+    /// Only Bcc has a supported reveal path. Cc must not expose fuzzy
+    /// fragments that also match Bcc menu items (#408).
     var revealMenuNameFragments: [String] {
         switch self {
-        case .to: return []
-        case .cc: return ["副本", "Cc Address Field"]
+        case .to, .cc: return []
         case .bcc: return ["密件副本", "Bcc"]
         }
     }
