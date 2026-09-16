@@ -76,9 +76,9 @@ error: <保留實際工具錯誤；沒有有效 envelope 時說明實際回應�
 
 先完成本批所有重新定位，再進入 Step 3 寫入。任一搜尋／headers 工具錯誤或無法辨識的回應 → 停止本批，報 `status: lookup-unavailable`、錯誤與受影響檔案／尚未評估清單，本批 `repaired: 0`；不得當成零候選繼續。只有成功查詢後的零／多候選、或成功取得 headers 後仍缺真 Message-ID 才屬於 `still-unparseable`。
 
-1. **先固定比對語意**：兩邊 sender 都解析為單一裸 email 位址後不分大小寫比對，不能拿 display name 當位址或做 substring 比對；缺少可用位址記 `sender-unavailable`。frontmatter date 必須能解析為具明確 offset 的完整 timestamp，再以絕對時刻比較；缺 offset 記 `date-offset-missing`，格式不明記 `date-unparseable`，不得猜時區。summary 的 date 是收信時間、frontmatter date 通常是 Date header 的寄出時間，傳遞延遲或歷史 offset 汙染可能造成保守漏配，不能因零候選自動放寬時間窗。
+1. **先固定比對語意**：缺少／空 bare subject 先記 `still-unparseable: subject-unavailable`，不發空查詢。兩邊 sender 都解析為單一裸 email 位址後不分大小寫比對，不能拿 display name 當位址或做 substring 比對；缺少可用位址記 `still-unparseable: sender-unavailable`。frontmatter date 必須能解析為具明確 offset 的完整 timestamp，再以絕對時刻比較；缺 offset 記 `still-unparseable: date-offset-missing`，格式不明記 `still-unparseable: date-unparseable`，不得猜時區。summary 的 date 是收信時間、frontmatter date 通常是 Date header 的寄出時間，傳遞延遲或歷史 offset 汙染可能造成保守漏配，不能因零候選自動放寬時間窗。
 2. **取得完整原始候選**：`search_emails(field: "subject", query: <bare subject>, projection: "summary", dedup: "none", limit: 200)`。不要用 logical 去重判定唯一，因為同 subject/sender/date_received 的不同 Message-ID 也可能被塌成一列。若 `truncated: true`，相同查詢最多再以 `limit: 1000` 讀一次；仍不完整就記 `still-unparseable: search-truncated`，不使用部分結果宣稱唯一。以 bare subject 精確相同、上述 sender 相同、絕對時間差 < 2 分鐘篩選；零候選記 `still-unparseable: no-match`。
-3. **補齊每個候選的定位資訊**：summary 沒有 account_name；用同條件 `projection: "full", dedup: "none", limit: 1000` 補查，必須取得完整 envelope。只對照原候選 id 的列，並核對相同 predicate 重新計算後的候選 id 集合；缺列、重複 id、集合變動或 `truncated: true` 都停止本批並報 `lookup-unavailable`，不改挑別封。每列須有 id、mailbox、account_name；有 account_id 也一併保留。必要欄位缺失即停止。
+3. **補齊每個候選的定位資訊**：summary 沒有 account_name；用同條件 `projection: "full", dedup: "none", limit: 1000` 補查，必須取得完整 envelope。full 的時間欄位為 `date_received`（對應 summary 的 `date`），不可改用寄出時間欄位。只對照原候選 id 的列，並核對相同 predicate 重新計算後的候選 id 集合；缺列、重複 id、集合變動或 `truncated: true` 都停止本批並報 `lookup-unavailable`，不改挑別封。每列須有 id、mailbox、account_name；有 account_id 時必須一併傳給後續headers呼叫。必要欄位缺失即停止。
 4. **用真 Message-ID 分辨多匣副本與真碰撞**：對每個候選以該列完整定位呼叫 `get_email_headers`。工具失敗依 lookup-unavailable 停止整批；成功但任一候選缺可用的真 Message-ID，整組記 `still-unparseable: candidate-message-id-missing`，不能忽略未知列。所有候選的真 Message-ID（需為單一可解析的 RFC 5322 Message-ID；多值、格式歧義、控制字元或 synthetic 皆不可用；移除外圍空白／角括號、其餘大小寫保留）恰好一種時才可定位：同一 Message-ID 的 Gmail 多信箱副本可視為同一候選；兩種以上記 `still-unparseable: message-id-collision`，不修復。這仍是受限的歷史匹配方法，不是原信身分的密碼學證明。
 
 中途工具／回應失效的固定報告：
@@ -93,7 +93,7 @@ pending: <全部尚未套用的檔案，包含已定位但尚未寫入者>
 error: <實際錯誤或回應問題>
 ```
 
-全部定位完成後，先對計畫中的真 Message-ID 分組並檢查 index 已有的同 key。不能先逐檔換 key 再用事後去重修補覆蓋。多檔／既有 entry 同 key 時，須讀取本 target 內相關檔案，除 message_id 欄位與換行表示法外，完整 frontmatter 與正文均相同才可確認為重複；前 500 字相同不足以放行。資料不全、內容不同、檔案在 target 外或無法確認，整組記 `still-unparseable: rekey-collision`，保留原檔／index。
+全部定位完成後，先建立「舊 synthetic key → 所有來源檔及既有 index entry」對照。舊 key 若仍被未納入成功修復計畫的檔案使用，或 entry 指向該檔案，不得刪除／改寫；無法安全分割時，所有相關組都記 `still-unparseable: rekey-collision` 並保持原狀。接著對計畫中的真 Message-ID 分組並檢查 index 已有的同 key。不能先逐檔換 key 再用事後去重修補覆蓋。多檔／既有 entry 同 key 時，須讀取本 target 內相關檔案，除 message_id 欄位與換行表示法外，完整 frontmatter 與正文均相同才可確認為重複；前 500 字相同不足以放行。資料不全、內容不同、檔案在 target 外或無法確認，整組記 `still-unparseable: rekey-collision`，保留原檔／index。以上完整性與實體路徑檢查必須先通過，才可採用下方的保留檔規則。
 
 確認重複者先產生唯一保留檔與隔離對應計畫：已有合法 index entry 時保留其原檔；否則保留檔名日期最早者，同日以檔名排序固定選擇。後續每個真 key 只寫一次，明確指向保留檔。這是寫入前檢查，不宣稱跨多個檔案已有交易／鎖定保證。
 
@@ -107,7 +107,7 @@ error: <實際錯誤或回應問題>
 
 ### Step 4: 事後去重
 
-只執行 Step 2 已確認的完整內容重複計畫，其餘檔案**移入 `duplicates/` 子目錄**（不刪除——人工確認後自行清理），再提交指向保留檔的 index entry。若套用期間發現來源變動或寫入／搬移失敗，停止並報 `apply-incomplete`，列出已完成操作與待辦，不得沿用 lookup 階段的 `repaired: 0` 或假報 completed；跨檔中斷仍需人工／既有reconcile恢復。
+只執行 Step 2 已確認的完整內容重複計畫，其餘檔案**移入 `duplicates/` 子目錄**（不刪除——人工確認後自行清理），隔離目的檔必須不存在，若同名已存在即停止為 `apply-incomplete`，不得覆寫隔離證據；再提交指向保留檔的 index entry。若套用期間發現來源變動或寫入／搬移失敗，停止並報 `apply-incomplete`，列出已完成操作與待辦，不得沿用 lookup 階段的 `repaired: 0` 或假報 completed；報告須明列每個殘留舊 index key、對應檔案與已改寫的 frontmatter。特別是 frontmatter 已改成真 ID、index 還是 synthetic 的狀態，重跑本命令不會重新掃到它，既有 append-only reconcile 也不會移除舊 key；需依操作紀錄人工核對修復，不宣稱自動收斂。
 
 ### Step 5: 報告
 
