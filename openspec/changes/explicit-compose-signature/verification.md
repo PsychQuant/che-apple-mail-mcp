@@ -36,7 +36,7 @@ Codex R1 要求 None 勾選驗證與可操作的正文指引；R2 發現既有 t
 - named 原流程在 None 區段被拒：型別化 missing value 轉字串得到字面 missing value。回歸先有兩項失敗，修正後區分空值／同名字串／錯型別。屬性讀取拋錯不能吞成空值；注入錯誤的兩項測試先 incorrectly accepted，修正後傳播精確錯誤。
 - 菜單開啟時 Mail 原生 window query 在 2.20 秒逾時，關閉後約 0.13 秒成功；named 的原生 guard 因此造成 90 秒逾時。改為 native 查核包住選單生命週期、開啟期間以 PID＋AX window identity／focus 查核；錯誤先取消精確且仍屬於本次操作的選單，無法確認即保留視窗並避免 native cleanup。
 - 最新 signature＋cleanup 選定測試 **25 項通過**，包含完整腳本編譯、型別、read-failure、partial-popup-scan、AX pin／focus 與 cleanup gating。Codex R4 對這批修正的靜態複查 PASS；不是完整 IDD ensemble，也不代替 native replay。
-- 本輪完整 Swift suite 尚未全綠：6 個 StdioShutdownTests 因目前預設 SwiftBuild 沒有舊式 Objects.LinkFileList／description.json 佈局而失敗，屬 #377 測試輔助程式的相容性缺口，保留追蹤，不把它們略過當作通過。
+- 本輪首次完整 Swift suite 有 6 個 StdioShutdownTests 因預設 SwiftBuild 不提供舊式 Objects.LinkFileList／description.json 佈局而失敗。#377 的雙格式輔助程式修正 `3377a5b` 已合入 `56fa06a`；重跑預設建置器的完整 suite 為 **1,341 項、11 項略過、零失敗**，沒有略過原本失敗的 stdio 案例。
 - 最新 named 重跑在簽名 phase 前因 AX 看不到新 compose title 而拒絕。接著 CUA 明確回報 Mac locked、automatic unlock failed，已請使用者手動解鎖。該唯一 UUID 專用草稿仍待收尾；不能標 live gate 完成。其餘本輪先前 fixture 均已驗證從 compose／outgoing／Drafts 消失；未寄送或清空 Trash。
 
-尚待：解鎖後先收尾最新專用草稿，再跑最終 named／none 正文及失敗取消流程；修復測試輔助程式並完成全套測試；Claude session 額度恢復後補完整角色審查。OAuth 已恢復，不再以登入過期為原因。
+尚待：解鎖後先收尾最新專用草稿，再跑最終 named／none 正文及失敗取消流程；完整角色審查。Claude session 額度於 02:10 後已恢復，後續排程中。OAuth 已恢復，不再以登入過期為原因。
