@@ -49,7 +49,23 @@ def shell_comment_prefix(line):
 
 
 def looks_like_install(line):
-    return re.search(r'(?<![\w-])/?plugin\s+(?:install|marketplace\s+add)\b', shell_comment_prefix(line)) is not None
+    text = shell_comment_prefix(line)
+    try:
+        words = shlex.split(text, comments=False)
+    except ValueError:
+        # Malformed quotes must not hide an installation-looking command.
+        text = text.replace('"', '').replace("'", '')
+        return re.search(r'(?<![\w-])/?plugin\s+(?:install|marketplace\s+add)\b', text) is not None
+    # Shell quoting can split a keyword (plu"gin") or quote it entirely.
+    # Inspect parsed words rather than requiring the raw spelling to match.
+    normalized = ['plugin' if word == '/plugin' else word for word in words]
+    for index, word in enumerate(normalized):
+        if word == 'plugin' and normalized[index + 1:index + 2] == ['install']:
+            return True
+        if word == 'plugin' and normalized[index + 1:index + 3] == ['marketplace', 'add']:
+            return True
+    # Strings passed to wrappers (e.g. sh -c) are unsupported, not ignored.
+    return any(re.search(r'(?<![\w-])/?plugin\s+(?:install|marketplace\s+add)\b', word) for word in words)
 
 
 def commands(readme):

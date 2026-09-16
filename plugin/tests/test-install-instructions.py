@@ -243,6 +243,15 @@ class InstallInstructionsTests(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(check.main(['--checkout-repo','PsychQuant/che-apple-mail-mcp','--checkout-manifest',str(missing)]),1)
 
+    def test_quoted_shell_keywords_are_checked_as_real_tokens(self):
+        for command in ['claude "plugin" install removed@external',
+                        "claude plugin 'install' removed@external",
+                        'claude plu"gin" in"stall" removed@external']:
+            with self.subTest(command=command),self.assertRaisesRegex(check.Invalid,'removed.*missing'):
+                self.resolve(README+'\n```sh\n'+command+'\n```')
+        readme=README.replace('claude plugin marketplace add','claude "plugin" "marketplace" "add"')
+        self.assertEqual(self.resolve(readme),['mail@external via other/aggregator'])
+
     def test_current_readme_against_local_fixture(self):
         data=(ROOT/'.claude-plugin/marketplace.json').read_bytes()
         self.assertEqual(self.resolve((ROOT/'README.md').read_text(),data),
