@@ -51,16 +51,19 @@ def shell_comment_prefix(line):
 def looks_like_install(line):
     text = shell_comment_prefix(line)
     try:
-        words = shlex.split(text, comments=False)
+        lexer = shlex.shlex(text, posix=True, punctuation_chars='();&|')
+        lexer.whitespace_split = True
+        lexer.commenters = ''
+        words = list(lexer)
     except ValueError:
         # Malformed quotes must not hide an installation-looking command.
         text = text.replace('"', '').replace("'", '').replace('`', '')
-        if not re.search(r'(?:^|\s)(?:\S*/)?claude\s+|(?:^|\s)/plugin\s+', text):
+        if not re.search(r'(?<![\w.-])(?:\S*/)?claude(?=[\s();&|]|$)|(?<![\w.-])/plugin(?=[\s();&|]|$)', text):
             return False
         return re.search(r'(?<![\w-])/?plugin\s+(?:install|marketplace\s+add)\b', text) is not None
     cli_words = [word.strip('`') for word in words]
     has_cli = any(word == '/plugin' or word.rsplit('/', 1)[-1] == 'claude' for word in cli_words)
-    has_cli = has_cli or any(re.search(r'(?:^|\s)(?:\S*/)?claude\s+', word) for word in words)
+    has_cli = has_cli or any(re.search(r'(?<![\w.-])(?:\S*/)?claude(?=[\s();&|]|$)', word) for word in words)
     if not has_cli:
         return False  # Ordinary prose such as 'the plugin install step'.
     # Shell quoting can split a keyword (plu"gin") or quote it entirely.
