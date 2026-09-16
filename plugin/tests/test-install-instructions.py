@@ -261,6 +261,11 @@ class InstallInstructionsTests(unittest.TestCase):
             self.resolve(data=b'{"name":"external","plugins":[{"name":"mail","name":"other"}]}')
         with self.assertRaises(check.Invalid):self.resolve(data=manifest(plugins=('other',)))
 
+    def test_prose_without_cli_prefix_is_not_an_install_command(self):
+        self.assertEqual(self.resolve(README+'\nRun the plugin install step after setup.\n'),['mail@external via other/aggregator'])
+        with self.assertRaises(check.Invalid):
+            self.resolve(README+'\nUse `claude plugin install removed@external`.\n')
+
     def test_current_readme_against_local_fixture(self):
         data=(ROOT/'.claude-plugin/marketplace.json').read_bytes()
         self.assertEqual(self.resolve((ROOT/'README.md').read_text(),data),
