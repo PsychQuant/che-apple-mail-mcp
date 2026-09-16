@@ -478,6 +478,36 @@ final class ExportEmailsMarkdownTests: XCTestCase {
         XCTAssertEqual(manifest.jsonObject["skipped"] as? Int, 1)
     }
 
+    func testHeaderMessageIDStorageSpellingMustRoundTripToExactSkipKey() throws {
+        for original in ["<CaseSensitive@example.invalid>", "bare@example.invalid"] {
+            let headers = RFC822Parser.parseHeaders(from: Data("Message-ID: \(original)\r\n\r\nbody".utf8))
+            let storage = try XCTUnwrap(headers["message-id"])
+            XCTAssertEqual(storage, original)
+            let directory = tempDir()
+            func export(_ skip: Set<String>, to output: URL) throws -> ExportManifest {
+                try ExportEmailsMarkdown.run(
+                    ids: ["10"], outputDir: output, ownAddresses: [], fallbackDirection: "received",
+                    includeAttachments: false, filenameTemplate: nil, filenameOverrides: [:],
+                    extraFrontmatter: [], fetch: { _ in self.makeEmail(sender: "fixture@example.invalid", messageId: storage) },
+                    attachmentNamesFor: { _ in [] }, attachmentData: { _, _ in Data() }, skipMessageIds: skip)
+            }
+            let written = try export([], to: directory)
+            XCTAssertEqual(written.items[0].messageId, storage)
+            let path = try XCTUnwrap(written.items[0].writtenPath)
+            let markdown = try String(contentsOfFile: path)
+            XCTAssertTrue(markdown.contains("message_id: \"\(storage)\"\n"))
+            let skipped = try export([storage], to: directory)
+            XCTAssertEqual(skipped.skipped, 1)
+            XCTAssertEqual(skipped.written, 0)
+            let comparisonOnly = storage.trimmingCharacters(in: CharacterSet(charactersIn: "<>"))
+            if comparisonOnly != storage {
+                let wrongKey = try export([comparisonOnly], to: tempDir())
+                XCTAssertEqual(wrongKey.skipped, 0, "stripping brackets must not masquerade as the stored key")
+                XCTAssertEqual(wrongKey.written, 1)
+            }
+        }
+    }
+
     func testRun_noSkipSet_skippedCountZeroAndAllWritten() throws {
         let out = tempDir()
         let manifest = try ExportEmailsMarkdown.run(
