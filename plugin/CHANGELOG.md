@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- Synthetic-ID repair checks SQLite capability before work, distinguishes lookup failure from no match, and reports quarantine inventory. Candidate uniqueness now uses complete uncollapsed rows and actual Message-IDs, with explicit sender/time normalization and pre-write collision planning. This is source preparation; plugin version changes remain part of release preparation. (#389)
+- Synthetic-ID repair checks SQLite capability before work, distinguishes lookup failure from no match, and reports quarantine inventory. Candidate uniqueness now uses complete uncollapsed rows and actual Message-IDs, with explicit sender/time normalization and pre-write collision planning. Missing-offset dates are now explicitly left for source/date confirmation before rerunning: the previous secondary offset-repair promise depended on first matching an ambiguous timestamp and is not treated as a reliable automatic capability. This conservative boundary and the manual recovery of partial file/index writes are disclosed. This is source preparation; plugin version changes remain part of release preparation. (#389)
 
 ## [2.48.0] - 2026-09-08
 
