@@ -59,7 +59,8 @@ install targets; recognized installation-looking commands in unsupported forms
 unsupported fence languages or outside a supported fence. Shell continuations
 are rejected rather than silently skipped. Console/shellsession fences are supported. The remote check requires curl 8.4.0+ so unknown-length responses are also
 bounded; an older or unavailable curl returns exit 2 before downloading. Each source has
-at most three attempts, a 10-second request limit and 1 MiB response limit; all
+at most three attempts, a 10-second request limit and 1 MiB response limit;
+README input is capped at 1 MiB and each physical line at 64 KiB for inspection; all
 sources share a 90-second network budget (plus subprocess termination grace).
 Scheduled monitoring depends on GitHub Actions remaining enabled; it is not a
 guarantee that inactive repositories will continue to receive scheduled runs.

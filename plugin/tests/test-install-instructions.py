@@ -276,6 +276,16 @@ class InstallInstructionsTests(unittest.TestCase):
             with self.subTest(command=command),self.assertRaises(check.Invalid):
                 self.resolve(README+'\n```sh\n'+command+'\n```')
 
+    def test_path_runs_and_malformed_quote_paths_are_bounded(self):
+        import subprocess,tempfile
+        for tail in ['/'*500_000, "'"+'/'*500_000, '/'*50_000, "'"+'/'*50_000]:
+            with tempfile.TemporaryDirectory() as directory:
+                path=Path(directory)/'input.md';path.write_text(README+'\n```sh\n'+tail+'\n```')
+                code="import importlib.util,sys; s=importlib.util.spec_from_file_location('c',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.commands(open(sys.argv[2]).read())"
+                result=subprocess.run([sys.executable,'-c',code,str(ROOT/'scripts/check-install-instructions.py'),str(path)],capture_output=True,text=True,timeout=5)
+                if len(tail)>check.MAX_LINE_BYTES:self.assertNotEqual(result.returncode,0)
+                else:self.assertEqual(result.returncode,0,result.stderr)
+
     def test_current_readme_against_local_fixture(self):
         data=(ROOT/'.claude-plugin/marketplace.json').read_bytes()
         self.assertEqual(self.resolve((ROOT/'README.md').read_text(),data),

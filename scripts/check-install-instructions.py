@@ -13,6 +13,7 @@ import tempfile
 import time
 
 MAX_BYTES = 1_048_576
+MAX_LINE_BYTES = 65_536
 NAME = re.compile(r'[A-Za-z0-9_.-]+\Z')
 REPO = re.compile(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z')
 
@@ -58,7 +59,8 @@ def looks_like_install(line, depth=0):
     except ValueError:
         # Malformed quotes must not hide an installation-looking command.
         text = text.replace('"', '').replace("'", '').replace('`', '')
-        if not re.search(r'(?<![\w.-])(?:\S*/)?claude(?=[\s();&|]|$)|(?<![\w.-])/plugin(?=[\s();&|]|$)', text):
+        pieces = re.split(r'[\s();&|<>]+', text)
+        if not any(piece == '/plugin' or piece.rsplit('/', 1)[-1] == 'claude' for piece in pieces):
             return False
         return re.search(r'(?<![\w-])/?plugin\s+(?:install|marketplace\s+add)\b', text) is not None
     # Shell wrappers may carry another literal command as one quoted argument.
@@ -72,7 +74,6 @@ def looks_like_install(line, depth=0):
         raise Invalid('nested installation command exceeds inspection depth')
     cli_words = [word.strip('`') for word in words]
     has_cli = any(word == '/plugin' or word.rsplit('/', 1)[-1] == 'claude' for word in cli_words)
-    has_cli = has_cli or any(re.search(r'(?<![\w.-])(?:\S*/)?claude(?=[\s();&|]|$)', word) for word in words)
     if not has_cli:
         return False  # Ordinary prose such as 'the plugin install step'.
     # Shell quoting can split a keyword (plu"gin") or quote it entirely.
@@ -90,6 +91,8 @@ def looks_like_install(line, depth=0):
 def commands(readme):
     if len(readme.encode('utf-8')) > MAX_BYTES:
         raise Invalid('README exceeds 1 MiB')
+    if any(len(line.encode('utf-8')) > MAX_LINE_BYTES for line in readme.splitlines()):
+        raise Invalid('README line exceeds 64 KiB inspection limit')
     # Detect unsupported shell continuation as a logical line, but never
     # accept the joined text as executable syntax (quotes may change meaning).
     pending, continued = '', False
