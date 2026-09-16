@@ -1,6 +1,6 @@
 ## Status
 
-Implementation complete; **not IDD verified**. Real Mail staging integration and the full Claude ensemble remain pending. No merge, installation, release, or issue closure.
+Implementation complete; **not IDD verified**. Real Mail staging integration passed on 2026-09-17; the full Claude ensemble remains pending due to session quota. No merge, installation, release, or issue closure.
 
 ## Boundary and controls
 
@@ -22,4 +22,25 @@ One fresh read-only reviewer found a validation-to-use race: `realpath` captured
 - Final `swift test`: 1,251 tests, 10 skipped, 0 failures.
 - `git diff --check`: passed.
 
-These attachment integration tests use local generated fixtures and injected script runners. They do not prove actual Mail.app staging behavior. The broader pre-existing suite retains its existing setup and skip behavior. The home-minus-denylist default is the existing export policy, not exhaustive protection of unrelated home files; a narrow configured allowlist remains the deployment control. Descriptor pinning protects directory identity and symlink swaps, not a same-user adversary relocating entire open directory trees.
+The 181-test run above uses local generated fixtures and injected script runners; it does not itself prove native Mail staging. The separate opt-in live test below supplies that evidence. The broader pre-existing suite retains its existing setup and skip behavior. The home-minus-denylist default is the existing export policy, not exhaustive protection of unrelated home files; a narrow configured allowlist remains the deployment control. Descriptor pinning protects directory identity and symlink swaps, not a same-user adversary relocating entire open directory trees.
+
+## Native staging evidence (2026-09-17)
+
+`AttachmentDestinationLiveTests.testNativeMailStagePublicationAndCleanup` passed
+with `MAIL_APP_INTEGRATION_TESTS=1` and one UUID-named local synthetic mailbox.
+The test executes real Mail `save` through `MailController.runScript` into
+`AttachmentDestination.saveUsingScript`'s production stage. Both native writes
+were byte-compared against the 45-byte binary fixture. Successful publication
+replaced an existing output; a deliberately identified producer error after the
+second native write preserved the prior output. Distinct 0700 stages and their
+cleanup were asserted. No send, real message content, or account mutation was
+needed. The local fixture selector is deliberately separate from production
+account resolution and does not prove remote download behavior.
+
+The final live run executed one test with zero failures. A default-mode focused
+run executed 18 tests, one live skip, zero failures. Mail's script-level mailbox
+deletion returned -10000, so cleanup used the exact synthetic mailbox in Mail UI.
+After the final run, the fixture and its newly created second Import parent were
+removed after checking their contents; a separate native query returned `0, 0`.
+The pre-existing/shared Import folder was retained. See
+[reproduction instructions](../../../docs/testing/attachment-staging.md).
