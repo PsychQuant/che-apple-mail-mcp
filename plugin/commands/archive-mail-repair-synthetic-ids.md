@@ -106,6 +106,8 @@ error: <實際錯誤或回應問題>
 
 確認重複者先產生唯一保留檔與隔離對應計畫：已有合法 index entry 時保留其原檔；否則保留檔名日期最早者，同日以檔名排序固定選擇。計畫階段先核對 `duplicates/` 目錄本身：存在時須以不跟隨 symlink 的檢查確認為 directory，且 realpath 在 target 實體範圍內；symlink、非目錄、範圍外或無法判定都使相關組成為 `still-unparseable: quarantine-destination-conflict`。空的列舉結果不能取代目錄身分證明。目錄不存在時，把安全建立／重驗列入套用計畫，不能假設 Move 會安全建立父目錄。再確認每個隔離目的檔均不存在（包括symlink等既有項目），使用Step 1盤點與必要的實際路徑核對；已有目的檔或無法確認者記 `still-unparseable: quarantine-destination-conflict`，整個相關組不進入寫入。套用時仍需不可覆寫primitive防止其後競爭。後續每個真 key 只寫一次，明確指向保留檔。這是寫入前檢查，不宣稱跨多個檔案已有交易／鎖定保證。
 
+所有真 ID／內容／隔離目的地檢查完成後，必須以**最終可套用集合**重新檢查每個共享舊 synthetic key 的安全分割條件，不能沿用剔除組別之前的判定。若某組後來遭拒，其檔案就是未修復參照；既有舊 entry 必須仍指向保留 synthetic key 的未修復檔，否則剔除所有會使該 entry 失真的相關修復組，記 `still-unparseable: rekey-collision`。每次剔除後重新計算相依組，直到集合不再變動，才可進入 Step 2.5；過程只縮小計畫，不改指／重建舊 entry，也不把已拒絕組重新加入。例：A、B 共用舊 key，entry 指 A，兩者先定位成功但 B 後因真 key 碰撞遭拒，則 A 也不可改寫；若 entry 原已指向仍未修復的 B，A 才可能安全分割。
+
 > mail#319 issue 作者自證：ad-hoc `(sender, bare_subject, ±時間窗)` 三元組在密集 thread 中不可靠——所以匹配窗刻意窄（2 分鐘、恰好一封），寬鬆匹配寧可失敗。
 
 ### Step 2.5: 套用能力檢查（寫入前）
@@ -123,7 +125,7 @@ error: <缺少的能力或授權>
 
 ### Step 3: 修復
 
-- 每個 frontmatter 改寫前重新檢查型別／範圍及讀取內容，必須仍符合 Step 2 的原檔快照；不符即 apply-incomplete，不能用快照覆蓋並行更動。檢查與 Read／Write 仍非原子操作，不承諾惡意同使用者並行替換路徑的安全。
+- 每個 frontmatter 改寫前重新檢查型別／範圍及讀取內容，必須仍符合 Step 2 的原檔快照；不符即 apply-incomplete，不能用快照覆蓋並行更動。該檔最後一次重讀與 Write 之間只做記憶體內比對／序列化，不插入 mkdir、其他檔案操作或工具呼叫；Step 2.5 的整批快照核對不能取代此重讀。檢查與 Read／Write 仍非原子操作，不承諾惡意同使用者並行替換路徑的安全。
 - frontmatter：將 synthetic 值改為 Step 2 的完整 Message-ID 落盤值（例如 header 為 `<same@example.invalid>`，frontmatter 與 index key 都必須是該完整字串；原檔就地改寫）。必須用 YAML serializer 或符合 YAML 的 JSON quoted string scalar 處理引號／反斜線，不能直接把 header 插入雙引號範本。寫後重新解析，確認 message_id 字串與真值精確一致、其餘 frontmatter／正文未變；不符即 apply-incomplete，停止後續隔離與 index 提交。
 - 依已核對計畫更新 frontmatter 後執行 Step 4 隔離，再寫 `email_index.json`：僅移除Step 2已證明沒有任何未修復來源／entry參照的舊 synthetic keys；有共用未修復參照者保持原狀，不因到了Step 3而略過該檢查，每個真 key 只寫一筆明確指向保留檔的 entry（**temp+rename 原子寫**，同 Step 8.5 紀律）。不得逐檔覆蓋同一真 key。
 - 新真 key entry 沿用 archive-mail.md Step 8.5 的 canonical `{file, date, subject, thread_key}`：file 為保留檔 basename，date／thread_key 取該檔 frontmatter（date 按 Step 8.5 正規化為 ISO，不猜缺少的 offset；缺 thread_key 寫空字串並揭露），subject 取其本文完整 Subject 行而非剝除前綴後的比對值；不得沿用不相干的舊 entry metadata。其餘 index 資料保持原狀。
@@ -133,7 +135,7 @@ error: <缺少的能力或授權>
 
 ### Step 4: 套用已確認的隔離計畫
 
-每次搬移前重新核對已驗證的 duplicates 目錄身分／範圍及目的檔不存在；有變動就 apply-incomplete。只執行 Step 2 已確認的完整內容重複計畫，其餘檔案**移入 `duplicates/` 子目錄**（不刪除——人工確認後自行清理），隔離目的檔必須不存在，若同名已存在即停止為 `apply-incomplete`，不得覆寫隔離證據；再提交指向保留檔的 index entry。若套用期間發現來源變動或寫入／搬移失敗，停止並報 `apply-incomplete`，列出已完成操作與待辦，不得沿用 lookup 階段的 `repaired: 0` 或假報 completed；報告須明列每個殘留舊 index key、對應檔案與已改寫的 frontmatter。特別是 frontmatter 已改成真 ID、index 還是 synthetic 的狀態，重跑本命令不會重新掃到它，既有 append-only reconcile 也不會移除舊 key；需依操作紀錄人工核對修復，不宣稱自動收斂。
+每次搬移前重新核對已驗證的 duplicates 目錄身分／範圍及目的檔不存在；有變動就 apply-incomplete。只執行 Step 2 已確認的完整內容重複計畫，該組非保留檔**移入 `duplicates/` 子目錄**（不刪除——人工確認後自行清理），隔離目的檔必須不存在，若同名已存在即停止為 `apply-incomplete`，不得覆寫隔離證據；再提交指向保留檔的 index entry。若套用期間發現來源變動或寫入／搬移失敗，停止並報 `apply-incomplete`，列出已完成操作與待辦，不得沿用 lookup 階段的 `repaired: 0` 或假報 completed；報告須明列每個殘留舊 index key、對應檔案與已改寫的 frontmatter。特別是 frontmatter 已改成真 ID、index 還是 synthetic 的狀態，重跑本命令不會重新掃到它，既有 append-only reconcile 也不會移除舊 key；需依操作紀錄人工核對修復，不宣稱自動收斂。
 
 每次搬移後、提交 index 前，必須重新核對來源已不存在，目的檔是 target 內的非 symlink regular file，且完整內容與該檔已驗證的改寫結果一致，才可計入隔離成功。不能只看命令退出碼：例如 `mv -n` 遇到既有目的檔可能回傳 0 卻沒有搬移。來源仍在、目的檔缺少／型別不符、內容不符或無法確認時，一律停止為 `apply-incomplete`，保留現況並列出差異，不提交 index、不覆寫目的檔、不再刪來源來補作。
 
