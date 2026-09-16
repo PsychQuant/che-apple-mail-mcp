@@ -14,3 +14,11 @@
 ### 未完成
 
 ID-only baseline 不是 creation binding，前後 count 相同也不證明 ID 跨重存穩定。真正 adapter、pre-create 接線、合併三欄 receipt、刪除 gate、正常同主旨 update／competing drafts 等仍未完成。完整 Claude 角色受週額度限制，不能把本元件的 bounded review 當成整張 issue verified。
+
+## 2026-09-17 Legacy metadata error 修正
+
+#404 歷史 PR #407 補上的 Codex cross-model review 發現：舊 recipient scan 每筆 subject／ID 讀取錯誤被空 try/end try 吞掉，可能回 NOTFOUND 或使用較早的部分候選。現行 legacy builder 仍有此問題，因此在正式 adapter 接線前獨立修正錯誤分類：以 `RECIPIENT_METADATA_UNAVAILABLE` 與原 error number 中止整份 scan，不帶回可能含信件／帳號資料的原生錯誤文字。
+
+實際執行生成的 metadata 控制流程，以純函式代換 Mail 存取與地址尾段：正確 RED 為 4 tests／4 failures（前兩次 harness 的縮排 anchor／reference 解參照錯誤不計）；修正後 25 項相關測試通過。涵蓋已有候選後的 subject／ID 失敗、第一筆失敗不能假報 NOTFOUND、完整 match／not-found 行為不變，以及實際 controller 將該失敗視為 unavailable 且不重試。完整 suite：MailSQLite 312／1 skip，server 939／10 skip，共 **1,251 tests／11 skipped／0 failures**。限定 Codex 複查無可行動缺陷；沒有執行新的 Mail mutation。
+
+這只修正讀取失敗的分類。Legacy global subject／最大 ID 選擇及 update 在 unavailable 時的舊刪除策略仍未解決，不能宣稱已取得 creation binding、完成正式接線或整張 #409 verified。

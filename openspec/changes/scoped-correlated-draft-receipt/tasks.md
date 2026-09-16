@@ -15,6 +15,7 @@
 ## 3. 合併 receipt 與嚴格選擇
 
 - [ ] 3.1 完成 One complete scoped read supplies identity and addresses：同一 script 在實際帳號範圍內完成 metadata 篩選、唯一 binding 匹配與 To/Cc/Bcc 讀取；以 reader tests 及 live collision fixture 驗證不讀不相關地址、所有 per-message 失敗均 fail closed。
+  - 2026-09-17：現行 legacy scan 的 subject／ID 讀取錯誤已改為整份 unavailable，完整控制流程與 controller 回歸通過；global subject／最大 ID heuristic 仍在，尚不是本項要求的唯一 binding 合併 read。
 - [ ] 3.2 實作「單次回讀與每次呼叫的結果」：create/update 共用一份 call-local outcome，移除額外 ID read 與 lastRecipientReceiptOutcome；以 spy 計數及 stale-outcome regression 證明每輪只有一個合併 read、失敗不重試、成功 not-found 最多三輪。
 - [ ] 3.3 完成 Draft recipient receipt verifies addresses after save：所有草稿包含 bare／To-only 都驗證三個集合；以 recipient matrix tests 驗證 To-only 差異、mismatch 三欄 diff，以及 unknown 狀態不製造 found-address 差異。
 
