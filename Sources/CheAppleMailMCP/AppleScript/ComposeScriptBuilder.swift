@@ -668,6 +668,7 @@ func buildMailtoComposeScript(
     // re-checks that our window is gone, and otherwise appends a
     // WINDOWLEFTOPEN note to the error so the caller knows to close it.
     let cleanupBody = """
+            if not (my dismissSignatureTracking()) then error (_mErr as text) & " — WINDOWLEFTOPEN: signature menu ownership or dismissal could not be verified; no native cleanup was attempted"
             try
                 my assertComposeWindowOwner(_ourId, "\(subjEsc)", false)
             on error
