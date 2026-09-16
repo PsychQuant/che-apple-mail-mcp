@@ -137,7 +137,7 @@ class CheAppleMailMCPServer {
             // Email Reading Tools
             Tool(
                 name: "list_emails",
-                description: "List emails in a mailbox. Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204).",
+                description: "Each result includes nullable is_draft (integer type 5=true, 0=false, otherwise null; AppleScript fallback is null). Do not infer draft status from mailbox names. List emails in a mailbox. Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -166,7 +166,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "search_emails",
-                description: "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101). Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204). For BULK collection (e.g. feeding export_emails_markdown), use `projection: \"ids\"` to get just rowId strings (far smaller payload, no per-row recipient fetch) and `dedup: \"logical\"` to collapse Gmail mailbox duplicates server-side; `projection: \"count\"` returns just the total match count for scoping (#208).",
+                description: "Result objects include is_draft: true for observed integer type 5, false for type 0, null for unknown/unsupported evidence or AppleScript fallback. It is a per-message fact, not a mailbox inference; ids/count projections are unchanged. Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101). Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204). For BULK collection (e.g. feeding export_emails_markdown), use `projection: \"ids\"` to get just rowId strings (far smaller payload, no per-row recipient fetch) and `dedup: \"logical\"` to collapse Gmail mailbox duplicates server-side; `projection: \"count\"` returns just the total match count for scoping (#208).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -179,7 +179,7 @@ class CheAppleMailMCPServer {
                         "date_to": .object(["type": .string("string"), "description": .string("End date filter, ISO 8601 (e.g., '2026-03-31')")]),
                         "limit": .object(["type": .string("integer"), "description": .string("Maximum results (default: 50)")]),
                         "sort": .object(["type": .string("string"), "description": .string("Sort order by date: 'desc' (newest first, default) or 'asc' (oldest first)")]),
-                        "projection": .object(["type": .string("string"), "description": .string("Result shape: 'full' (default, the {results,returned,limit,truncated} envelope of full objects), 'ids' (envelope whose `results` is an array of message rowId strings only — orders-of-magnitude smaller, for bulk collection feeding export_emails_markdown), 'summary' (envelope whose `results` elements are triage objects with only `id`/`date`/`sender`/`subject`/`mailbox` — between `ids` and `full`, for human triage without the full per-row cost), or 'count' (just {count}, the total matches ignoring `limit`, for scoping). 'ids'/'summary'/'count' require the SQLite index (#208/#177).")]),
+                        "projection": .object(["type": .string("string"), "description": .string("Result shape: 'full' (default, the {results,returned,limit,truncated} envelope of full objects), 'ids' (envelope whose `results` is an array of message rowId strings only — orders-of-magnitude smaller, for bulk collection feeding export_emails_markdown), 'summary' (envelope whose `results` elements are triage objects with only `id`/`date`/`sender`/`subject`/`mailbox`/`is_draft` — between `ids` and `full`, for human triage without the full per-row cost), or 'count' (just {count}, the total matches ignoring `limit`, for scoping). 'ids'/'summary'/'count' require the SQLite index (#208/#177).")]),
                         "dedup": .object(["type": .string("string"), "description": .string("'none' (default) or 'logical'. 'logical' collapses mailbox-duplicate copies (same subject+sender+date_received, e.g. Gmail INBOX/Archive/All Mail) to one row server-side. Valid with projection 'ids', 'summary', or 'count' — not 'full' (#208/#177).")])
                     ]),
                     "required": .array([.string("query")])
@@ -601,7 +601,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "get_email_metadata",
-                description: "Get email metadata (was forwarded, replied, redirected, size)",
+                description: "Get email metadata (was forwarded, replied, redirected, size). Includes is_draft: true (SQLite integer type 5), false (type 0), or null when evidence is unknown/unsupported or AppleScript fallback is used.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -794,6 +794,7 @@ class CheAppleMailMCPServer {
                 "description": .string("Optional export options"),
                 "properties": .object([
                     "include_attachments": .object(["type": .string("boolean"), "description": .string("Also export each email's attachments (data extensions → output_dir/data/, others → output_dir/attachments/<stem>/)")]),
+                    "skip_drafts": .object(["type": .string("boolean"), "description": .string("Default false preserves existing exports. Set true to exclude known drafts before content/attachment fetch (status skipped, skip_reason draft); unknown draft status produces a per-item draft_status_unknown error. Every manifest item includes is_draft: true (type 5), false (type 0), or null (unknown). No mailbox-name inference. Explicit non-boolean values, including null, are rejected.")]),
                     "skip_partial": .object(["type": .string("boolean"), "description": .string("Opt-in (#283): when an email's on-disk .emlx is a partial (Mail stores it as <rowid>.partial.emlx) AND the body the .md would carry is empty, do NOT write a header-only .md; record it as status 'header_only' with body_downloaded:false instead. Default false = still written but annotated (manifest item gets body_downloaded:false, summary gets body_not_downloaded count) so bulk archives are never silently header-only. With skip_partial:true the clean re-export loop is: re-fetch flagged ids via single get_email (its fallback nudges Mail to download the body), then re-run export for just those ids — nothing stale is on disk and the skipped email's filename slot is reserved, so the re-export lands on its original name. Under the DEFAULT mode that loop is NOT safe as-is: the header-only .md was really written, so a re-export collides into a -N-suffixed duplicate next to the stale file — delete each flagged item's written_path first (or use skip_partial:true from the start).")]),
                     "filename_template": .object(["type": .string("string"), "description": .string("Override filename with placeholders {date}/{subject}/{sender}/{message_id}")]),
                     "filenames": .object(["type": .string("object"), "description": .string("Per-id filename override map { id: name }")]),
@@ -1224,7 +1225,7 @@ class CheAppleMailMCPServer {
                     let count = try reader.searchCount(params, dedup: dedup)
                     return formatJSON(["count": count])
                 case "summary":
-                    // #177: triage shape — id/date/sender/subject/mailbox only.
+                    // #374: triage shape adds the nullable per-message is_draft fact.
                     let page = try reader.searchSummaryPage(params, dedup: dedup)
                     let formatted: [[String: Any]] = page.results.map(Self.formatSummaryResultForJSON)
                     return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
@@ -2060,6 +2061,7 @@ class CheAppleMailMCPServer {
             // emails OUT of the corpus (status "header_only", not written)
             // instead of the default annotate-and-write.
             let skipPartial = exportOpts["skip_partial"]?.boolValue ?? false
+            let skipDrafts = try parseSkipDraftsOption(exportOpts["skip_drafts"])
             let filenameTemplate = exportOpts["filename_template"]?.stringValue
             var filenameOverrides: [String: String] = [:]
             if let fmap = exportOpts["filenames"]?.objectValue {
@@ -2158,7 +2160,12 @@ class CheAppleMailMCPServer {
                     return try EmlxParser.attachmentData(rowId: rowId, mailboxURL: mailboxUrl, attachmentName: name)
                 },
                 skipMessageIds: skipMessageIds,
-                skipPartial: skipPartial)
+                skipPartial: skipPartial,
+                skipDrafts: skipDrafts,
+                draftStatusFor: { id in
+                    guard let rowId = Int(id) else { throw MailError.invalidParameter("id is not a numeric rowId") }
+                    return try exportReader.messageIsDraft(messageId: rowId)
+                })
             return formatJSON(exportManifest.jsonObject)
 
         case "get_emails_batch":
@@ -2348,6 +2355,7 @@ class CheAppleMailMCPServer {
     static func formatSearchResultForJSON(_ r: SearchResult) -> [String: Any] {
         var dict: [String: Any] = [
             "id": String(r.id),
+            "is_draft": r.isDraft.map { $0 as Any } ?? NSNull(),
             "subject": r.subject,
             "sender": r.senderAddress.isEmpty ? r.senderName : "\(r.senderName) <\(r.senderAddress)>",
             "date_received": ISO8601DateFormatter().string(from: r.dateReceived),
@@ -2362,11 +2370,12 @@ class CheAppleMailMCPServer {
     }
 
     /// #177: the triage (`summary`) projection JSON — exactly `id/date/sender/
-    /// subject/mailbox` (no recipient list, no account fields). `date` carries the
+    /// subject/mailbox/is_draft` (no recipient list, no account fields). `date` carries the
     /// same ISO 8601 value as `full`'s `date_received`.
     static func formatSummaryResultForJSON(_ r: SearchResult) -> [String: Any] {
         [
             "id": String(r.id),
+            "is_draft": r.isDraft.map { $0 as Any } ?? NSNull(),
             "date": ISO8601DateFormatter().string(from: r.dateReceived),
             "sender": r.senderAddress.isEmpty ? r.senderName : "\(r.senderName) <\(r.senderAddress)>",
             "subject": r.subject,
@@ -2637,6 +2646,13 @@ func parseBodyFormat(_ raw: String?) throws -> BodyFormat {
         throw MailError.invalidParameter(ComposeRefusal.richTextFormat(format).message)
     }
     return format
+}
+
+/// Unlike the legacy optional Bool helper, an explicit null is not an opt-out.
+func parseSkipDraftsOption(_ value: Value?) throws -> Bool {
+    guard let value else { return false }
+    if case .bool(let flag) = value { return flag }
+    throw MailError.invalidParameter("opts.skip_drafts must be a boolean (true/false)")
 }
 
 /// Issue #35: type-strict bool extraction. Returns the bool when key is present

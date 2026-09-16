@@ -24,6 +24,7 @@ actor MailController {
     /// NSAppleScript — lets production-site behavioral tests drive the real
     /// compose/reply/forward methods with a fake script runner (no live Mail).
     private var scriptRunnerOverride: ((String) throws -> String)?
+    private var scriptListRunnerOverride: ((String) throws -> [String])?
     /// When set, both pre-flight refusal probes return this closure's value
     /// (nil = proceed) instead of probing Accessibility — lets tests select the
     /// branch deterministically.
@@ -48,9 +49,11 @@ actor MailController {
         scriptRunner: ((String) throws -> String)?,
         refusal: (() -> ComposeRefusal?)?,
         openURL: ((URL) -> Bool)? = nil,
-        scriptTimeout: TimeInterval? = nil
+        scriptTimeout: TimeInterval? = nil,
+        scriptListRunner: ((String) throws -> [String])? = nil
     ) {
         scriptRunnerOverride = scriptRunner
+        scriptListRunnerOverride = scriptListRunner
         refusalOverride = refusal
         openURLOverride = openURL
         scriptTimeoutOverride = scriptTimeout
@@ -167,6 +170,9 @@ actor MailController {
 
     /// Execute AppleScript and return result as list
     func runScriptAsList(_ source: String, timeout: TimeInterval? = nil) throws -> [String] {
+        if let override = scriptListRunnerOverride {
+            return try runGuarded(timeout: timeout, automationGranted: true) { try override(source) }
+        }
         let granted = try preflightAutomation()
         return try runGuarded(timeout: timeout, automationGranted: granted) {
             var error: NSDictionary?
@@ -918,6 +924,7 @@ actor MailController {
             // three lists contain a single empty string).
             if ids[i].isEmpty && subjects[i].isEmpty && senders[i].isEmpty { continue }
             emails.append([
+                "is_draft": NSNull(), // Do not infer draft status from the mailbox.
                 "id": ids[i],
                 "subject": subjects[i],
                 "sender": senders[i]
@@ -1273,6 +1280,7 @@ actor MailController {
             let fields = row.components(separatedBy: sep)
             guard fields.count >= 6 else { continue }
             emails.append([
+                "is_draft": NSNull(), // Do not infer draft status from the mailbox.
                 "id": fields[0],
                 "subject": fields[1],
                 "sender": fields[2],
@@ -2716,6 +2724,7 @@ actor MailController {
         let size = try runScript(sizeScript)
 
         return [
+            "is_draft": NSNull(), // No equivalent per-message evidence in this fallback.
             "was_forwarded": wasForwarded,
             "was_replied_to": wasReplied,
             "was_redirected": wasRedirected,
