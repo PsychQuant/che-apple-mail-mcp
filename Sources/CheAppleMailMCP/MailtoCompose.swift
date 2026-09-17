@@ -199,6 +199,34 @@ func parseRecipient(_ raw: String) -> (name: String?, address: String) {
     return (name, address)
 }
 
+/// #411 input-validation signal only. Reader parsing stays Character-based;
+/// quote, escape and comma syntax here is scalar-based so combining marks
+/// cannot hide ASCII syntax. The caller also requires a parsed display name.
+func hasUnquotedDisplayNameComma(_ raw: String) -> Bool {
+    let input = raw.trimmingCharacters(in: .whitespaces)
+    guard input.hasSuffix(">") else { return false }
+    var inQuote = false
+    var escaped = false
+    var sawComma = false
+    var hasAngle = false
+    var commaBeforeAngle = false
+    for scalar in input.unicodeScalars {
+        if inQuote {
+            if escaped { escaped = false }
+            else if scalar.value == 0x5C { escaped = true }
+            else if scalar.value == 0x22 { inQuote = false }
+        } else if scalar.value == 0x22 {
+            inQuote = true
+        } else if scalar.value == 0x3C {
+            hasAngle = true
+            commaBeforeAngle = sawComma
+        } else if scalar.value == 0x2C {
+            sawComma = true
+        }
+    }
+    return hasAngle && commaBeforeAngle
+}
+
 /// #266 — decode RFC 5322 quoted-pairs (`\x` → `x`) in a quoted-string body
 /// (outer quotes already stripped). A backslash escapes the next character; a
 /// trailing lone backslash is kept literally. Single pass.
