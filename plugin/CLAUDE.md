@@ -26,6 +26,8 @@ Apple Mail MCP server for macOS,加上 Foresay-derived confirmation protocol + I
 
 ### Commands
 - `/archive-mail` — 歸檔指定聯絡人的郵件到 Markdown(v2.7.0+ 加入 confirmation phases、v2.8.0+ 用 `.claude/.mail/` namespace)
+- `/archive-mail-registry` — 全域目標清單／檢查／歷史快照／分派規劃及復原
+- `/archive-mail-tree` — 保留各層候選，以共同 intake 捕捉後按已確認目的地分派
 - `/archive-mail-view` — 從 `threads.json` 生成 thread 聚合視圖
 - `/archive-mail-rebuild-threads` — 從 per-email md 重建 thread index
 - `/archive-mail-migrate`(v2.8.0+)— 一次性把舊 archive 的 indices + config 搬到 `.claude/.mail/` namespace
@@ -153,6 +155,14 @@ AI: [直接執行,沒 confirmation]
 ```
 
 ## Configuration
+
+### 全域歸檔目標（mail#363）
+
+`~/.claude/.mail/archives.json` 與 identity.yaml 分開，使用者明確維護。version 1 的 targets 每項包含 id、parent_id、workspace、config_file、output_dir、index_file、purpose、filter_axis；可選 attachment_roots 宣告 workspace／output 外的附件目錄。路徑全為絕對路徑；父子為組織關係，不從目錄推導。index 所在目錄亦須各自獨立，以綁定 threads.json。父層 output 就是 intake，未知或跨支線歧義留 intake。
+
+詳見 [registry 命令](commands/archive-mail-registry.md) 的完整 schema 與 JSON 範例。註冊樹內去重讀全部 index（含 tombstone），missing/corrupt index 拒絕不完整快照。未登錄者保留 legacy；樹外 distributed_archives 仍是額外只讀來源。
+
+[樹狀歸檔](commands/archive-mail-tree.md) 先預覽 corpus／目的地，再用完整 staging bundle 執行。journal 證明本輪檔案所有權；目的地驗證後才更新來源 tombstone／清除副本。executor complete 還需對 reconcile_targets 跑 threads/date/index gate。helper 使用 Python 3.9+ 與標準函式庫，不下載套件。
 
 ### `.claude/.mail/config.yaml` Schema
 
