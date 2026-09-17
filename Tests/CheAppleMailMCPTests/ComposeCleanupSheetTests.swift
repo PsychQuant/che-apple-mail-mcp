@@ -124,9 +124,10 @@ final class ComposeCleanupSheetTests: XCTestCase {
         }
     }
 
-    func testRepeatedExistingTitleRefusalNeverLaunches() throws {
-        let lines = draftScript().components(separatedBy: "\n")
-        let begin = try XCTUnwrap(lines.firstIndex { codeLine($0) == "tell application \"Mail\"" })
+    private func prelaunchFixture(_ script: String) throws -> String {
+        let lines = script.components(separatedBy: "\n")
+        let snapshot = try XCTUnwrap(lines.firstIndex { codeLine($0) == "set _beforeIds to (id of every window)" })
+        let begin = try XCTUnwrap(lines.indices.last { $0 < snapshot && codeLine(lines[$0]) == "tell application \"Mail\"" })
         let end = try XCTUnwrap(lines.indices.first { $0 > begin && codeLine(lines[$0]) == "end tell" })
         let fragment = lines[(begin + 1)..<end].map { line -> String in
             let code = codeLine(line)
@@ -136,8 +137,14 @@ final class ComposeCleanupSheetTests: XCTestCase {
                 .replacingOccurrences(of: "name of every window", with: "{\"S\"}")
         }.joined(separator: "\n")
         guard !fragment.contains("tell application") else { throw BoundaryViolation.malformed("unexpected application call") }
+        return fragment
+    }
+
+    private func prelaunchCount(_ fragment: String) throws -> String {
         let source = "set _launchCount to 0\nrepeat 3 times\ntry\n" + fragment
-            + "\non error _ignored\nend try\nend repeat\nreturn _launchCount"
+            + "\non error _fixtureError number _fixtureNumber\n"
+            + "if _fixtureError does not contain \"already existed before this compose\" then error _fixtureError number _fixtureNumber\n"
+            + "end try\nend repeat\nreturn _launchCount"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         process.arguments = ["-e", source]
@@ -149,7 +156,21 @@ final class ComposeCleanupSheetTests: XCTestCase {
         process.waitUntilExit()
         let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .newlines)
         XCTAssertEqual(process.terminationStatus, 0, text)
-        XCTAssertEqual(text, "0", "repeated collision refusals must issue no compose launches")
+        return text
+    }
+
+    func testRepeatedExistingTitleRefusalNeverLaunches() throws {
+        let fragment = try prelaunchFixture(draftScript())
+        XCTAssertTrue(fragment.contains("if _beforeTitles contains "))
+        XCTAssertTrue(fragment.contains("set _launchCount to _launchCount + 1"))
+        XCTAssertEqual(try prelaunchCount(fragment), "0", "repeated collision refusals must issue no compose launches")
+    }
+
+    func testPrelaunchFixtureDetectsRemovalOfCollisionRefusal() throws {
+        let mutant = draftScript().components(separatedBy: "\n")
+            .filter { !codeLine($0).hasPrefix("if _beforeTitles contains ") }.joined(separator: "\n")
+        XCTAssertEqual(try prelaunchCount(prelaunchFixture(mutant)), "3",
+                       "removing the production refusal must reach all three launch attempts")
     }
 
     func testExistingTitleIsRejectedBeforeLaunchingAnotherWindow() throws {
@@ -286,15 +307,19 @@ final class ComposeCleanupSheetTests: XCTestCase {
     func testCleanup_everyButtonClickIsGuardedByTheDiscardCondition() {
         // R1 #12: the old "never clicks save" assertion could not fail (the
         // generator always puts a newline between `then` and `click`). This
-        // one reads the generated script line by line: every `click _b` must
-        // sit directly under the exact discard-title condition.
-        let lines = draftScript().components(separatedBy: "\n")
+        // Every click must remain inside the discard-title block. A one-line
+        // ownership refusal may occur between that condition and the action.
+        let lines = draftScript().components(separatedBy: "\n").map(codeLine)
         var clicks = 0
-        for (i, line) in lines.enumerated() where line.trimmingCharacters(in: .whitespaces) == "click _b" {
-            clicks += 1
-            let guardLine = lines[i - 1].trimmingCharacters(in: .whitespaces)
-            XCTAssertEqual(guardLine, "if _bt is \"不儲存\" or _bt is \"Don't Save\" or _bt is \"Don’t Save\" then",
-                           "click _b at line \(i + 1) is not guarded by the discard condition")
+        var conditions: [String] = []
+        for (i, line) in lines.enumerated() {
+            if line.hasPrefix("if ") && line.hasSuffix(" then") { conditions.append(line) }
+            if line == "end if" { _ = conditions.popLast() }
+            if line == "click _b" {
+                clicks += 1
+                XCTAssertEqual(conditions.last, "if _bt is \"不儲存\" or _bt is \"Don't Save\" or _bt is \"Don’t Save\" then",
+                               "click _b at line \(i + 1) escaped the discard condition")
+            }
         }
         XCTAssertEqual(clicks, 1, "exactly one sheet-button click exists in cleanup")
     }
