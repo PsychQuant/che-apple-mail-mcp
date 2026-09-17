@@ -2,15 +2,19 @@ import Foundation
 
 // MARK: - #175 mailto-based clean-body compose
 //
-// Mail.app wraps ANY AppleScript-injected outgoing-message body
-// (`content:` / `set content` / `set html content`) in its
+// The observed upstream regression FB11734014 wraps AppleScript-injected bodies.
+// Public evidence: https://developer.apple.com/forums/thread/738842 (#310).
+// Reports differ across versions; its current private status is unknown and Apple
+// may fix it. The following describes this project's observed affected path:
+// Mail encloses bodies assigned via `content:` / `set content` /
+// `set html content` in its
 // `Apple-Mail-URLShareWrapperClass` › `blockquote type="cite"` "inserted /
 // shared content" path at MIME-serialization time — so recipients (esp. mobile
 // clients honoring `cite`) see the user's own new text rendered as a quotation.
 // The wrapper cannot be stripped after the fact (reading the live outgoing
 // message's `html content` → AppleScript -1723; re-setting clean HTML → re-wraps;
-// editing the saved `.emlx` → overwritten by Mail on send). The ONLY wrapper-free
-// paths are Mail's native editor: typing, clipboard paste, and the `mailto:`
+// editing the saved `.emlx` → overwritten by Mail on send). This project uses
+// Mail's native editor to avoid that trigger: plain clipboard paste and the `mailto:`
 // hand-off. `mailto:` is the robust one (it populates the body itself, so there
 // is no fragile "focus the body field" step), at the cost of being plain-text
 // only and needing a GUI keystroke (Accessibility TCC) to save/send.
@@ -432,7 +436,7 @@ func isSimpleAddrSpec(_ addr: String) -> Bool {
 ///
 /// Until #304 these same conditions chose a ROUTE rather than a refusal: they
 /// diverted the call to a builder that assigned the body via AppleScript, which
-/// Mail wraps in `<blockquote type="cite">` at MIME serialization. The sender
+/// triggered the observed FB11734014 regression at MIME serialization (#310). The sender
 /// could not see it (the wrapper's inline style has no border) while Gmail and
 /// Outlook showed the whole letter as quoted text. On 2026-07-29 a formal
 /// meeting notice went out that way to 10 recipients and could not be recalled.
@@ -466,10 +470,13 @@ enum ComposeRefusal: Equatable {
         case .richTextFormat(let format):
             return "format '\(format.rawValue)' is no longer supported. No path this "
                 + "project ships today can deliver rich text without assigning the body via "
-                + "AppleScript, and assigning it that way is what wraps the whole letter in "
-                + "<blockquote type=\"cite\"> (#304). Whether a clipboard paste could carry "
-                + "rich text AND stay wrapper-free is UNVERIFIED, not impossible — #306 is "
-                + "settling it. Use format 'plain'; alternative architectures are #308 / #309."
+                + "AppleScript, which triggered the reported upstream regression FB11734014: "
+                + "<blockquote type=\"cite\"> (#304/#310). Apple may fix that regression; "
+                + "current private report status is unknown. The #306 experiment reports "
+                + "rich-paste drafts and the HTML combination's Sent/received MIME passing. "
+                + "That is not a guarantee for other OS versions, CJK, or every flavor. "
+                + "Rich paste is not integrated in this product. Use format 'plain'; "
+                + "alternative architectures are #308 / #309."
         case .emptySubject:
             return "the subject is empty. The compose path identifies its own window by "
                 + "the window title (= subject) before it fires any keystroke, so an "

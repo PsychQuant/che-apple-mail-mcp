@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Compose documentation identifies FB11734014 as a reported upstream regression**
+  ([#310](https://github.com/PsychQuant/che-apple-mail-mcp/issues/310)).
+  Rules, README, schema descriptions and code comments distinguish removal of
+  this project's body-injection trigger from a guarantee about every Mail version.
+  Public reports include a non-reproduction; the private feedback report's current
+  status is unknown. The prior #306 experiment reports success within its tested scope, but rich
+  paste remains unintegrated in the product.
+
 - **Native signature selection handles missing AX values and menu tracking**
   ([#322](https://github.com/PsychQuant/che-apple-mail-mcp/issues/322)).
   Typed missing labels/marks remain distinct from literal signature names;
@@ -186,8 +194,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The legacy compose path is gone: no code in this project assigns a message
   body through AppleScript any more**
   ([#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)).
-  Mail wraps any AppleScript-assigned body in `<blockquote type="cite">` at MIME
-  serialization. The sender cannot see it — the wrapper's inline style has no
+  The project observed AppleScript-assigned bodies wrapped in `<blockquote type="cite">`
+  at MIME serialization, matching the reported upstream regression FB11734014
+  ([public evidence and limits](https://developer.apple.com/forums/thread/738842);
+  see #310). This is not a permanent Mail format requirement; Apple may fix it,
+  and the public thread does not establish the private report's current status. The sender cannot see it — the wrapper's inline style has no
   border, so Apple Mail renders the letter normally — while Gmail's web UI and
   Outlook show the whole thing as quoted text. On 2026-07-29 a formal meeting
   notice went out that way to 10 recipients and could not be recalled; the
@@ -208,10 +219,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     impossibility
     ([#310](https://github.com/PsychQuant/che-apple-mail-mcp/issues/310)): the
     clipboard paste path (#218) is a second wrapper-free route already in
-    production and `NSPasteboard` can carry `public.rtf` / `public.html`, but
-    nobody has checked the MIME such a paste produces —
-    [#306](https://github.com/PsychQuant/che-apple-mail-mcp/issues/306) is
-    settling it. Both values are still *parsed*, so a caller passing them gets
+    production. The [#306 experiment](https://github.com/PsychQuant/che-apple-mail-mcp/issues/306#issuecomment-5112852813)
+    reports four rich draft variants passing and the HTML combination passing
+    in Sent and received MIME. Those ASCII results are not a guarantee for CJK,
+    other OS versions, or sending with every flavor. Product integration remains
+    absent; describing all rich-paste MIME as unverified was stale. Both values are still *parsed*, so a caller passing them gets
     an error naming the removal and pointing at #306 and at
     [#308](https://github.com/PsychQuant/che-apple-mail-mcp/issues/308) /
     [#309](https://github.com/PsychQuant/che-apple-mail-mcp/issues/309) rather
