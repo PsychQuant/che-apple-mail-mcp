@@ -261,3 +261,18 @@ https://github.com/kiki830621/che-apple-mail-mcp
 - **v2.5.0** — composing tools format 參數
 - **v2.4.0** — search expansion + Coverage Audit
 - **v2.3.0** — attachment auto-download + 分流
+
+
+### SessionStart FDA assist diagnostics (#422)
+
+The first-run helper probes `--version` and `--check-fda --quiet` for at most
+2 seconds each, with up to 0.35 seconds of termination/reap grace per timeout.
+It caps probe output at 4 KiB. Timeouts, abnormal exits and unknown FDA states
+skip the offer and leave it available for a later session. An atomic creation
+of the existing `fda-setup-offered` file lets only one concurrent hook offer
+setup; existing markers remain compatible. Setup itself is detached.
+
+This feature uses macOS `/usr/bin/perl` and core modules, independently of jq
+and ps. If its helper/runtime is unavailable, only FDA assist is skipped.
+Set `CHE_MAIL_HOOK_DEBUG=1` to see which probe or prerequisite was skipped.
+These are FDA-assist bounds; the separate staleness check has its own work.
