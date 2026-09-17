@@ -15,7 +15,7 @@ final class ServerSchemaTests: XCTestCase {
         let create = try XCTUnwrap(try XCTUnwrap(tool(named: "create_draft")).description)
         XCTAssertTrue(create.contains("window open"))
         XCTAssertTrue(create.contains("Message-ID"))
-        XCTAssertTrue(create.contains("not validated"))
+        XCTAssertTrue(create.contains("both ROWID and RFC Message-ID changed"))
         let update = try XCTUnwrap(tool(named: "update_draft"))
         let properties = try XCTUnwrap(propertiesObject(of: update))
         for name in ["draft_id", "subject_match"] {
