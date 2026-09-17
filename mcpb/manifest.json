@@ -235,7 +235,7 @@
       "name" : "reply_email"
     },
     {
-      "description" : "Save an email attachment to disk. Optionally accepts `account_id` (UUID) for disambiguation when multiple Mail.app accounts share the same `display_name` (e.g., iCloud catch-all alias + Gmail with the same address — #101). When provided, the AppleScript fallback path uses Mail.app's globally-unique `account id` selector; when omitted, falls back to the legacy `account_name` (display_name) form for backward compatibility.",
+      "description" : "Save an email attachment to disk within CHE_MAIL_EXPORT_ALLOWED_ROOTS (colon-separated configured roots replace home; default: home excluding sensitive paths). Unsafe path components and paths escaping the policy are rejected before Mail work. SQLite and AppleScript share safe atomic publication; AppleScript first saves to a private temporary file. Existing symlinks are allowed only when their canonical target passes the policy. Optionally accepts `account_id` (UUID) for disambiguation when multiple Mail.app accounts share the same `display_name` (e.g., iCloud catch-all alias + Gmail with the same address — #101). When provided, the AppleScript fallback path uses Mail.app's globally-unique `account id` selector; when omitted, falls back to the legacy `account_name` (display_name) form for backward compatibility.",
       "name" : "save_attachment"
     },
     {

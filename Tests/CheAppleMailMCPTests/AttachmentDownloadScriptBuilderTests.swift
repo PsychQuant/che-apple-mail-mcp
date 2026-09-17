@@ -167,7 +167,7 @@ final class AttachmentDownloadScriptBuilderTests: XCTestCase {
         let counter = SaveCounter()
         // #314: the retry loop now post-write-verifies a success, so the fake
         // "saved" must be backed by a real non-empty file at savePath.
-        let saved = FileManager.default.temporaryDirectory
+        let saved = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("retry-\(UUID().uuidString).pdf").path
         FileManager.default.createFile(atPath: saved, contents: Data([1, 2, 3]))
         defer { try? FileManager.default.removeItem(atPath: saved) }
@@ -176,7 +176,7 @@ final class AttachmentDownloadScriptBuilderTests: XCTestCase {
             counter.saves += 1
             // First two saves see the part still server-side (-10000); third lands.
             if counter.saves < 3 { throw MailError.scriptFailed(message: "-10000", code: -10000) }
-            return "Attachment saved to \(saved)"
+            return try stageAttachmentFixture(source, data: Data([1, 2, 3]))
         }) {
             let result = try await MailController.shared.saveAttachmentRetryingForDownload(
                 id: "42", mailbox: "INBOX", accountId: nil, accountName: "Google",
@@ -197,7 +197,7 @@ final class AttachmentDownloadScriptBuilderTests: XCTestCase {
             do {
                 _ = try await MailController.shared.saveAttachmentRetryingForDownload(
                     id: "42", mailbox: "INBOX", accountId: nil, accountName: "Google",
-                    attachmentName: "x.pdf", savePath: "/tmp/x.pdf", policy: self.fastPolicy)
+                    attachmentName: "x.pdf", savePath: NSHomeDirectory() + "/idd402-unused-retry-fixture.pdf", policy: self.fastPolicy)
                 XCTFail("a never-landing attachment must throw, not return")
             } catch let MailError.operationFailed(msg) {
                 XCTAssertTrue(msg.contains("not downloaded") || msg.lowercased().contains("download"),
@@ -220,7 +220,7 @@ final class AttachmentDownloadScriptBuilderTests: XCTestCase {
             do {
                 _ = try await MailController.shared.saveAttachmentRetryingForDownload(
                     id: "42", mailbox: "INBOX", accountId: nil, accountName: "Google",
-                    attachmentName: "x.pdf", savePath: "/tmp/x.pdf", policy: self.fastPolicy)
+                    attachmentName: "x.pdf", savePath: NSHomeDirectory() + "/idd402-unused-retry-fixture.pdf", policy: self.fastPolicy)
                 XCTFail("a definitive not-found must abort, not return or time out")
             } catch let MailError.operationFailed(msg) {
                 XCTAssertTrue(msg.contains("could not find") && msg.contains("not a download problem"),
@@ -245,7 +245,7 @@ final class AttachmentDownloadScriptBuilderTests: XCTestCase {
             do {
                 _ = try await MailController.shared.saveAttachmentRetryingForDownload(
                     id: "42", mailbox: "INBOX", accountId: nil, accountName: "Google",
-                    attachmentName: "x.pdf", savePath: "/tmp/x.pdf", policy: policy)
+                    attachmentName: "x.pdf", savePath: NSHomeDirectory() + "/idd402-unused-retry-fixture.pdf", policy: policy)
                 XCTFail("never-landing attachment must throw on deadline")
             } catch let MailError.operationFailed(msg) {
                 XCTAssertTrue(msg.contains("download"), "must be the download-timeout error; got: \(msg)")
@@ -268,7 +268,7 @@ final class AttachmentDownloadScriptBuilderTests: XCTestCase {
             do {
                 _ = try await MailController.shared.saveAttachmentRetryingForDownload(
                     id: "42", mailbox: "INBOX", accountId: nil, accountName: "Google",
-                    attachmentName: "x.pdf", savePath: "/tmp/x.pdf", policy: self.fastPolicy)
+                    attachmentName: "x.pdf", savePath: NSHomeDirectory() + "/idd402-unused-retry-fixture.pdf", policy: self.fastPolicy)
                 XCTFail("a -1728 error must propagate, not be swallowed as a timeout")
             } catch let MailError.scriptFailed(_, code) {
                 XCTAssertEqual(code, -1728, "the specific terminal error must surface unchanged")

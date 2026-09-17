@@ -74,8 +74,19 @@ struct AllowedRootsValidator {
     ///   `AllowedRootsError.escapesAllowedRoots` if outside all roots.
     func validate(_ outputDir: String, allowedRoots: [String]) throws -> URL {
         let canonical = Self.canonicalize(outputDir)
-        let canonicalPath = canonical.path
+        try validateCanonicalPath(canonical.path,
+                                  homePath: Self.canonicalize(NSHomeDirectory()).path,
+                                  allowedRoots: allowedRoots.filter { !$0.isEmpty }
+                                    .map { Self.canonicalize($0).path })
+        return canonical
+    }
 
+    /// Policy-only entry for callers that already resolved the path they will
+    /// use. Never resolve this candidate again: a second symlink lookup can
+    /// authorize a different file while the caller retains the first (#402).
+    /// Home and roots must use the same canonical representation as candidate.
+    func validateCanonicalPath(_ canonicalPath: String, homePath: String,
+                               allowedRoots: [String]) throws {
         for deny in Self.systemDenylist {
             if canonicalPath == deny || canonicalPath.hasPrefix(deny + "/") {
                 throw AllowedRootsError.systemPath(path: canonicalPath)
@@ -86,7 +97,6 @@ struct AllowedRootsValidator {
         // in the default all-of-home mode (and even if such a path were a
         // configured root). Runs on the canonical, `..`-collapsed path so
         // `~/Documents/../Library` is caught.
-        let homePath = Self.canonicalize(NSHomeDirectory()).path
         if canonicalPath == homePath || canonicalPath.hasPrefix(homePath + "/") {
             let relative = canonicalPath.dropFirst(homePath.count).drop(while: { $0 == "/" })
             let firstComponent = relative.split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""
@@ -101,13 +111,10 @@ struct AllowedRootsValidator {
         // #197: roots policy. No configured roots → default to the user's home
         // (backward-compatible). One or more configured roots → those REPLACE
         // home (opt-in strict allowlist / deny-by-default).
-        let configured = allowedRoots.filter { !$0.isEmpty }.map { Self.canonicalize($0) }
-        let roots = configured.isEmpty ? [Self.canonicalize(NSHomeDirectory())] : configured
-
-        for root in roots {
-            let rootPath = root.path
+        let roots = allowedRoots.isEmpty ? [homePath] : allowedRoots
+        for rootPath in roots {
             if canonicalPath == rootPath || canonicalPath.hasPrefix(rootPath + "/") {
-                return canonical
+                return
             }
         }
         throw AllowedRootsError.escapesAllowedRoots(path: canonicalPath)
