@@ -66,8 +66,9 @@ final class MailtoComposeTests: XCTestCase {
         XCTAssertFalse(s.contains("keystroke \"s\" using command down"), s)
         XCTAssertTrue(s.contains("Email sent successfully (mailto path)"))
         XCTAssertTrue(s.contains(url))
-        // window-count first gate + window-IDENTITY guard (#175 verify hardening):
-        XCTAssertTrue(s.contains("count of windows"), "missing window-count first gate")
+        // #333: identity guards work even when another window closes.
+        XCTAssertTrue(s.contains("_beforeIds does not contain (id of _cw)"))
+        XCTAssertTrue(s.contains("if _ourMatches is 0 then error"))
         XCTAssertTrue(s.contains("if title of _cand is _t then"),
                       "dispatch must locate the compose window by title (= subject)")
         XCTAssertTrue(s.contains("if _w is missing value then error"),
@@ -76,17 +77,17 @@ final class MailtoComposeTests: XCTestCase {
                       "must raise OUR compose window before dispatch (wrong-window mitigation)")
         XCTAssertTrue(s.contains("count of sheets of _w) is not 0"),
                       "must refuse dispatch while an open panel/sheet is up on the target window")
-        // stage-aware fallback with NO data loss: on error, close ONLY the
+        // Stage-aware cleanup uses the captured native identity to select the
         // window we created — its exact id (_ourId = the new window whose title
         // is the subject), by id-iteration. Never a title guess, so a user's
-        // same-titled draft can't be discarded (#175 verify R2 + #219/#277
-        // verify R2, Codex BLOCKING).
+        // same-title case is covered by the #333 action-boundary fixtures. Earlier
+        // ownership checks originated in #175/#219/#277.
         XCTAssertTrue(s.contains("on error _mErr"))
         XCTAssertTrue(s.contains("set _beforeIds to (id of every window)"),
                       "must snapshot window ids before mailto for safe cleanup")
         XCTAssertTrue(s.contains("set _ourId to (id of _cw)"),
                       "must capture our compose window's exact id (new window whose title = subject)")
-        XCTAssertTrue(s.contains("if (id of _cw) is _ourId and (name of _cw as string) is \"S\" then close _cw saving no"),
+        XCTAssertTrue(s.contains("if (id of _cw) is _ourId then"),
                       "cleanup must close only OUR window by exact id, not a title guess")
         XCTAssertFalse(s.contains("close (every window whose name"),
                        "must NOT batch-close by subject (data-loss bug)")
@@ -462,7 +463,7 @@ extension MailtoComposeTests {
                        "must NOT force legacy when Mail opens a second (viewer) window on launch — count all windows, only subject-matching new ones")
         XCTAssertTrue(script.contains("if _wMatches > 1 then error"),
                       "raiseOnly must fail closed when more than one window carries our title")
-        XCTAssertTrue(script.contains("if (id of _cw) is _ourId and (name of _cw as string) is \"S\" then close _cw saving no"),
+        XCTAssertTrue(script.contains("if (id of _cw) is _ourId then"),
                       "cleanup must close ONLY our window by id-iteration, never a title guess")
         XCTAssertFalse(script.contains("first window whose id is _ourId"),
                        "must NOT use `whose id is` on a compose window (silently fails — reply-path lesson)")
