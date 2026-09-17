@@ -276,3 +276,14 @@ This feature uses macOS `/usr/bin/perl` and core modules, independently of jq
 and ps. If its helper/runtime is unavailable, only FDA assist is skipped.
 Set `CHE_MAIL_HOOK_DEBUG=1` to see which probe or prerequisite was skipped.
 These are FDA-assist bounds; the separate staleness check has its own work.
+
+
+### Draft rendering review (#305)
+
+`/review-draft-render` prepares a private RFC822 review bundle and compares a
+fresh source capture with a received test copy. The offline helper uses Python
+3 standard-library modules, caps input at 16 MiB, and never renders HTML or
+contacts a server. `client_render_verified` always remains false in machine
+output: actual observation in Gmail or another selected non-Apple Mail client
+is a separate, explicitly recorded human step. Test sending/uploading needs its
+own approval. See [the command](commands/review-draft-render.md).
