@@ -142,7 +142,9 @@ final class ComposeSignatureScriptTests: XCTestCase {
         }
     }
 
-    func test_menu_owner_pin_rejects_replacement_process_window_title_and_focus() throws {
+    func test_menu_property_guard_rejects_changed_process_identifier_title_and_focus() throws {
+        // These fixtures prove changed-field rejection, not lifetime identity:
+        // a replacement preserving every compared field is indistinguishable.
         let helpers = "use framework \"Foundation\"\nuse scripting additions\n" + composeSignatureHandlers
         let expected = "{44, \"_NS:4\", \"Title\", true, \"_NS:4\"}"
         let cases = [
@@ -186,23 +188,42 @@ final class ComposeSignatureScriptTests: XCTestCase {
 
     func test_unconfirmed_menu_dismissal_blocks_native_cleanup() throws {
         let full = script(.init(mode: .none))
-        let start = try XCTUnwrap(full.range(of: "if not (my dismissSignatureTracking())"))
-        let end = try XCTUnwrap(full.range(of: "tell application \"Mail\"", range: start.upperBound..<full.endIndex))
-        let prefix = String(full[start.lowerBound..<end.lowerBound])
+        let start = try XCTUnwrap(full.range(of: "on error _mErr"))
+        let end = try XCTUnwrap(full.range(of: "on error _cleanupErr", range: start.upperBound..<full.endIndex))
+        // Keep the entire cleanup, including anything before menu dismissal.
+        // Replace native tell blocks at the boundary so this fixture cannot touch Mail.
+        var lines = String(full[start.upperBound..<end.lowerBound]).components(separatedBy: "\n")
+        while let first = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("tell application ") }) {
+            var depth = 0
+            var last: Int?
+            for i in first..<lines.count {
+                let line = lines[i].trimmingCharacters(in: .whitespaces)
+                if line.hasPrefix("tell ") { depth += 1 }
+                if line == "end tell" { depth -= 1 }
+                if depth == 0 { last = i; break }
+            }
+            let finish = try XCTUnwrap(last)
+            lines.replaceSubrange(first...finish, with: ["my fixtureNativeBoundary()"])
+        }
+        let cleanup = lines.joined(separator: "\n").replacingOccurrences(of: "delay 0.4", with: "delay 0")
         for (dismissed, expectedCalls) in [("false", "0"), ("true", "1")] {
             let source = """
             property nativeCalls : 0
             on dismissSignatureTracking()
                 return \(dismissed)
             end dismissSignatureTracking
-            on assertComposeWindowOwner(_id, _title, _front)
+            on composeCleanupOwnerState(_id, _title, _front)
+                return my fixtureNativeBoundary()
+            end composeCleanupOwnerState
+            on fixtureNativeBoundary()
                 set my nativeCalls to my nativeCalls + 1
                 error "stop before any native API" number -9878
-            end assertComposeWindowOwner
+            end fixtureNativeBoundary
             set _mErr to "fixture read failure"
             set _ourId to 42
-            try
-                \(prefix)
+            \(cleanup)
+            on error
+                -- Stop at the first native boundary or at the dismissal refusal.
             end try
             return my nativeCalls
             """
