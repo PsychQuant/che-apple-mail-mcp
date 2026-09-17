@@ -158,6 +158,10 @@ AI: [直接執行,沒 confirmation]
 
 本機 audit 先於移動寫入，並以 policy_digest 對應不可變的當時規則快照。audit 不存主旨／本文；未知結果不盲重試。plan 300 秒有效、每次最多 200 個明確 ids；同一筆已開始派送就不可重試同 plan。
 
+## 新建郵件的簽名
+
+compose/create_draft/update_draft 支援 signature 物件（mail_default／none／named + name），由目標視窗原生 popup 選取，不手工拼接簽名。收據證明選取，不證明正文插入；首次設定先確認草稿，再正式送出。詳見 [compose-signature](rules/compose-signature.md)。
+
 ## Configuration
 
 > **路徑遷移**:v2.7.0 ↓ 用 `.claude/emails.md`,v2.8.0+ 改用 `.claude/.mail/config.md`(auto-migrate),**v2.16.0+ 改用 `.claude/.mail/config.yaml`** 副檔名(silent rename per #47;legacy `.md` 仍 fallback,v3.0 移除)。下述 schema 三者通用。

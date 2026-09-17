@@ -131,6 +131,10 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 
 ## All 57 Tools
 
+### Compose signatures
+
+`compose_email`, `create_draft`, and `update_draft` accept `signature: {"mode":"mail_default"}`, `{"mode":"none"}`, or `{"mode":"named","name":"Professional"}`. The server selects Mail's native signature after From selection; it never appends a handwritten signature to body. A selection receipt is **not proof of body insertion**. Verify a draft on first use of this Mail setup before a formal send, or use `none` with caller-supplied signature text. Do not append the same signature manually when choosing Mail-managed insertion. Explicit selection refuses unsupported UI rather than guessing; no legacy body-assignment fallback exists.
+
 <details>
 <summary><b>Email Classification (4)</b></summary>
 
