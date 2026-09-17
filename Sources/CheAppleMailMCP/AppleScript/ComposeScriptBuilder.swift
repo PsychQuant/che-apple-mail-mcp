@@ -140,7 +140,7 @@ func buildComposeErrorHandler(cleanupBody: String, send: Bool) -> String {
         try
     \(cleanupBody)
         on error _cleanupErr
-            set _mErr to (_mErr as text) & " — CLEANUPFAILED: " & (_cleanupErr as text)
+            set _mErr to (_mErr as text) & " — CLEANUPFAILED: " & (_cleanupErr as text) & " (compose window state unknown; inspect Mail before retrying)"
         end try
     """
     return send
@@ -283,6 +283,9 @@ func buildMailtoComposeScript(
     // The later System Events discard click only has a title, not a Mail id;
     // entering cleanup before ownership is established could discard a user's
     // pre-existing same-title compose window. Structural tests pin this boundary.
+    // #333: refuse known title collisions before mailto can create another
+    // window. Net window-count growth is not evidence of creation: another
+    // window can close concurrently. Use the existing id/subject checks below.
     // 1. Capture Mail window ids BEFORE the mailto, hand it off, then identify
     // OUR compose window as the NEW window (id unseen before) whose title is our
     // subject — captured as `_ourId`. On-error cleanup closes ONLY `_ourId`, by
@@ -331,18 +334,16 @@ func buildMailtoComposeScript(
     end senderMatches
 
     """ : ""
-    var s = fillHandlers + senderMatchHandler + """
+    var s = composeCleanupIdentityHandlers + fillHandlers + senderMatchHandler + """
     tell application "Mail"
-        set _wc to (count of windows)
         set _beforeIds to (id of every window)
         set _beforeTitles to (name of every window)
+        if _beforeTitles contains "\(subjEsc)" then error "a window titled \\"\(subjEsc)\\" already existed before this compose — refusing before mailto; inspect that window in Mail before retrying"
         activate
         mailto "\(appleScriptEscape(url))"
     end tell
     delay \(windowDelay)
     tell application "Mail"
-        if (count of windows) <= _wc then error "mailto did not open a compose window"
-        if _beforeTitles contains "\(subjEsc)" then error "a window titled \\"\(subjEsc)\\" already existed before this compose — cannot safely disambiguate the new window (safe fallback)"
         set _ourId to missing value
         set _ourMatches to 0
         repeat with _cw in windows
@@ -353,8 +354,8 @@ func buildMailtoComposeScript(
                 end if
             end try
         end repeat
-        if _ourMatches is 0 then error "could not identify our new compose window by subject after mailto (safe fallback)"
-        if _ourMatches > 1 then error "more than one new window is titled the subject — cannot safely identify our compose window (safe fallback)"
+        if _ourMatches is 0 then error "could not identify our new compose window by subject after mailto — ownership is unconfirmed; inspect Mail before retrying"
+        if _ourMatches > 1 then error "more than one new window is titled the subject — ownership is unconfirmed; inspect Mail before retrying"
     end tell
     \(flagInit)\(bccFlagInit)try
         tell application "System Events"
@@ -689,14 +690,27 @@ func buildMailtoComposeScript(
     // re-checks that our window is gone, and otherwise appends a
     // WINDOWLEFTOPEN note to the error so the caller knows to close it.
     let cleanupBody = """
+            set _titleMatches to 0
+            set _cleanupState to my composeCleanupOwnerState(_ourId, "\(subjEsc)", false)
+            if _cleanupState is "owned" then
             tell application "Mail"
                 repeat with _cw in windows
                     try
-                        if (id of _cw) is _ourId then close _cw saving no
+                        considering case
+                            if (id of _cw) is _ourId then
+                                set _closeTitle to name of _cw
+                                if class of _closeTitle is text and _closeTitle is "\(subjEsc)" then close _cw saving no
+                            end if
+                        end considering
                     end try
                 end repeat
             end tell
             delay 0.4
+            set _cleanupState to my composeCleanupOwnerState(_ourId, "\(subjEsc)", false)
+            end if
+            -- A successful close (or prior disappearance) ends cleanup. A
+            -- remaining same-title AX window is not evidence of ownership.
+            if _cleanupState is "owned" then
             tell application "System Events"
                 tell process "Mail"
                     -- PR #407 R1 #11: System Events cannot see Mail's window
@@ -704,16 +718,34 @@ func buildMailtoComposeScript(
                     -- more than one window carries our subject the click could
                     -- discard someone else's unsaved message — refuse, and let
                     -- the WINDOWLEFTOPEN note below report it.
-                    set _titleMatches to 0
+                    set _cleanupTarget to missing value
                     repeat with _cw2 in windows
                         try
-                            if (title of _cw2) is "\(subjEsc)" then set _titleMatches to _titleMatches + 1
+                            set _axTitle to title of _cw2
+                            if class of _axTitle is not text then error "CLEANUPIDENTITY: AX window title unavailable"
+                            considering case
+                                if _axTitle is "\(subjEsc)" then
+                                    set _titleMatches to _titleMatches + 1
+                                    set _cleanupTarget to contents of _cw2
+                                end if
+                            end considering
+                        on error number _axNumber
+                            error "CLEANUPIDENTITY: AX window enumeration incomplete" number _axNumber
                         end try
                     end repeat
                     if _titleMatches is 1 then
-                    repeat with _cw2 in windows
+                        set _cw2 to _cleanupTarget
                         try
-                            if (title of _cw2) is "\(subjEsc)" and (count of sheets of _cw2) > 0 then
+                            set _axTitle to title of _cw2
+                            if class of _axTitle is not text then error "CLEANUPIDENTITY: AX target title unavailable"
+                            considering case
+                                if _axTitle is not "\(subjEsc)" then error "CLEANUPIDENTITY: AX target title changed"
+                            end considering
+                            if (count of sheets of _cw2) > 0 then
+                                if (my composeCleanupOwnerState(_ourId, "\(subjEsc)", false)) is not "owned" then error "CLEANUPIDENTITY: native owner changed before AX raise"
+                                perform action "AXRaise" of _cw2
+                                delay 0.1
+                                if (my composeCleanupOwnerState(_ourId, "\(subjEsc)", true)) is not "owned" then error "CLEANUPIDENTITY: raised AX window is not the native owner"
                                 set _sh to sheet 1 of _cw2
                                 if (value of attribute "AXIdentifier" of _sh) is "Mail.sendMessageAlert" then
                                     repeat with _b in buttons of _sh
@@ -722,30 +754,37 @@ func buildMailtoComposeScript(
                                             set _bt to (title of _b as text)
                                         end try
                                         if _bt is "不儲存" or _bt is "Don't Save" or _bt is "Don’t Save" then
+                                            -- Recheck immediately before the
+                                            -- destructive action; still not an
+                                            -- atomic cross-API transaction.
+                                            if (my composeCleanupOwnerState(_ourId, "\(subjEsc)", true)) is not "owned" then error "CLEANUPIDENTITY: native owner changed before discard"
                                             click _b
                                             exit repeat
                                         end if
                                     end repeat
                                 end if
                             end if
+                        on error number _axNumber
+                            error "CLEANUPIDENTITY: guarded AX cleanup unavailable" number _axNumber
                         end try
-                    end repeat
                     end if
                 end tell
             end tell
             delay 0.4
-            set _stillOpen to false
-            tell application "Mail"
-                repeat with _cw in windows
-                    try
-                        if (id of _cw) is _ourId then set _stillOpen to true
-                    end try
-                end repeat
-            end tell
+            set _cleanupState to my composeCleanupOwnerState(_ourId, "\(subjEsc)", false)
+            end if
+            set _stillOpen to _cleanupState is not "absent"
             set _leftOpenReason to "its discard sheet could not be dismissed"
             if _titleMatches is greater than 1 then set _leftOpenReason to "cleanup refused to dismiss its discard sheet because " & _titleMatches & " windows carry this subject and only one can be ours"
             if _titleMatches is 0 then set _leftOpenReason to "no window carrying this subject was visible to System Events, so nothing was clicked"
-            if _stillOpen then set _mErr to (_mErr as text) & " — WINDOWLEFTOPEN: the compose window titled \\"\(subjEsc)\\" was left open (" & _leftOpenReason & "); close it in Mail before retrying"
+            if _cleanupState is not "owned" and _cleanupState is not "absent" then set _leftOpenReason to "native ownership is " & _cleanupState & "; no title-only discard is allowed"
+            if _cleanupState is "unknown" then
+                set _mErr to (_mErr as text) & " — WINDOWLEFTOPEN: the original compose window state could not be verified; inspect Mail before retrying"
+            else if _cleanupState is "changed" then
+                set _mErr to (_mErr as text) & " — WINDOWLEFTOPEN: the original compose window changed title and was preserved; inspect Mail before retrying"
+            else if _stillOpen then
+                set _mErr to (_mErr as text) & " — WINDOWLEFTOPEN: the compose window titled \\"\(subjEsc)\\" was left open (" & _leftOpenReason & "); close it in Mail before retrying"
+            end if
     """
     // send:true handler: three branches, all rethrow — sentinel-marked errors
     // (keystroke) pass through untouched; unmarked errors with the flag set
@@ -1067,4 +1106,3 @@ func buildForwardEmailPasteScript(
         notOpenedError: "forward did not open a compose window"
     )
 }
-
