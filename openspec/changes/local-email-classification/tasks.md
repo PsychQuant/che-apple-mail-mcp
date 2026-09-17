@@ -12,4 +12,5 @@
 ## 3. 整合與驗證
 
 - [x] 3.1 串接 Public tools and authorization provenance；驗證 MCP schemas、dispatch 及 plugin 明確規則批准／其餘預覽。
-- [ ] 3.2 執行完整相關測試與 IDD 審查，記錄真實 Mail mutation 未驗證及 Claude OAuth 缺口，不以純核心完成冒稱完整交付。
+- [x] 3.2 執行完整測試與限定合成資料的原生 Trash 驗收：來源不符拒絕、來源一致移動、來源信箱清空、Trash 內容 digest 不變；不啟用真實規則。
+- [ ] 3.3 完整 IDD 獨立審查；目前 Claude 週額度不足，不以原生邊界測試或限定 Codex 複查冒稱完整交付。空測試信箱清理另待不可還原刪除確認。
