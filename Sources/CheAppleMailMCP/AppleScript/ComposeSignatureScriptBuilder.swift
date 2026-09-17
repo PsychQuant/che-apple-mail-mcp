@@ -88,8 +88,9 @@ on signaturePopupFor(_window)
 end signaturePopupFor
 
 -- Mail does not service its scripting AppleEvents while an NSMenu tracks.
--- Capture native ownership before opening, then use the captured AX identity
--- during tracking. Revalidate native identity once the menu has closed.
+-- Check native ownership before opening, then compare AX properties/focus
+-- during tracking. This snapshot is not a window-lifetime token. Revalidate
+-- native identity once the menu has closed; a postcheck cannot undo a click.
 on signatureWindowSnapshot(_expectedTitle)
     tell application "System Events"
         tell process "Mail"
@@ -159,7 +160,9 @@ on dismissSignatureTracking()
         tell application "System Events"
             set _popup to item 2 of _state
             if exists menu 1 of _popup then
-                -- Cancel this exact, still-owned menu; never global Escape.
+                -- Cancel through the stored popup after the property/focus
+                -- guard passes; this is not an atomic ownership check/action.
+                -- Never use global Escape.
                 perform action "AXCancel" of menu 1 of _popup
             end if
         end tell
@@ -272,8 +275,8 @@ on verifySignatureMenuChoice(_popup, _mode, _wanted, _expectedId, _expectedTitle
         end repeat
         set _index to my signatureChoiceIndex(_labels, _enabled, _marks, _mode, _wanted)
         if _index is 0 then error "SIGNATURE: selected menu item is not independently verifiable"
-        -- Select the already-checked item to close this exact menu, not a
-        -- global Escape keystroke that could hit another window.
+        -- Select the checked item through the guarded popup specifier rather
+        -- than issue global Escape. The guard/action interval is not atomic.
         my assertSignatureMenuOwner(_signatureMenuState)
         click menu item _index of _menu
     end tell
