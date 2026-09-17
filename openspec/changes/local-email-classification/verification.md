@@ -27,3 +27,17 @@ Core/store 審查先修正 namespace ancestor symlink 與 Message-ID 格式。�
 **尚未完整 IDD verified**：Claude OAuth 過期，四個 lens + DA 待重新登入；真實 Mail move／Trash-role live gate 亦未執行。測試替身、編譯及純 Foundation handler 成功，不等於實際 Mail 移動已驗證。
 
 沒有啟用真實分類規則、沒有搬動真實郵件、沒有安裝或發布 binary。Mail 不提供原子 compare-and-move，最後讀取與 move 之間仍有外部改動競態；cooperative local store lock 也不防同一 OS 使用者的惡意程式。不能宣稱完全無敏感資料：audit 包含 identifiers、source account/mailbox，policy/history 含使用者判準，但不含郵件主旨／本文。
+
+## 2026-09-17 原生 Trash 驗收
+
+`ClassificationTrashLiveTests` 使用明確 opt-in 與 UUID 專用帳號信箱，呼叫真正的 `classificationSource`／`moveClassifiedMessage`，沒有 MailController seam。先以不符的預期 source 驗證拒絕與來源不變，再以精確 source 移到帳號唯一的原生 Trash；最後驗證來源信箱為空、Trash 的 Message-ID／sender／subject 與正規化 source digest 保持一致。單一實機測試 **8.36 秒通過**，只使用 466-byte 合成郵件。
+
+政策 store 在獨立暫存目錄使用空政策；沒有批准規則、沒有存取使用者政策，也沒有寄信或永久刪信。這是 native 邊界驗證，不是完整 MCP plan／approval／audit／SQLite 流程的實機證明；後者仍由既有獨立整合測試涵蓋相應部分，不能混稱端到端實測。
+
+第一版 harness 在政策目錄準備階段因 `/var` alias 與 no-follow 檢查不相容而失敗，尚未到 mover；重新讀取確認來源未變。改用既有 store 測試的 POSIX `realpath` 作法後通過。獨立 Codex 指出 XCTest assertion 不會停止後續操作，已將拒絕／來源不變／moved 三個必要條件改成終止式 guard，未知結果不再繼續派送。
+
+普通 `swift test` 為 **1,322 tests／12 skipped／0 failures**（MailSQLite 316／1 skip，server 1,006／11 skip）；新增 live test 在沒有 opt-in 時略過。分類相關選定群組為 **50 tests／1 skipped／0 failures**。
+
+合成信保留於原生 Trash，可循正常流程回復。帳號內的空 UUID 信箱與本輪新建的本機 Import parent／空子信箱已核對為空；Mail 將刪除信箱標為不可還原，已取消對話框並等待使用者確認，不能宣稱清理完成。重現契約與清理邊界見 `docs/testing/classification-trash.md`。
+
+完整 IDD 審查仍待補齊。Claude OAuth 正常，現為週額度限制（工具顯示 2026-09-21 16:00 Asia/Taipei 重設），不是登入過期。原生邊界通過不等於整張 issue verified。
