@@ -40,3 +40,25 @@ Codex R1 要求 None 勾選驗證與可操作的正文指引；R2 發現既有 t
 - 最新 named 重跑在簽名 phase 前因 AX 看不到新 compose title 而拒絕。接著 CUA 明確回報 Mac locked、automatic unlock failed，已請使用者手動解鎖。該唯一 UUID 專用草稿仍待收尾；不能標 live gate 完成。其餘本輪先前 fixture 均已驗證從 compose／outgoing／Drafts 消失；未寄送或清空 Trash。
 
 尚待：解鎖後先收尾最新專用草稿，再跑最終 named／none 正文及失敗取消流程；完整角色審查。Claude session 額度於 02:10 後已恢復，後續排程中。OAuth 已恢復，不再以登入過期為原因。
+
+## 2026-09-17 AX 屬性檢查的證據界線
+
+較早的 AX 屬性探測與後來 named-r5 都取得 `_NS:41`，但前者沒有保存 window title／native id，因此不能由兩份紀錄宣稱已重現識別字重用或錯誤視窗操作。named-r5 取得指定 title 的 snapshot，AXIdentifier 與 focused identifier 相同，但 foreground 為 false，符合目前拒絕條件；尚未證實為 activation 程式錯誤。named-r4 與 named-r5 都已核對並清理，window／outgoing／Drafts 的精確比對均為 0。
+
+目前 tracking 期間檢查的是 PID、非空 AXIdentifier、唯一精確 title、foreground 與 focused identifier；原生 window id 在選單開啟前及關閉後核對。這不是已證明的視窗生命週期身分，也未獨立證明 stored popup specifier 在視窗替換後的行為。若替代視窗保留所有比較欄位，單靠 comparator 無法分辨；後置檢查也不能撤銷先前點擊。現有單元測試只證明欄位變動會遭拒，已更正測試名稱及註解，未降低任何 runtime guard 或規格要求。
+
+[Apple 的 accessibilityIdentifier 文件](https://developer.apple.com/documentation/appkit/nsaccessibility-c.protocol/accessibilityidentifier) 描述元素識別與自動測試用途；本案不據此推定字串跨視窗生命週期永不重用。限定 Codex 靜態審查將此裁定為 coverage／assurance gap，沒有宣稱已證實現行 Mail 可操作到錯誤視窗。
+
+仍須完成正常 named／none／正文與取消的實機驗證，並釐清 same-title replacement／失效 popup target 的實際行為；必要時應以公開 AX API 的實體 element reference 與 ownership relationship 取代字串推定，不可用永久拒絕代替功能，也不可把假想替換當作已執行的實機測試。此處只修正證據敘述，原規格及驗收門檻維持未完成。
+
+## 2026-09-17 整合 #333 清理歸屬檢查
+
+合入 #356 的實機分類測試紀錄及 #333 的 cleanup ownership 修正。錯誤清理仍先確認簽名選單已關閉，之後才查詢原生 Mail；原視窗不存在時直接結束，不以同名 AX 視窗接手。原生 close 限定 id 與未改變的文字 title；AX 保留同一個精確比對目標，並在 raise 前後及 discard 前重查原生歸屬。POSTDISPATCH 分支維持不執行清理。這些查核仍不是跨 API 原子操作。
+
+衝突整合後更新測試邊界：ownership 測試替代簽名選單關閉操作；signature 測試攔截新的原生 ownership 查詢，驗證關閉失敗時呼叫數為 0、成功時為 1。第一次測試暴露舊字串斷言與不完整 AppleScript 擷取範圍，修正測試後 **79 項重點測試通過**，包含完整 send／draft 腳本編譯。預設 SwiftBuild 完整測試 **1,366 項、12 項略過、零失敗**（316 + 1,050）。未進行真實 Mail 操作。
+
+#322 的 named／none／正文插入移除／失敗取消實機驗證及完整獨立審查仍未完成；週額度限制仍為 Claude 的待辦原因，不是 OAuth。先前 named-r4／r5 草稿已清理，不能沿用早期「尚待解鎖清理」敘述當作目前狀態。
+
+限定整合審查發現兩個測試缺口，已修正：選單測試改執行整段 cleanup（原生邊界以記錄呼叫的 stub 取代），AX 測試加入「精確目標在第一筆、其他視窗在最後」並沿 raise／sheet／button／click 傳遞目標身分。外部負向控制確認提前原生查詢產生 1 而非 0 次呼叫、改成錯誤目標使成功預期失敗；兩者均為實際執行後的斷言失敗，非編譯錯誤。
+
+審查者另建議移除 `contents of`，但該 mutation 的 1 項測試仍通過。純 AppleScript `{1, 2}` 實驗確認先保存第一項 reference，迴圈結束後仍讀得 1（迴圈變數為 2），所以不把此改寫宣稱為已重現的 loop-reference 產品錯誤，也不硬造失敗結果；production 仍保留明確的 `contents of`。真實 AX reference 生命週期仍屬既有實機驗證缺口。
