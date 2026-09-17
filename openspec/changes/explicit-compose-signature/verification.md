@@ -50,3 +50,15 @@ Codex R1 要求 None 勾選驗證與可操作的正文指引；R2 發現既有 t
 [Apple 的 accessibilityIdentifier 文件](https://developer.apple.com/documentation/appkit/nsaccessibility-c.protocol/accessibilityidentifier) 描述元素識別與自動測試用途；本案不據此推定字串跨視窗生命週期永不重用。限定 Codex 靜態審查將此裁定為 coverage／assurance gap，沒有宣稱已證實現行 Mail 可操作到錯誤視窗。
 
 仍須完成正常 named／none／正文與取消的實機驗證，並釐清 same-title replacement／失效 popup target 的實際行為；必要時應以公開 AX API 的實體 element reference 與 ownership relationship 取代字串推定，不可用永久拒絕代替功能，也不可把假想替換當作已執行的實機測試。此處只修正證據敘述，原規格及驗收門檻維持未完成。
+
+## 2026-09-17 整合 #333 清理歸屬檢查
+
+合入 #356 的實機分類測試紀錄及 #333 的 cleanup ownership 修正。錯誤清理仍先確認簽名選單已關閉，之後才查詢原生 Mail；原視窗不存在時直接結束，不以同名 AX 視窗接手。原生 close 限定 id 與未改變的文字 title；AX 保留同一個精確比對目標，並在 raise 前後及 discard 前重查原生歸屬。POSTDISPATCH 分支維持不執行清理。這些查核仍不是跨 API 原子操作。
+
+衝突整合後更新測試邊界：ownership 測試替代簽名選單關閉操作；signature 測試攔截新的原生 ownership 查詢，驗證關閉失敗時呼叫數為 0、成功時為 1。第一次測試暴露舊字串斷言與不完整 AppleScript 擷取範圍，修正測試後 **79 項重點測試通過**，包含完整 send／draft 腳本編譯。預設 SwiftBuild 完整測試 **1,366 項、12 項略過、零失敗**（316 + 1,050）。未進行真實 Mail 操作。
+
+#322 的 named／none／正文插入移除／失敗取消實機驗證及完整獨立審查仍未完成；週額度限制仍為 Claude 的待辦原因，不是 OAuth。先前 named-r4／r5 草稿已清理，不能沿用早期「尚待解鎖清理」敘述當作目前狀態。
+
+限定整合審查發現兩個測試缺口，已修正：選單測試改執行整段 cleanup（原生邊界以記錄呼叫的 stub 取代），AX 測試加入「精確目標在第一筆、其他視窗在最後」並沿 raise／sheet／button／click 傳遞目標身分。外部負向控制確認提前原生查詢產生 1 而非 0 次呼叫、改成錯誤目標使成功預期失敗；兩者均為實際執行後的斷言失敗，非編譯錯誤。
+
+審查者另建議移除 `contents of`，但該 mutation 的 1 項測試仍通過。純 AppleScript `{1, 2}` 實驗確認先保存第一項 reference，迴圈結束後仍讀得 1（迴圈變數為 2），所以不把此改寫宣稱為已重現的 loop-reference 產品錯誤，也不硬造失敗結果；production 仍保留明確的 `contents of`。真實 AX reference 生命週期仍屬既有實機驗證缺口。
