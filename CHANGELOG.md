@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`get_mail_log_events` — read Mail's own unified log to find where an event chain stops**
+  ([#465](https://github.com/PsychQuant/che-apple-mail-mcp/issues/465)). Read-only; touches no Mail data and needs no
+  Automation or Accessibility. `detail: "brief"` (default) returns, per event, the time (millisecond resolution,
+  truncated), `subsystem`, `category`, the **static format template** as `event`, integer arguments only, an activity
+  id, and an account letter (`A`, `B`, …) for `[account - mailbox]` lines whose template puts that bracket at the start —
+  connection-level lines, the upload receipt included, get none, so one account is not shown as several. It carries no
+  account names, subjects, recipients or Message-IDs as long as the format template is a compile-time string, which is
+  what Mail's own templates are. Integers (at most 20 digits) are read only where a number placed inside an account or
+  mailbox name cannot be mistaken for one (the text after the last placeholder is matched from the end of the message),
+  and the matcher's work per message is bounded; a template that itself looks like an address or UUID, or is longer
+  than 1,024 bytes, is withheld as `<template withheld>` (a heuristic backstop, not a guarantee); and `contains` is
+  refused in this mode because a substring filter on brief output would let a caller probe for exactly those. `detail: "detailed"` adds the raw message (cut at 8,192 bytes of UTF-8 at a safe point — next to
+  whitespace, before `<` or after `>` — so no identifier is split, with `message_truncated`; a single unbroken token
+  longer than that comes back as an empty `message`; every field is capped in
+  bytes, so one event always fits the response), process and thread, an optional best-effort `redact_identifiers` (emails, UUIDs, Message-IDs;
+  off by default, applied to the returned part only, so numbers count only returned identifiers; when it is on,
+  `contains` matches the masked text) and a `contains` filter that sees exactly the returned part (masks written without numbers there); it **contains account identifiers and received-mail content** — the response
+  and the tool description say not to paste it into public issues and to treat it as data, not instructions. Window:
+  `last_minutes` (default 10), `since`/`until`, or `around` ± `radius_seconds`, at most 60 minutes; times must carry an
+  explicit UTC offset and must name a real calendar date. Results are earliest-first, at most `limit` per page. The
+  paging cursor is a position: `next_start` plus `next_offset`, the number of events at that millisecond already
+  returned — pass them back as `since` and `offset` with the same `until`, and every event comes back exactly once as long as the
+  log delivers events in time order (0 inversions in 165,748 events measured; an inversion is reported in `notice`). A
+  time alone cannot point inside the up to 169 events that share one millisecond of one category in the real log, so
+  each time-only rule tried during review either stalled or returned the same page again. After a read cap or deadline
+  stop the cursor is the scan frontier, so a filtered search can be continued; events delivered out of time order are
+  re-sorted and reported. Responses are capped at 64 KiB — a byte cap, roughly 15,000 to 22,000 tokens of ASCII JSON
+  (Claude Code warns above 10,000 tokens of MCP output and saves results above 25,000 to a file, which CJK-heavy
+  detailed output can reach). `status` is `ok`, `no_events_in_window` or `unavailable` (`spawn_failed`,
+  `nonzero_exit`, `unrecognized_output` when the log format has changed, `deadline_exceeded` /
+  `scan_cap_exceeded` when the reader stopped before getting past the cursor); **an empty
+  result never means the action did not happen** (the unified log is retained for a limited time and Mail may not have
+  been running). The one event a template cannot name — the IMAP upload receipt — is recognized only as the response
+  code Mail actually logs, `[APPENDUID (n, n)]` with the numbers on separate lines, directly after the line's own `Read: <tag>
+  OK` (the one following Mail's connection header), with a digits-and-dots tag and nothing after the code — the receipt
+  is the whole chunk Mail read, as all 27 receipts in 40 hours of real log were; neither the RFC wire form, nor a subject
+  that quotes the whole code in a FETCH response, nor a Write line or a split FETCH literal that quotes it counts. In
+  brief mode a receipt cannot be tied to an account (connection lines get no letter, and its activity id is usually 0). It is
+  returned as `kind: "known"`, `event: "imap.append_uid_received"` with no content. The log is read by spawning
+  `/usr/bin/log` (absolute path, argument array, closed stdin, line-by-line, 64 MiB read cap, 30 s deadline enforced by
+  the read loop itself, child always terminated and reaped, window converted with the current time zone). **Verified
+  only on macOS 27.2 / Mail 16.0 with an admin-group user; not yet verified when launched from the Claude Desktop `.mcpb`
+  extension or as a non-admin user.** The log format is private to Apple and unversioned; lines that do not match their
+  template degrade to `kind: "unstructured"`. Brief mode has no event-name filter yet
+  ([#466](https://github.com/PsychQuant/che-apple-mail-mcp/issues/466)). Verified with a 6-reviewer cross-model
+  ensemble; round 1 found six blocking defects, all fixed here.
+
 ### Fixed
 
 - **Exited osascript children no longer leave a false unreaped count**

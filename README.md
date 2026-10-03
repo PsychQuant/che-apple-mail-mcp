@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**The most comprehensive Apple Mail MCP server** - 53 tools with SQLite-powered millisecond search across 250K+ emails.
+**The most comprehensive Apple Mail MCP server** - 54 tools with SQLite-powered millisecond search across 250K+ emails.
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +15,7 @@
 
 | Feature | Other MCPs | che-apple-mail-mcp |
 |---------|------------|-------------------|
-| Total Tools | ~20 | **53** |
+| Total Tools | ~20 | **54** |
 | Language | Python | **Swift (Native)** |
 | Search Speed | Seconds (AppleScript) | **Milliseconds (SQLite)** |
 | Search Fields | Subject/Sender | **Subject/Sender/Recipient/Date** |
@@ -61,7 +61,7 @@ you these are missing (#353):
 
 | Shipped by the plugin | Present with MCP-only |
 |---|---|
-| All 53 MCP tools | ✅ yes |
+| All 54 MCP tools | ✅ yes |
 | `/archive-mail` + `-migrate` / `-rebuild-threads` / `-repair-synthetic-ids` / `-view` | ❌ the archiving SOP does not exist |
 | `rules/compose-wrapper-free.md` — what the cite-block was, and what a refused compose call means | ⚠️ background: since [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304) the wrapper is structurally impossible, so this rule now explains the six refusal reasons and their recipes rather than guarding against a silent fallback |
 | `rules/confirmation-triggers.md`, `rules/false-positive-detection.md` | ❌ no confirmation discipline on destructive operations |
@@ -129,7 +129,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## All 53 Tools
+## All 54 Tools
 
 <details>
 <summary><b>Accounts (2)</b></summary>
@@ -310,13 +310,14 @@ reply_email(
 </details>
 
 <details>
-<summary><b>Diagnostics (3)</b></summary>
+<summary><b>Diagnostics (4)</b></summary>
 
 | Tool | Description |
 |------|-------------|
 | `check_fda` | Check Full Disk Access status (SQLite fast-path availability) |
 | `check_accessibility` | Check Accessibility permission (the compose/reply GUI paths; without it those tools refuse) |
 | `check_automation` | Check Automation permission (Apple Events to Mail) — non-prompting probe, four states with remediation ([#293](https://github.com/PsychQuant/che-apple-mail-mcp/issues/293)); the binary holds its OWN grant, osascript working ≠ binary authorized ([#288](https://github.com/PsychQuant/che-apple-mail-mcp/issues/288)) |
+| `get_mail_log_events` | Read Mail's own unified log to find where an event chain stops (e.g. draft saved → queued → engine notified → IMAP `APPENDUID` receipt) — read-only ([#465](https://github.com/PsychQuant/che-apple-mail-mcp/issues/465)). `detail=brief` (default) returns only the static event template, integer arguments and an account letter for `[account - mailbox]` lines — no account names, subjects or Message-IDs, as long as the template is a compile-time string (Mail's own are); `detail=detailed` adds the raw message, which **contains account identifiers and received-mail content: do not paste it into public issues**. Window ≤ 60 min, times must carry a UTC offset; page with `since=next_start`, `offset=next_offset` and the same `until`. No event-name filter yet ([#466](https://github.com/PsychQuant/che-apple-mail-mcp/issues/466)). An empty result never means the action did not happen. Verified on macOS 27.2 / Mail 16.0 only; needs an admin-group user |
 
 </details>
 
@@ -513,6 +514,8 @@ Most read tools prefer Apple Mail's local Envelope Index (SQLite) and on-disk `.
 | `list_attachments` | ✓ | ✓ on any error |
 | `save_attachment` | ✓ | ✓ on any error |
 | `get_email_metadata` | ✓ | ✓ on any error (since [#71](https://github.com/PsychQuant/che-apple-mail-mcp/issues/71)) |
+
+`get_mail_log_events` is outside this table on purpose: it reads Mail's **unified log** (events: what happened and when) through `/usr/bin/log`, not the Envelope Index (state). It needs no Full Disk Access but does need a user in the admin group, and it is never a source of truth for whether a message exists — see `.claude/rules/r-must-direct-db.md`.
 
 For `save_attachment`'s read path the fast path is **10–100× faster** than AppleScript (per [#12](https://github.com/PsychQuant/che-apple-mail-mcp/issues/12) measurements). Other tools' speedup ratios depend on request shape; in general, large bulk reads see the biggest gain.
 
