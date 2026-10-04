@@ -1368,7 +1368,20 @@ class CheAppleMailMCPServer {
             let format = try parseBodyFormatArgument(arguments["format"])
             // #131: sender account selection (see compose_email).
             let fromAddress = arguments["from_address"]?.stringValue
-            return try await mailController.createDraft(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, fromAddress: fromAddress)
+            // #472: EXPERIMENTAL opt-in (CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1) —
+            // write the draft straight into Mail's store; anything outside the
+            // verified range falls back to the GUI path below, with a note.
+            var directNote = ""
+            if DirectDraft.isEnabled {
+                switch await DirectDraftPath(controller: mailController, reader: indexReader).attempt(
+                    to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments,
+                    format: format, fromAddress: fromAddress) {
+                case .created(let text): return text
+                case .notAttempted(let reason): directNote = reason.map(DirectDraftPath.fallbackNote) ?? ""
+                case .fellBack(let reason): directNote = DirectDraftPath.fallbackNote(reason)
+                }
+            }
+            return try await mailController.createDraft(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, fromAddress: fromAddress) + directNote
 
         case "update_draft":
             // #276 — upsert: locate existing draft → create replacement →

@@ -41,6 +41,15 @@
 - create/delete mailbox / rule
 - check_for_new_mail / synchronize_account
 
+### C/U/D 的唯一例外:實驗性直接寫入草稿(#472,opt-in)
+
+`create_draft` 在 `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1` 時可**直接寫入** Envelope Index + `.emlx`(`Sources/MailSQLite/DraftStoreWriter.swift`),再用 AppleScript 切換該草稿的已讀狀態,讓 Mail 自己上傳。這是本規則「寫入走 AppleScript」的**唯一**例外,理由是證據而非方便:
+
+- #463 兩輪實驗:注入的草稿 Mail 不必重啟就列出、可開成可編輯撰寫視窗;同帳號一個 Mail 自己建立的 action(包括切換該草稿自身的已讀)就讓同步引擎把注入的 action 一併處理,上傳後伺服器端 `draft=1`,與 Mail 自己的草稿在列形狀與內容上無法區分(標頭與解碼後內文逐欄一致,含中文)。
+- split-brain 的疑慮在這個範圍內被量測過:寫入只在單一 `BEGIN IMMEDIATE` 交易內完成(寫入鎖約 2–5 ms),`.emlx` 在交易內原子改名,絕不碰 `alleged_change_identifier`,由 Mail 自己的 trigger 維護計數。
+
+**界線(封閉,不得依性質相似類推)**:只有這一條路徑、只在 opt-in 時、只在 `DirectDraft.eligibility` 與版本/結構檢查全部通過時(純文字、無附件、只有 To、全為 bare address、有 `from_address`、IMAP 帳號、Mail 16 / macOS 27、`messages` 欄位與驗證時完全一致)。任何其他寫入(標記、搬移、刪除、`update_draft`、`compose_email`)仍走 AppleScript。觸發前任何失敗都必須精確還原並退回 GUI 路徑;觸發後不得退回(會產生重複草稿)。
+
 ## Hybrid pattern(實作慣例)
 
 每個 read tool 必須:
@@ -104,6 +113,7 @@ return try await mailController.fallback(...)
 - #71 — `get_email_metadata` AppleScript fallback gap(待修)
 - #9 — EWS / Exchange caveat
 - #186 — `list_drafts` 草稿匣識別是 app-level metadata → sanctioned AppleScript-primary exception(won't-implement,2026-06-14)
+- #463 / #472 — 實驗性直接寫入草稿(C/U/D 唯一例外,opt-in;證據見上方例外段)
 
 ## `whose content contains` 全文掃描禁令 (#221)
 

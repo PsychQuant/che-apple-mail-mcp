@@ -17,6 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   osascript's stderr through an ASObjC clock; with the variable unset the generated script is
   byte-for-byte unchanged.
 
+- **Experimental direct-write path for `create_draft`** (`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, off by default,
+  [#472](https://github.com/PsychQuant/che-apple-mail-mcp/issues/472)). The draft is written straight into Mail's
+  Envelope Index and `.emlx` store in one `BEGIN IMMEDIATE` transaction, in the shape Mail uses for its own
+  unsent drafts, then AppleScript toggles the draft's read status so Mail's sync engine uploads it (#463). No
+  compose window opens. Only plain-text drafts with bare To addresses, a bare `from_address` on an IMAP account,
+  no cc/bcc and no attachments qualify, on Mail 16 / macOS 27 with the `messages` schema it was verified against;
+  anything else, and any failure before the trigger (rolled back exactly), takes the GUI path with a one-line
+  note. Live on a Gmail-type IMAP account: six drafts (ASCII and Chinese) created in 2.0–3.4 s, uploaded
+  1.5–3.0 s after the trigger, server copies equal to the input in subject and decoded body, `draft=1`; a cc
+  draft fell back to the GUI path with the note. With a 0.3 s gap between the two toggles one draft stayed
+  unread locally, so the gap is 0.5 s and the path re-asserts read status after the upload.
+
 ### Changed
 
 - **`create_draft` with a sender is ~1.7 s faster: two fixed waits became readiness polls**

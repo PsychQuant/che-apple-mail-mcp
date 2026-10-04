@@ -122,6 +122,27 @@ public enum EmlxParser {
         return nil
     }
 
+    /// #472 — where a NEW message's .emlx goes, for a writer that creates it.
+    ///
+    /// Unlike `resolveEmlxPathDetailed`, the file does not have to exist; only
+    /// the mailbox's store directory must. The mailbox directory is built from
+    /// `pathComponents` (decoded per component), so a name containing an
+    /// encoded `/` stays one directory instead of being split (#344/#358).
+    public static func newEmlxPath(rowId: Int, mailboxURL: String) -> String? {
+        guard let parsed = MailboxURL.decode(mailboxURL), !parsed.pathComponents.isEmpty else {
+            return nil
+        }
+        let mboxPath = parsed.pathComponents.map { "\($0).mbox" }.joined(separator: "/")
+        let mailboxDir = "\(EnvelopeIndexReader.mailStoragePath)/\(parsed.accountUUID)/\(mboxPath)"
+        guard let storeUUID = findStoreUUID(in: mailboxDir) else {
+            return nil
+        }
+        let hashDir = hashDirectoryPath(rowId: rowId)
+        let dataPath = "\(mailboxDir)/\(storeUUID)/Data"
+        let messagesDir = hashDir.isEmpty ? "\(dataPath)/Messages" : "\(dataPath)/\(hashDir)/Messages"
+        return "\(messagesDir)/\(rowId).emlx"
+    }
+
     // MARK: - Private Helpers
 
     /// Scan a .mbox directory for a UUID-formatted subdirectory (the store UUID).
