@@ -438,6 +438,7 @@ actor MailController {
         // Lossy decode (never nil): stderr embeds CJK mailbox names/subjects,
         // and a decode failure must not erase the diagnostic (Lens A P2-7).
         let errText = String(decoding: errBox.get(), as: UTF8.self)
+        if ComposeTiming.isEnabled { ComposeTiming.captureStderr(errText) }  // #464
         if process.terminationStatus != 0 {
             let (message, code) = Self.parseOsascriptError(errText)
             throw MailError.scriptFailed(message: message, code: code)
@@ -1656,11 +1657,36 @@ actor MailController {
     /// truncation), and runs the GUI script with the user's clipboard preserved
     /// at full fidelity when attachments are involved (the script sets the
     /// clipboard per-attachment for the Go-to-folder paste).
+    /// #464 — append this call's timing rows when `CHE_MAIL_COMPOSE_TIMING_CSV`
+    /// is set. Diagnostics only: a write failure is reported to stderr and never
+    /// fails the compose call.
+    private func recordComposeTiming(enter: TimeInterval, spawn: TimeInterval, outcome: String,
+                                     fromAddressSet: Bool) {
+        guard let path = ComposeTiming.csvPathFromEnvironment else { return }
+        let env = ProcessInfo.processInfo.environment
+        let marks = [
+            ComposeTiming.Mark(source: "swift", label: "enter", time: enter),
+            ComposeTiming.Mark(source: "swift", label: "spawn", time: spawn),
+            ComposeTiming.Mark(source: "swift", label: "returned", time: Date().timeIntervalSinceReferenceDate),
+        ] + ComposeTiming.takeCapturedMarks()
+        let rows = ComposeTiming.csvRows(
+            runId: UUID().uuidString, marks: marks, outcome: outcome,
+            config: ["window_delay": env["CHE_MAIL_MAILTO_WINDOW_DELAY"] ?? "default",
+                     "step_delay": env["CHE_MAIL_MAILTO_STEP_DELAY"] ?? "default",
+                     "from_address_set": fromAddressSet ? "true" : "false"])
+        do {
+            try ComposeTiming.append(rows: rows, toCSVAt: path)
+        } catch {
+            _ = Diagnostics.emit("compose timing: could not append to \(path): \(error.localizedDescription)\n")
+        }
+    }
+
     private func composeViaMailto(
         to: [String], subject: String, body: String,
         cc: [String]?, bcc: [String]?, attachments: [String]?, send: Bool,
         fromAddress: String? = nil
     ) throws -> String {
+        let timingEnter = Date().timeIntervalSinceReferenceDate  // #464
         // #277/#404: a display name can't ride the mailto URL (RFC 6068). Any
         // list carrying a display name is omitted from the URL as a whole and
         // filled through its AX-addressed field (order preserved; bare + named
@@ -1702,9 +1728,19 @@ actor MailController {
         // delays — on a large mailbox a HEALTHY run crosses the 45s default, so
         // it gets the GUI deadline (the default killed it mid-flight and the
         // caller saw a hang + a wrapped-body legacy fallback).
-        var result = needsClipboard
-            ? try withClipboardPreserved({ try runGuiScript(script, timeout: Self.guiScriptTimeout) })
-            : try runGuiScript(script, timeout: Self.guiScriptTimeout)
+        let timingSpawn = Date().timeIntervalSinceReferenceDate
+        var result: String
+        do {
+            result = needsClipboard
+                ? try withClipboardPreserved({ try runGuiScript(script, timeout: Self.guiScriptTimeout) })
+                : try runGuiScript(script, timeout: Self.guiScriptTimeout)
+            recordComposeTiming(enter: timingEnter, spawn: timingSpawn, outcome: "ok",
+                                fromAddressSet: popupAddress?.isEmpty == false)
+        } catch {
+            recordComposeTiming(enter: timingEnter, spawn: timingSpawn, outcome: "error",
+                                fromAddressSet: popupAddress?.isEmpty == false)
+            throw error
+        }
         // #404: the script tags its return value when it had to reveal the Bcc
         // field (the View-menu state is deliberately NOT restored — disclose it).
         // Strip the tag FIRST: it is a suffix of the raw script return, and any

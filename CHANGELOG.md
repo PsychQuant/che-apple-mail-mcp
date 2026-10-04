@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in per-step timing for the GUI compose path** (`CHE_MAIL_COMPOSE_TIMING_CSV=<file>`,
+  [#464](https://github.com/PsychQuant/che-apple-mail-mcp/issues/464)). Each `create_draft` /
+  `compose_email` call appends one CSV row per step (`run_id, source, step, t_ref, ms_since_start,
+  ms_since_prev, outcome, window_delay, step_delay, from_address_set`): Swift-side `enter` / `spawn` /
+  `returned` plus in-script marks from `script_start` to `script_end`. The script logs them to
+  osascript's stderr through an ASObjC clock; with the variable unset the generated script is
+  byte-for-byte unchanged.
+
+### Changed
+
+- **`create_draft` with a sender is ~1.7 s faster: two fixed waits became readiness polls**
+  ([#464](https://github.com/PsychQuant/che-apple-mail-mcp/issues/464)). Per-step timing of three
+  default calls put 1850 ms on the compose-window wait and 1375 ms on picking and verifying the sender,
+  out of ~7.95 s. The window is now polled every 0.1 s (cap: the old `CHE_MAIL_MAILTO_WINDOW_DELAY`,
+  same checks and messages afterwards) and is found in ~90 ms; the sender read-back is polled up to
+  2 s instead of one read after 0.7 s (~810 ms instead of 1375 ms). Because the From popup is now
+  reached while Mail is still setting up the window, its first click failed in 3 of 10 runs with a
+  System Events connection error; the click is now retried up to four times with a fresh lookup and
+  still fails as `SENDERPOPUP` when exhausted. Removing the 0.7 s wait after opening the popup was
+  tried and reverted (the menu poll then took up to 6 s). Measured over ten consecutive calls: 10/10
+  drafts correct (body, From, To), median 6.27 s (5.6–7.0 s) versus ~7.95 s before. The no-sender path
+  shares the window poll but was not exercised live (it would draft on the default account).
+
 ### Fixed
 
 - **The first AppleScript-backed call in a fresh server no longer waits out the 45-second deadline**
