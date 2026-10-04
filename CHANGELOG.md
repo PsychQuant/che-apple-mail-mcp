@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.2.0] - 2026-10-04
+
 ### Added
 
 - **`get_mail_log_events` — read Mail's own unified log to find where an event chain stops**
