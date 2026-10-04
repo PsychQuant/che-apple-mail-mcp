@@ -141,6 +141,9 @@ actor MailController {
                 + "Install a seam with setTestSeams(scriptRunner:) around this call, or do not "
                 + "route it through MailController.")
         }
+        // #471: the component must be initialized on the main thread first, or
+        // the detached thread below never receives its Apple Event replies.
+        AppleScriptPrimer.shared.ensurePrimed()
         let granted = try preflightAutomation()
         return try runGuarded(timeout: timeout, automationGranted: granted) {
             var error: NSDictionary?
@@ -159,6 +162,7 @@ actor MailController {
 
     /// Execute AppleScript and return result as list
     func runScriptAsList(_ source: String, timeout: TimeInterval? = nil) throws -> [String] {
+        AppleScriptPrimer.shared.ensurePrimed()  // #471, see runScript
         let granted = try preflightAutomation()
         return try runGuarded(timeout: timeout, automationGranted: granted) {
             var error: NSDictionary?

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The first AppleScript-backed call in a fresh server no longer waits out the 45-second deadline**
+  ([#471](https://github.com/PsychQuant/che-apple-mail-mcp/issues/471)). `runScript` and `runScriptAsList`
+  run NSAppleScript on a detached thread; in a new process, the thread that first initialized the
+  AppleScript component never received its Apple Event replies. The first `list_accounts` took 45–75 s
+  (and fell back to the SQLite listing), and the first `create_draft` ~39 s instead of ~8 s. A standalone
+  reproduction pinned it to where the component is first initialized: a first background call got no
+  reply within 100 s, while running `return 1` once on the main thread made every later background call
+  return in ~0.24 s. Both paths now prime the component on the main thread first (`AppleScriptPrimer`,
+  once per process, no Apple Event, no TCC grant). Measured with the fix: the first `list_accounts` in a
+  fresh server takes 0.43–0.44 s and returns all 8 accounts with their addresses.
+
 ## [3.2.0] - 2026-10-04
 
 ### Added
