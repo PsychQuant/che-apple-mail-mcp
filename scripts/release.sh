@@ -311,14 +311,30 @@ echo "    ..."
 # ---- Build universal binary --------------------------------------------------
 
 info "Building release binary (universal: arm64 + x86_64)..."
-swift build -c release --arch arm64
-swift build -c release --arch x86_64
+# Ask SwiftPM where each build went, and copy it out before the next build.
+#
+# The native build system wrote one tree per triple (.build/<arch>-apple-macosx/
+# release). swiftbuild, the default from Swift 6.4, writes BOTH arches to one
+# directory, the x86_64 build overwriting the arm64 one, and leaves the per-triple
+# trees holding whatever the last native build produced. The first v3.2.0 attempt
+# lipo'd the v3.1.0 binaries from those trees; only the slice probe below stopped
+# it from being signed. Checking each product's arch catches a build that wrote
+# somewhere else again.
+STAGE_DIR="$DIST_DIR/stage"
+rm -rf "$STAGE_DIR"
+mkdir -p "$STAGE_DIR"
+for arch in arm64 x86_64; do
+    swift build -c release --arch "$arch"
+    BUILT="$(swift build -c release --arch "$arch" --show-bin-path)/$BINARY_NAME"
+    [[ -f "$BUILT" ]] || die "the $arch build left no $BINARY_NAME at $BUILT"
+    BUILT_ARCHS="$(lipo -archs "$BUILT")"
+    [[ "$BUILT_ARCHS" == "$arch" ]] \
+        || die "the $arch build's product at $BUILT is '$BUILT_ARCHS', not $arch"
+    cp "$BUILT" "$STAGE_DIR/$BINARY_NAME-$arch"
+done
 
-ARM64_BINARY=".build/arm64-apple-macosx/release/$BINARY_NAME"
-X64_BINARY=".build/x86_64-apple-macosx/release/$BINARY_NAME"
-if [[ ! -f "$ARM64_BINARY" || ! -f "$X64_BINARY" ]]; then
-    die "expected per-arch binaries missing (arm64: $ARM64_BINARY, x86_64: $X64_BINARY). build failed?"
-fi
+ARM64_BINARY="$STAGE_DIR/$BINARY_NAME-arm64"
+X64_BINARY="$STAGE_DIR/$BINARY_NAME-x86_64"
 
 mkdir -p "$DIST_DIR"
 # rm -f forces a fresh inode (macOS caches code-signature hashes per inode;
