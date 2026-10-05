@@ -8,7 +8,8 @@ N drafts per gap value, on a test account. For every draft it records:
   - the local read state after the re-assert (when one was needed),
   - the upload-confirm time from the tool result,
   - after the batch has synced: how many copies are in the account's Drafts and All Mail
-    mailboxes, and the read flag of the All Mail copy (the server's state).
+    mailboxes, and their read flags as Mail's local index holds them (the All Mail copy is a
+    local mirror of the server copy; the IMAP \\Seen flag is not read directly).
 
 Environment:
   EXP488_BIN          path to the signed experiment binary
@@ -66,13 +67,15 @@ def create(gap, subject):
         err.seek(0)
         exp = [line.strip() for line in err if line.startswith("EXP488|")]
     res = r.get("result") or {}
-    text = " ".join(c.get("text", "") for c in res.get("content", [])).replace(FROM, "<from>")
+    # The tool text is not stored: it is not needed for the results, and storing it would make
+    # the account-masking below the only thing between the address and a committed file.
+    text = " ".join(c.get("text", "") for c in res.get("content", []))
     first = next((re.search(r"first=(\w+)", l).group(1) for l in exp if "first=" in l), None)
     after = next((re.search(r"after=(\w+)", l).group(1) for l in exp if "after=" in l), None)
     m = re.search(r"uploaded ([0-9.]+)s after the trigger", text)
     return {"gap": gap, "subject": subject, "isError": bool(res.get("isError")),
             "uploaded": bool(m), "upload_s": float(m.group(1)) if m else None,
-            "first": first, "after": after, "text": text[:200]}
+            "first": first, "after": after}
 
 
 def copies(subject):
