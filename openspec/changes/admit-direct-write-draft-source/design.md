@@ -51,6 +51,12 @@ run context 用 Swift `@TaskLocal` 傳遞：`createDraft → composeViaMailto �
 
 `append` 在檔案非空時讀第一行，與 `csvHeader` 不同就丟出錯誤；呼叫端照既有慣例寫 `compose timing:` 到 stderr，不影響 compose 結果。理由：同一個檔案混用 10 欄與 11 欄，任何以表頭解析的讀者都會錯欄，而且安靜。
 
+### 一次寫入一個總期限，非一般檔案拒絕（verify R3）
+
+R2 的約 1 秒上限只限制 `flock` 重試，不涵蓋前面的 process 內鎖：N 個並發呼叫在被別的 process 佔住鎖時會排隊累積到約 N 秒，FIFO 路徑則會讓 `open` 無限期阻塞。改為每次寫入開始時定一個期限，`appendLock.lock(before:)` 與 `flock` 重試共用它；`open` 加 `O_NONBLOCK` 並以 `fstat` 要求一般檔案。代價：鎖被佔超過約 1 秒時，該次寫入放棄自己的列（stderr 說明），spec 明寫這是唯一會遺失列的情況。
+
+替代方案：把寫入丟到背景序列佇列、完全不等。拒絕理由：測試與 live 驗證都在呼叫結束後立刻讀檔，非同步寫入會讓「呼叫結束時列已寫好」不再成立，需要另一套 flush 機制。
+
 ### 寫入以鎖串行化，欄位也去掉雙引號（verify R1）
 
 verify R1 的 Codex lens 指出：`append` 的「檢查存在 → 建檔 → 讀表頭 → 寫入」之間沒有鎖，而 MCP server 對每個 request 開一個 Task，兩個 `create_draft` 可以同時寫同一個檔；16 個並發 writer 的測試一跑就重現資料遺失。改為：process 內 `NSLock` ＋ 跨 process `flock` ＋ `O_APPEND`，表頭檢查與寫入都在兩把鎖內。`csvField` 另外把雙引號換成單引號，否則標準 CSV 解析器會把它當欄位分隔。

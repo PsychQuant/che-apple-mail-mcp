@@ -348,9 +348,49 @@ final class ComposeTimingTests: XCTestCase {
         XCTAssertEqual(rows.map { String($0.split(separator: ",")[2]) }, ["uploaded", "read_ensured", "returned"])
     }
 
+    // MARK: - #475 verify R3: one deadline per write
+
+    func testConcurrentWritersBehindABusyLockEachGiveUpWithinTheDeadline() throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let holder = open(path, O_RDWR | O_CREAT, 0o644)
+        XCTAssertEqual(flock(holder, LOCK_EX), 0)
+        defer { flock(holder, LOCK_UN); close(holder) }
+        let start = Date()
+        let failures = ManagedAtomicCounter()
+        DispatchQueue.concurrentPerform(iterations: 4) { _ in
+            do { try ComposeTiming.append(rows: ["r"], toCSVAt: path) } catch { failures.increment() }
+        }
+        let elapsed = Date().timeIntervalSince(start)
+        XCTAssertEqual(failures.value, 4)
+        XCTAssertLessThan(elapsed, 2.5, "each write has its own ~1 s deadline; they must not queue to ~4 s (took \(elapsed))")
+    }
+
+    func testANonRegularFileIsRefused() throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        XCTAssertEqual(mkfifo(path, 0o644), 0)
+        let done = expectation(description: "append returns")
+        var thrown: Error?
+        DispatchQueue.global().async {
+            do { try ComposeTiming.append(rows: ["r"], toCSVAt: path) } catch { thrown = error }
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 3)
+        XCTAssertTrue(thrown.map { "\($0)".contains("regular file") } ?? false, String(describing: thrown))
+    }
+
     func testCapturedMarksAreTakenOnce() {
         ComposeTiming.captureStderr("\(ComposeTiming.logPrefix)x|1.0\n")
         XCTAssertEqual(ComposeTiming.takeCapturedMarks().map(\.label), ["x"])
         XCTAssertEqual(ComposeTiming.takeCapturedMarks().count, 0, "taking clears the buffer")
     }
+}
+
+/// A tiny lock-protected counter for the concurrency tests.
+final class ManagedAtomicCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() { lock.lock(); count += 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
 }

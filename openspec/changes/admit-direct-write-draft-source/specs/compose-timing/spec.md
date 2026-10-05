@@ -6,7 +6,7 @@ Opt-in per-step timing of the composing paths, written as CSV, so that a slow or
 
 ### Requirement: Timing is opt-in and never affects the compose call
 
-The system SHALL record compose timing only when the environment variable `CHE_MAIL_COMPOSE_TIMING_CSV` names a file path. When the variable is unset or empty, the AppleScript the composing tools generate SHALL be byte-for-byte identical to the script generated without timing support, and the system SHALL write no timing file. A failure to write timing rows SHALL be reported on stderr and SHALL NOT change the result or the error of the compose call. A writer that cannot obtain the file lock within about one second SHALL give up those rows, with a stderr line, rather than wait.
+The system SHALL record compose timing only when the environment variable `CHE_MAIL_COMPOSE_TIMING_CSV` names a file path. When the variable is unset or empty, the AppleScript the composing tools generate SHALL be byte-for-byte identical to the script generated without timing support, and the system SHALL write no timing file. A failure to write timing rows SHALL be reported on stderr and SHALL NOT change the result or the error of the compose call. Each timing write SHALL either complete or give up within about one second of starting — including any wait for another write in the same process or for another process's file lock — so a compose call is never held longer than that by timing. A write that gives up loses only its own rows and prints a `compose timing:` line on stderr. A path that is not a regular file SHALL be refused the same way.
 
 #### Scenario: Unset variable produces the untimed script
 
@@ -26,13 +26,30 @@ The timing file SHALL be CSV with exactly this header line:
 
 `run_id,source,step,t_ref,ms_since_start,ms_since_prev,outcome,window_delay,step_delay,from_address_set,path`
 
-The system SHALL write the header only when the file does not exist or is empty. Each timing mark SHALL produce one row. Within one `run_id`, rows SHALL be ordered by time; `ms_since_start` SHALL be measured from the earliest mark of that `run_id`, and `ms_since_prev` from the mark before it. `source` SHALL be `swift` for marks taken in the server process and `script` for marks logged by the AppleScript. `path` SHALL be `gui-mailto` for marks of the GUI mailto path and `direct` for marks of the direct-write path. No field SHALL contain a comma or a double quote. Concurrent writers to the same file — within one server process or across processes — SHALL NOT lose, duplicate, or truncate each other's rows, and the header SHALL be written exactly once. When a non-empty file's last line has no line break, one SHALL be written before the new rows.
+The system SHALL write the header only when the file does not exist or is empty. Each timing mark SHALL produce one row. Within one `run_id`, rows SHALL be ordered by time; `ms_since_start` SHALL be measured from the earliest mark of that `run_id`, and `ms_since_prev` from the mark before it. `source` SHALL be `swift` for marks taken in the server process and `script` for marks logged by the AppleScript. `path` SHALL be `gui-mailto` for marks of the GUI mailto path and `direct` for marks of the direct-write path. No field SHALL contain a comma or a double quote. Apart from a write that gives up as described in Requirement: Timing is opt-in and never affects the compose call, concurrent writers to the same file — within one server process or across processes — SHALL NOT lose, duplicate, or truncate each other's rows, and the header SHALL be written exactly once. When a non-empty file's last line has no line break, one SHALL be written before the new rows.
 
 #### Scenario: A new file starts with the header
 
 - **WHEN** a composing call records timing into a path where no file exists
 - **THEN** the file's first line SHALL equal the header above
 - **AND** every following line SHALL have exactly 11 comma-separated fields
+
+#### Scenario: A held file lock does not hold up the calls
+
+- **WHEN** another process holds the timing file's lock and four calls write at the same time
+- **THEN** each write SHALL give up within about one second of starting, with a `compose timing:` stderr line
+- **AND** the calls SHALL NOT queue behind each other's waits
+
+#### Scenario: A missing final line break is added before new rows
+
+- **WHEN** the timing file holds only the header with no trailing line break and a call appends a row
+- **THEN** the file SHALL contain the header and the new row on separate lines
+
+#### Scenario: A non-regular file is refused
+
+- **WHEN** `CHE_MAIL_COMPOSE_TIMING_CSV` names a FIFO
+- **THEN** the write SHALL be refused with a `compose timing:` stderr line naming it as not a regular file
+- **AND** the compose call SHALL NOT wait on it
 
 #### Scenario: Concurrent writers keep every row
 
@@ -65,8 +82,8 @@ When `create_draft` attempts the direct-write path with timing enabled, the syst
 
 The `outcome` of every direct-write row SHALL be one of the following values. This list is closed:
 
-- `created` — the draft was written and Mail has it: the upload was confirmed, or the upload request failed after Mail had already uploaded the draft, so the write was not reversed.
-- `created:upload_pending` — the draft was written and the upload request succeeded, but the upload was not confirmed within the wait.
+- `created` — the draft was written and Mail has it: the upload was confirmed, or the upload request failed but reversing the write showed that Mail had already uploaded the draft.
+- `created:upload_pending` — the draft was written and is in Mail's Drafts, but its upload was not confirmed: the request succeeded and the wait ran out, or the request failed and the write could not be reversed.
 - `fell_back:trigger` — the upload request failed and the write was reversed.
 - `not_attempted:<code>` — the attempt ended without the draft reaching Mail and with nothing it wrote left behind (for `insert`, the write was begun and rolled back), where `<code>` is one of `format`, `attachments`, `ccOrBcc`, `noRecipient`, `displayName`, `unsupportedAddress`, `emptySubject`, `missingFromAddress`, `fromNotBare`, `version`, `account`, `index`, `drafts_unidentified`, `drafts_unmatched`, `writer_open`, `schema_drift`, `mailbox`, `sender`, `insert`.
 

@@ -33,6 +33,8 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 
 ## 呼叫失敗時怎麼辦（封閉六類，不得依性質相似類推第七類）
 
+以下六類屬 GUI 路徑。`create_draft` 的 opt-in 直接寫入（#472／#475）建立草稿時，第 3 類（Accessibility）不適用；直接寫入沒有建立草稿時，六類照常適用。
+
 前提不滿足時工具**直接失敗、零副作用**（不建草稿、不寄出、不刪既有草稿），
 訊息會具名原因與替代做法。六類與各自的處置：
 
@@ -54,7 +56,7 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 1. **不開可見視窗組信**。legacy 是唯一能在不彈出 compose 視窗的情況下建信的路徑
    （`CHE_MAIL_DISABLE_MAILTO_COMPOSE` 這個 hatch 的原始理由就是無人值守自動化）。
    mailto hand-off 必然開視窗。若日後真的成為阻塞，走 #308（IMAP APPEND），不要復活注入。
-   **例外**：`create_draft` 的 opt-in 直接寫入（`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，#472／#475）不開視窗、也不需要 Accessibility，但只限它的封閉適用條件（純文字、只有 bare To、無 cc／bcc／附件、bare `from_address`、IMAP 帳號、Mail 16／macOS 27）；其餘情況仍必然開視窗。
+   **例外**：`create_draft` 的 opt-in 直接寫入（`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，#472／#475）不開視窗、也不需要 Accessibility（改為需要 Full Disk Access 與 Automation），但只在呼叫符合 spec〈Direct-write draft path〉列出的全部條件時（適用條件與寫入前閘門兩份封閉清單，以 spec 為準，這裡不重抄）；任一條件不符就走 GUI 路徑，仍必然開視窗。
 2. **`compose_email` 直接寄給 `Name <addr>`**。乾淨路徑的顯示名填入是**草稿限定**——`create_draft` /
    `update_draft` 的 to/cc/bcc **皆支援**顯示名（AX 定位聚焦 + 貼上，#404），但 `compose_email`
    （送出）仍拒絕任何顯示名收件人，因為填入失敗會在送出當下漏收件人。要保留人名 → 用 `create_draft`
@@ -65,6 +67,7 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 | 階 | 路徑 | TCC 需求 | 附件 |
 |----|------|----------|------|
 | (a) | `create_draft` / `compose_email` | Automation + Accessibility | ✅（GUI ⇧⌘A）|
+| (a′) | `create_draft` 的 opt-in 直接寫入（`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，只在符合 spec〈Direct-write draft path〉全部條件時）| Full Disk Access + Automation | ❌（附件不在適用條件內）|
 | (b) | **`open_mailto`（LaunchServices）** | **零** | ❌（RFC 6068；手動拖入）|
 
 **AppleScript 工具回 `-1743`（Not authorized to send Apple events）時 (b) 是正解。**

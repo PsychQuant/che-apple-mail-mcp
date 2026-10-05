@@ -138,30 +138,43 @@ enum ComposeTiming {
     /// Serializes writers: an in-process lock for concurrent tool calls (the MCP
     /// server runs each request in its own Task), `flock` for another server
     /// process sharing the file, and `O_APPEND` so every write lands at the end.
-    /// The existence/header check and the write happen under both locks — before
-    /// #475 verify R1 a second writer could `createFile` over the first one's rows.
+    /// The existence/header check and the write happen under both locks (#475
+    /// verify R1). One deadline covers the WHOLE write — waiting for the
+    /// in-process lock and for the file lock alike — so the compose call is never
+    /// held longer than about `writeDeadline`, however many calls write at once
+    /// (#475 verify R3; R2 bounded only the file lock, so waits stacked).
     private static let appendLock = NSLock()
+    static let writeDeadline: TimeInterval = 1.0
 
     static func append(rows: [String], toCSVAt path: String) throws {
-        appendLock.lock(); defer { appendLock.unlock() }
-        let fd = open(path, O_RDWR | O_CREAT | O_APPEND | O_CLOEXEC, 0o644)
+        let deadline = Date().addingTimeInterval(writeDeadline)
+        guard appendLock.lock(before: deadline) else {
+            throw AppendError.io(path: path, reason: "busy — another timing write did not finish in time")
+        }
+        defer { appendLock.unlock() }
+        // O_NONBLOCK: a FIFO or similar at this path must not block the open.
+        let fd = open(path, O_RDWR | O_CREAT | O_APPEND | O_CLOEXEC | O_NONBLOCK, 0o644)
         guard fd >= 0 else { throw AppendError.io(path: path, reason: "open: \(String(cString: strerror(errno)))") }
         defer { close(fd) }
-        // Never wait indefinitely (#475 verify R2): timing must not hold up the
-        // compose call, so a lock held elsewhere — e.g. a stuck second server —
-        // is retried for about a second and then the rows are given up.
+        var info = stat()
+        guard fstat(fd, &info) == 0 else {
+            throw AppendError.io(path: path, reason: "fstat: \(String(cString: strerror(errno)))")
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG else {
+            throw AppendError.io(path: path, reason: "not a regular file")
+        }
         var locked = false
-        for _ in 0..<20 {
+        while true {
             if flock(fd, LOCK_EX | LOCK_NB) == 0 { locked = true; break }
             guard errno == EWOULDBLOCK || errno == EINTR else {
                 throw AppendError.io(path: path, reason: "flock: \(String(cString: strerror(errno)))")
             }
-            usleep(50_000)
+            if Date() >= deadline { break }
+            usleep(20_000)
         }
         guard locked else { throw AppendError.io(path: path, reason: "flock: busy — another writer holds the lock") }
         defer { flock(fd, LOCK_UN) }
-        var info = stat()
-        guard fstat(fd, &info) == 0 else {
+        guard fstat(fd, &info) == 0 else {   // re-read: another writer may have grown it while we waited
             throw AppendError.io(path: path, reason: "fstat: \(String(cString: strerror(errno)))")
         }
         let isNew = info.st_size == 0
@@ -171,7 +184,13 @@ enum ComposeTiming {
         }
         // A file whose last line has no line break (a hand-edited file, or a write
         // cut short) would otherwise glue the first new row onto it (#475 verify R2).
-        let lead = !isNew && lastByte(of: fd, size: info.st_size) != UInt8(ascii: "\n") ? "\n" : ""
+        var lead = ""
+        if !isNew {
+            guard let last = lastByte(of: fd, size: info.st_size) else {
+                throw AppendError.io(path: path, reason: "could not read the last byte")
+            }
+            if last != UInt8(ascii: "\n") { lead = "\n" }
+        }
         let data = Data((lead + ((isNew ? [csvHeader] : []) + rows).joined(separator: "\n") + "\n").utf8)
         try data.withUnsafeBytes { raw in
             var offset = 0

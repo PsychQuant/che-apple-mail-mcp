@@ -1,5 +1,6 @@
 import XCTest
 @testable import CheAppleMailMCP
+import MailSQLite
 
 /// #472 — the orchestration seams of the experimental direct-draft path that
 /// need no store and no Mail: the trigger script and the early exits.
@@ -190,12 +191,49 @@ final class DirectDraftPathTests: XCTestCase {
         XCTAssertFalse(directRan)
     }
 
-    // MARK: - #475 verify R2: read_ensured means confirmed
+    // MARK: - #475 verify R2/R3: read status is reported from what was observed
 
-    func testReadCheckOnlyConfirmsAnObservedReadFlag() {
-        XCTAssertEqual(DirectDraftPath.readCheck(true), .confirmed)
-        XCTAssertEqual(DirectDraftPath.readCheck(false), .needsRepair)
-        XCTAssertEqual(DirectDraftPath.readCheck(nil), .unknown, "a row that cannot be read is not a confirmed read")
+    func testReadOutcomeFollowsWhatWasObserved() {
+        XCTAssertEqual(DirectDraftPath.readOutcome([true]), .confirmed)
+        XCTAssertEqual(DirectDraftPath.readOutcome([nil, true]), .confirmed, "a transient unreadable look is retried")
+        XCTAssertEqual(DirectDraftPath.readOutcome([false, false]), .stillUnread)
+        XCTAssertEqual(DirectDraftPath.readOutcome([false, nil, nil]), .stillUnread, "an unread look is a real observation")
+        XCTAssertEqual(DirectDraftPath.readOutcome([nil, nil, nil, nil]), .unknown)
+        XCTAssertEqual(DirectDraftPath.readOutcome([]), .unknown)
+        // R3 (Codex): after a repair, eight unreadable looks are NOT "still unread".
+        XCTAssertEqual(DirectDraftPath.readOutcome(Array(repeating: nil, count: 8)), .unknown)
+    }
+
+    func testReadOutcomeNotes() {
+        XCTAssertEqual(DirectDraftPath.ReadOutcome.confirmed.note, "")
+        XCTAssertEqual(DirectDraftPath.ReadOutcome.stillUnread.note,
+                       " [note: the draft is uploaded but still shows as unread locally]")
+        XCTAssertEqual(DirectDraftPath.ReadOutcome.unknown.note,
+                       " [note: the draft is uploaded but its local read status could not be read]")
+    }
+
+    // MARK: - #475 verify R3: a failed upload request is only "created" when Mail has the draft
+
+    func testFailedTriggerWithSuccessfulRollbackFallsBack() {
+        let outcome = DirectDraftPath.outcomeAfterFailedTrigger(rollbackError: nil, triggerError: "timeout")
+        XCTAssertEqual(outcome.timingCode, "fell_back:trigger")
+        guard case .fellBack(let reason) = outcome else { return XCTFail("\(outcome)") }
+        XCTAssertTrue(reason.contains("timeout"))
+    }
+
+    func testFailedTriggerWithAnUploadedDraftIsCreated() {
+        let outcome = DirectDraftPath.outcomeAfterFailedTrigger(
+            rollbackError: DraftStoreWriter.WriteError.alreadyUploaded, triggerError: "timeout")
+        XCTAssertEqual(outcome.timingCode, "created")
+    }
+
+    func testFailedTriggerWithAFailedRollbackIsPendingNotUploaded() {
+        let outcome = DirectDraftPath.outcomeAfterFailedTrigger(
+            rollbackError: DraftStoreWriter.WriteError.sql("database is locked"), triggerError: "timeout")
+        XCTAssertEqual(outcome.timingCode, "created:upload_pending")
+        guard case .created(let text, _) = outcome else { return XCTFail("\(outcome)") }
+        XCTAssertFalse(text.contains("uploaded "), "must not claim an upload nobody confirmed: \(text)")
+        XCTAssertTrue(text.contains("could not be reversed"), text)
     }
 
     func testFallbackNoteFormat() {

@@ -236,12 +236,12 @@ struct DirectDraftPath {
             _ = try await controller.triggerDirectDraftUpload(rowId: inserted.messageRowId)
             timer.mark("trigger_sent")
         } catch {
+            let triggerError = error.localizedDescription
             do {
                 try writer.rollback(inserted)
-                return .fellBack("Mail could not be asked to upload it (\(error.localizedDescription)); the write was rolled back")
+                return Self.outcomeAfterFailedTrigger(rollbackError: nil, triggerError: triggerError)
             } catch {
-                // Rollback refused: the server already has it. It is created.
-                return .created(Self.createdText(seconds: Date().timeIntervalSince(triggered), uploaded: true), pending: false)
+                return Self.outcomeAfterFailedTrigger(rollbackError: error, triggerError: triggerError)
             }
         }
         while Date().timeIntervalSince(triggered) < uploadDeadline {
@@ -250,7 +250,7 @@ struct DirectDraftPath {
                 let seconds = Date().timeIntervalSince(triggered)
                 timer.mark("uploaded")
                 let read = await ensureRead(writer, inserted)
-                if read.confirmed { timer.mark("read_ensured") }
+                if read == .confirmed { timer.mark("read_ensured") }
                 return .created(Self.createdText(seconds: seconds, uploaded: true) + read.note, pending: false)
             }
             try? await Task.sleep(nanoseconds: 250_000_000)
@@ -258,35 +258,68 @@ struct DirectDraftPath {
         return .created(Self.createdText(seconds: uploadDeadline, uploaded: false), pending: true)
     }
 
-    /// What one look at the uploaded draft's local read flag means (#475 verify
-    /// R2): only an observed `read = 1` is a confirmation; a row that cannot be
-    /// read is NOT, even though no repair is attempted for it.
-    enum ReadCheck: Equatable { case confirmed, needsRepair, unknown }
+    /// The outcome of an upload request that failed after the write committed
+    /// (#475 verify R3). Reversed → fall back to the GUI path. Not reversed
+    /// because Mail already uploaded it → created. Not reversed for any other
+    /// reason (e.g. Mail holding the database lock) → the draft is local and its
+    /// upload is NOT confirmed, so it is reported as pending, never as uploaded.
+    static func outcomeAfterFailedTrigger(rollbackError: Error?, triggerError: String) -> Outcome {
+        guard let rollbackError else {
+            return .fellBack("Mail could not be asked to upload it (\(triggerError)); the write was rolled back")
+        }
+        if case DraftStoreWriter.WriteError.alreadyUploaded? = rollbackError as? DraftStoreWriter.WriteError {
+            return .created("Draft created successfully (experimental direct-write path, #472; the upload request "
+                            + "reported an error (\(triggerError)) but Mail had already uploaded the draft)", pending: false)
+        }
+        return .created("Draft created (experimental direct-write path, #472) — the upload request failed "
+                        + "(\(triggerError)) and the write could not be reversed (\(rollbackError)); the draft is in "
+                        + "Mail's Drafts and Mail uploads it with its next action for this account", pending: true)
+    }
 
-    static func readCheck(_ flag: Bool?) -> ReadCheck {
-        switch flag {
-        case true?: return .confirmed
-        case false?: return .needsRepair
-        case nil: return .unknown
+    /// What the looks at the uploaded draft's local read flag establish
+    /// (#475 verify R2/R3). Only an observed `read = 1` confirms; an observed
+    /// `read = 0` is "still unread"; looks that could not read the row
+    /// establish nothing.
+    enum ReadOutcome: Equatable {
+        case confirmed, stillUnread, unknown
+
+        var note: String {
+            switch self {
+            case .confirmed: return ""
+            case .stillUnread: return " [note: the draft is uploaded but still shows as unread locally]"
+            case .unknown: return " [note: the draft is uploaded but its local read status could not be read]"
+            }
         }
     }
 
-    /// Re-assert read status once if the uploaded draft's row still says unread
-    /// (see `buildDirectDraftMarkReadScript`). `confirmed` is true only when the
-    /// row was seen as read; `note` explains anything else.
-    private func ensureRead(_ writer: DraftStoreWriter, _ inserted: DraftStoreWriter.Inserted) async
-        -> (note: String, confirmed: Bool) {
-        switch Self.readCheck(writer.readFlag(inserted)) {
-        case .confirmed: return ("", true)
-        case .unknown: return (" [note: the draft is uploaded but its local read status could not be read]", false)
-        case .needsRepair: break
+    static func readOutcome(_ looks: [Bool?]) -> ReadOutcome {
+        if looks.contains(true) { return .confirmed }
+        if looks.contains(false) { return .stillUnread }
+        return .unknown
+    }
+
+    /// Up to four looks until the row can be read; re-assert read status only
+    /// after an observed `read = 0`, then judge by what the looks after the
+    /// repair show (see `buildDirectDraftMarkReadScript`).
+    private func ensureRead(_ writer: DraftStoreWriter, _ inserted: DraftStoreWriter.Inserted) async -> ReadOutcome {
+        var looks: [Bool?] = []
+        for attempt in 0..<4 {
+            let flag = writer.readFlag(inserted)
+            looks.append(flag)
+            if flag != nil { break }
+            if attempt < 3 { try? await Task.sleep(nanoseconds: 250_000_000) }
         }
+        let first = Self.readOutcome(looks)
+        guard first == .stillUnread else { return first }
         _ = try? await controller.markDirectDraftRead(rowId: inserted.messageRowId)
+        var after: [Bool?] = []
         for _ in 0..<8 {
-            if Self.readCheck(writer.readFlag(inserted)) == .confirmed { return ("", true) }
+            let flag = writer.readFlag(inserted)
+            after.append(flag)
+            if flag == true { break }
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
-        return (" [note: the draft is uploaded but still shows as unread locally]", false)
+        return Self.readOutcome(after)
     }
 
     static func createdText(seconds: TimeInterval, uploaded: Bool) -> String {

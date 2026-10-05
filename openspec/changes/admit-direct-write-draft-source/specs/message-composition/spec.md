@@ -28,7 +28,7 @@ No other body source is permitted.
 
 ### Requirement: Plain mode preserves existing behavior
 
-When `format` is `"plain"`, the system SHALL deliver the `body` parameter verbatim: HTML tags SHALL appear literally in the delivered email and no HTML rendering SHALL occur. The body SHALL reach the message through one of the two sources in Requirement: Composing tools never inject a body via AppleScript — Mail's own editor (the `mailto:` hand-off or the native reply/forward verb plus paste), or, for `create_draft` under Requirement: Direct-write draft path, a MIME message the system builds with the body HTML-escaped — and SHALL NOT be assigned through the AppleScript `content` property, which is what produces the `<blockquote type="cite">` wrapper.
+When `format` is `"plain"`, the system SHALL deliver the `body` parameter verbatim: HTML tags SHALL appear literally in the delivered email and no HTML rendering SHALL occur. The body SHALL reach the message through one of the two sources in Requirement: Composing tools never inject a body via AppleScript — Mail's own editor (the `mailto:` hand-off or the native reply/forward verb plus paste), or, for `create_draft` under Requirement: Direct-write draft path, a MIME message the system builds with the body HTML-escaped; on that path the `text/plain` part is empty and the body is carried in `text/html`, as in drafts Mail saves itself, and Mail's auto-inserted signature is not added — and SHALL NOT be assigned through the AppleScript `content` property, which is what produces the `<blockquote type="cite">` wrapper.
 
 #### Scenario: Plain body is delivered literally
 
@@ -67,7 +67,7 @@ The set of ineligibility reasons SHALL be exactly the following six, and SHALL N
 
 #### Scenario: Direct write needs no Accessibility
 
-- **WHEN** `create_draft` is invoked with `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, a call eligible for the direct-write path, and Accessibility not granted
+- **WHEN** `create_draft` is invoked with `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, a call that passes every eligibility condition and every pre-write gate of Requirement: Direct-write draft path, Full Disk Access and Automation granted, and Accessibility not granted
 - **THEN** the draft SHALL be created through the direct-write path
 - **AND** the tool SHALL NOT fail for reason 3
 
@@ -113,7 +113,11 @@ After eligibility passes and before writing, the system SHALL also require all o
 
 The write SHALL happen inside a single `BEGIN IMMEDIATE` transaction, with the `.emlx` file renamed into place inside that transaction. A failure during the write SHALL roll the transaction back and remove the file, and the call SHALL take the GUI path.
 
-After the write commits, the system SHALL ask Mail to upload the draft by toggling the draft's read status to unread and back to read. If that request fails, the system SHALL reverse the write exactly and take the GUI path — unless Mail has already uploaded the draft, in which case the system SHALL NOT reverse it and SHALL report the draft as created. Once the upload request has succeeded, the system SHALL NOT take the GUI path for that call, because doing so would create a second draft.
+After the write commits, the system SHALL ask Mail to upload the draft by toggling the draft's read status to unread and back to read. The upload request succeeds when that toggle completes without error. If it fails, the system SHALL reverse the write exactly and take the GUI path. If the write cannot be reversed because Mail has already uploaded the draft, the system SHALL report the draft as created and SHALL NOT take the GUI path. If it cannot be reversed for any other reason, the system SHALL report the draft as created with its upload pending, SHALL NOT claim that it was uploaded, and SHALL NOT take the GUI path. Once the upload request has succeeded, the system SHALL NOT take the GUI path for that call, because doing so would create a second draft. A reversed direct write that continues on the GUI path is not a retry through a body-assigning path; Requirement: Runtime composing failures propagate without falling back continues to govern failures of the GUI path itself.
+
+After the upload is confirmed, the system SHALL look at the draft's local read flag up to four times until it can be read. If a look shows the draft unread, the system SHALL re-assert its read status once and look again up to eight times. The tool result SHALL end with ` [note: the draft is uploaded but still shows as unread locally]` when no look after the re-assert shows it read but at least one shows it unread, and with ` [note: the draft is uploaded but its local read status could not be read]` when no relevant look could read the flag.
+
+The direct-write path SHALL NOT require Accessibility. It requires Full Disk Access, because it writes Mail's store, and Automation, because it toggles the draft's read status.
 
 Whenever the call takes the GUI path after the direct write was attempted or found ineligible (other than the variable being unset), the tool result SHALL end with ` [experimental direct-write not used: <reason> — GUI path]`, where `<reason>` names the condition that failed.
 
@@ -141,3 +145,15 @@ Whenever the call takes the GUI path after the direct write was attempted or fou
 - **WHEN** the upload request succeeds but the upload is not confirmed within the wait
 - **THEN** the system SHALL NOT take the GUI path
 - **AND** the tool result SHALL state that the draft is in Mail's Drafts with its upload pending
+
+#### Scenario: A failed upload request that cannot be reversed is not reported as uploaded
+
+- **WHEN** the upload request fails and reversing the write fails for a reason other than Mail having uploaded the draft
+- **THEN** the system SHALL NOT take the GUI path
+- **AND** the tool result SHALL state that the upload request failed and the write could not be reversed, and SHALL NOT state that the draft was uploaded
+
+#### Scenario: Unreadable read status after the upload is reported as unknown
+
+- **WHEN** the upload is confirmed, a look shows the draft unread, and every look after the re-assert fails to read the flag
+- **THEN** the tool result SHALL end with ` [note: the draft is uploaded but its local read status could not be read]`
+

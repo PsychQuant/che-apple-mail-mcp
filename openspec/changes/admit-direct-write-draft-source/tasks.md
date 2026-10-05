@@ -36,7 +36,15 @@
 - [x] 7.1 B1／B3：`message-composition` delta 以 MODIFIED 改「Plain mode preserves existing behavior」（內文來源指向兩種來源，直接寫入對內文 HTML 跳脫）與「Ineligible composing calls fail without side effects」（六類屬 GUI 路徑，直接寫入建立草稿時第 3 類不適用）；`create_draft` 的 tool description 同步。驗證：`spectra validate` 通過；`ToolCountCensusGuardTests` 以重產的 manifest 通過。
 - [x] 7.2 B2：三份 compose 規則的〈能力損失〉段寫明 opt-in 直接寫入在封閉適用條件內不開視窗；退回時機補上「觸發上傳失敗並還原」。驗證：三份內容審閱一致。
 - [x] 7.3 I1：`append` 對尾端缺換行的檔先補換行。驗證：`testHeaderWithoutTrailingNewlineIsNotGluedToTheFirstRow`、`testATruncatedLastRowDoesNotSwallowTheNextRow`；mutation（拿掉補換行）2 個測試轉紅。
-- [x] 7.4 I2：`read_ensured` 只在觀察到已讀時記；讀不到時回提示。驗證：`testReadCheckOnlyConfirmsAnObservedReadFlag`。
+- [x] 7.4 I2：`read_ensured` 只在觀察到已讀時記；讀不到時回提示。驗證：見 8.3（R3 改為依觀察序列判斷）。
 - [x] 7.5 I3：`flock` 改為不阻塞、約 1 秒的有限重試，逾時放棄該批列。驗證：`testABusyLockGivesUpInsteadOfBlocking`；mutation（改回阻塞）測試轉紅。
 - [x] 7.6 I4／I5：同一時間戳的列保持輸入順序；寫不進的路徑丟出具名錯誤、run 仍回傳原結果。驗證：`testMarksWithEqualTimestampsKeepTheirInputOrder`、`testAnUnwritablePathThrowsANamedErrorAndARunStillReturns`。
 - [x] 7.7 I6：proposal（9 類）、design（Segment 載體、測試範圍、並發 marks 風險）、tasks、compose-timing spec（`drafts_resolved`、`read_ensured`、`created`、`not_attempted`、`update_draft`）措辭對齊。驗證：`spectra validate` 通過。
+
+## 8. Verify R3 修正（按類別關閉）
+
+- [x] 8.1 C1：權限／視窗說法全庫掃描並統一例外句（指向 spec 完整清單、寫明需要 Full Disk Access 與 Automation），刪掉規則、description 與 `r-must-direct-db.md` 裡標成「封閉」的部分條件清單；涵蓋 `create_draft` description 與 `from_address` 參數、`check_accessibility`（含 #304 前遺留的錯誤句）、README 兩處、三份規則的失敗表前言與 TCC 表。驗證：manifest 以 `ManifestToolsSetEqualityTests` 重產並比對，只有 `create_draft` 與 `check_accessibility` 帶直接寫入說明；README 只剩 `compose_email` 列寫「Bodies always come from Mail's own editor」。
+- [x] 8.2 C2：一次計時寫入只有一個約 1 秒的總期限（`appendLock.lock(before:)` 加 `flock` 重試）；`open` 加 `O_NONBLOCK`，非一般檔案拒絕；讀不到檔尾直接報錯；spec 合併成一致條款並補三個場景。驗證：`testConcurrentWritersBehindABusyLockEachGiveUpWithinTheDeadline`、`testANonRegularFileIsRefused`；mutation（改回每次呼叫各自重試、拿掉一般檔案檢查）兩個測試都轉紅。
+- [x] 8.3 C3：`ReadOutcome` 依觀察序列判斷（看到已讀才算確認、只看到未讀才算仍未讀、都讀不到為無法讀取）；第一次讀不到會重試，只有看到未讀才補設；spec 寫明兩種提示文字。驗證：`testReadOutcomeFollowsWhatWasObserved`、`testReadOutcomeNotes`。
+- [x] 8.4 C4：上傳請求失敗後，依還原結果分三種 outcome（還原成功 → 退回 GUI；因已上傳而拒絕 → `created`；其他原因 → `created:upload_pending`，不宣稱已上傳）。驗證：`testFailedTrigger*` 三個測試。
+- [x] 8.5 C5／C6：「觸發」在 spec、`r-must-direct-db.md` 與三份規則中定義一致；直接寫入還原後改走 GUI 不屬於以 body 指派重試；場景改為「通過全部條件」並寫明 FDA／Automation；Plain mode 註明直接寫入的 text/plain 部分為空、沒有簽名檔。驗證：`spectra validate` 通過。

@@ -48,7 +48,7 @@
 - #463 兩輪實驗:注入的草稿 Mail 不必重啟就列出、可開成可編輯撰寫視窗;同帳號一個 Mail 自己建立的 action(包括切換該草稿自身的已讀)就讓同步引擎把注入的 action 一併處理,上傳後伺服器端 `draft=1`,與 Mail 自己的草稿在列形狀與內容上無法區分(標頭與解碼後內文逐欄一致,含中文)。
 - split-brain 的疑慮在這個範圍內被量測過:寫入只在單一 `BEGIN IMMEDIATE` 交易內完成(寫入鎖約 2–5 ms),`.emlx` 在交易內原子改名,絕不碰 `alleged_change_identifier`,由 Mail 自己的 trigger 維護計數。
 
-**界線(封閉,不得依性質相似類推)**:只有這一條路徑、只在 opt-in 時、只在 `DirectDraft.eligibility` 與版本/結構檢查全部通過時(純文字、無附件、只有 To、全為 bare address、有 `from_address`、IMAP 帳號、Mail 16 / macOS 27、`messages` 欄位與驗證時完全一致)。任何其他寫入(標記、搬移、刪除、`update_draft`、`compose_email`)仍走 AppleScript。觸發前任何失敗都必須精確還原並退回 GUI 路徑;觸發後不得退回(會產生重複草稿)。
+**界線(封閉,不得依性質相似類推)**:只有這一條路徑、只在 opt-in 時、只在呼叫通過 spec〈Direct-write draft path〉列出的全部條件時（`message-composition` spec：9 項適用條件與 8 項寫入前閘門兩份封閉清單，以 spec 為準，這裡不重抄）。任何其他寫入(標記、搬移、刪除、`update_draft`、`compose_email`)仍走 AppleScript。「觸發」指上傳請求（切換該草稿的已讀狀態）成功完成。在那之前的任何失敗，包括上傳請求本身失敗，都必須精確還原並退回 GUI 路徑；還原若因 Mail 已上傳而被拒，視為已建立、不得退回；還原因其他原因失敗，回報為已建立、上傳未確認，同樣不得退回。上傳請求成功之後不得退回（會產生重複草稿）。殘留風險（#475 verify R3，未實測）：還原只以 `server_messages` 判斷是否已上傳；若上傳請求在切換之後才出錯，而 Mail 的上傳已在進行、尚未寫入 `server_messages`，還原仍可能放行。
 
 ## Hybrid pattern(實作慣例)
 
