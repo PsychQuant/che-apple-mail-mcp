@@ -51,6 +51,12 @@ run context 用 Swift `@TaskLocal` 傳遞：`createDraft → composeViaMailto �
 
 `append` 在檔案非空時讀第一行，與 `csvHeader` 不同就丟出錯誤；呼叫端照既有慣例寫 `compose timing:` 到 stderr，不影響 compose 結果。理由：同一個檔案混用 10 欄與 11 欄，任何以表頭解析的讀者都會錯欄，而且安靜。
 
+### 寫入以鎖串行化，欄位也去掉雙引號（verify R1）
+
+verify R1 的 Codex lens 指出：`append` 的「檢查存在 → 建檔 → 讀表頭 → 寫入」之間沒有鎖，而 MCP server 對每個 request 開一個 Task，兩個 `create_draft` 可以同時寫同一個檔；16 個並發 writer 的測試一跑就重現資料遺失。改為：process 內 `NSLock` ＋ 跨 process `flock` ＋ `O_APPEND`，表頭檢查與寫入都在兩把鎖內。`csvField` 另外把雙引號換成單引號，否則標準 CSV 解析器會把它當欄位分隔。
+
+替代方案：改用完整的 CSV 引號跳脫。拒絕理由：欄位值都是固定代碼、數字或旗標，引號跳脫只為了容納本來就不該出現的字元；維持「無引號、不含逗號與雙引號」的格式，讀者用最簡單的 split 也不會錯。
+
 ## Implementation Contract
 
 **可觀察行為：**

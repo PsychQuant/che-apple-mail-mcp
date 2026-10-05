@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the direct `enter`, so the fallback's total cost is the last row. A file whose header differs (e.g. one
   started by a build before #475) is left untouched and a `compose timing:` line on stderr says so — point the
   variable at a new file. With the variable unset the generated script is byte-for-byte unchanged and no file
-  is written.
+  is written. Writers to one file are serialized (an in-process lock, `flock` across server processes and
+  `O_APPEND`), so concurrent calls no longer truncate or overwrite each other's rows, and double quotes in a
+  value are written as single quotes so a standard CSV reader cannot misparse the row.
 
 - **Experimental direct-write path for `create_draft`** (`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, off by default,
   [#472](https://github.com/PsychQuant/che-apple-mail-mcp/issues/472)). The draft is written straight into Mail's

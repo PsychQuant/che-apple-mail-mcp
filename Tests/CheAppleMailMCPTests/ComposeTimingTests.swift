@@ -262,6 +262,34 @@ final class ComposeTimingTests: XCTestCase {
         XCTAssertTrue(lines.allSatisfy { $0.hasSuffix(",error,default,default,false,gui-mailto") })
     }
 
+    // MARK: - #475 verify R1 (Codex): quotes and concurrent writers
+
+    func testNoFieldContainsADoubleQuote() {
+        // A standard CSV reader treats `"` as a field delimiter; an env value such as
+        // `"0.2` would swallow the rest of the row into one quoted field.
+        let rows = ComposeTiming.csvRows(runId: "R1", marks: [
+            ComposeTiming.Mark(source: "swift", label: "enter", time: 1.0)], outcome: "ok",
+            config: ["window_delay": "\"0.2", "step_delay": "\"1\"", "from_address_set": "true"])
+        XCTAssertEqual(rows, ["R1,swift,enter,1.000,0,0,ok,'0.2,'1',true,gui-mailto"])
+    }
+
+    func testConcurrentAppendsKeepEveryRowAndOneHeader() throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let writers = 16
+        DispatchQueue.concurrentPerform(iterations: writers) { i in
+            try? ComposeTiming.append(rows: ["row-\(i)-a", "row-\(i)-b"], toCSVAt: path)
+        }
+        let lines = try String(contentsOfFile: path, encoding: .utf8).split(separator: "\n").map(String.init)
+        XCTAssertEqual(lines.filter { $0 == Self.header475 }.count, 1, "the header is written exactly once")
+        XCTAssertEqual(lines.first, Self.header475)
+        let rows = Set(lines.dropFirst())
+        for i in 0..<writers {
+            XCTAssertTrue(rows.contains("row-\(i)-a") && rows.contains("row-\(i)-b"), "writer \(i) lost its rows")
+        }
+        XCTAssertEqual(lines.count, 1 + 2 * writers, "no row is duplicated or truncated")
+    }
+
     func testCapturedMarksAreTakenOnce() {
         ComposeTiming.captureStderr("\(ComposeTiming.logPrefix)x|1.0\n")
         XCTAssertEqual(ComposeTiming.takeCapturedMarks().map(\.label), ["x"])

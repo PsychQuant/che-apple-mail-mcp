@@ -73,12 +73,16 @@ enum ComposeTiming {
         /// Appending would mix layouts and every header-driven reader would
         /// misalign columns without noticing — so nothing is written.
         case headerMismatch(path: String, found: String)
+        /// The file could not be opened, locked, inspected or written.
+        case io(path: String, reason: String)
 
         var description: String {
             switch self {
             case .headerMismatch(let path, let found):
                 return "header of \(path) does not match the current layout (found \"\(found)\"); "
                     + "point \(ComposeTiming.envKey) at a new file"
+            case .io(let path, let reason):
+                return "\(path): \(reason)"
             }
         }
 
@@ -119,34 +123,59 @@ enum ComposeTiming {
     }
 
     /// Fields are joined without quoting, so a comma (or line break) in a value —
-    /// e.g. an env delay someone wrote as `0.2,0.3` — would shift every column.
+    /// e.g. an env delay someone wrote as `0.2,0.3` — would shift every column,
+    /// and a double quote would make a standard CSV reader treat it as a field
+    /// delimiter (#475 verify R1).
     static func csvField(_ value: String) -> String {
-        value.replacingOccurrences(of: ",", with: ";")
+        value.replacingOccurrences(of: ",", with: ";").replacingOccurrences(of: "\"", with: "'")
             .replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
     }
 
+    /// Serializes writers: an in-process lock for concurrent tool calls (the MCP
+    /// server runs each request in its own Task), `flock` for another server
+    /// process sharing the file, and `O_APPEND` so every write lands at the end.
+    /// The existence/header check and the write happen under both locks — before
+    /// #475 verify R1 a second writer could `createFile` over the first one's rows.
+    private static let appendLock = NSLock()
+
     static func append(rows: [String], toCSVAt path: String) throws {
-        let fm = FileManager.default
-        let isNew = !fm.fileExists(atPath: path)
-            || ((try? fm.attributesOfItem(atPath: path)[.size] as? NSNumber)?.intValue ?? 0) == 0
+        appendLock.lock(); defer { appendLock.unlock() }
+        let fd = open(path, O_RDWR | O_CREAT | O_APPEND | O_CLOEXEC, 0o644)
+        guard fd >= 0 else { throw AppendError.io(path: path, reason: "open: \(String(cString: strerror(errno)))") }
+        defer { close(fd) }
+        guard flock(fd, LOCK_EX) == 0 else {
+            throw AppendError.io(path: path, reason: "flock: \(String(cString: strerror(errno)))")
+        }
+        defer { flock(fd, LOCK_UN) }
+        var info = stat()
+        guard fstat(fd, &info) == 0 else {
+            throw AppendError.io(path: path, reason: "fstat: \(String(cString: strerror(errno)))")
+        }
+        let isNew = info.st_size == 0
         if !isNew {
-            let first = try firstLine(ofFileAt: path)
+            let first = firstLine(of: fd)
             guard first == csvHeader else { throw AppendError.headerMismatch(path: path, found: first) }
         }
-        if isNew { fm.createFile(atPath: path, contents: nil) }
-        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
-        defer { try? handle.close() }
-        try handle.seekToEnd()
-        let text = (isNew ? [csvHeader] : []) + rows
-        try handle.write(contentsOf: Data((text.joined(separator: "\n") + "\n").utf8))
+        let data = Data((((isNew ? [csvHeader] : []) + rows).joined(separator: "\n") + "\n").utf8)
+        try data.withUnsafeBytes { raw in
+            var offset = 0
+            while offset < raw.count {
+                let n = Darwin.write(fd, raw.baseAddress! + offset, raw.count - offset)
+                if n < 0 {
+                    if errno == EINTR { continue }
+                    throw AppendError.io(path: path, reason: "write: \(String(cString: strerror(errno)))")
+                }
+                offset += n
+            }
+        }
     }
 
     /// Reads only up to the first line break (bounded), never the whole file.
-    private static func firstLine(ofFileAt path: String) throws -> String {
-        let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
-        defer { try? handle.close() }
-        let head = try handle.read(upToCount: 4096) ?? Data()
-        let text = String(decoding: head, as: UTF8.self)
+    private static func firstLine(of fd: Int32) -> String {
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        let n = pread(fd, &buffer, buffer.count, 0)
+        guard n > 0 else { return "" }
+        let text = String(decoding: buffer[0..<n], as: UTF8.self)
         return String(text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
             .trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
     }

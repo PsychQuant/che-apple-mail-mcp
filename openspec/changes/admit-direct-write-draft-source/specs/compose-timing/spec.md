@@ -26,13 +26,19 @@ The timing file SHALL be CSV with exactly this header line:
 
 `run_id,source,step,t_ref,ms_since_start,ms_since_prev,outcome,window_delay,step_delay,from_address_set,path`
 
-The system SHALL write the header only when the file does not exist or is empty. Each timing mark SHALL produce one row. Within one `run_id`, rows SHALL be ordered by time; `ms_since_start` SHALL be measured from the earliest mark of that `run_id`, and `ms_since_prev` from the mark before it. `source` SHALL be `swift` for marks taken in the server process and `script` for marks logged by the AppleScript. `path` SHALL be `gui-mailto` for marks of the GUI mailto path and `direct` for marks of the direct-write path. No field SHALL contain a comma.
+The system SHALL write the header only when the file does not exist or is empty. Each timing mark SHALL produce one row. Within one `run_id`, rows SHALL be ordered by time; `ms_since_start` SHALL be measured from the earliest mark of that `run_id`, and `ms_since_prev` from the mark before it. `source` SHALL be `swift` for marks taken in the server process and `script` for marks logged by the AppleScript. `path` SHALL be `gui-mailto` for marks of the GUI mailto path and `direct` for marks of the direct-write path. No field SHALL contain a comma or a double quote. Concurrent writers to the same file — within one server process or across processes — SHALL NOT lose, duplicate, or truncate each other's rows, and the header SHALL be written exactly once.
 
 #### Scenario: A new file starts with the header
 
 - **WHEN** a composing call records timing into a path where no file exists
 - **THEN** the file's first line SHALL equal the header above
 - **AND** every following line SHALL have exactly 11 comma-separated fields
+
+#### Scenario: Concurrent writers keep every row
+
+- **WHEN** 16 writers append two rows each to a new timing file at the same time
+- **THEN** the file SHALL contain the header exactly once, as its first line
+- **AND** it SHALL contain all 32 rows, none duplicated or truncated
 
 ### Requirement: Mismatched header is refused
 

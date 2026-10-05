@@ -25,3 +25,8 @@
 
 - [x] 5.1 全套測試綠燈。驗證：`swift test` 0 failures（依 repo 慣例先取得使用者同意再跑全套）。
 - [x] 5.2 Live 驗證三條路徑的 CSV：以新的計時檔、開啟直接寫入，對測試帳號各跑一次（a）符合條件的草稿（只有 `direct` 列，outcome `created`）、（b）帶 cc 的草稿（`direct` 的 `enter`＋`returned` 接 `gui-mailto` 列、同一 `run_id`）、（c）關閉直接寫入的草稿（只有 `gui-mailto` 列）；另以舊表頭檔確認拒寫與 stderr 訊息。探針以 `[idd-475-probe]` 為主旨、`.invalid` 收件人，結束後以 id-delta 清理。驗證：把三段 CSV 摘錄（去除帳號）貼到 #475。
+
+## 6. Verify R1 修正（Codex lens）
+
+- [x] 6.1 落實 design 決策「寫入以鎖串行化，欄位也去掉雙引號（verify R1）」的寫入部分：`ComposeTiming.append` 以 process 內鎖＋`flock`＋`O_APPEND` 串行化，表頭檢查與寫入都在鎖內；`Timing CSV layout` 的並發條款成立。驗證：`testConcurrentAppendsKeepEveryRowAndOneHeader`（16 個並發 writer）修正前 RED、修正後連跑 3 次綠。
+- [x] 6.2 `csvField` 把雙引號換成單引號，`Timing CSV layout` 的「不含逗號或雙引號」成立。驗證：`testNoFieldContainsADoubleQuote` 修正前 RED、修正後綠。
