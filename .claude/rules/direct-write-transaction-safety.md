@@ -63,14 +63,16 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 
 上面沒列到的改動，都不會讓這兩條守門測試轉紅。凍結段呼叫到的函式不在它們的範圍內；其中另有測試的只有
 `readOutcome`、`outcomeAfterFailedTrigger`、`buildDirectDraftMarkReadScript`、`buildDirectDraftTriggerScript`
-（`DirectDraftPathTests`）與 `uploadState`（`DraftStoreWriterTests`），`readFlag`、`createdText`、
-`markDirectDraftRead`、`triggerDirectDraftUpload` 沒有任何測試。
+（`DirectDraftPathTests`）、`triggerDirectDraftUpload`（`DirectDraftTriggerTimingTests`，#489：斷言它送出的
+就是 `buildDirectDraftTriggerScript` 在同一個 `timing` 下的輸出）與 `uploadState`（`DraftStoreWriterTests`），
+`readFlag`、`createdText`、`markDirectDraftRead` 沒有任何測試。
 
 結構檢查擋不住所有削弱方式。#490 第 4 輪驗證找到下列六種寫法，這兩條守門測試都不會轉紅（#492；根治要靠
 #484 的行為測試）：
 
 1. 在 `timer.mark("inserted")` 之前提早回報；
-2. 讓 `triggerDirectDraftUpload` 送出 `buildDirectDraftTriggerScript` 以外的 script，或在送出前改寫它；
+2. 讓 `triggerDirectDraftUpload` 送出 `buildDirectDraftTriggerScript` 以外的 script，或在送出前改寫它
+   （#489 之後由 `DirectDraftTriggerTimingTests` 擋下，但不屬於這兩條守門測試）；
 3. 在 `DirectDraftPath` 裡宣告與凍結段所用名稱同名的型別或函式（例如 `Task`）；
 4. 用 `set the read status of` 之類的寫法多加一次切換；
 5. 用 `if` 等控制流程包住兩次切換；

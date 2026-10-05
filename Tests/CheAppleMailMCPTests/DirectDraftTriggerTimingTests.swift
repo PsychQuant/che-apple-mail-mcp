@@ -10,9 +10,23 @@ final class DirectDraftTriggerTimingTests: XCTestCase {
         _ = ComposeTiming.takeCapturedMarks()
     }
 
-    override func tearDown() {
+    override func tearDown() async throws {
         _ = ComposeTiming.takeCapturedMarks()
-        super.tearDown()
+        await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
+        try await super.tearDown()
+    }
+
+    // MARK: - Task 3.1: the trigger sends the builder's script for its timing flag
+
+    func testTriggerSendsTheBuildersScriptForItsTimingFlag() async throws {
+        final class Box: @unchecked Sendable { var sent: [String] = [] }
+        let box = Box()
+        await MailController.shared.setTestSeams(scriptRunner: { source in box.sent.append(source); return "toggled" },
+                                                 refusal: nil)
+        _ = try await MailController.shared.triggerDirectDraftUpload(rowId: 305619, timing: true)
+        _ = try await MailController.shared.triggerDirectDraftUpload(rowId: 305619, timing: false)
+        XCTAssertEqual(box.sent, [buildDirectDraftTriggerScript(rowId: 305619, timing: true),
+                                  buildDirectDraftTriggerScript(rowId: 305619, timing: false)])
     }
 
     // MARK: - Task 1.1: the trigger script
