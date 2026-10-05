@@ -43,6 +43,8 @@
 
 ### C/U/D 的唯一例外:實驗性直接寫入草稿(#472,opt-in)
 
+> 任何改動(包括加速)都不得削弱它的交易保證,見 `direct-write-transaction-safety.md`。
+
 `create_draft` 在 `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1` 時可**直接寫入** Envelope Index + `.emlx`(`Sources/MailSQLite/DraftStoreWriter.swift`),再用 AppleScript 切換該草稿的已讀狀態,讓 Mail 自己上傳。這是本規則「寫入走 AppleScript」的**唯一**例外,理由是證據而非方便:
 
 - #463 兩輪實驗:注入的草稿 Mail 不必重啟就列出、可開成可編輯撰寫視窗;同帳號一個 Mail 自己建立的 action(包括切換該草稿自身的已讀)就讓同步引擎把注入的 action 一併處理,上傳後伺服器端 `draft=1`,與 Mail 自己的草稿在列形狀與內容上無法區分(標頭與解碼後內文逐欄一致,含中文)。
