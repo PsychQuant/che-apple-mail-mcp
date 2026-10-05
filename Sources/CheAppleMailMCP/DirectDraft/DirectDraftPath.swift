@@ -273,7 +273,7 @@ struct DirectDraftPath {
         }
         return .created("Draft created (experimental direct-write path, #472) — the upload request failed "
                         + "(\(triggerError)) and the write could not be reversed (\(rollbackError)); the draft is in "
-                        + "Mail's Drafts and Mail uploads it with its next action for this account", pending: true)
+                        + "Mail's Drafts and its upload is not confirmed", pending: true)
     }
 
     /// What the looks at the uploaded draft's local read flag establish

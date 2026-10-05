@@ -1694,7 +1694,7 @@ actor MailController {
         let partition = partitionRecipientsForMailto(to: to, cc: cc ?? [], bcc: bcc ?? [])
         // #277 defense-in-depth (verify R1 + R2, Codex): display-name fill is
         // DRAFT-ONLY. Eligibility already routes a send with ANY display-name
-        // recipient (To/Cc/Bcc) to the legacy path, so this is unreachable — but
+        // recipient (To/Cc/Bcc) to a refusal (#304), so this is unreachable — but
         // a future routing bug must fail LOUD, never silently clean-send with a
         // display name the mailto URL can't carry (wrong/missing recipient). The
         // guard covers all three lists, not just `fillTo` (#219/#277 verify R2,

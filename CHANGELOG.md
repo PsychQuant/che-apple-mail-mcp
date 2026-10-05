@@ -50,7 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   README and rules point at the spec's closed lists instead of repeating a partial one. When the upload request
   fails and the write cannot be reversed, the result reports the draft as created with its upload pending
   (`created:upload_pending`) unless Mail had already uploaded it — it no longer claims an upload nobody
-  confirmed.
+  confirmed. `check_accessibility`'s returned text, the setup window and `open_mailto`'s description no
+  longer describe the legacy fallback that #304 removed; a guard test scans the sources for those phrasings.
 
 ### Changed
 

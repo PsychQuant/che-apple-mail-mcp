@@ -37,7 +37,7 @@ private let mailtoUnreserved: CharacterSet =
 
 /// Upper bound on the encoded `mailto:` URL length. Beyond this, the native
 /// compose path risks silent body truncation (URL parsers / Mail), so the caller
-/// falls back to the legacy injection path (which has no length limit). 8000 is
+/// fails with a named reason (#304 removed the injection path that had no length limit). 8000 is
 /// well under typical OS URL ceilings while comfortably fitting ordinary mail.
 let maxMailtoURLLength = 8000
 
@@ -586,7 +586,7 @@ func unknownSendStateError(_ error: Error) -> MailError {
         return MailError.scriptFailed(
             message: "the GUI send flow hit its deadline — "
                 + "the send keystroke may or may not have fired, so the send state is "
-                + "UNKNOWN. NOT retrying via the legacy path (that could send a "
+                + "UNKNOWN. NOT retrying (that could send a "
                 + "duplicate). Check Mail's Sent mailbox / Outbox and any leftover "
                 + "compose window before re-sending. Original error: "
                 + clampedErrorEcho(error.localizedDescription),
@@ -595,7 +595,7 @@ func unknownSendStateError(_ error: Error) -> MailError {
     return MailError.scriptFailed(
         message: "the send keystroke was already dispatched but the GUI step failed "
             + "afterwards — the send state is UNKNOWN and the mail may already be on "
-            + "the wire. NOT retrying via the legacy path (that could send a duplicate). "
+            + "the wire. NOT retrying (that could send a duplicate). "
             + "Check Mail's Sent mailbox / Outbox before re-sending. The compose window "
             + "(if still open) was left untouched for inspection. Original error: "
             + clampedErrorEcho(error.localizedDescription),

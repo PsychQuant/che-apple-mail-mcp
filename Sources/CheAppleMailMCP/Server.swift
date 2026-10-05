@@ -686,7 +686,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "open_mailto",
-                description: "Open a mailto URL in the system default mail client via LaunchServices — ZERO Automation TCC required (#287), so it works even when AppleScript tools fail with -1743 (Not authorized to send Apple events). The mailto compose window is inherently cite-block-free (#175). Cite-block-avoidance ladder: (a) create_draft clean path — needs Automation + Accessibility TCC, carries attachments; (b) THIS TOOL — zero TCC, no attachments (RFC 6068; drag files in manually), window opens in the default mail app which may not be Mail.app; (c) legacy AppleScript injection — body wrapped in blockquote type=cite, unacceptable for formal mail. When TCC is not granted (-1743), (b) is the correct path — never fall to (c).",
+                description: "Open a mailto URL in the system default mail client via LaunchServices — ZERO Automation TCC required (#287), so it works even when AppleScript tools fail with -1743 (Not authorized to send Apple events). The mailto compose window is inherently cite-block-free (#175). Cite-block-avoidance ladder: (a) create_draft clean path — needs Automation + Accessibility TCC (the opt-in direct-write create_draft path needs Full Disk Access + Automation instead), carries attachments; (b) THIS TOOL — zero TCC, no attachments (RFC 6068; drag files in manually), window opens in the default mail app which may not be Mail.app; the legacy AppleScript body injection that wrapped the body in blockquote type=cite was removed in #304, so there is no third path. When TCC is not granted (-1743), (b) is the correct path.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -874,10 +874,10 @@ class CheAppleMailMCPServer {
             switch probe {
             case .granted:
                 return "✅ " + AccessibilityStatus.summary(probe)
-                    + "\nEligible compose_email / create_draft calls (plain-text, a subject, a simple custom"
-                    + " from_address rides the clean path via the verified From popup (#219), env hatch off) will"
-                    + " attempt the wrapper-free mailto path (#175); other calls and any GUI-step failure fall back"
-                    + " to the legacy path. Note: System Events keystrokes also rely on Automation (Apple Events)"
+                    + "\ncompose_email / create_draft / reply_email / forward_email take their body from Mail's own"
+                    + " editor (#175/#304); a call that cannot run cleanly fails with a named reason, and nothing falls"
+                    + " back to another path. With CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1 an eligible create_draft writes"
+                    + " the draft directly instead (#472/#475). Note: System Events keystrokes also rely on Automation (Apple Events)"
                     + " being allowed — this probe only checks Accessibility (AXIsProcessTrusted)."
             case .denied:
                 return "⚠️ " + AccessibilityStatus.summary(probe) + "\n\n"

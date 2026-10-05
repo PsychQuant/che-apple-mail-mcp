@@ -43,7 +43,7 @@ enum AccessibilityStatus {
         case .granted:
             return "Accessibility: GRANTED — GUI scripting (keystrokes, File ▸ Attach, sender popup) is allowed."
         case .denied:
-            return "Accessibility: DENIED — this process can't send keystrokes, so the wrapper-free mailto compose path is unavailable (compose falls back to the legacy path, which works but wraps the body in a quote on some mobile clients — see #175)."
+            return "Accessibility: DENIED — this process can't send keystrokes, so the GUI compose paths are unavailable: compose_email / create_draft / reply_email / forward_email-with-a-body fail with a named reason, and there has been no fallback path since #304. open_mailto needs no grant; the opt-in direct-write create_draft path (CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1) needs Full Disk Access and Automation instead."
         case .unsupported:
             return "Accessibility: UNSUPPORTED — not a macOS environment."
         }
@@ -61,9 +61,11 @@ enum AccessibilityStatus {
              (macOS can't tell us which one automatically — add whichever applies.)
           3. Re-run check_accessibility to confirm.
 
-        Without it, compose/create_draft still work but route through the legacy
-        path, which Mail wraps in <blockquote type="cite"> (looks like quoted text
-        on mobile). This is separate from Full Disk Access (see check_fda).
+        Without it, the GUI compose paths fail with a named reason — there has been
+        no fallback path since #304. open_mailto needs no grant (no attachments).
+        The opt-in direct-write create_draft path (CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1)
+        does not use Accessibility; it needs Full Disk Access and Automation.
+        This is separate from Full Disk Access (see check_fda).
         """
     }
 }

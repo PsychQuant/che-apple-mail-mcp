@@ -48,3 +48,8 @@
 - [x] 8.3 C3：`ReadOutcome` 依觀察序列判斷（看到已讀才算確認、只看到未讀才算仍未讀、都讀不到為無法讀取）；第一次讀不到會重試，只有看到未讀才補設；spec 寫明兩種提示文字。驗證：`testReadOutcomeFollowsWhatWasObserved`、`testReadOutcomeNotes`。
 - [x] 8.4 C4：上傳請求失敗後，依還原結果分三種 outcome（還原成功 → 退回 GUI；因已上傳而拒絕 → `created`；其他原因 → `created:upload_pending`，不宣稱已上傳）。驗證：`testFailedTrigger*` 三個測試。
 - [x] 8.5 C5／C6：「觸發」在 spec、`r-must-direct-db.md` 與三份規則中定義一致；直接寫入還原後改走 GUI 不屬於以 body 指派重試；場景改為「通過全部條件」並寫明 FDA／Automation；Plain mode 註明直接寫入的 text/plain 部分為空、沒有簽名檔。驗證：`spectra validate` 通過。
+
+## 9. Verify R4 修正
+
+- [x] 9.1 C1 補完：`check_accessibility` 實際回傳的文字（`AccessibilityStatus.summary(.denied)`、`guidance()`、granted 分支）、設定視窗、`open_mailto` 說明的 (a)／(c)、`MailtoCompose` 錯誤訊息與註解、`MailController` 註解，不再宣稱有 legacy 退回路徑，並寫明直接寫入的例外。驗證：新增 `NoLegacyFallbackClaimGuardTests`（runtime 字串＋全 Swift 原始碼掃描 compose 類說法），修正前 RED、修正後綠；`OpenMailtoLaunchServicesTests` 原本釘住 (c) 舊句，改為斷言「removed in #304」；manifest 重產。
+- [x] 9.2 R4 LOW：上傳請求失敗且無法還原時，結果文字不再斷言「Mail 會在下一個動作時上傳」（該失敗情境沒有驗證過）；spec 寫明「could not be read」的兩種情況，以及讀不到檔尾時拒寫。驗證：`spectra validate` 通過。
