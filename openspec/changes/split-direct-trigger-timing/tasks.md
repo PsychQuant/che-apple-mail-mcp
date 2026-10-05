@@ -1,12 +1,12 @@
 ## 1. 觸發 script 的計時點
 
-- [ ] 1.1 （Requirement: Direct-write path marks；design D1、D2：計時旗標怎麼傳）`buildDirectDraftTriggerScript(rowId:timing:)` 在 `timing: true` 時以 `ComposeTiming.prelude` 開頭，並依 design D1 的位置加入 `trigger_script_start`、`trigger_listed`、`trigger_unread`、`trigger_read` 四個計時點；`timing: false` 時輸出與現在逐位元組相同。驗證：`DirectDraftPathTests` 新測試比對 `timing: false` 的輸出與修改前的字串完全相同；`timing: true` 的輸出含四個計時點且順序正確；兩次 `set read status` 之間只有 `trigger_unread` 一行計時呼叫與 `delay 0.5`
-- [ ] 1.2 #490 第 8 項守門測試同時檢查計時開啟的觸發 script：`toggleGap(in: buildDirectDraftTriggerScript(rowId:timing: true))` 為 `.seconds` 且 ≥ 0.5。驗證：`DirectWriteSafetyGuardTests` 新測試通過；把計時版的 `delay 0.5` 改成 0.3 時轉紅（手動 mutation，不 commit）
+- [x] 1.1 （Requirement: Direct-write path marks；design D1、D2：計時旗標怎麼傳）`buildDirectDraftTriggerScript(rowId:timing:)` 在 `timing: true` 時以 `ComposeTiming.prelude` 開頭，並依 design D1 的位置加入 `trigger_script_start`、`trigger_listed`、`trigger_unread`、`trigger_read` 四個計時點；`timing: false` 時輸出與現在逐位元組相同。驗證：`DirectDraftPathTests` 新測試比對 `timing: false` 的輸出與修改前的字串完全相同；`timing: true` 的輸出含四個計時點且順序正確；兩次 `set read status` 之間只有 `trigger_unread` 一行計時呼叫與 `delay 0.5`
+- [x] 1.2 #490 第 8 項守門測試同時檢查計時開啟的觸發 script：`toggleGap(in: buildDirectDraftTriggerScript(rowId:timing: true))` 為 `.seconds` 且 ≥ 0.5。驗證：`DirectWriteSafetyGuardTests` 新測試通過；把計時版的 `delay 0.5` 改成 0.3 時轉紅（手動 mutation，不 commit）
 
 ## 2. 取走 script 計時點
 
-- [ ] 2.1 [P] `ComposeTiming.takeCapturedMarks(where:)` 在同一個鎖內只移出符合條件的點，其他點留在 buffer。驗證：`ComposeTiming` 相關測試新增案例，buffer 裡同時有 `trigger_x` 與 `script_start` 時，取 `trigger_` 前綴後只剩 `script_start`
-- [ ] 2.2 （design D3：在哪裡、何時取走 script 計時點）`DirectDraftTimer` 新增 `isRecording`（有 run 時為 true）與 `absorbScriptMarks()`：取出 `trigger_` 前綴的 script 點併入本段落；沒有 run 時不取、不併。驗證：`DirectDraftPathTests` 新測試在有 run 與沒有 run 兩種情況下檢查 buffer 與段落內容
+- [x] 2.1 [P] `ComposeTiming.takeCapturedMarks(where:)` 在同一個鎖內只移出符合條件的點，其他點留在 buffer。驗證：`ComposeTiming` 相關測試新增案例，buffer 裡同時有 `trigger_x` 與 `script_start` 時，取 `trigger_` 前綴後只剩 `script_start`
+- [x] 2.2 （design D3：在哪裡、何時取走 script 計時點）`DirectDraftTimer` 新增 `isRecording`（有 run 時為 true）與 `absorbScriptMarks()`：取出 `trigger_` 前綴的 script 點併入本段落；沒有 run 時不取、不併。驗證：`DirectDraftPathTests` 新測試在有 run 與沒有 run 兩種情況下檢查 buffer 與段落內容
 
 ## 3. 接上直接寫入的觸發
 

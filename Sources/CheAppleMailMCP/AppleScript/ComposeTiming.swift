@@ -291,4 +291,13 @@ enum ComposeTiming {
         captured = []
         return marks
     }
+
+    /// #489 — takes only the marks `predicate` selects, under the same lock,
+    /// and leaves the rest for the caller they belong to.
+    static func takeCapturedMarks(where predicate: (Mark) -> Bool) -> [Mark] {
+        lock.lock(); defer { lock.unlock() }
+        let taken = captured.filter(predicate)
+        captured.removeAll(where: predicate)
+        return taken
+    }
 }
