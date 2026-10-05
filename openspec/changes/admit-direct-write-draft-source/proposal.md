@@ -7,7 +7,7 @@
 ## What Changes
 
 - 修改 `message-composition` 的 requirement「Composing tools never inject a body via AppleScript」：AppleScript 注入禁令一字不改；body 來源從「只能來自 Mail 的編輯器」改成兩種，另一種是 `create_draft` 在 opt-in 下自組 MIME、直接寫入本機資料庫。
-- 在 `message-composition` 新增 requirement「Direct-write draft path」，把 #472 已出貨的行為寫成契約：opt-in 環境變數、10 類不符條件的封閉列舉、Mail／macOS 版本閘門與資料庫結構閘門、單一寫入交易、觸發前失敗精確還原並退回 GUI、觸發後不退回、退回時結果附原因。
+- 在 `message-composition` 新增 requirement「Direct-write draft path」，把 #472 已出貨的行為寫成契約：opt-in 環境變數、9 類不符條件的封閉列舉（另加旗標未開）、Mail／macOS 版本閘門與資料庫結構閘門、單一寫入交易、觸發前失敗精確還原並退回 GUI、觸發後不退回、退回時結果附原因。
 - 新增 capability `compose-timing`：把 #464 的 GUI 計時補成 spec，並擴充到 `create_draft` 的三條路徑。
   - CSV 新增最後一欄 `path`（`direct`／`gui-mailto`）。
   - `create_draft` 的一次呼叫只有一個 `run_id`；直接寫入失敗後退回 GUI 時，兩段的列共用同一個 `run_id`、同一個起點。

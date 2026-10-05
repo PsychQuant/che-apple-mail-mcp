@@ -26,6 +26,71 @@ No other body source is permitted.
 - **WHEN** `compose_email`, `reply_email`, or `forward_email` is invoked with `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1` set
 - **THEN** the tool SHALL obtain its body from Mail's own editor exactly as it does with the variable unset
 
+### Requirement: Plain mode preserves existing behavior
+
+When `format` is `"plain"`, the system SHALL deliver the `body` parameter verbatim: HTML tags SHALL appear literally in the delivered email and no HTML rendering SHALL occur. The body SHALL reach the message through one of the two sources in Requirement: Composing tools never inject a body via AppleScript — Mail's own editor (the `mailto:` hand-off or the native reply/forward verb plus paste), or, for `create_draft` under Requirement: Direct-write draft path, a MIME message the system builds with the body HTML-escaped — and SHALL NOT be assigned through the AppleScript `content` property, which is what produces the `<blockquote type="cite">` wrapper.
+
+#### Scenario: Plain body is delivered literally
+
+- **WHEN** a caller invokes `compose_email` with `body: "<b>bold</b>"` and `format: "plain"`
+- **THEN** the delivered email SHALL show the characters `<b>bold</b>` literally
+
+#### Scenario: Plain body written directly is escaped
+
+- **WHEN** `create_draft` creates a draft through the direct-write path with `body: "<b>bold</b>"`
+- **THEN** the draft's HTML part SHALL contain `&lt;b&gt;bold&lt;/b&gt;`, so the characters `<b>bold</b>` are shown literally
+
+#### Scenario: Plain body is not assigned via AppleScript content
+
+- **WHEN** the AppleScript emitted for a plain compose is inspected
+- **THEN** it SHALL NOT assign the body through `content` or `html content`
+
+### Requirement: Ineligible composing calls fail without side effects
+
+When a composing tool cannot use its non-injecting path, it SHALL fail with an error that names the reason and states an actionable alternative, and SHALL NOT create a draft, send mail, or delete an existing draft.
+
+The set of ineligibility reasons SHALL be exactly the following six, and SHALL NOT be extended by analogy. They govern the GUI path; when `create_draft` creates the draft through Requirement: Direct-write draft path, reason 3 does not apply, because that path sends no keystrokes. When the direct write does not create the draft, the GUI path's reasons apply in full.
+
+1. `format` is `markdown` or `html`
+2. the subject is empty (the clean path identifies its compose window by title)
+3. Accessibility is not granted (GUI keystrokes are unavailable)
+4. a supplied `from_address` is not a simple addr-spec
+5. an attachment path contains non-ASCII characters
+6. a `to`, `cc`, or `bcc` recipient carries a display name on a send (`compose_email`); on a draft, display-name recipients are filled through the GUI and are not a refusal reason
+
+#### Scenario: Missing Accessibility fails and names the zero-TCC alternative
+
+- **WHEN** `create_draft` is invoked while Accessibility is not granted and the direct-write path does not create the draft
+- **THEN** the tool SHALL fail naming Accessibility as the reason
+- **AND** the error SHALL name `open_mailto` as an alternative that requires no TCC grant, noting that it cannot carry attachments
+- **AND** no draft SHALL be created
+
+#### Scenario: Direct write needs no Accessibility
+
+- **WHEN** `create_draft` is invoked with `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, a call eligible for the direct-write path, and Accessibility not granted
+- **THEN** the draft SHALL be created through the direct-write path
+- **AND** the tool SHALL NOT fail for reason 3
+
+#### Scenario: Non-ASCII attachment path fails with the manual recipe
+
+- **WHEN** `create_draft` is invoked with an attachment path containing non-ASCII characters
+- **THEN** the tool SHALL fail naming the path as the reason
+- **AND** the error SHALL direct the caller to create the draft without `attachments` and attach the file manually
+- **AND** no draft SHALL be created
+
+#### Scenario: Display-name recipient on a send fails rather than degrading silently
+
+- **WHEN** `compose_email` is invoked with `cc: ["王小明 <ming@example.com>"]`
+- **THEN** the tool SHALL fail naming display-name recipients on a send as the reason
+- **AND** the error SHALL direct the caller to `create_draft`, where display-name recipients are supported
+- **AND** no mail SHALL be sent
+
+#### Scenario: Display-name recipient on a draft is not a refusal reason
+
+- **WHEN** `create_draft` is invoked with `bcc: ["王小明 <ming@example.com>"]` and every other eligibility condition holds
+- **THEN** the tool SHALL NOT fail for reason 6
+- **AND** SHALL proceed to fill the Bcc field
+
 ## ADDED Requirements
 
 ### Requirement: Direct-write draft path

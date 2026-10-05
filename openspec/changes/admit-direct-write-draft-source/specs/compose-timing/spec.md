@@ -6,7 +6,7 @@ Opt-in per-step timing of the composing paths, written as CSV, so that a slow or
 
 ### Requirement: Timing is opt-in and never affects the compose call
 
-The system SHALL record compose timing only when the environment variable `CHE_MAIL_COMPOSE_TIMING_CSV` names a file path. When the variable is unset or empty, the AppleScript the composing tools generate SHALL be byte-for-byte identical to the script generated without timing support, and the system SHALL write no timing file. A failure to write timing rows SHALL be reported on stderr and SHALL NOT change the result or the error of the compose call.
+The system SHALL record compose timing only when the environment variable `CHE_MAIL_COMPOSE_TIMING_CSV` names a file path. When the variable is unset or empty, the AppleScript the composing tools generate SHALL be byte-for-byte identical to the script generated without timing support, and the system SHALL write no timing file. A failure to write timing rows SHALL be reported on stderr and SHALL NOT change the result or the error of the compose call. A writer that cannot obtain the file lock within about one second SHALL give up those rows, with a stderr line, rather than wait.
 
 #### Scenario: Unset variable produces the untimed script
 
@@ -26,7 +26,7 @@ The timing file SHALL be CSV with exactly this header line:
 
 `run_id,source,step,t_ref,ms_since_start,ms_since_prev,outcome,window_delay,step_delay,from_address_set,path`
 
-The system SHALL write the header only when the file does not exist or is empty. Each timing mark SHALL produce one row. Within one `run_id`, rows SHALL be ordered by time; `ms_since_start` SHALL be measured from the earliest mark of that `run_id`, and `ms_since_prev` from the mark before it. `source` SHALL be `swift` for marks taken in the server process and `script` for marks logged by the AppleScript. `path` SHALL be `gui-mailto` for marks of the GUI mailto path and `direct` for marks of the direct-write path. No field SHALL contain a comma or a double quote. Concurrent writers to the same file — within one server process or across processes — SHALL NOT lose, duplicate, or truncate each other's rows, and the header SHALL be written exactly once.
+The system SHALL write the header only when the file does not exist or is empty. Each timing mark SHALL produce one row. Within one `run_id`, rows SHALL be ordered by time; `ms_since_start` SHALL be measured from the earliest mark of that `run_id`, and `ms_since_prev` from the mark before it. `source` SHALL be `swift` for marks taken in the server process and `script` for marks logged by the AppleScript. `path` SHALL be `gui-mailto` for marks of the GUI mailto path and `direct` for marks of the direct-write path. No field SHALL contain a comma or a double quote. Concurrent writers to the same file — within one server process or across processes — SHALL NOT lose, duplicate, or truncate each other's rows, and the header SHALL be written exactly once. When a non-empty file's last line has no line break, one SHALL be written before the new rows.
 
 #### Scenario: A new file starts with the header
 
@@ -52,7 +52,7 @@ When the timing file already exists, is non-empty, and its first line differs fr
 
 ### Requirement: GUI mailto path marks
 
-When `compose_email` or `create_draft` runs the GUI mailto path with timing enabled, the system SHALL record swift marks `enter`, `spawn`, and `returned`, plus every mark the AppleScript logs, all with `path` `gui-mailto`. These rows SHALL have `outcome` `ok` when the GUI script succeeded and `error` when it failed; `window_delay` and `step_delay` SHALL hold the values of `CHE_MAIL_MAILTO_WINDOW_DELAY` and `CHE_MAIL_MAILTO_STEP_DELAY`, or `default` when unset; `from_address_set` SHALL be `true` or `false`.
+When `compose_email`, `create_draft`, or `update_draft` (which builds its replacement through that path) runs the GUI mailto path with timing enabled, the system SHALL record swift marks `enter`, `spawn`, and `returned`, plus every mark the AppleScript logs, all with `path` `gui-mailto`. These rows SHALL have `outcome` `ok` when the GUI script succeeded and `error` when it failed; `window_delay` and `step_delay` SHALL hold the values of `CHE_MAIL_MAILTO_WINDOW_DELAY` and `CHE_MAIL_MAILTO_STEP_DELAY`, or `default` when unset; `from_address_set` SHALL be `true` or `false`.
 
 #### Scenario: A GUI draft records its steps
 
@@ -61,14 +61,14 @@ When `compose_email` or `create_draft` runs the GUI mailto path with timing enab
 
 ### Requirement: Direct-write path marks
 
-When `create_draft` attempts the direct-write path with timing enabled, the system SHALL record a swift mark with `path` `direct` when the attempt starts (`enter`) and when each of these steps completes successfully, in this order: `eligibility` (eligibility passed), `version_gate` (Mail/macOS version accepted), `drafts_resolved` (the account and its Drafts mailbox row identified), `writer_opened` (store opened for writing and the schema accepted), `inserted` (write committed), `trigger_sent` (upload request succeeded), `uploaded` (upload confirmed), `read_ensured` (local read status confirmed). It SHALL always record a final `returned` mark when the attempt ends. A step that does not complete SHALL produce no row. `window_delay` and `step_delay` SHALL be empty, and `from_address_set` SHALL be `true` when `from_address` is non-empty and `false` otherwise.
+When `create_draft` attempts the direct-write path with timing enabled, the system SHALL record a swift mark with `path` `direct` when the attempt starts (`enter`) and when each of these steps completes successfully, in this order: `eligibility` (eligibility passed), `version_gate` (Mail/macOS version accepted), `drafts_resolved` (the account identified and its Drafts mailbox matched to a path in the index), `writer_opened` (store opened for writing and the schema accepted), `inserted` (write committed), `trigger_sent` (upload request succeeded), `uploaded` (upload confirmed), `read_ensured` (the draft observed as read locally — a read status that cannot be read is not a confirmation). It SHALL always record a final `returned` mark when the attempt ends. A step that does not complete SHALL produce no row. `window_delay` and `step_delay` SHALL be empty, and `from_address_set` SHALL be `true` when `from_address` is non-empty and `false` otherwise.
 
 The `outcome` of every direct-write row SHALL be one of the following values. This list is closed:
 
-- `created` — the draft was written and Mail confirmed the upload.
+- `created` — the draft was written and Mail has it: the upload was confirmed, or the upload request failed after Mail had already uploaded the draft, so the write was not reversed.
 - `created:upload_pending` — the draft was written and the upload request succeeded, but the upload was not confirmed within the wait.
 - `fell_back:trigger` — the upload request failed and the write was reversed.
-- `not_attempted:<code>` — the attempt stopped before writing, where `<code>` is one of `format`, `attachments`, `ccOrBcc`, `noRecipient`, `displayName`, `unsupportedAddress`, `emptySubject`, `missingFromAddress`, `fromNotBare`, `version`, `account`, `index`, `drafts_unidentified`, `drafts_unmatched`, `writer_open`, `schema_drift`, `mailbox`, `sender`, `insert`.
+- `not_attempted:<code>` — the attempt ended without the draft reaching Mail and with nothing it wrote left behind (for `insert`, the write was begun and rolled back), where `<code>` is one of `format`, `attachments`, `ccOrBcc`, `noRecipient`, `displayName`, `unsupportedAddress`, `emptySubject`, `missingFromAddress`, `fromNotBare`, `version`, `account`, `index`, `drafts_unidentified`, `drafts_unmatched`, `writer_open`, `schema_drift`, `mailbox`, `sender`, `insert`.
 
 When `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT` is not `1`, the system SHALL record no `direct` rows.
 

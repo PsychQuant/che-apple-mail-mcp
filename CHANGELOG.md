@@ -24,7 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variable at a new file. With the variable unset the generated script is byte-for-byte unchanged and no file
   is written. Writers to one file are serialized (an in-process lock, `flock` across server processes and
   `O_APPEND`), so concurrent calls no longer truncate or overwrite each other's rows, and double quotes in a
-  value are written as single quotes so a standard CSV reader cannot misparse the row.
+  value are written as single quotes so a standard CSV reader cannot misparse the row. A file whose last line
+  lacks a line break gets one before new rows, and a writer that cannot get the file lock within about a
+  second gives up those rows (stderr) rather than hold up the compose call. `read_ensured` is recorded only
+  when the draft is seen as read locally; when its read status cannot be read the result now says so.
 
 - **Experimental direct-write path for `create_draft`** (`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, off by default,
   [#472](https://github.com/PsychQuant/che-apple-mail-mcp/issues/472)). The draft is written straight into Mail's
@@ -39,7 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unread locally, so the gap is 0.5 s and the path re-asserts read status after the upload.
   The `message-composition` spec now admits this as the second permitted body source for `create_draft`
   (opt-in only, closed eligibility list, no AppleScript body property); the AppleScript body-injection ban is
-  unchanged ([#475](https://github.com/PsychQuant/che-apple-mail-mcp/issues/475)).
+  unchanged ([#475](https://github.com/PsychQuant/che-apple-mail-mcp/issues/475)). The `create_draft` tool
+  description and the compose rules state the exception: within its eligibility list the direct write opens
+  no window and needs no Accessibility.
 
 ### Changed
 

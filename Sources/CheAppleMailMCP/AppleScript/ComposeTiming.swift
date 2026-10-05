@@ -107,8 +107,12 @@ enum ComposeTiming {
     /// All segments' marks in time order, measured from the earliest mark of the
     /// run, so a fallback's total cost reads straight off the last row.
     static func csvRows(runId: String, segments: [Segment]) -> [String] {
+        // Ties keep their recorded order: steps that complete in the same clock
+        // tick (e.g. `uploaded`, `read_ensured`, `returned`) stay in sequence.
         let tagged = segments.flatMap { segment in segment.marks.map { (mark: $0, segment: segment) } }
-            .sorted { $0.mark.time < $1.mark.time }
+            .enumerated()
+            .sorted { ($0.element.mark.time, $0.offset) < ($1.element.mark.time, $1.offset) }
+            .map(\.element)
         guard let start = tagged.first?.mark.time else { return [] }
         var previous = start
         return tagged.map { item in
@@ -143,9 +147,18 @@ enum ComposeTiming {
         let fd = open(path, O_RDWR | O_CREAT | O_APPEND | O_CLOEXEC, 0o644)
         guard fd >= 0 else { throw AppendError.io(path: path, reason: "open: \(String(cString: strerror(errno)))") }
         defer { close(fd) }
-        guard flock(fd, LOCK_EX) == 0 else {
-            throw AppendError.io(path: path, reason: "flock: \(String(cString: strerror(errno)))")
+        // Never wait indefinitely (#475 verify R2): timing must not hold up the
+        // compose call, so a lock held elsewhere — e.g. a stuck second server —
+        // is retried for about a second and then the rows are given up.
+        var locked = false
+        for _ in 0..<20 {
+            if flock(fd, LOCK_EX | LOCK_NB) == 0 { locked = true; break }
+            guard errno == EWOULDBLOCK || errno == EINTR else {
+                throw AppendError.io(path: path, reason: "flock: \(String(cString: strerror(errno)))")
+            }
+            usleep(50_000)
         }
+        guard locked else { throw AppendError.io(path: path, reason: "flock: busy — another writer holds the lock") }
         defer { flock(fd, LOCK_UN) }
         var info = stat()
         guard fstat(fd, &info) == 0 else {
@@ -156,7 +169,10 @@ enum ComposeTiming {
             let first = firstLine(of: fd)
             guard first == csvHeader else { throw AppendError.headerMismatch(path: path, found: first) }
         }
-        let data = Data((((isNew ? [csvHeader] : []) + rows).joined(separator: "\n") + "\n").utf8)
+        // A file whose last line has no line break (a hand-edited file, or a write
+        // cut short) would otherwise glue the first new row onto it (#475 verify R2).
+        let lead = !isNew && lastByte(of: fd, size: info.st_size) != UInt8(ascii: "\n") ? "\n" : ""
+        let data = Data((lead + ((isNew ? [csvHeader] : []) + rows).joined(separator: "\n") + "\n").utf8)
         try data.withUnsafeBytes { raw in
             var offset = 0
             while offset < raw.count {
@@ -168,6 +184,11 @@ enum ComposeTiming {
                 offset += n
             }
         }
+    }
+
+    private static func lastByte(of fd: Int32, size: off_t) -> UInt8? {
+        var byte: UInt8 = 0
+        return pread(fd, &byte, 1, size - 1) == 1 ? byte : nil
     }
 
     /// Reads only up to the first line break (bounded), never the whole file.

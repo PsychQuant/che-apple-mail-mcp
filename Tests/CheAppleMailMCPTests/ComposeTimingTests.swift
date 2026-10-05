@@ -290,6 +290,64 @@ final class ComposeTimingTests: XCTestCase {
         XCTAssertEqual(lines.count, 1 + 2 * writers, "no row is duplicated or truncated")
     }
 
+    // MARK: - #475 verify R2
+
+    func testHeaderWithoutTrailingNewlineIsNotGluedToTheFirstRow() throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        try Self.header475.write(toFile: path, atomically: true, encoding: .utf8)   // no "\n"
+        try ComposeTiming.append(rows: ["r1"], toCSVAt: path)
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), Self.header475 + "\nr1\n")
+    }
+
+    func testATruncatedLastRowDoesNotSwallowTheNextRow() throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        try (Self.header475 + "\nR0,partial").write(toFile: path, atomically: true, encoding: .utf8)
+        try ComposeTiming.append(rows: ["r1"], toCSVAt: path)
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), Self.header475 + "\nR0,partial\nr1\n")
+    }
+
+    func testAnUnwritablePathThrowsANamedErrorAndARunStillReturns() async throws {
+        let path = "/nonexistent-\(UUID().uuidString)/t.csv"
+        XCTAssertThrowsError(try ComposeTiming.append(rows: ["r"], toCSVAt: path)) { error in
+            XCTAssertTrue(error.localizedDescription.contains(path), error.localizedDescription)
+        }
+        // The compose call's own result is untouched: the run returns the body's value.
+        let value = await ComposeTiming.withRun(csvPath: path) { () -> String in
+            ComposeTiming.record(seg("gui-mailto", "enter", 1.0), csvPath: path)
+            return "draft created"
+        }
+        XCTAssertEqual(value, "draft created")
+    }
+
+    func testABusyLockGivesUpInsteadOfBlocking() throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let holder = open(path, O_RDWR | O_CREAT, 0o644)
+        XCTAssertGreaterThanOrEqual(holder, 0)
+        XCTAssertEqual(flock(holder, LOCK_EX), 0)
+        defer { flock(holder, LOCK_UN); close(holder) }
+        let done = expectation(description: "append returns while the lock is held elsewhere")
+        var thrown: Error?
+        DispatchQueue.global().async {
+            do { try ComposeTiming.append(rows: ["r"], toCSVAt: path) } catch { thrown = error }
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 5)
+        XCTAssertNotNil(thrown, "a held lock must not make the compose call wait indefinitely")
+        XCTAssertTrue(thrown.map { "\($0)".contains("flock") } ?? false, String(describing: thrown))
+    }
+
+    func testMarksWithEqualTimestampsKeepTheirInputOrder() {
+        let rows = ComposeTiming.csvRows(runId: "R", segments: [
+            ComposeTiming.Segment(path: "direct", outcome: "created", config: [:], marks: [
+                ComposeTiming.Mark(source: "swift", label: "uploaded", time: 5.0),
+                ComposeTiming.Mark(source: "swift", label: "read_ensured", time: 5.0),
+                ComposeTiming.Mark(source: "swift", label: "returned", time: 5.0)])])
+        XCTAssertEqual(rows.map { String($0.split(separator: ",")[2]) }, ["uploaded", "read_ensured", "returned"])
+    }
+
     func testCapturedMarksAreTakenOnce() {
         ComposeTiming.captureStderr("\(ComposeTiming.logPrefix)x|1.0\n")
         XCTAssertEqual(ComposeTiming.takeCapturedMarks().map(\.label), ["x"])

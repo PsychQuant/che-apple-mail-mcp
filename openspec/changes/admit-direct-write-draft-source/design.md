@@ -41,7 +41,7 @@ run context 用 Swift `@TaskLocal` 傳遞：`createDraft → composeViaMailto �
 
 ### 每個 mark 帶自己的 path 與 outcome
 
-`Mark` 增加 `path` 欄位；`csvRows` 改成接受多個 segment（每段有 `path`、`outcome`、`config`、marks），合併後依時間排序、以整個 run 最早的 mark 為起點。直接寫入段的 `window_delay`／`step_delay` 為空。
+每一列都帶自己的 `path` 與 `outcome`，但載體是 segment 而不是 mark：`Mark` 不變，`csvRows` 接受多個 `Segment`（每段有 `path`、`outcome`、`config`、marks），合併後依時間排序、以整個 run 最早的 mark 為起點。直接寫入段的 `window_delay`／`step_delay` 為空。
 
 ### outcome 用固定代碼，不放原因全文
 
@@ -80,7 +80,7 @@ verify R1 的 Codex lens 指出：`append` 的「檢查存在 → 建檔 → 讀
 **驗收：**
 
 - `ComposeTimingTests` 覆蓋表頭、11 欄、多段合併排序與起點、表頭不符拒寫、未設定時 script 不變。
-- `DirectDraftPathTests` 覆蓋每種 outcome 代碼與對應的步驟序列（以注入的假 controller／writer 驗證，不碰真實 Mail）。
+- `DirectDraftPathTests` 覆蓋 outcome 代碼的封閉清單（純函式映射），以及不需要 Mail 的早期結果（旗標關、不符條件、版本閘門失敗後退回 GUI）的步驟序列。寫入之後的結果（`created`、`created:upload_pending`、`fell_back:trigger`）沒有可注入的 controller／writer seam，目前只靠 live 驗證（verify R2，已開 follow-up）。
 - `NoBodyInjectionGuardTests` 維持綠燈（它已遞迴掃描整個 `Sources/`，含 `DirectDraft/`）。
 - 全套測試綠燈；live：開啟兩個環境變數各跑一次三條路徑，CSV 內容符合第 3 點。
 
@@ -92,6 +92,8 @@ verify R1 的 Codex lens 指出：`append` 的「檢查存在 → 建檔 → 讀
 - [直接寫入路徑加計時點後，未開計時時多出成本] → 計時關閉時 mark 呼叫只做一次 nil 檢查，不取時間、不配置。
 - [使用者沿用 #464 時期的 CSV 檔，升級後計時「消失」] → stderr 明確說表頭不符與檔名；CHANGELOG 註明要換新檔。
 - [outcome 代碼與 `Ineligible` case 名稱漂移] → 代碼由 `Ineligible` 的 case 名稱推導，測試逐一列舉比對 spec 的封閉清單。
+
+- [script mark 的暫存是 process 全域] → 兩個並發的 GUI 呼叫可能拿走對方的 script marks、寫進錯的 run（#464 既有行為）。GUI 呼叫本身會搶同一個 Mail 視窗，實務上少見；已開 follow-up 改以 run 為單位暫存。
 
 ## Migration Plan
 

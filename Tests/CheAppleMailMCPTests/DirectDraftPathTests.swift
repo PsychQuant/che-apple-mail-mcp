@@ -190,6 +190,14 @@ final class DirectDraftPathTests: XCTestCase {
         XCTAssertFalse(directRan)
     }
 
+    // MARK: - #475 verify R2: read_ensured means confirmed
+
+    func testReadCheckOnlyConfirmsAnObservedReadFlag() {
+        XCTAssertEqual(DirectDraftPath.readCheck(true), .confirmed)
+        XCTAssertEqual(DirectDraftPath.readCheck(false), .needsRepair)
+        XCTAssertEqual(DirectDraftPath.readCheck(nil), .unknown, "a row that cannot be read is not a confirmed read")
+    }
+
     func testFallbackNoteFormat() {
         XCTAssertEqual(DirectDraftPath.fallbackNote("cc/bcc are not written directly"),
                        " [experimental direct-write not used: cc/bcc are not written directly — GUI path]")

@@ -249,25 +249,44 @@ struct DirectDraftPath {
             if state.remoteId != nil && !state.actionQueued {
                 let seconds = Date().timeIntervalSince(triggered)
                 timer.mark("uploaded")
-                let readNote = await ensureRead(writer, inserted)
-                if readNote.isEmpty { timer.mark("read_ensured") }
-                return .created(Self.createdText(seconds: seconds, uploaded: true) + readNote, pending: false)
+                let read = await ensureRead(writer, inserted)
+                if read.confirmed { timer.mark("read_ensured") }
+                return .created(Self.createdText(seconds: seconds, uploaded: true) + read.note, pending: false)
             }
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
         return .created(Self.createdText(seconds: uploadDeadline, uploaded: false), pending: true)
     }
 
+    /// What one look at the uploaded draft's local read flag means (#475 verify
+    /// R2): only an observed `read = 1` is a confirmation; a row that cannot be
+    /// read is NOT, even though no repair is attempted for it.
+    enum ReadCheck: Equatable { case confirmed, needsRepair, unknown }
+
+    static func readCheck(_ flag: Bool?) -> ReadCheck {
+        switch flag {
+        case true?: return .confirmed
+        case false?: return .needsRepair
+        case nil: return .unknown
+        }
+    }
+
     /// Re-assert read status once if the uploaded draft's row still says unread
-    /// (see `buildDirectDraftMarkReadScript`). Returns a note only on failure.
-    private func ensureRead(_ writer: DraftStoreWriter, _ inserted: DraftStoreWriter.Inserted) async -> String {
-        guard writer.readFlag(inserted) == false else { return "" }
+    /// (see `buildDirectDraftMarkReadScript`). `confirmed` is true only when the
+    /// row was seen as read; `note` explains anything else.
+    private func ensureRead(_ writer: DraftStoreWriter, _ inserted: DraftStoreWriter.Inserted) async
+        -> (note: String, confirmed: Bool) {
+        switch Self.readCheck(writer.readFlag(inserted)) {
+        case .confirmed: return ("", true)
+        case .unknown: return (" [note: the draft is uploaded but its local read status could not be read]", false)
+        case .needsRepair: break
+        }
         _ = try? await controller.markDirectDraftRead(rowId: inserted.messageRowId)
         for _ in 0..<8 {
-            if writer.readFlag(inserted) == true { return "" }
+            if Self.readCheck(writer.readFlag(inserted)) == .confirmed { return ("", true) }
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
-        return " [note: the draft is uploaded but still shows as unread locally]"
+        return (" [note: the draft is uploaded but still shows as unread locally]", false)
     }
 
     static func createdText(seconds: TimeInterval, uploaded: Bool) -> String {

@@ -14,7 +14,7 @@
 | `compose_email` / `create_draft` | `mailto:` hand-off + GUI 鍵盤操作 |
 | `reply_email` / `forward_email` | Mail 原生 reply/forward verb + 游標處貼上 |
 | `forward_email`（不帶 body） | 原生 forward，**什麼都不寫入**（連 Accessibility 都不需要）|
-| `create_draft`（opt-in：`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，#472／#475） | 自組 MIME 直接寫入本機資料庫（Envelope Index＋`.emlx`），**不經 Mail 編輯器、不經 AppleScript 內文屬性**；不符條件或寫入前失敗就退回第一列的 mailto 路徑 |
+| `create_draft`（opt-in：`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，#472／#475） | 自組 MIME 直接寫入本機資料庫（Envelope Index＋`.emlx`），**不經 Mail 編輯器、不經 AppleScript 內文屬性**；不符條件、寫入失敗、或觸發上傳失敗並還原後，退回第一列的 mailto 路徑 |
 
 AppleScript 的 `set content` / `set html content` / outgoing-message 建構中的 `content:`
 **全部移除**，並由 `Tests/CheAppleMailMCPTests/NoBodyInjectionGuardTests.swift` 整檔掃描把關——
@@ -42,11 +42,12 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 
 ## 兩項誠實記錄的能力損失
 
-刪掉 legacy path 不是零成本。以下兩件事**做不到了，且沒有替代方案**：
+刪掉 legacy path 不是零成本。以下兩件事在 GUI 路徑上**做不到了**（第 1 件在 opt-in 直接寫入的適用範圍內例外）：
 
 1. **不開可見視窗組信**。legacy 是唯一能在不彈出 compose 視窗的情況下建信的路徑
    （`CHE_MAIL_DISABLE_MAILTO_COMPOSE` 這個 hatch 的原始理由就是無人值守自動化）。
    mailto hand-off 必然開視窗。若日後真的成為阻塞，走 #308（IMAP APPEND），不要復活注入。
+   **例外**：`create_draft` 的 opt-in 直接寫入（`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，#472／#475）不開視窗、也不需要 Accessibility，但只限它的封閉適用條件（純文字、只有 bare To、無 cc／bcc／附件、bare `from_address`、IMAP 帳號、Mail 16／macOS 27）；其餘情況仍必然開視窗。
 2. **`compose_email` 直接寄給 `Name <addr>`**。乾淨路徑的顯示名填入是**草稿限定**——`create_draft` /
    `update_draft` 的 to/cc/bcc **皆支援**顯示名（AX 定位聚焦 + 貼上，#404），但 `compose_email`
    （送出）仍拒絕任何顯示名收件人，因為填入失敗會在送出當下漏收件人。要保留人名 → 用 `create_draft`
