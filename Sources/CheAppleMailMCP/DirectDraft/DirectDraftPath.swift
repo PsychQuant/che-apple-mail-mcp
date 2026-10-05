@@ -50,8 +50,8 @@ func buildDirectDraftMarkReadScript(rowId: Int64) -> String {
 
 extension MailController {
     /// Runs the trigger through the cancellable `osascript` transport (#406).
-    func triggerDirectDraftUpload(rowId: Int64) throws -> String {
-        try runDraftScanScript(buildDirectDraftTriggerScript(rowId: rowId), timeout: 20)
+    func triggerDirectDraftUpload(rowId: Int64, timing: Bool) throws -> String {
+        try runDraftScanScript(buildDirectDraftTriggerScript(rowId: rowId, timing: timing), timeout: 20)
     }
 
     func markDirectDraftRead(rowId: Int64) throws -> String {
@@ -241,10 +241,13 @@ struct DirectDraftPath {
         timer.mark("inserted")
 
         let triggered = Date()
+        timer.mark("trigger_spawn")
         do {
-            _ = try await controller.triggerDirectDraftUpload(rowId: inserted.messageRowId)
+            _ = try await controller.triggerDirectDraftUpload(rowId: inserted.messageRowId, timing: timer.isRecording)
+            timer.absorbScriptMarks()
             timer.mark("trigger_sent")
         } catch {
+            timer.absorbScriptMarks()
             let triggerError = error.localizedDescription
             do {
                 try writer.rollback(inserted)

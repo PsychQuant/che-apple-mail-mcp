@@ -157,10 +157,13 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
     static let frozenPostTrigger = #"""
         timer.mark("inserted")
         let triggered = Date()
+        timer.mark("trigger_spawn")
         do {
-        _ = try await controller.triggerDirectDraftUpload(rowId: inserted.messageRowId)
+        _ = try await controller.triggerDirectDraftUpload(rowId: inserted.messageRowId, timing: timer.isRecording)
+        timer.absorbScriptMarks()
         timer.mark("trigger_sent")
         } catch {
+        timer.absorbScriptMarks()
         let triggerError = error.localizedDescription
         do {
         try writer.rollback(inserted)
