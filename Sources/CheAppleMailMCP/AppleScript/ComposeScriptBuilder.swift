@@ -117,7 +117,7 @@ func recipientFragment(_ addresses: [String], kind: String) -> String {
 //     pre-existing same-titled draft the user already had open is never
 //     `saving no` discarded (a data-loss bug the second verify round caught).
 //     Dispatch is the last statement, so a pre-dispatch error means nothing was
-//     sent (an ordinary failure, safe to retry; no double-send).
+//     sent (no double-send).
 //   - CLIPBOARD: the per-attachment path is set on the clipboard here, but
 //     save/restore is done by the caller in Swift (full-fidelity NSPasteboard,
 //     failure-safe) — this script does NOT save/restore.

@@ -80,7 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   direct write, and a source line mentioning the legacy compose fallback must cite #304. Six compose error
   messages that reach the caller verbatim (the reply/forward focus guard, the compose-window checks) said
   "falling back" or "(safe fallback)" while the call actually fails; they now say nothing was sent or that
-  the flow stopped before the next keystroke, and a test scans error literals for fallback claims.
+  the flow stopped before the next keystroke. A test scans AppleScript error literals in every source file and
+  every string literal in the two compose builders for fallback claims (Swift-side error text elsewhere is not
+  scanned), and pins its own patterns so a pattern that matches nothing fails.
 
 - **The first AppleScript-backed call in a fresh server no longer waits out the 45-second deadline**
   ([#471](https://github.com/PsychQuant/che-apple-mail-mcp/issues/471)). `runScript` and `runScriptAsList`

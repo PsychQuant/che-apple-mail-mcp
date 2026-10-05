@@ -116,21 +116,54 @@ final class NoLegacyFallbackClaimGuardTests: XCTestCase {
                       + offenders.joined(separator: "\n"))
     }
 
+    /// AppleScript `error "…"` inside a Swift triple-quoted script, or
+    /// `error \"…\"` inside a single-line Swift string: an optional backslash
+    /// before each quote, then everything up to the next quote.
+    private static let appleScriptErrorPattern = #"error \\?"[^"]*""#
+    private static let stringLiteralPattern = #""([^"\\\n]|\\.)*""#
+    private static let fallbackClaimPattern = #"fall(s|ing)? ?back|fallback"#
+
+    /// #486 verify round 2: the first version of the AppleScript-error pattern
+    /// was written `\?` (a literal question mark) instead of `\\?`, so it matched
+    /// nothing and the repo-wide half of the scan below passed vacuously. Pin the
+    /// patterns against known inputs so a dead pattern fails here.
+    func testScanPatternsMatchWhatTheyClaimTo() throws {
+        let appleScriptError = try NSRegularExpression(pattern: Self.appleScriptErrorPattern)
+        let claim = try NSRegularExpression(pattern: Self.fallbackClaimPattern, options: [.caseInsensitive])
+        func matches(_ regex: NSRegularExpression, _ text: String) -> [String] {
+            regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+                .map { (text as NSString).substring(with: $0.range) }
+        }
+        XCTAssertEqual(matches(appleScriptError, #"    if x then error "no window (falling back)""#),
+                       [#"error "no window (falling back)""#], "unescaped AppleScript error literal")
+        XCTAssertEqual(matches(appleScriptError, #"let s = "if x then error \"stop (safe fallback)\" end if""#),
+                       [#"error \"stop (safe fallback)\""#], "escaped form inside a single-line Swift string")
+        // The dead first version, kept as a counter-example: it matches nothing real.
+        let deadVersion = try NSRegularExpression(pattern: #"error \?"([^"\\]|\\.)*\?""#)
+        XCTAssertTrue(matches(deadVersion, #"    if x then error "no window (falling back)""#).isEmpty)
+        for text in ["falling back", "safe fallback", "falls back", "fall back"] {
+            XCTAssertFalse(matches(claim, text).isEmpty, "claim pattern must flag \"\(text)\"")
+        }
+        XCTAssertTrue(matches(claim, "stopping before the next keystroke (nothing sent)").isEmpty)
+    }
+
     /// #486 verify: the reply/forward front guard threw "… — falling back" and
     /// the window checks threw "(safe fallback)". Those AppleScript errors reach
     /// the caller verbatim (mapRuntimeError returns them unchanged), so a caller
-    /// was told a fallback happened when the call had failed. Read-tool
-    /// fallbacks (SQLite → AppleScript) are real and live elsewhere; this scans
-    /// AppleScript `error "…"` literals everywhere, and every string literal in
-    /// the two compose builders.
+    /// was told a fallback happened when the call had failed.
+    ///
+    /// Scope, stated exactly: AppleScript `error "…"` literals in every source
+    /// file, plus every string literal in the two compose builders. Swift-side
+    /// MailError text in other files is NOT scanned — read tools there have real
+    /// SQLite → AppleScript fallbacks whose messages say so legitimately.
     func testComposeErrorTextDoesNotClaimAFallback() throws {
         let sources = Self.repoRoot.appendingPathComponent("Sources/CheAppleMailMCP")
         let files = try XCTUnwrap(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
             .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
         let composeBuilders: Set<String> = ["ComposeScriptBuilder.swift", "MailtoCompose.swift"]
-        let appleScriptError = try NSRegularExpression(pattern: #"error \?"([^"\\]|\\.)*\?""#)
-        let stringLiteral = try NSRegularExpression(pattern: #""([^"\\\n]|\\.)*""#)
-        let claim = try NSRegularExpression(pattern: #"fall(s|ing)? ?back|fallback"#, options: [.caseInsensitive])
+        let appleScriptError = try NSRegularExpression(pattern: Self.appleScriptErrorPattern)
+        let stringLiteral = try NSRegularExpression(pattern: Self.stringLiteralPattern)
+        let claim = try NSRegularExpression(pattern: Self.fallbackClaimPattern, options: [.caseInsensitive])
         var offenders: [String] = []
         for file in files {
             let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
