@@ -42,20 +42,28 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 觸發 script 與原始碼的**結構檢查**，不是行為測試（行為測試要等 #484 的測試入口）。這兩條守門測試會轉紅的
 情況**只有以下這些，不得依性質相似推論其他改動也會被擋**：
 
-- **第 8 項**（解析觸發 script；比對前去掉 AppleScript 註解，關鍵字不分大小寫）：
+- **第 8 項**（解析觸發 script；比對前去掉 AppleScript 註解，字串內容清空，關鍵字不分大小寫）：
   - 兩次切換之間的 `delay` 數字總和低於 0.5 秒；
-  - 兩次切換之間出現控制流程（`if`、`repeat`、`try` 等）或不是單純數字的 `delay`；
-  - 觸發 script 裡不是恰好一次切到未讀、一次切回已讀（例如改了變數名 `_m`、多加一組切換）。
+  - 兩次切換之間有一行以這些字開頭：`if`、`repeat`、`try`、`considering`、`ignoring`、`tell`、`with`、
+    `using`、`on`、`error`、`return`、`exit`、`end`；或有一個 `delay` 後面不是單純的數字；
+  - `set read status of` 在整個 script 裡不是恰好出現兩次（不分大小寫、不論對哪個變數），或這兩次不是
+    逐字的 `set read status of _m to false` 在前、`set read status of _m to true` 在後。
 - **第 7 項**（比對 `Sources`；比對前去掉 Swift 註解與縮排）：
   - `uploadDeadline` 的預設值低於 10；
   - `Sources` 裡提到 `uploadDeadline` 的程式碼行，與這三行不完全相同：預設宣告、等待迴圈條件、待定回報。
     所以在其他地方用到它（例如在呼叫端覆寫），或改寫這三行的任何文字，都會轉紅；
-  - `attemptSteps` 從 `let triggered = Date()` 到待定回報為止的程式碼行，或 `ensureRead` 整個函式，
-    有任何一行被新增、刪除、改動、註解掉或換順序。這兩段是整段凍結的：要改它們（例如 #489 加計時點），
-    必須在同一個 commit 更新測試裡的凍結副本，審查時逐行對照第 2、3、6、7 項。
+  - `Sources` 裡提到 `ensureRead` 或 `attemptSteps(` 的程式碼行，不是恰好它們的宣告與唯一的呼叫
+    （例如宣告同名的局部閉包、改呼叫一份複製出來的函式）；
+  - `attemptSteps` 從 `timer.mark("inserted")` 到函式結尾 `}` 的程式碼行，或 `ensureRead` 整個函式，
+    有任何一行被新增、刪除、改動、註解掉或換順序；或這兩段的結尾 `}` 之後，下一行不是以 `func `、`static func `、
+    `private func `、`private static func `、`fileprivate func `、`fileprivate static func ` 或 `@` 開頭
+    （例如把整段包起來、在後面補上提早回報）；或前一段不在 `attemptSteps` 裡。這兩段是整段凍結的：
+    要改它們（例如 #489 加計時點），必須在同一個 commit 更新測試裡的凍結副本，審查時逐行對照
+    第 2、3、6、7 項。
 
-上面沒列到的部分，例如 `readOutcome`、`uploadState`、補設已讀的 AppleScript、觸發 script 中兩次切換以外的
-內容，各有自己的既有測試，但不在這兩條守門測試的範圍內。測試轉紅時，先取得上面要求的證據並更新本規則，再改測試；不要只改門檻或
+上面沒列到的部分，例如 `readOutcome`、`uploadState`、`readFlag`、`createdText`、`outcomeAfterFailedTrigger`、
+`markDirectDraftRead` 與它的 AppleScript、觸發 script 中兩次切換以外的內容，各有自己的既有測試，但不在這兩條
+守門測試的範圍內。測試轉紅時，先取得上面要求的證據並更新本規則，再改測試；不要只改門檻或
 凍結副本。第 1–6 項沒有專屬的守門測試，靠既有測試與 spec 部分覆蓋（第 5 項見 #491）。
 
 已評估過的提案（2026-10-05，live 計時：直接寫入 3.17 秒，其中寫入 14 ms、找草稿匣 470 ms、

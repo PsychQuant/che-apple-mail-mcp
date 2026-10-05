@@ -46,7 +46,14 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
     /// number literal on its own line could hide any value, control flow could
     /// skip a delay, and a second toggle pair would make "the gap" ambiguous.
     static func toggleGap(in script: String) -> ToggleGap {
-        let code = strippingAppleScriptComments(script)
+        // String contents are blanked so a `delay` inside a string literal is
+        // not counted, and every read-status toggle is counted in any case or
+        // on any variable (round 3).
+        let code = strippingAppleScriptComments(script, blankingStrings: true)
+        let anyToggle = matches(of: #"\bset\s+read\s+status\s+of\b"#, in: code, caseInsensitive: true).count
+        guard anyToggle == 2 else {
+            return .unverifiable("expected exactly two read-status toggles, found \(anyToggle)")
+        }
         let toUnread = ranges(of: "set read status of _m to false", in: code)
         let toRead = ranges(of: "set read status of _m to true", in: code)
         guard toUnread.count == 1, toRead.count == 1 else {
@@ -106,6 +113,8 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
         XCTAssertEqual(Self.toggleGap(in: script("    -- delay 0.5\n    delay 0.3\n")), .seconds(0.3))
         XCTAssertEqual(Self.toggleGap(in: script("    # delay 0.5\n    delay 0.3\n")), .seconds(0.3))
         XCTAssertEqual(Self.toggleGap(in: script("    Delay 0.3\n")), .seconds(0.3), "AppleScript is case-insensitive")
+        // Round 3: a `delay` inside a multi-line string literal does not run.
+        XCTAssertEqual(Self.toggleGap(in: script("    set s to \"x\n    delay 0.9\n    \"\n    delay 0.1\n")), .seconds(0.1))
         for hidden in ["    delay gapSeconds\n", "    delay (0.5)\n", "    delay 1 / 4\n",
                        // Round 1: a delay that may never run.
                        "    if false then\n    delay 0.5\n    end if\n",
@@ -113,7 +122,10 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
                        "    try\n    delay 0.5\n    end try\n",
                        // Round 2: keywords in any case.
                        "    If false then\n    delay 0.5\n    End If\n",
-                       "    REPEAT 0 TIMES\n    delay 0.5\n    END REPEAT\n"] {
+                       "    REPEAT 0 TIMES\n    delay 0.5\n    END REPEAT\n",
+                       // Round 3: a third toggle in another case or on another variable.
+                       "    delay 0.5\n    SET READ STATUS OF _m TO TRUE\n",
+                       "    delay 0.5\n    set read status of _x to true\n"] {
             guard case .unverifiable = Self.toggleGap(in: script(hidden)) else {
                 return XCTFail("a hidden or conditional delay must be unverifiable: \(hidden)")
             }
@@ -126,16 +138,20 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
 
     // MARK: - Item 7: upload confirmation and read repair
 
-    /// The post-trigger section of `attemptSteps`, from the start of the wait
-    /// clock to the pending result, as code lines (comments removed, whitespace
-    /// trimmed). FROZEN: any added, removed, changed, reordered or commented-out
-    /// line turns the test red. Round 2 showed that checking fragments of this
-    /// section invites one bypass per insertion point (an inline early return,
-    /// a `break` inside the loop, a shifted clock), so the whole section is
-    /// pinned instead. An edit here (e.g. #489's timing marks) updates this copy
-    /// in the same commit, and the reviewer checks it against rule items 2, 3,
-    /// 6 and 7.
+    /// The post-trigger section of `attemptSteps`, from the `inserted` mark to
+    /// the function's closing brace, as code lines (comments removed,
+    /// whitespace trimmed). FROZEN: any added, removed, changed, reordered or
+    /// commented-out line turns the test red. Round 2 showed that checking
+    /// fragments of this section invites one bypass per insertion point (an
+    /// inline early return, a `break` inside the loop, a shifted clock), so the
+    /// whole section is pinned instead; round 3 showed the ends need pinning
+    /// too (a wrapper opened before the section and closed after it), so the
+    /// copy runs to the closing brace and the next line must start a new
+    /// declaration. An edit here (e.g. #489's timing marks) updates this copy in
+    /// the same commit, and the reviewer checks it against rule items 2, 3, 6
+    /// and 7.
     static let frozenPostTrigger = #"""
+        timer.mark("inserted")
         let triggered = Date()
         do {
         _ = try await controller.triggerDirectDraftUpload(rowId: inserted.messageRowId)
@@ -161,6 +177,7 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
         try? await Task.sleep(nanoseconds: 250_000_000)
         }
         return .created(Self.createdText(seconds: uploadDeadline, uploaded: false), pending: true)
+        }
         """#
 
     /// `ensureRead`, whole function. FROZEN like the section above: the probe
@@ -189,29 +206,81 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
         }
         """#
 
-    /// How `source` (DirectDraftPath.swift) departs from the two frozen
-    /// sections; empty when both match exactly.
+    /// The only code lines that may name what the frozen sections call or are
+    /// called from: the declaration and the one call. A local closure named
+    /// `ensureRead` declared before the section would shadow the method and
+    /// skip the read repair; a copied `attemptSteps` could take over the call
+    /// and leave the frozen original unused (round 3).
+    static let pinnedNameLines: [(name: String, lines: [String])] = [
+        ("ensureRead", [
+            "let read = await ensureRead(writer, inserted)",
+            "private func ensureRead(_ writer: DraftStoreWriter, _ inserted: DraftStoreWriter.Inserted) async -> ReadOutcome {",
+        ]),
+        ("attemptSteps(", [
+            "let outcome = await attemptSteps(to: to, subject: subject, body: body, cc: cc, bcc: bcc,",
+            "private func attemptSteps(to: [String], subject: String, body: String, cc: [String]?, bcc: [String]?,",
+        ]),
+    ]
+
+    /// A frozen section must be followed by the start of another declaration,
+    /// so nothing can be appended after its closing brace.
+    static let declarationStarts = ["func ", "static func ", "private func ", "private static func ",
+                                    "fileprivate func ", "fileprivate static func ", "@"]
+
+    /// How `source` (DirectDraftPath.swift) departs from the item 7 shape;
+    /// empty when it holds.
     static func itemSevenViolations(in source: String) -> [String] {
         let lines = codeLines(of: source)
-        return [("post-trigger section of attemptSteps", frozenPostTrigger), ("ensureRead", frozenEnsureRead)]
-            .compactMap { name, frozen in frozenMismatch(name, expected: codeLines(of: frozen), in: lines) }
+        var problems: [String] = []
+        for pinned in pinnedNameLines {
+            let found = lines.filter { $0.contains(pinned.name) }
+            if found.sorted() != pinned.lines.sorted() {
+                problems.append("`\(pinned.name)` appears on lines other than its declaration and its one call: \(found)")
+            }
+        }
+        var postTrigger: Range<Int>?
+        for (name, frozen) in [("post-trigger section of attemptSteps", frozenPostTrigger), ("ensureRead", frozenEnsureRead)] {
+            switch frozenMatch(name, expected: codeLines(of: frozen), in: lines) {
+            case .mismatch(let message):
+                problems.append(message)
+            case .match(let range):
+                let next = range.upperBound < lines.count ? lines[range.upperBound] : "<end of file>"
+                if !declarationStarts.contains(where: { next.hasPrefix($0) }) {
+                    problems.append("\(name): the line after its closing brace is `\(next)`, not a new declaration")
+                }
+                if postTrigger == nil { postTrigger = range }
+            }
+        }
+        if let section = postTrigger,
+           let declaration = lines.firstIndex(where: { $0.hasPrefix("private func attemptSteps(") }) {
+            let between = lines[(declaration + 1)..<max(declaration + 1, section.lowerBound)]
+            if declaration > section.lowerBound || between.contains(where: { $0.contains("func ") }) {
+                problems.append("the post-trigger section is not inside attemptSteps")
+            }
+        }
+        return problems
     }
 
-    /// The first difference between `expected` and the lines of `actual` that
-    /// start at the (single) occurrence of `expected`'s first line.
-    private static func frozenMismatch(_ name: String, expected: [String], in actual: [String]) -> String? {
+    enum FrozenMatch {
+        case match(Range<Int>)
+        case mismatch(String)
+    }
+
+    /// Where `expected` sits in `actual`, starting at the single occurrence of
+    /// its first line, or the first difference.
+    private static func frozenMatch(_ name: String, expected: [String], in actual: [String]) -> FrozenMatch {
         let starts = actual.indices.filter { actual[$0] == expected[0] }
         guard starts.count == 1, let start = starts.first else {
-            return "\(name): its first line `\(expected[0])` occurs \(starts.count) times (expected once)"
+            return .mismatch("\(name): its first line `\(expected[0])` occurs \(starts.count) times (expected once)")
         }
         for (offset, want) in expected.enumerated() {
             let index = start + offset
             let got = index < actual.count ? actual[index] : "<end of file>"
             if got != want {
-                return "\(name), line \(offset + 1): expected `\(want)`, found `\(got)`"
+                return .mismatch("\(name), line \(offset + 1): expected `\(want)`, found `\(got)`")
             }
         }
-        return nil
+        return .match(start..<(start + expected.count))
     }
 
     func testUploadIsConfirmedThenReadRepairedAfterAnAcceptedTrigger() throws {
@@ -257,6 +326,14 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
              "if skip { return .confirmed }\n var looks: [Bool?] = []"),
             ("fewer probes before the gate", "for attempt in 0..<4 {", "for attempt in 0..<1 {"),
             ("fewer probes after the re-assert", "for _ in 0..<8 {", "for _ in 0..<1 {"),
+            // Round 3
+            ("local closure shadowing ensureRead", #"timer.mark("inserted")"#,
+             "let ensureRead: (DraftStoreWriter, DraftStoreWriter.Inserted) async -> ReadOutcome = { _, _ in .confirmed }\n        "
+             + #"timer.mark("inserted")"#),
+            ("section wrapped, created returned after it",
+             "uploadDeadline, uploaded: false), pending: true)\n    }\n",
+             "uploadDeadline, uploaded: false), pending: true)\n        }\n        return .created(\"fast\", pending: false)\n    }\n"),
+            ("call switched to a copy", "let outcome = await attemptSteps(", "let outcome = await attemptStepsFast("),
         ]
         XCTAssertEqual(Self.itemSevenViolations(in: source), [], "the real source must pass before edits are meaningful")
         for edit in edits {
@@ -285,26 +362,41 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
         "DirectDraftPath.swift|return .created(Self.createdText(seconds: uploadDeadline, uploaded: false), pending: true)",
     ]
 
-    static func uploadDeadlineUses(in files: [(name: String, source: String)]) -> [String] {
+    static func uses(of name: String, in files: [(name: String, source: String)]) -> [String] {
         files.flatMap { file in
-            codeLines(of: file.source).filter { $0.contains("uploadDeadline") }.map { "\(file.name)|\($0)" }
+            codeLines(of: file.source).filter { $0.contains(name) }.map { "\(file.name)|\($0)" }
         }.sorted()
     }
 
-    func testUploadDeadlineIsOnlySetByItsDefault() throws {
-        let sources = Self.repoRoot.appendingPathComponent("Sources")
+    private static func sourceFiles() throws -> [(name: String, source: String)] {
+        let sources = repoRoot.appendingPathComponent("Sources")
         let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
         var files: [(name: String, source: String)] = []
         for case let url as URL in enumerator where url.pathExtension == "swift" {
             files.append((url.lastPathComponent, try String(contentsOf: url, encoding: .utf8)))
         }
+        return files
+    }
+
+    func testUploadDeadlineIsOnlySetByItsDefault() throws {
+        let files = try Self.sourceFiles()
         XCTAssertGreaterThan(files.count, 20, "the Sources scan read too few files to mean anything")
-        XCTAssertEqual(Self.uploadDeadlineUses(in: files), Self.allowedUploadDeadlineLines.sorted(),
+        XCTAssertEqual(Self.uses(of: "uploadDeadline", in: files), Self.allowedUploadDeadlineLines.sorted(),
                        "rule item 7: uploadDeadline is used somewhere other than its default, the wait loop and the "
                        + "pending result" + Self.hint)
         let overridden = files + [("Server.swift", "let path = DirectDraftPath(controller: c, reader: r, uploadDeadline: 2)")]
-        XCTAssertNotEqual(Self.uploadDeadlineUses(in: overridden), Self.allowedUploadDeadlineLines.sorted(),
+        XCTAssertNotEqual(Self.uses(of: "uploadDeadline", in: overridden), Self.allowedUploadDeadlineLines.sorted(),
                           "an override at the call site must be caught")
+    }
+
+    /// The names pinned by `pinnedNameLines` appear nowhere else in `Sources`
+    /// either, so no other file declares or calls them (round 3).
+    func testFrozenSectionNamesAreUsedOnlyWherePinned() throws {
+        let files = try Self.sourceFiles()
+        for pinned in Self.pinnedNameLines {
+            XCTAssertEqual(Self.uses(of: pinned.name, in: files), pinned.lines.map { "DirectDraftPath.swift|\($0)" }.sorted(),
+                           "rule item 7: `\(pinned.name)` is used outside its declaration and its one call" + Self.hint)
+        }
     }
 
     // MARK: - Comment stripping
@@ -328,6 +420,9 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
         XCTAssertEqual(Self.strippingAppleScriptComments("(* a\n b *)delay 1"), "\ndelay 1")
         XCTAssertEqual(Self.strippingAppleScriptComments("(* a (* b *) c *)delay 1"), "delay 1")
         XCTAssertEqual(Self.strippingAppleScriptComments("# c\ndelay 1"), "\ndelay 1")
+        XCTAssertEqual(Self.strippingAppleScriptComments("log \"a\n-- b\" -- c"), "log \"a\n-- b\" ",
+                       "an AppleScript string may span lines")
+        XCTAssertEqual(Self.strippingAppleScriptComments("log \"ab\nc\" -- d", blankingStrings: true), "log \"  \n \" ")
     }
 
     // MARK: - Helpers
@@ -348,17 +443,22 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
         strippingComments(source, lineOpeners: ["//"], blockOpen: "/*", blockClose: "*/", swiftStrings: true)
     }
 
-    /// Removes `--` and `#` line comments and nested `(* … *)` blocks, leaving
-    /// `"…"` strings untouched.
-    static func strippingAppleScriptComments(_ script: String) -> String {
-        strippingComments(script, lineOpeners: ["--", "#"], blockOpen: "(*", blockClose: "*)", swiftStrings: false)
+    /// Removes `--` and `#` line comments and nested `(* … *)` blocks. `"…"`
+    /// strings, which may span lines in AppleScript, are kept, or with
+    /// `blankingStrings` have their contents replaced by spaces (line breaks
+    /// kept) so text inside a string is never read as a statement.
+    static func strippingAppleScriptComments(_ script: String, blankingStrings: Bool = false) -> String {
+        strippingComments(script, lineOpeners: ["--", "#"], blockOpen: "(*", blockClose: "*)", swiftStrings: false,
+                          blankStrings: blankingStrings)
     }
 
-    /// One pass over `text`: string literals are copied as they are, comments
-    /// are dropped, and the line breaks inside a block comment are kept so the
-    /// line structure survives.
+    /// One pass over `text`: string literals are copied as they are (or
+    /// blanked), comments are dropped, and the line breaks inside a block
+    /// comment are kept so the line structure survives.
     private static func strippingComments(_ text: String, lineOpeners: [String], blockOpen: String,
-                                          blockClose: String, swiftStrings: Bool) -> String {
+                                          blockClose: String, swiftStrings: Bool,
+                                          blankStrings: Bool = false) -> String {
+        func body(_ ch: Character) -> Character { blankStrings && ch != "\n" ? " " : ch }
         let c = Array(text)
         var out: [Character] = []
         var i = 0
@@ -397,9 +497,12 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
                 let bodyStart = quoteAt + quote.count
                 out.append(contentsOf: c[i..<bodyStart])
                 i = bodyStart
+                // Swift single-line literals end at a line break; AppleScript
+                // strings may span lines (round 3).
+                let spansLines = multiLine || !swiftStrings
                 while i < c.count {
                     if starts(escape, at: i) && i + escape.count < c.count {
-                        out.append(contentsOf: c[i...(i + escape.count)])
+                        out.append(contentsOf: c[i...(i + escape.count)].map(body))
                         i += escape.count + 1
                         continue
                     }
@@ -408,8 +511,8 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
                         i += close.count
                         break
                     }
-                    if !multiLine && c[i] == "\n" { break }
-                    out.append(c[i])
+                    if !spansLines && c[i] == "\n" { break }
+                    out.append(body(c[i]))
                     i += 1
                 }
                 continue
