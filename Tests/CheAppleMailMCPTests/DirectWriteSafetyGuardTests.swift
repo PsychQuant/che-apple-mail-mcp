@@ -5,20 +5,30 @@ import XCTest
 /// Each test pins one guarantee of that rule so that a speed change which
 /// weakens it turns the suite red instead of shipping silently.
 ///
+/// These are STRUCTURAL checks of the trigger script and of the Swift source,
+/// not behavioural tests (those need the controller/writer seam of #484). The
+/// rule lists exactly which edits they catch; anything outside that list is not
+/// guarded, however similar it looks.
+///
 /// - Item 8: the gap between the two read toggles of the upload trigger is a
-///   measured safety margin (0.5 s, from the #463 Round 2 supplement, runs I3
-///   and I4; #472 saw 0.3 s leave one of two drafts unread locally). Changing it needs the live
+///   safety margin known to work, not a known floor (0.5 s; #472 saw 0.3 s
+///   leave one of two drafts unread locally). Changing it needs the live
 ///   experiment of #488 first.
 /// - Item 7: after an accepted trigger the path waits for the upload to be
-///   confirmed and then re-asserts the draft's read status (#482). This is a
-///   structural check of the source; a behavioural test needs the
-///   controller/writer seam tracked in #484.
+///   confirmed and then re-asserts the draft's read status (#482).
 final class DirectWriteSafetyGuardTests: XCTestCase {
 
     private static var repoRoot: URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     }
+
+    private static func directDraftPathSource() throws -> String {
+        try String(contentsOf: repoRoot.appendingPathComponent("Sources/CheAppleMailMCP/DirectDraft/DirectDraftPath.swift"),
+                   encoding: .utf8)
+    }
+
+    private static let hint = " (if a refactor moved this, replace the check with a behavioural test once #484 adds the seam)"
 
     // MARK: - Item 8: the gap between the read toggles
 
@@ -30,13 +40,15 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
     }
 
     /// The total of the `delay` statements between the toggle to unread and
-    /// the toggle back to read. A script the parser cannot read with certainty
-    /// is reported as unverifiable, never as a number: a `delay` whose
-    /// argument is not a plain number literal on its own line could hide any
-    /// value, and a second toggle pair would make "the gap" ambiguous.
+    /// the toggle back to read, after AppleScript comments are removed. A
+    /// script the parser cannot read with certainty is reported as
+    /// unverifiable, never as a number: a `delay` whose argument is not a plain
+    /// number literal on its own line could hide any value, control flow could
+    /// skip a delay, and a second toggle pair would make "the gap" ambiguous.
     static func toggleGap(in script: String) -> ToggleGap {
-        let toUnread = ranges(of: "set read status of _m to false", in: script)
-        let toRead = ranges(of: "set read status of _m to true", in: script)
+        let code = strippingAppleScriptComments(script)
+        let toUnread = ranges(of: "set read status of _m to false", in: code)
+        let toRead = ranges(of: "set read status of _m to true", in: code)
         guard toUnread.count == 1, toRead.count == 1 else {
             return .unverifiable("expected one toggle to unread and one back to read, "
                                  + "found \(toUnread.count) and \(toRead.count)")
@@ -44,9 +56,13 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
         guard toUnread[0].upperBound <= toRead[0].lowerBound else {
             return .unverifiable("the toggle back to read comes before the toggle to unread")
         }
-        let between = String(script[toUnread[0].upperBound..<toRead[0].lowerBound])
+        let between = String(code[toUnread[0].upperBound..<toRead[0].lowerBound])
+        let controlFlow = #"^\s*(if|repeat|try|considering|ignoring|tell|with|using|on|error|return|exit|end)\b"#
+        guard matches(of: controlFlow, in: between).isEmpty else {
+            return .unverifiable("control flow between the toggles: the parser cannot tell whether a delay runs")
+        }
         let delayCount = matches(of: #"\bdelay\b"#, in: between).count
-        let literals = matches(of: #"^\s*delay\s+([0-9]+(?:\.[0-9]+)?)\s*(?:--.*)?$"#, in: between)
+        let literals = matches(of: #"^\s*delay\s+([0-9]+(?:\.[0-9]+)?)\s*$"#, in: between)
             .compactMap { Double($0) }
         guard delayCount == literals.count else {
             return .unverifiable("a delay between the toggles is not a plain number literal on its own line")
@@ -60,8 +76,8 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
         case .seconds(let gap):
             XCTAssertGreaterThanOrEqual(
                 gap, Self.minimumToggleGap,
-                "rule item 8: the read-toggle gap is a measured margin (#463 Round 2 supplement; #472 saw 0.3 s leave a draft "
-                + "unread locally). Shortening it needs the #488 live experiment, at least 10 runs per value.")
+                "rule item 8: the read-toggle gap is a margin known to work, not a known floor (#472 saw 0.3 s leave "
+                + "a draft unread locally). Shortening it needs the #488 live experiment, at least 10 runs per value.")
         case .unverifiable(let why):
             XCTFail("rule item 8: the trigger script's read-toggle gap cannot be verified: \(why)")
         }
@@ -79,11 +95,22 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
         XCTAssertEqual(Self.toggleGap(in: script("    delay 0.3\n")), .seconds(0.3), "the gap #472 saw fail")
         XCTAssertEqual(Self.toggleGap(in: script("    delay 0.2\n    log \"x\"\n    delay 0.2\n")), .seconds(0.4),
                        "split delays are summed")
+        XCTAssertEqual(Self.toggleGap(in: script("    my _cheMailMark(\"trigger_unread\")\n    delay 0.5\n")),
+                       .seconds(0.5), "a timing mark (#489) between the toggles is not a delay")
         XCTAssertEqual(Self.toggleGap(in: script("", before: "    delay 0.5\n")), .seconds(0),
                        "a delay outside the toggles does not count")
-        for hidden in ["    delay gapSeconds\n", "    delay (0.5)\n", "    delay 1 / 4\n"] {
+        // Round 1: an old value kept in a comment is not a delay.
+        XCTAssertEqual(Self.toggleGap(in: script("    (*\n    delay 0.5\n    *)\n    delay 0.3\n")), .seconds(0.3))
+        XCTAssertEqual(Self.toggleGap(in: script("    delay 0.3 (* was 0.5 *)\n")), .seconds(0.3))
+        XCTAssertEqual(Self.toggleGap(in: script("    -- delay 0.5\n    delay 0.3\n")), .seconds(0.3))
+        XCTAssertEqual(Self.toggleGap(in: script("    # delay 0.5\n    delay 0.3\n")), .seconds(0.3))
+        for hidden in ["    delay gapSeconds\n", "    delay (0.5)\n", "    delay 1 / 4\n",
+                       // Round 1: a delay that may never run.
+                       "    if false then\n    delay 0.5\n    end if\n",
+                       "    repeat 0 times\n    delay 0.5\n    end repeat\n",
+                       "    try\n    delay 0.5\n    end try\n"] {
             guard case .unverifiable = Self.toggleGap(in: script(hidden)) else {
-                return XCTFail("a non-literal delay must be unverifiable: \(hidden)")
+                return XCTFail("a hidden or conditional delay must be unverifiable: \(hidden)")
             }
         }
         let twoPairs = script("    delay 0.5\n") + script("    delay 0.1\n")
@@ -94,45 +121,207 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
 
     // MARK: - Item 7: upload confirmation and read repair
 
+    /// After the trigger is accepted, these lines (comments removed, whitespace
+    /// trimmed) must appear in this order and unchanged. Pinning whole lines
+    /// rather than fragments is what turns `|| true` or `< uploadDeadline / 10`
+    /// red (Round 1).
+    static let itemSevenSequence = [
+        #"timer.mark("trigger_sent")"#,
+        "while Date().timeIntervalSince(triggered) < uploadDeadline {",
+        "let state = writer.uploadState(inserted)",
+        "if state.remoteId != nil && !state.actionQueued {",
+        #"timer.mark("uploaded")"#,
+        "let read = await ensureRead(writer, inserted)",
+        "return .created(Self.createdText(seconds: seconds, uploaded: true) + read.note, pending: false)",
+    ]
+
+    /// Inside `ensureRead`: a draft still unread gets its read status
+    /// re-asserted, on the very next line.
+    static let readRepairLines = [
+        "guard first == .stillUnread else { return first }",
+        "_ = try? await controller.markDirectDraftRead(rowId: inserted.messageRowId)",
+    ]
+
+    /// Every way `source` (DirectDraftPath.swift) departs from the item 7
+    /// shape; empty when it holds.
+    static func itemSevenViolations(in source: String) -> [String] {
+        let lines = codeLines(of: source)
+        var indices: [Int] = []
+        var from = 0
+        for want in itemSevenSequence {
+            guard from <= lines.count, let index = lines[from...].firstIndex(of: want) else {
+                return ["missing, changed, commented out or out of order: `\(want)`"]
+            }
+            indices.append(index)
+            from = index + 1
+        }
+        var problems: [String] = []
+        if lines[(indices[0] + 1)..<indices[1]].contains(where: { $0.contains(".created(") }) {
+            problems.append("a `.created(` result between the accepted trigger and the upload wait")
+        }
+        let detached = ["Task {", "Task.detached", "DispatchQueue", "async let"]
+        if lines[indices[0]...indices[6]].contains(where: { line in detached.contains { line.contains($0) } }) {
+            problems.append("the upload wait or the read repair runs detached from the result")
+        }
+        if lines[(indices[3] + 1)..<indices[5]].contains(where: { $0.hasPrefix("return") || $0 == "break" || $0 == "continue" }) {
+            problems.append("an exit between the confirmed upload and the read repair")
+        }
+        guard let function = lines.firstIndex(where: { $0.hasPrefix("private func ensureRead(") }) else {
+            return problems + ["ensureRead not found"]
+        }
+        let nextFunction = lines[(function + 1)...].firstIndex(where: { $0.contains("func ") }) ?? lines.count
+        guard let gate = lines[function..<nextFunction].firstIndex(of: readRepairLines[0]) else {
+            return problems + ["ensureRead no longer gates the re-assert on `.stillUnread`: `\(readRepairLines[0])`"]
+        }
+        if gate + 1 >= nextFunction || lines[gate + 1] != readRepairLines[1] {
+            problems.append("ensureRead does not re-assert read status right after the unread check: `\(readRepairLines[1])`")
+        }
+        return problems
+    }
+
+    func testUploadIsConfirmedThenReadRepairedAfterAnAcceptedTrigger() throws {
+        let problems = Self.itemSevenViolations(in: try Self.directDraftPathSource())
+        XCTAssertEqual(problems, [], "rule item 7: " + problems.joined(separator: "; ") + Self.hint)
+    }
+
+    /// Round 1: each edit a reviewer showed passing the first version of this
+    /// guard, applied to the real source in memory, must now be caught.
+    func testItemSevenCheckCatchesTheEditsRoundOneFound() throws {
+        let source = try Self.directDraftPathSource()
+        let edits: [(name: String, find: String, replace: String)] = [
+            ("read repair call commented out", "let read = await ensureRead(writer, inserted)",
+             "// let read = await ensureRead(writer, inserted)"),
+            ("read repair call in a block comment", "let read = await ensureRead(writer, inserted)",
+             "/* let read = await ensureRead(writer, inserted) */"),
+            ("upload condition loosened", "if state.remoteId != nil && !state.actionQueued {",
+             "if state.remoteId != nil && !state.actionQueued || true {"),
+            ("wait scaled down", "< uploadDeadline {", "< uploadDeadline / 10 {"),
+            ("wait detached", "while Date().timeIntervalSince(triggered) < uploadDeadline {",
+             "Task {\n        while Date().timeIntervalSince(triggered) < uploadDeadline {"),
+            ("result before the wait", #"timer.mark("trigger_sent")"#,
+             #"timer.mark("trigger_sent")"# + "\n            return .created(\"early\", pending: false)"),
+            ("exit before the read repair", #"timer.mark("uploaded")"#, #"timer.mark("uploaded")"# + "\n                    break"),
+            ("early return in ensureRead", "guard first == .stillUnread else { return first }",
+             "guard first == .stillUnread else { return first }\n        return first"),
+            ("re-assert commented out", "_ = try? await controller.markDirectDraftRead(rowId: inserted.messageRowId)",
+             "// _ = try? await controller.markDirectDraftRead(rowId: inserted.messageRowId)"),
+        ]
+        XCTAssertEqual(Self.itemSevenViolations(in: source), [], "the real source must pass before edits are meaningful")
+        for edit in edits {
+            XCTAssertEqual(source.components(separatedBy: edit.find).count, 2,
+                           "`\(edit.find)` must occur exactly once for the edit '\(edit.name)' to mean anything")
+            let edited = source.replacingOccurrences(of: edit.find, with: edit.replace)
+            XCTAssertFalse(Self.itemSevenViolations(in: edited).isEmpty, "not caught: \(edit.name)")
+        }
+    }
+
+    // MARK: - Item 7: the wait limit
+
     func testUploadWaitIsNotShortened() {
         XCTAssertGreaterThanOrEqual(
             DirectDraftPath(controller: MailController.shared, reader: nil).uploadDeadline, 10,
             "rule item 7: the upload wait is what finds a draft that did not upload and what lets the read repair "
-            + "run. A shorter wait is a speed change: bring the upload-confirm time distribution first.")
+            + "run. A shorter wait is a speed change: bring the trigger and upload-confirm time distributions first.")
     }
 
-    func testUploadIsConfirmedThenReadRepairedAfterAnAcceptedTrigger() throws {
-        let file = Self.repoRoot.appendingPathComponent("Sources/CheAppleMailMCP/DirectDraft/DirectDraftPath.swift")
-        let source = try String(contentsOf: file, encoding: .utf8)
-        let hint = " (if a refactor moved this, replace the check with a behavioural test once #484 adds the seam)"
+    /// The only lines in `Sources` that may name `uploadDeadline`. Any other
+    /// use, such as overriding it where the path is built, changes the wait
+    /// without touching the default the test above reads (Round 1).
+    static let allowedUploadDeadlineLines = [
+        "DirectDraftPath.swift|var uploadDeadline: TimeInterval = 10",
+        "DirectDraftPath.swift|while Date().timeIntervalSince(triggered) < uploadDeadline {",
+        "DirectDraftPath.swift|return .created(Self.createdText(seconds: uploadDeadline, uploaded: false), pending: true)",
+    ]
 
-        // After the trigger succeeds: wait loop → upload state → uploaded → read repair, in this order.
-        let sequence = ["timer.mark(\"trigger_sent\")", "< uploadDeadline", "writer.uploadState(inserted)",
-                        "timer.mark(\"uploaded\")", "await ensureRead(writer, inserted)"]
-        var cursor = source.startIndex
-        var found: [Range<String.Index>] = []
-        for marker in sequence {
-            guard let range = source.range(of: marker, range: cursor..<source.endIndex) else {
-                return XCTFail("rule item 7: `\(marker)` not found after `\(found.isEmpty ? "start" : sequence[found.count - 1])`" + hint)
-            }
-            found.append(range)
-            cursor = range.upperBound
+    static func uploadDeadlineUses(in files: [(name: String, source: String)]) -> [String] {
+        files.flatMap { file in
+            codeLines(of: file.source).filter { $0.contains("uploadDeadline") }.map { "\(file.name)|\($0)" }
+        }.sorted()
+    }
+
+    func testUploadDeadlineIsOnlySetByItsDefault() throws {
+        let sources = Self.repoRoot.appendingPathComponent("Sources")
+        let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
+        var files: [(name: String, source: String)] = []
+        for case let url as URL in enumerator where url.pathExtension == "swift" {
+            files.append((url.lastPathComponent, try String(contentsOf: url, encoding: .utf8)))
         }
+        XCTAssertGreaterThan(files.count, 20, "the Sources scan read too few files to mean anything")
+        XCTAssertEqual(Self.uploadDeadlineUses(in: files), Self.allowedUploadDeadlineLines.sorted(),
+                       "rule item 7: uploadDeadline is used somewhere other than its default, the wait loop and the "
+                       + "pending result" + Self.hint)
+        let overridden = files + [("Server.swift", "let path = DirectDraftPath(controller: c, reader: r, uploadDeadline: 2)")]
+        XCTAssertNotEqual(Self.uploadDeadlineUses(in: overridden), Self.allowedUploadDeadlineLines.sorted(),
+                          "an override at the call site must be caught")
+    }
 
-        // Nothing between the accepted trigger and the wait loop may report the draft as created.
-        let beforeWait = String(source[found[0].upperBound..<found[1].lowerBound])
-        XCTAssertFalse(beforeWait.contains(".created("),
-                       "rule items 6/7: a result is returned before the upload wait" + hint)
+    // MARK: - Comment stripping
 
-        // The read repair re-asserts read status when the draft still shows unread.
-        let start = try XCTUnwrap(source.range(of: "private func ensureRead("), "ensureRead not found" + hint)
-        let end = try XCTUnwrap(source.range(of: "\n    }\n", range: start.upperBound..<source.endIndex))
-        let body = String(source[start.upperBound..<end.lowerBound])
-        XCTAssertTrue(body.contains(".stillUnread") && body.contains("controller.markDirectDraftRead("),
-                      "rule item 7 (#482): ensureRead must re-assert read status when the draft shows unread" + hint)
+    func testCommentStrippersKeepCodeAndDropComments() {
+        XCTAssertEqual(Self.strippingSwiftComments("a // b"), "a ")
+        XCTAssertEqual(Self.strippingSwiftComments(#"x.hasPrefix("imap://") else {"#), #"x.hasPrefix("imap://") else {"#)
+        XCTAssertEqual(Self.strippingSwiftComments(#"f("a\"//b") // c"#), #"f("a\"//b") "#)
+        XCTAssertEqual(Self.strippingSwiftComments("/* x\n y */z"), "z")
+        XCTAssertEqual(Self.strippingAppleScriptComments("delay 0.5 -- c"), "delay 0.5 ")
+        XCTAssertEqual(Self.strippingAppleScriptComments(#"log "a -- b # c""#), #"log "a -- b # c""#)
+        XCTAssertEqual(Self.strippingAppleScriptComments("(* a\n b *)delay 1"), "delay 1")
     }
 
     // MARK: - Helpers
+
+    /// Code lines of a Swift source: comments removed, whitespace trimmed,
+    /// blank lines dropped.
+    static func codeLines(of source: String) -> [String] {
+        strippingSwiftComments(source).split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// Removes `/* … */` blocks (not nested) and `//` line comments outside
+    /// string literals. Lines inside a multi-line string literal are read as
+    /// code, so a `//` there would be cut; DirectDraftPath.swift has none.
+    static func strippingSwiftComments(_ source: String) -> String {
+        source.replacingOccurrences(of: #"/\*[\s\S]*?\*/"#, with: "", options: .regularExpression)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { cutLineComment(String($0)) { ch, previous in ch == "/" && previous == "/" ? 2 : 0 } }
+            .joined(separator: "\n")
+    }
+
+    /// Removes `(* … *)` blocks (not nested) and `--` or `#` line comments
+    /// outside string literals.
+    static func strippingAppleScriptComments(_ script: String) -> String {
+        script.replacingOccurrences(of: #"\(\*[\s\S]*?\*\)"#, with: "", options: .regularExpression)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { cutLineComment(String($0)) { ch, previous in ch == "#" ? 1 : (ch == "-" && previous == "-" ? 2 : 0) } }
+            .joined(separator: "\n")
+    }
+
+    /// Cuts `line` where `opener` says a comment starts (returning how many
+    /// characters, ending at the current one, belong to the opener), skipping
+    /// double-quoted strings with backslash escapes.
+    private static func cutLineComment(_ line: String, opener: (Character, Character?) -> Int) -> String {
+        var out = ""
+        var inString = false
+        var escaped = false
+        var previous: Character?
+        for ch in line {
+            if inString {
+                out.append(ch)
+                if escaped { escaped = false } else if ch == "\\" { escaped = true } else if ch == "\"" { inString = false }
+                previous = nil
+                continue
+            }
+            let length = opener(ch, previous)
+            if length > 0 {
+                out.removeLast(length - 1)
+                return out
+            }
+            if ch == "\"" { inString = true }
+            out.append(ch)
+            previous = ch
+        }
+        return out
+    }
 
     private static func ranges(of needle: String, in text: String) -> [Range<String.Index>] {
         var result: [Range<String.Index>] = []
