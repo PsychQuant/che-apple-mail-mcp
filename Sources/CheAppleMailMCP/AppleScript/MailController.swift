@@ -66,7 +66,7 @@ actor MailController {
     /// large mailbox Mail's UI answers slowly. Live evidence (#301): a HEALTHY
     /// sender-popup `create_draft` runs past 45s, so the #297 default killed it
     /// mid-flight — the abandoned (uncancellable) script kept typing into Mail
-    /// while the legacy fallback ran, the reply arrived at ~78s with a WRAPPED
+    /// while the legacy fallback (removed in #304) ran, the reply arrived at ~78s with a WRAPPED
     /// body, and the caller experienced a hang. On the osascript subprocess
     /// path the measured happy path is ~6s (script) / ~33s (worst live E2E with
     /// popup + save), so 90s clears the legitimate ceiling with margin while
@@ -350,8 +350,8 @@ actor MailController {
             try process.run()
         } catch {
             // Map the POSIX NSError onto the same MailError family every other
-            // failure uses, so the wrapper-free → legacy fallback ladder still
-            // catches it (verify #301, Lens A P1-3).
+            // failure uses, so callers classify it like
+            // any other script failure (verify #301, Lens A P1-3).
             throw MailError.scriptFailed(
                 message: "could not launch /usr/bin/osascript: \(error.localizedDescription)",
                 code: -1)
@@ -1726,7 +1726,7 @@ actor MailController {
         // #301: the whole keystroke flow is ONE script with deliberate per-phase
         // delays — on a large mailbox a HEALTHY run crosses the 45s default, so
         // it gets the GUI deadline (the default killed it mid-flight and the
-        // caller saw a hang + a wrapped-body legacy fallback).
+        // caller saw a hang + a wrapped-body legacy fallback, pre-#304).
         let timingSpawn = Date().timeIntervalSinceReferenceDate
         var result: String
         do {

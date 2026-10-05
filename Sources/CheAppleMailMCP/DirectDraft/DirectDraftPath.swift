@@ -325,7 +325,7 @@ struct DirectDraftPath {
     static func createdText(seconds: TimeInterval, uploaded: Bool) -> String {
         uploaded
             ? String(format: "Draft created successfully (experimental direct-write path, #472; uploaded %.1fs after the trigger)", seconds)
-            : String(format: "Draft created (experimental direct-write path, #472) — upload pending after %.0fs: the draft is in Mail's Drafts and Mail uploads it with its next action for this account", seconds)
+            : String(format: "Draft created (experimental direct-write path, #472) — upload pending after %.0fs: the upload request was sent and the draft is in Mail's Drafts, but the upload is not confirmed yet", seconds)
     }
 
     private func mailVersion() -> (short: String, build: String)? {

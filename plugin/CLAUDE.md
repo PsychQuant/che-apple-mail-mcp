@@ -38,7 +38,7 @@ Apple Mail MCP server for macOS,加上 Foresay-derived confirmation protocol + I
 ### Rules(v2.7.0+ 新增)
 - `confirmation-triggers.md` — 何時必 confirm、何時可 skip
 - `false-positive-detection.md` — Search 結果中偵測 sibling activity / CC pollution / subject collision
-- `compose-wrapper-free.md`(v2.43.0 匯入)— **正式信件 cite-block 紀律(CRITICAL)**:`compose_email`/`create_draft` 的 wrapper-free eligibility、`[legacy path — …]` 揭露義務、自訂寄件人/人名收件人/附件 recipes、TCC fallback ladder(-1743 時走 `open_mailto`,絕不靜默落到 wrapped body)。Canonical 版在 server repo 的 `.claude/rules/`,此為同步副本
+- `compose-wrapper-free.md`(v2.43.0 匯入)— **cite-block 已在結構上不可能(#304)**:compose 工具的 body 來源(只來自 Mail 編輯器;`create_draft` 的 opt-in 直接寫入例外,#475)、六類失敗原因與處置、自訂寄件人/人名收件人/附件 recipes、TCC fallback ladder(-1743 時走 `open_mailto`)。Canonical 版在 server repo 的 `.claude/rules/`,此為同步副本
 
 ## 設計哲學
 

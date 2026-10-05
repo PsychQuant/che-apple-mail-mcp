@@ -70,6 +70,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Text no longer over-claims after #304／#475** ([#486](https://github.com/PsychQuant/che-apple-mail-mcp/issues/486)).
+  `check_accessibility` (all three outputs), its description and the setup window said "nothing falls back"; a
+  reversed opt-in direct write does take the GUI path, so they now say it is the legacy path that is gone, and
+  that direct write applies only to calls meeting its conditions. The upload-pending result of a direct write no
+  longer asserts when Mail will upload. README, `plugin/CLAUDE.md`, the `draft-update` spec and compose code
+  comments stop describing the removed legacy fallback as current. `NoLegacyFallbackClaimGuardTests` now checks
+  properties instead of fixed phrases: runtime text must scope "no fallback" to the legacy path and qualify
+  direct write, and a source line mentioning the legacy compose fallback must cite #304.
+
 - **The first AppleScript-backed call in a fresh server no longer waits out the 45-second deadline**
   ([#471](https://github.com/PsychQuant/che-apple-mail-mcp/issues/471)). `runScript` and `runScriptAsList`
   run NSAppleScript on a detached thread; in a new process, the thread that first initialized the

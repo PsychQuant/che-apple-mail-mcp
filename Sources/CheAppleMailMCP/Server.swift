@@ -74,7 +74,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "check_accessibility",
-                description: "Check whether Accessibility (GUI-scripting) is granted via AXIsProcessTrusted(). Required for the #175 wrapper-free compose path (compose_email / create_draft use mailto + keystrokes so the body isn't wrapped in <blockquote type=\"cite\"> on mobile clients), except when the experimental direct-write create_draft path (CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1) creates the draft — that path needs Full Disk Access instead. Returns status plus steps to grant it. Separate grant from check_fda. If denied, the GUI compose paths fail with a named reason — there has been no fallback path since #304.",
+                description: "Check whether Accessibility (GUI-scripting) is granted via AXIsProcessTrusted(). Required for the #175 wrapper-free compose path (compose_email / create_draft use mailto + keystrokes so the body isn't wrapped in <blockquote type=\"cite\"> on mobile clients), except when the experimental direct-write create_draft path (CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1) creates the draft — that path needs Full Disk Access and Automation instead, and applies only when the call meets its conditions. Returns status plus steps to grant it. Separate grant from check_fda. If denied, the GUI compose paths fail with a named reason; there is no fallback to the removed legacy compose route (#304).",
                 inputSchema: .object(["type": .string("object"), "properties": .object([:])])
             ),
             Tool(
@@ -873,12 +873,7 @@ class CheAppleMailMCPServer {
             let probe = AccessibilityStatus.probe()
             switch probe {
             case .granted:
-                return "✅ " + AccessibilityStatus.summary(probe)
-                    + "\ncompose_email / create_draft / reply_email / forward_email take their body from Mail's own"
-                    + " editor (#175/#304); a call that cannot run cleanly fails with a named reason, and nothing falls"
-                    + " back to another path. With CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1 an eligible create_draft writes"
-                    + " the draft directly instead (#472/#475). Note: System Events keystrokes also rely on Automation (Apple Events)"
-                    + " being allowed — this probe only checks Accessibility (AXIsProcessTrusted)."
+                return "✅ " + AccessibilityStatus.summary(probe) + "\n" + AccessibilityStatus.grantedDetail
             case .denied:
                 return "⚠️ " + AccessibilityStatus.summary(probe) + "\n\n"
                     + AccessibilityStatus.guidance()

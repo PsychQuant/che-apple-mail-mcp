@@ -268,7 +268,7 @@ func buildMailtoComposeScript(
     // #175 verify R2 + #219/#277 verify R2, Codex BLOCKING). `id of window` is
     // stable + unique. We do NOT assume exactly one new window: launching Mail
     // from closed opens the viewer too, so we pick the new window by subject
-    // rather than a count==1 assertion (which would over-reject to legacy
+    // rather than a count==1 assertion (which would fail the call
     // whenever Mail wasn't already running).
     // #219/#277 verify (Codex BLOCKING): System Events (where raiseOnly runs)
     // cannot read Mail's window `id`, so the KEYSTROKE-targeting bridge is the
@@ -277,7 +277,7 @@ func buildMailtoComposeScript(
     // (ii) raiseOnly asserts EXACTLY ONE window carries our title before each
     // keystroke phase — a same-title window opening concurrently (after the
     // snapshot) makes raiseOnly error pre-dispatch → cleanup closes only `_ourId`
-    // → legacy fallback, so a race can neither keystroke/dispatch the wrong
+    // → the call fails (no fallback, #304), so a race can neither keystroke/dispatch the wrong
     // window nor lose the user's window. The `my senderMatches` handler is
     // prepended only when a sender popup is driven — see below. It matches the
     // requested addr against a popup label by (a) exact bare addr, (b) the
@@ -473,13 +473,13 @@ func buildMailtoComposeScript(
     // the last space-delimited token (Mail's real `Name – addr` en-dash format,
     // #219 live-fix) — never by extraction (a quoted local-part could spoof
     // that; the caller normalizes `fromAddress` to a bare addr-spec and a
-    // non-simple one is gated to legacy upstream by `isSimpleAddrSpec`). The
+    // non-simple one is refused upstream by `isSimpleAddrSpec`). The
     // From popup is identified by its stable, locale-independent AXIdentifier
     // "popup_from" (#219 verify, Codex BLOCKING) — NOT a "value contains @"
     // scan, which a signature popup named like an email could satisfy and be
     // driven as the WRONG control. Any SENDERPOPUP error is pre-dispatch: the
-    // on-error handler closes OUR window (saving no) and the Swift router falls
-    // back to legacy `set sender` (correct sender beats clean body, #175).
+    // on-error handler closes OUR window (saving no) and the call fails with
+    // that error, so a wrong sender is never risked (the legacy `set sender` route is gone, #304).
     if let from = fromAddress, !from.isEmpty {
         let fromEsc = appleScriptEscape(from)
         s += """
@@ -632,7 +632,7 @@ func buildMailtoComposeScript(
     // path pasted into the Go-to-folder (⇧⌘G) field (clipboard set here, restored by
     // the caller in Swift). ASCII-only paths reach this flow: the sheet hangs
     // deterministically on CJK/fullwidth input even via paste (#220 live repro), so
-    // non-ASCII paths are routed to the legacy native-attach path upstream — do NOT
+    // non-ASCII paths are refused upstream with a named reason (#220, #304) — do NOT
     // remove that gate.
     if !attachments.isEmpty {
         // #341/#321 — put the caret at the END of the body before attaching.
@@ -694,10 +694,10 @@ func buildMailtoComposeScript(
     // #242: for send:true the dispatch keystroke is wrapped in its own
     // POSTDISPATCH sentinel — once ⇧⌘D has been attempted, the send state is
     // UNKNOWN (the mail may already be on the wire), so the Swift layer must
-    // not fall back to a legacy re-send (duplicate outbound). Pre-dispatch
-    // errors (window lost, lingering sheet) stay unmarked → safe fallback.
-    // ⌘S (draft save) keeps the plain fallback: a duplicated draft is visible
-    // and harmless, unlike a duplicated send.
+    // not retry (a re-send would duplicate the outbound mail). Pre-dispatch
+    // errors (window lost, lingering sheet) stay unmarked → an ordinary failure,
+    // since nothing was sent. ⌘S (draft save) needs no sentinel: a duplicated
+    // draft is visible and harmless, unlike a duplicated send.
     let dispatchBlock: String
     if send {
         dispatchBlock = """
@@ -897,18 +897,18 @@ private func buildReplyForwardPasteScript(
     // of Mail's window id. The mailto path (#175) bridges to AX by window TITLE —
     // which does NOT work here: Mail's reply/forward COMPOSE windows expose an
     // EMPTY `name` (the live test proved a reply window's title is ""), so a
-    // title match would either refuse the (common) empty-title case → legacy-wrap,
+    // title match would either refuse the (common) empty-title case (failing every reply),
     // or match the wrong same-titled window. Instead we use the guard the verify
     // reviewers (Logic + Devil's Advocate) recommended: in the MAIL context, gate
     // each keystroke phase on `id of front window` ∈ the id-delta set — i.e. OUR
     // window is the frontmost Mail window. `reply/forward with opening window`
     // opens the window frontmost; if the user stole focus during a delay, the id
     // won't match → error → on-error close (scoped to our ids) → MailController
-    // catch → legacy injection fallback. Then `set frontmost to true` + keystroke
+    // reports the error (no fallback since #304). Then `set frontmost to true` + keystroke
     // hits that frontmost window. RESIDUAL (inherent GUI automation, documented):
     // a sub-second TOCTOU between the Mail-side check and the AX keystroke remains
-    // — same class as the #175 mailto residual; a detectable change degrades to
-    // the legacy fallback.
+    // — same class as the #175 mailto residual; a detectable change fails the
+    // call instead of keystroking the wrong window.
     let frontGuard = """
         tell application "Mail"
             if (count of windows) is 0 then error "no Mail window to target (falling back)"
@@ -975,7 +975,8 @@ private func buildReplyForwardPasteScript(
     // without this every quiet draft accumulates a window — and an open compose
     // window also holds the draft, blocking later deletion. The close lives
     // OUTSIDE the `try` (best-effort, own inner `try`): a close failure must NOT
-    // propagate into the legacy fallback, which would save a SECOND draft (the
+    // turn the saved draft into an error, which a retrying caller would answer
+    // with a SECOND draft (the
     // double-dispatch hazard the "dispatch is the last statement in `try`"
     // ordering deliberately avoids). `saving yes` is a harmless re-save of the
     // already-saved draft, never a discard.
@@ -998,10 +999,10 @@ private func buildReplyForwardPasteScript(
     // #254 (the #242 pattern, verbatim): for send:true the dispatch keystroke
     // gets its own POSTDISPATCH sentinel and the `_dispatched` flag marks any
     // error from the success-path tail — once ⇧⌘D has been attempted the send
-    // state is UNKNOWN and the Swift layer must not fall back to a legacy
-    // re-send (duplicate outbound reply/forward). The draft path (⌘S) keeps
-    // the plain fallback and its post-try window close (a close failure must
-    // never re-enter the legacy fallback — the double-dispatch hazard).
+    // state is UNKNOWN and the Swift layer must not retry (a re-send
+    // would duplicate the reply/forward). The draft path (⌘S) needs no
+    // sentinel and keeps its post-try window close (a close failure must
+    // never turn a saved draft into an error — the double-dispatch hazard).
     let rfDispatchBlock: String
     if send {
         rfDispatchBlock = """
