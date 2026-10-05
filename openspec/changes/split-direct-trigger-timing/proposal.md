@@ -44,6 +44,6 @@
 - Affected specs: `compose-timing`
 - Affected code:
   - `Sources/CheAppleMailMCP/DirectDraft/DirectDraftPath.swift`：觸發 script 生成（計時開啟才加 prelude 與計時點）、`triggerDirectDraftUpload` 帶計時旗標、`attemptSteps` 記 `trigger_spawn` 並在觸發後取走 script 計時點、`DirectDraftTimer` 加併入 script 計時點的方法
-  - `Tests/CheAppleMailMCPTests/DirectDraftPathTests.swift`：計時開／關的觸發 script、計時點順序、取走 buffer
+  - `Tests/CheAppleMailMCPTests/DirectDraftTriggerTimingTests.swift`（新檔）：計時開／關的觸發 script、計時點順序、取走 buffer、觸發送出的 script
   - `Tests/CheAppleMailMCPTests/DirectWriteSafetyGuardTests.swift`：更新凍結副本；第 8 項同時檢查計時開啟的觸發 script
   - `.claude/rules/direct-write-transaction-safety.md`：若守門測試清單的描述需要對應更新
