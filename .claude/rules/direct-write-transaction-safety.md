@@ -61,10 +61,22 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
     要改它們（例如 #489 加計時點），必須在同一個 commit 更新測試裡的凍結副本，審查時逐行對照
     第 2、3、6、7 項。
 
-上面沒列到的部分，例如 `readOutcome`、`uploadState`、`readFlag`、`createdText`、`outcomeAfterFailedTrigger`、
-`markDirectDraftRead` 與它的 AppleScript、觸發 script 中兩次切換以外的內容，各有自己的既有測試，但不在這兩條
-守門測試的範圍內。測試轉紅時，先取得上面要求的證據並更新本規則，再改測試；不要只改門檻或
-凍結副本。第 1–6 項沒有專屬的守門測試，靠既有測試與 spec 部分覆蓋（第 5 項見 #491）。
+上面沒列到的改動，都不會讓這兩條守門測試轉紅。凍結段呼叫到的函式不在它們的範圍內；其中另有測試的只有
+`readOutcome`、`outcomeAfterFailedTrigger`、`buildDirectDraftMarkReadScript`、`buildDirectDraftTriggerScript`
+（`DirectDraftPathTests`）與 `uploadState`（`DraftStoreWriterTests`），`readFlag`、`createdText`、
+`markDirectDraftRead`、`triggerDirectDraftUpload` 沒有任何測試。
+
+結構檢查擋不住所有削弱方式。#490 第 4 輪驗證找到下列六種寫法，這兩條守門測試都不會轉紅（#492；根治要靠
+#484 的行為測試）：
+
+1. 在 `timer.mark("inserted")` 之前提早回報；
+2. 讓 `triggerDirectDraftUpload` 送出 `buildDirectDraftTriggerScript` 以外的 script，或在送出前改寫它；
+3. 在 `DirectDraftPath` 裡宣告與凍結段所用名稱同名的型別或函式（例如 `Task`）；
+4. 用 `set the read status of` 之類的寫法多加一次切換；
+5. 用 `if` 等控制流程包住兩次切換；
+6. 另寫一條名稱不同、不經 `attemptSteps` 的平行路徑。
+
+測試轉紅時，先取得上面要求的證據並更新本規則，再改測試；不要只改門檻或凍結副本。第 1–6 項沒有專屬的守門測試，靠既有測試與 spec 部分覆蓋（第 5 項見 #491）。
 
 已評估過的提案（2026-10-05，live 計時：直接寫入 3.17 秒，其中寫入 14 ms、找草稿匣 470 ms、
 觸發 1,667 ms、等上傳確認 1,021 ms）：
