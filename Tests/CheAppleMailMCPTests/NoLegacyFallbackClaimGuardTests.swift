@@ -141,6 +141,9 @@ final class NoLegacyFallbackClaimGuardTests: XCTestCase {
         // The dead first version, kept as a counter-example: it matches nothing real.
         let deadVersion = try NSRegularExpression(pattern: #"error \?"([^"\\]|\\.)*\?""#)
         XCTAssertTrue(matches(deadVersion, #"    if x then error "no window (falling back)""#).isEmpty)
+        let stringLiteral = try NSRegularExpression(pattern: Self.stringLiteralPattern)
+        XCTAssertEqual(matches(stringLiteral, #"let a = "x falling back", b = "y \"quoted\" z""#),
+                       [#""x falling back""#, #""y \"quoted\" z""#], "every Swift string literal, escapes included")
         for text in ["falling back", "safe fallback", "falls back", "fall back"] {
             XCTAssertFalse(matches(claim, text).isEmpty, "claim pattern must flag \"\(text)\"")
         }
@@ -152,10 +155,12 @@ final class NoLegacyFallbackClaimGuardTests: XCTestCase {
     /// the caller verbatim (mapRuntimeError returns them unchanged), so a caller
     /// was told a fallback happened when the call had failed.
     ///
-    /// Scope, stated exactly: AppleScript `error "…"` literals in every source
-    /// file, plus every string literal in the two compose builders. Swift-side
-    /// MailError text in other files is NOT scanned — read tools there have real
-    /// SQLite → AppleScript fallbacks whose messages say so legitimately.
+    /// Scope: every string literal in the two compose builders; in every other
+    /// source file, only the first quoted segment after an AppleScript `error`
+    /// (a later `& "…"` segment is not seen). The scan is per line. Swift-side
+    /// text in other files is NOT scanned, including compose-side messages such
+    /// as DirectDraft's: those files also hold true fallback statements (read
+    /// tools' SQLite → AppleScript, a reversed direct write's GUI path).
     func testComposeErrorTextDoesNotClaimAFallback() throws {
         let sources = Self.repoRoot.appendingPathComponent("Sources/CheAppleMailMCP")
         let files = try XCTUnwrap(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
@@ -165,14 +170,19 @@ final class NoLegacyFallbackClaimGuardTests: XCTestCase {
         let stringLiteral = try NSRegularExpression(pattern: Self.stringLiteralPattern)
         let claim = try NSRegularExpression(pattern: Self.fallbackClaimPattern, options: [.caseInsensitive])
         var offenders: [String] = []
+        var builderLiterals = 0, appleScriptErrors = 0
+        var buildersSeen: Set<String> = []
         for file in files {
+            let isBuilder = composeBuilders.contains(file.lastPathComponent)
+            if isBuilder { buildersSeen.insert(file.lastPathComponent) }
             let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
             for (index, line) in lines.enumerated() {
                 let code = line.trimmingCharacters(in: .whitespaces)
                 if code.hasPrefix("//") { continue }
-                let pattern = composeBuilders.contains(file.lastPathComponent) ? stringLiteral : appleScriptError
+                let pattern = isBuilder ? stringLiteral : appleScriptError
                 let range = NSRange(line.startIndex..., in: line)
                 for match in pattern.matches(in: line, range: range) {
+                    if isBuilder { builderLiterals += 1 } else { appleScriptErrors += 1 }
                     let literal = (line as NSString).substring(with: match.range)
                     if claim.firstMatch(in: literal, range: NSRange(literal.startIndex..., in: literal)) != nil {
                         offenders.append("\(file.lastPathComponent):\(index + 1): \(literal)")
@@ -180,6 +190,11 @@ final class NoLegacyFallbackClaimGuardTests: XCTestCase {
                 }
             }
         }
+        // A scan that matched nothing would pass vacuously (round 2 of the #486
+        // verify): require both halves to have actually read something.
+        XCTAssertEqual(buildersSeen, composeBuilders, "both compose builders must be found")
+        XCTAssertGreaterThan(builderLiterals, 0, "the builder scan read no string literals")
+        XCTAssertGreaterThan(appleScriptErrors, 0, "the repo-wide scan read no AppleScript error literals")
         XCTAssertTrue(offenders.isEmpty,
                       "compose error text must not claim a fallback (the call fails; #304):\n"
                       + offenders.joined(separator: "\n"))
