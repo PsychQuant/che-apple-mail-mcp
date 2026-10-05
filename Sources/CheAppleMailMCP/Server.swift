@@ -1370,18 +1370,19 @@ class CheAppleMailMCPServer {
             let fromAddress = arguments["from_address"]?.stringValue
             // #472: EXPERIMENTAL opt-in (CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1) —
             // write the draft straight into Mail's store; anything outside the
-            // verified range falls back to the GUI path below, with a note.
-            var directNote = ""
-            if DirectDraft.isEnabled {
-                switch await DirectDraftPath(controller: mailController, reader: indexReader).attempt(
-                    to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments,
-                    format: format, fromAddress: fromAddress) {
-                case .created(let text): return text
-                case .notAttempted(let reason): directNote = reason.map(DirectDraftPath.fallbackNote) ?? ""
-                case .fellBack(let reason): directNote = DirectDraftPath.fallbackNote(reason)
-                }
-            }
-            return try await mailController.createDraft(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, fromAddress: fromAddress) + directNote
+            // verified range falls back to the GUI path, with a note. #475: the
+            // whole call is one timing run when CHE_MAIL_COMPOSE_TIMING_CSV is set.
+            let directPath = DirectDraftPath(controller: mailController, reader: indexReader)
+            return try await DirectDraftPath.createDraft(
+                csvPath: ComposeTiming.csvPathFromEnvironment, directEnabled: DirectDraft.isEnabled,
+                direct: {
+                    await directPath.attempt(to: to, subject: subject, body: body, cc: cc, bcc: bcc,
+                                             attachments: attachments, format: format, fromAddress: fromAddress)
+                },
+                gui: {
+                    try await mailController.createDraft(to: to, subject: subject, body: body, cc: cc, bcc: bcc,
+                                                         attachments: attachments, format: format, fromAddress: fromAddress)
+                })
 
         case "update_draft":
             // #276 — upsert: locate existing draft → create replacement →

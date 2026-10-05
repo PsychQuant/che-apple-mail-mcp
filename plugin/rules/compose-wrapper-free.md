@@ -14,13 +14,14 @@
 
 ## 現況（#304 落地後）
 
-四個 compose 工具的 body **只能**來自 Mail 自己的編輯器：
+四個 compose 工具的 body **只能**來自 Mail 自己的編輯器——唯一例外是表中最後一列，`create_draft` 的 opt-in 直接寫入（它也不經 AppleScript 內文屬性）：
 
 | 工具 | body 來源 |
 |---|---|
 | `compose_email` / `create_draft` | `mailto:` hand-off + GUI 鍵盤操作 |
 | `reply_email` / `forward_email` | Mail 原生 reply/forward verb + 游標處貼上 |
 | `forward_email`（不帶 body） | 原生 forward，**什麼都不寫入**（連 Accessibility 都不需要）|
+| `create_draft`（opt-in：`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，#472／#475） | 自組 MIME 直接寫入本機資料庫（Envelope Index＋`.emlx`），**不經 Mail 編輯器、不經 AppleScript 內文屬性**；不符條件或寫入前失敗就退回第一列的 mailto 路徑 |
 
 AppleScript 的 `set content` / `set html content` / outgoing-message 建構中的 `content:`
 **全部移除**，並由 `Tests/CheAppleMailMCPTests/NoBodyInjectionGuardTests.swift` 整檔掃描把關——

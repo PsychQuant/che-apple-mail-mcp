@@ -60,33 +60,148 @@ enum ComposeTiming {
         }
     }
 
+    /// #475 added `path` as the last column (`gui-mailto` / `direct`), so the
+    /// two `create_draft` paths can be told apart in one file.
     static let csvHeader =
-        "run_id,source,step,t_ref,ms_since_start,ms_since_prev,outcome,window_delay,step_delay,from_address_set"
+        "run_id,source,step,t_ref,ms_since_start,ms_since_prev,outcome,window_delay,step_delay,from_address_set,path"
 
-    static func csvRows(runId: String, marks: [Mark], outcome: String, config: [String: String]) -> [String] {
-        let sorted = marks.sorted { $0.time < $1.time }
-        guard let start = sorted.first?.time else { return [] }
-        let tail = ["window_delay", "step_delay", "from_address_set"].map { config[$0] ?? "" }
-        var previous = start
-        return sorted.map { mark in
-            let sinceStart = Int(((mark.time - start) * 1000).rounded())
-            let sincePrev = Int(((mark.time - previous) * 1000).rounded())
-            previous = mark.time
-            return ([runId, mark.source, mark.label, String(format: "%.3f", mark.time),
-                     String(sinceStart), String(sincePrev), outcome] + tail).joined(separator: ",")
+    static let guiMailtoPath = "gui-mailto"
+    static let directPath = "direct"
+
+    enum AppendError: LocalizedError, CustomStringConvertible {
+        /// The file was started by another layout (e.g. #464's 10 columns).
+        /// Appending would mix layouts and every header-driven reader would
+        /// misalign columns without noticing — so nothing is written.
+        case headerMismatch(path: String, found: String)
+
+        var description: String {
+            switch self {
+            case .headerMismatch(let path, let found):
+                return "header of \(path) does not match the current layout (found \"\(found)\"); "
+                    + "point \(ComposeTiming.envKey) at a new file"
+            }
         }
+
+        var errorDescription: String? { description }
+    }
+
+    /// One path's part of a run: its marks share a `path`, an `outcome` and the
+    /// config columns. A `create_draft` that falls back from the direct write to
+    /// the GUI path is one run with two segments (#475).
+    struct Segment: Equatable {
+        let path: String
+        let outcome: String
+        let config: [String: String]
+        let marks: [Mark]
+    }
+
+    static func csvRows(runId: String, marks: [Mark], outcome: String, config: [String: String],
+                        path: String = guiMailtoPath) -> [String] {
+        csvRows(runId: runId, segments: [Segment(path: path, outcome: outcome, config: config, marks: marks)])
+    }
+
+    /// All segments' marks in time order, measured from the earliest mark of the
+    /// run, so a fallback's total cost reads straight off the last row.
+    static func csvRows(runId: String, segments: [Segment]) -> [String] {
+        let tagged = segments.flatMap { segment in segment.marks.map { (mark: $0, segment: segment) } }
+            .sorted { $0.mark.time < $1.mark.time }
+        guard let start = tagged.first?.mark.time else { return [] }
+        var previous = start
+        return tagged.map { item in
+            let sinceStart = Int(((item.mark.time - start) * 1000).rounded())
+            let sincePrev = Int(((item.mark.time - previous) * 1000).rounded())
+            previous = item.mark.time
+            let tail = ["window_delay", "step_delay", "from_address_set"].map { item.segment.config[$0] ?? "" }
+            return ([runId, item.mark.source, item.mark.label, String(format: "%.3f", item.mark.time),
+                     String(sinceStart), String(sincePrev), item.segment.outcome] + tail + [item.segment.path])
+                .map(csvField).joined(separator: ",")
+        }
+    }
+
+    /// Fields are joined without quoting, so a comma (or line break) in a value —
+    /// e.g. an env delay someone wrote as `0.2,0.3` — would shift every column.
+    static func csvField(_ value: String) -> String {
+        value.replacingOccurrences(of: ",", with: ";")
+            .replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
     }
 
     static func append(rows: [String], toCSVAt path: String) throws {
         let fm = FileManager.default
         let isNew = !fm.fileExists(atPath: path)
             || ((try? fm.attributesOfItem(atPath: path)[.size] as? NSNumber)?.intValue ?? 0) == 0
+        if !isNew {
+            let first = try firstLine(ofFileAt: path)
+            guard first == csvHeader else { throw AppendError.headerMismatch(path: path, found: first) }
+        }
         if isNew { fm.createFile(atPath: path, contents: nil) }
         let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
         defer { try? handle.close() }
         try handle.seekToEnd()
         let text = (isNew ? [csvHeader] : []) + rows
         try handle.write(contentsOf: Data((text.joined(separator: "\n") + "\n").utf8))
+    }
+
+    /// Reads only up to the first line break (bounded), never the whole file.
+    private static func firstLine(ofFileAt path: String) throws -> String {
+        let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
+        defer { try? handle.close() }
+        let head = try handle.read(upToCount: 4096) ?? Data()
+        let text = String(decoding: head, as: UTF8.self)
+        return String(text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
+    }
+
+    // MARK: - Runs (#475)
+
+    /// The rows of one composing call. `create_draft` opens a run so that a
+    /// direct-write attempt and the GUI path it falls back to share one `run_id`
+    /// and one starting point; the run writes everything once, when it ends.
+    final class Run: @unchecked Sendable {
+        let id = UUID().uuidString
+        private let lock = NSLock()
+        private var segments: [Segment] = []
+
+        func add(_ segment: Segment) {
+            lock.lock(); segments.append(segment); lock.unlock()
+        }
+
+        var collected: [Segment] {
+            lock.lock(); defer { lock.unlock() }
+            return segments
+        }
+    }
+
+    /// Carried down `create_draft → createDraft → composeViaMailto` on the same
+    /// task, so none of those signatures needs a timing parameter.
+    @TaskLocal static var currentRun: Run?
+
+    /// Runs `body` inside a run when `csvPath` is set, and writes the run's rows
+    /// when it ends — also when `body` throws. With `csvPath` nil this is just `body`.
+    static func withRun<T>(csvPath: String?, _ body: () async throws -> T) async rethrows -> T {
+        guard let csvPath else { return try await body() }
+        let run = Run()
+        defer { write(csvRows(runId: run.id, segments: run.collected), to: csvPath) }
+        return try await $currentRun.withValue(run) { try await body() }
+    }
+
+    /// Inside a run the segment joins it; outside (e.g. `compose_email`) it is
+    /// written at once as its own run.
+    static func record(_ segment: Segment, csvPath: String) {
+        if let run = currentRun {
+            run.add(segment)
+        } else {
+            write(csvRows(runId: UUID().uuidString, segments: [segment]), to: csvPath)
+        }
+    }
+
+    /// Diagnostics only: a failure goes to stderr and never reaches the compose call.
+    private static func write(_ rows: [String], to path: String) {
+        guard !rows.isEmpty else { return }
+        do {
+            try append(rows: rows, toCSVAt: path)
+        } catch {
+            _ = Diagnostics.emit("compose timing: could not append to \(path): \(error.localizedDescription)\n")
+        }
     }
 
     // MARK: - Hand-off from the osascript transport to composeViaMailto

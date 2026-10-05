@@ -9,13 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Opt-in per-step timing for the GUI compose path** (`CHE_MAIL_COMPOSE_TIMING_CSV=<file>`,
-  [#464](https://github.com/PsychQuant/che-apple-mail-mcp/issues/464)). Each `create_draft` /
-  `compose_email` call appends one CSV row per step (`run_id, source, step, t_ref, ms_since_start,
-  ms_since_prev, outcome, window_delay, step_delay, from_address_set`): Swift-side `enter` / `spawn` /
-  `returned` plus in-script marks from `script_start` to `script_end`. The script logs them to
-  osascript's stderr through an ASObjC clock; with the variable unset the generated script is
-  byte-for-byte unchanged.
+- **Opt-in per-step timing for every `create_draft` path** (`CHE_MAIL_COMPOSE_TIMING_CSV=<file>`,
+  [#464](https://github.com/PsychQuant/che-apple-mail-mcp/issues/464),
+  [#475](https://github.com/PsychQuant/che-apple-mail-mcp/issues/475)). Each call appends one CSV row per
+  step (`run_id, source, step, t_ref, ms_since_start, ms_since_prev, outcome, window_delay, step_delay,
+  from_address_set, path`). The GUI mailto path (`path` = `gui-mailto`, also used by `compose_email`) records
+  Swift-side `enter` / `spawn` / `returned` plus in-script marks from `script_start` to `script_end`, logged to
+  osascript's stderr through an ASObjC clock. The direct-write path (`path` = `direct`) records `enter`, one
+  mark per completed step (`eligibility` … `read_ensured`) and `returned`, with a fixed `outcome` code such as
+  `created`, `not_attempted:ccOrBcc` or `fell_back:trigger`. A `create_draft` that falls back from the direct
+  write to the GUI path is one run: both segments share the `run_id` and `ms_since_start` keeps counting from
+  the direct `enter`, so the fallback's total cost is the last row. A file whose header differs (e.g. one
+  started by a build before #475) is left untouched and a `compose timing:` line on stderr says so — point the
+  variable at a new file. With the variable unset the generated script is byte-for-byte unchanged and no file
+  is written.
 
 - **Experimental direct-write path for `create_draft`** (`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, off by default,
   [#472](https://github.com/PsychQuant/che-apple-mail-mcp/issues/472)). The draft is written straight into Mail's
@@ -28,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.5–3.0 s after the trigger, server copies equal to the input in subject and decoded body, `draft=1`; a cc
   draft fell back to the GUI path with the note. With a 0.3 s gap between the two toggles one draft stayed
   unread locally, so the gap is 0.5 s and the path re-asserts read status after the upload.
+  The `message-composition` spec now admits this as the second permitted body source for `create_draft`
+  (opt-in only, closed eligibility list, no AppleScript body property); the AppleScript body-injection ban is
+  unchanged ([#475](https://github.com/PsychQuant/che-apple-mail-mcp/issues/475)).
 
 ### Changed
 

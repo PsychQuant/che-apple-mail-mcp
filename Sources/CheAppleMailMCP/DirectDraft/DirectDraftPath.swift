@@ -61,13 +61,93 @@ struct DirectDraftPath {
     var mailInfoPlist: String = "/System/Applications/Mail.app/Contents/Info.plist"
     var uploadDeadline: TimeInterval = 10
 
+    /// Why an attempt stopped before writing. `reason` is the human text of the
+    /// GUI-path note (unchanged since #472); `code` is the fixed timing-CSV code
+    /// (#475) — a closed list, kept free of commas because the CSV is unquoted.
+    enum Gate: Equatable {
+        case ineligible(DirectDraft.Ineligible)
+        case version
+        case account(count: Int)
+        case index
+        case draftsUnidentified(String)
+        case draftsUnmatched
+        case writerOpen(String)
+        case schemaDrift([String])
+        case mailbox
+        case sender
+        case insert(String)
+
+        var code: String {
+            switch self {
+            case .ineligible(let i): return String(describing: i)
+            case .version: return "version"
+            case .account: return "account"
+            case .index: return "index"
+            case .draftsUnidentified: return "drafts_unidentified"
+            case .draftsUnmatched: return "drafts_unmatched"
+            case .writerOpen: return "writer_open"
+            case .schemaDrift: return "schema_drift"
+            case .mailbox: return "mailbox"
+            case .sender: return "sender"
+            case .insert: return "insert"
+            }
+        }
+
+        var reason: String {
+            switch self {
+            case .ineligible(let i): return i.reason
+            case .version: return "Mail/macOS version outside the verified range (Mail 16, macOS 27)"
+            case .account(let n): return "from_address maps to \(n) accounts, not exactly one"
+            case .index: return "the Envelope Index is not readable"
+            case .draftsUnidentified(let why): return "could not identify the Drafts mailbox: \(why)"
+            case .draftsUnmatched: return "the Drafts mailbox could not be matched to the index"
+            case .writerOpen(let why): return "the store could not be opened for writing: \(why)"
+            case .schemaDrift(let drift): return "store schema differs from the verified one (\(drift.joined(separator: "; ")))"
+            case .mailbox: return "the Drafts mailbox is not a single IMAP mailbox row"
+            case .sender: return "no existing sender row for from_address in this account"
+            case .insert(let why): return "the direct write failed and was rolled back: \(why)"
+            }
+        }
+    }
+
     enum Outcome: Equatable {
-        /// Not tried; `nil` reason = the flag is off (no note at all).
-        case notAttempted(String?)
-        /// Draft written and handed to Mail. The text is the tool result.
-        case created(String)
+        /// Not tried; `nil` = the flag is off (no note, no timing rows).
+        case notAttempted(Gate?)
+        /// Draft written and handed to Mail. The text is the tool result;
+        /// `pending` = the upload was requested but not confirmed in time.
+        case created(String, pending: Bool)
         /// Written, then rolled back before Mail had it; the GUI path should run.
         case fellBack(String)
+
+        /// The `outcome` column of this attempt's `direct` timing rows (#475);
+        /// nil when the attempt did not run at all.
+        var timingCode: String? {
+            switch self {
+            case .notAttempted(nil): return nil
+            case .notAttempted(let gate?): return "not_attempted:\(gate.code)"
+            case .created(_, let pending): return pending ? "created:upload_pending" : "created"
+            case .fellBack: return "fell_back:trigger"
+            }
+        }
+    }
+
+    /// #475 — the whole `create_draft` call as one timing run: the direct-write
+    /// attempt (when enabled) and, unless it created the draft, the GUI path,
+    /// whose result then carries the fallback note. `csvPath` nil = timing off.
+    static func createDraft(csvPath: String?, directEnabled: Bool,
+                            direct: () async -> Outcome,
+                            gui: () async throws -> String) async throws -> String {
+        try await ComposeTiming.withRun(csvPath: csvPath) {
+            var note = ""
+            if directEnabled {
+                switch await direct() {
+                case .created(let text, _): return text
+                case .notAttempted(let gate): note = gate.map { fallbackNote($0.reason) } ?? ""
+                case .fellBack(let reason): note = fallbackNote(reason)
+                }
+            }
+            return try await gui() + note
+        }
     }
 
     static func fallbackNote(_ reason: String) -> String {
@@ -76,26 +156,40 @@ struct DirectDraftPath {
 
     func attempt(to: [String], subject: String, body: String, cc: [String]?, bcc: [String]?,
                  attachments: [String]?, format: BodyFormat, fromAddress: String?) async -> Outcome {
+        let timer = DirectDraftTimer(fromAddressSet: !(fromAddress ?? "").isEmpty)
+        timer.mark("enter")
+        let outcome = await attemptSteps(to: to, subject: subject, body: body, cc: cc, bcc: bcc,
+                                         attachments: attachments, format: format, fromAddress: fromAddress,
+                                         timer: timer)
+        timer.finish(outcome)
+        return outcome
+    }
+
+    private func attemptSteps(to: [String], subject: String, body: String, cc: [String]?, bcc: [String]?,
+                              attachments: [String]?, format: BodyFormat, fromAddress: String?,
+                              timer: DirectDraftTimer) async -> Outcome {
         if let no = DirectDraft.eligibility(enabled: enabled, format: format, to: to, cc: cc ?? [], bcc: bcc ?? [],
                                             attachments: attachments ?? [], subject: subject, fromAddress: fromAddress) {
-            return .notAttempted(no == .disabled ? nil : no.reason)
+            return .notAttempted(no == .disabled ? nil : .ineligible(no))
         }
+        timer.mark("eligibility")
         let from = fromAddress!
         guard let version = mailVersion(), version.short.hasPrefix("16."),
               ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27 else {
-            return .notAttempted("Mail/macOS version outside the verified range (Mail 16, macOS 27)")
+            return .notAttempted(.version)
         }
+        timer.mark("version_gate")
         let uuids = AccountMapper.uuids(forEmail: from)
         guard uuids.count == 1, let account = uuids.first else {
-            return .notAttempted("from_address maps to \(uuids.count) accounts, not exactly one")
+            return .notAttempted(.account(count: uuids.count))
         }
-        guard let reader else { return .notAttempted("the Envelope Index is not readable") }
+        guard let reader else { return .notAttempted(.index) }
 
         // Drafts mailbox: the sanctioned identification (r-must-direct-db #186),
         // then the #345 corroborated join to a path, then exactly one row.
         let special: [String: Any]
         do { special = try await controller.getSpecialMailboxes(accountId: account) }
-        catch { return .notAttempted("could not identify the Drafts mailbox: \(error.localizedDescription)") }
+        catch { return .notAttempted(.draftsUnidentified(error.localizedDescription)) }
         let entries: [(path: String, components: [String])] = ((try? reader.listMailboxes(accountId: account)) ?? [])
             .compactMap { row in
                 guard let name = row["name"] as? String else { return nil }
@@ -104,20 +198,22 @@ struct DirectDraftPath {
         let leaves = perAccountSpecialMailboxes.compactMap { s in (special[s.key] as? String).map { (key: s.key, leaf: $0) } }
         guard let draftsPath = joinSpecialMailboxPaths(leaves: leaves, mailboxes: entries)["drafts"],
               let components = entries.first(where: { $0.path == draftsPath })?.components else {
-            return .notAttempted("the Drafts mailbox could not be matched to the index")
+            return .notAttempted(.draftsUnmatched)
         }
+        timer.mark("drafts_resolved")
 
         let writer: DraftStoreWriter
         do { writer = try DraftStoreWriter(databasePath: databasePath) }
-        catch { return .notAttempted("the store could not be opened for writing: \(error)") }
+        catch { return .notAttempted(.writerOpen("\(error)")) }
         let drift = writer.schemaDrift()
-        guard drift.isEmpty else { return .notAttempted("store schema differs from the verified one (\(drift.joined(separator: "; ")))") }
+        guard drift.isEmpty else { return .notAttempted(.schemaDrift(drift)) }
+        timer.mark("writer_opened")
         guard let mailbox = writer.mailboxRow(accountUUID: account, pathComponents: components),
               mailbox.url.hasPrefix("imap://") else {
-            return .notAttempted("the Drafts mailbox is not a single IMAP mailbox row")
+            return .notAttempted(.mailbox)
         }
         guard let sender = writer.senderRow(address: from, accountUUID: account) else {
-            return .notAttempted("no existing sender row for from_address in this account")
+            return .notAttempted(.sender)
         }
 
         let now = Date()
@@ -132,29 +228,34 @@ struct DirectDraftPath {
             flags: DirectDraft.draftFlags, date: now)
         let inserted: DraftStoreWriter.Inserted
         do { inserted = try writer.insert(draft, emlx: DirectDraft.emlx(mime: message.mime, flags: DirectDraft.draftFlags, date: now)) }
-        catch { return .notAttempted("the direct write failed and was rolled back: \(error)") }
+        catch { return .notAttempted(.insert("\(error)")) }
+        timer.mark("inserted")
 
         let triggered = Date()
         do {
             _ = try await controller.triggerDirectDraftUpload(rowId: inserted.messageRowId)
+            timer.mark("trigger_sent")
         } catch {
             do {
                 try writer.rollback(inserted)
                 return .fellBack("Mail could not be asked to upload it (\(error.localizedDescription)); the write was rolled back")
             } catch {
                 // Rollback refused: the server already has it. It is created.
-                return .created(Self.createdText(seconds: Date().timeIntervalSince(triggered), uploaded: true))
+                return .created(Self.createdText(seconds: Date().timeIntervalSince(triggered), uploaded: true), pending: false)
             }
         }
         while Date().timeIntervalSince(triggered) < uploadDeadline {
             let state = writer.uploadState(inserted)
             if state.remoteId != nil && !state.actionQueued {
                 let seconds = Date().timeIntervalSince(triggered)
-                return .created(Self.createdText(seconds: seconds, uploaded: true) + (await ensureRead(writer, inserted)))
+                timer.mark("uploaded")
+                let readNote = await ensureRead(writer, inserted)
+                if readNote.isEmpty { timer.mark("read_ensured") }
+                return .created(Self.createdText(seconds: seconds, uploaded: true) + readNote, pending: false)
             }
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
-        return .created(Self.createdText(seconds: uploadDeadline, uploaded: false))
+        return .created(Self.createdText(seconds: uploadDeadline, uploaded: false), pending: true)
     }
 
     /// Re-assert read status once if the uploaded draft's row still says unread
@@ -180,5 +281,34 @@ struct DirectDraftPath {
               let short = info["CFBundleShortVersionString"] as? String,
               let build = info["CFBundleVersion"] as? String else { return nil }
         return (short, build)
+    }
+}
+
+/// #475 — the `direct` segment of a `create_draft` timing run. Inert (no clock
+/// reads, nothing recorded) unless a run is active, i.e. unless
+/// `CHE_MAIL_COMPOSE_TIMING_CSV` is set; a mark is taken when a step COMPLETES.
+final class DirectDraftTimer: @unchecked Sendable {
+    private let run = ComposeTiming.currentRun
+    private let fromAddressSet: Bool
+    private let lock = NSLock()
+    private var marks: [ComposeTiming.Mark] = []
+
+    init(fromAddressSet: Bool) { self.fromAddressSet = fromAddressSet }
+
+    func mark(_ label: String) {
+        guard run != nil else { return }
+        let mark = ComposeTiming.Mark(source: "swift", label: label, time: Date().timeIntervalSinceReferenceDate)
+        lock.lock(); marks.append(mark); lock.unlock()
+    }
+
+    /// Adds the segment to the run; nothing when the attempt did not run at all
+    /// (flag off) or no run is active.
+    func finish(_ outcome: DirectDraftPath.Outcome) {
+        guard let run, let code = outcome.timingCode else { return }
+        mark("returned")
+        lock.lock(); let collected = marks; lock.unlock()
+        run.add(ComposeTiming.Segment(path: ComposeTiming.directPath, outcome: code,
+                                      config: ["from_address_set": fromAddressSet ? "true" : "false"],
+                                      marks: collected))
     }
 }

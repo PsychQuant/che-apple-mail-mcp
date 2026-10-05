@@ -1660,25 +1660,24 @@ actor MailController {
     /// #464 — append this call's timing rows when `CHE_MAIL_COMPOSE_TIMING_CSV`
     /// is set. Diagnostics only: a write failure is reported to stderr and never
     /// fails the compose call.
-    private func recordComposeTiming(enter: TimeInterval, spawn: TimeInterval, outcome: String,
-                                     fromAddressSet: Bool) {
-        guard let path = ComposeTiming.csvPathFromEnvironment else { return }
+    /// #475 — inside a `create_draft` run the rows join the run (path
+    /// `gui-mailto`); outside a run (`compose_email`) they are written at once.
+    nonisolated func recordComposeTiming(enter: TimeInterval, spawn: TimeInterval, outcome: String,
+                                         fromAddressSet: Bool,
+                                         csvPath: String? = ComposeTiming.csvPathFromEnvironment) {
+        guard let csvPath else { return }
         let env = ProcessInfo.processInfo.environment
         let marks = [
             ComposeTiming.Mark(source: "swift", label: "enter", time: enter),
             ComposeTiming.Mark(source: "swift", label: "spawn", time: spawn),
             ComposeTiming.Mark(source: "swift", label: "returned", time: Date().timeIntervalSinceReferenceDate),
         ] + ComposeTiming.takeCapturedMarks()
-        let rows = ComposeTiming.csvRows(
-            runId: UUID().uuidString, marks: marks, outcome: outcome,
+        ComposeTiming.record(ComposeTiming.Segment(
+            path: ComposeTiming.guiMailtoPath, outcome: outcome,
             config: ["window_delay": env["CHE_MAIL_MAILTO_WINDOW_DELAY"] ?? "default",
                      "step_delay": env["CHE_MAIL_MAILTO_STEP_DELAY"] ?? "default",
-                     "from_address_set": fromAddressSet ? "true" : "false"])
-        do {
-            try ComposeTiming.append(rows: rows, toCSVAt: path)
-        } catch {
-            _ = Diagnostics.emit("compose timing: could not append to \(path): \(error.localizedDescription)\n")
-        }
+                     "from_address_set": fromAddressSet ? "true" : "false"],
+            marks: marks), csvPath: csvPath)
     }
 
     private func composeViaMailto(

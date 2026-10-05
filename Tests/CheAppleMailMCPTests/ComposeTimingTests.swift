@@ -87,12 +87,10 @@ final class ComposeTimingTests: XCTestCase {
         let rows = ComposeTiming.csvRows(runId: "R1", marks: marks, outcome: "ok",
                                          config: ["window_delay": "0.2", "step_delay": "default", "from_address_set": "true"])
         XCTAssertEqual(rows, [
-            "R1,swift,enter,100.000,0,0,ok,0.2,default,true",
-            "R1,swift,spawn,100.100,100,100,ok,0.2,default,true",
-            "R1,script,window_found,100.500,500,400,ok,0.2,default,true",
+            "R1,swift,enter,100.000,0,0,ok,0.2,default,true,gui-mailto",
+            "R1,swift,spawn,100.100,100,100,ok,0.2,default,true,gui-mailto",
+            "R1,script,window_found,100.500,500,400,ok,0.2,default,true,gui-mailto",
         ])
-        XCTAssertEqual(ComposeTiming.csvHeader,
-            "run_id,source,step,t_ref,ms_since_start,ms_since_prev,outcome,window_delay,step_delay,from_address_set")
     }
 
     func testAppendWritesTheHeaderOnlyOnce() throws {
@@ -103,6 +101,165 @@ final class ComposeTimingTests: XCTestCase {
         try ComposeTiming.append(rows: ["b", "c"], toCSVAt: path)
         XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8),
                        ComposeTiming.csvHeader + "\na\nb\nc\n")
+    }
+
+    // MARK: - #475 Timing CSV layout / Mismatched header is refused
+
+    static let header475 =
+        "run_id,source,step,t_ref,ms_since_start,ms_since_prev,outcome,window_delay,step_delay,from_address_set,path"
+    static let header464 =
+        "run_id,source,step,t_ref,ms_since_start,ms_since_prev,outcome,window_delay,step_delay,from_address_set"
+
+    private func tempCSV() -> String {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("compose-timing-\(UUID().uuidString).csv").path
+    }
+
+    func testHeaderEndsWithThePathColumn() {
+        XCTAssertEqual(ComposeTiming.csvHeader, Self.header475)
+    }
+
+    func testNewFileStartsWithTheElevenColumnHeader() throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let rows = ComposeTiming.csvRows(runId: "R1", marks: [
+            ComposeTiming.Mark(source: "swift", label: "enter", time: 1.0)], outcome: "ok", config: [:])
+        try ComposeTiming.append(rows: rows, toCSVAt: path)
+        let lines = try String(contentsOfFile: path, encoding: .utf8).split(separator: "\n")
+        XCTAssertEqual(String(lines[0]), Self.header475)
+        for line in lines { XCTAssertEqual(line.split(separator: ",", omittingEmptySubsequences: false).count, 11) }
+    }
+
+    func testFileWithTheOldHeaderIsRefusedAndLeftUnchanged() throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let original = Self.header464 + "\nR0,swift,enter,1.000,0,0,ok,,,true\n"
+        try original.write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try ComposeTiming.append(rows: ["x"], toCSVAt: path)) { error in
+            // The caller logs `error.localizedDescription`; it must name the file and the mismatch.
+            XCTAssertTrue(error.localizedDescription.contains("header"), error.localizedDescription)
+            XCTAssertTrue(error.localizedDescription.contains(path), error.localizedDescription)
+        }
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), original)
+    }
+
+    func testNoFieldContainsAComma() {
+        let rows = ComposeTiming.csvRows(runId: "R1", marks: [
+            ComposeTiming.Mark(source: "swift", label: "enter", time: 1.0)], outcome: "ok",
+            config: ["window_delay": "0.2,0.3", "step_delay": "default", "from_address_set": "true"])
+        XCTAssertEqual(rows, ["R1,swift,enter,1.000,0,0,ok,0.2;0.3,default,true,gui-mailto"])
+    }
+
+    // MARK: - #475 segments: one run across the direct and GUI paths
+
+    func testSegmentsMergeIntoOneRunMeasuredFromTheEarliestMark() {
+        let direct = ComposeTiming.Segment(
+            path: "direct", outcome: "not_attempted:version",
+            config: ["from_address_set": "true"],
+            marks: [ComposeTiming.Mark(source: "swift", label: "returned", time: 10.040),
+                    ComposeTiming.Mark(source: "swift", label: "enter", time: 10.000)])
+        let gui = ComposeTiming.Segment(
+            path: "gui-mailto", outcome: "ok",
+            config: ["window_delay": "default", "step_delay": "default", "from_address_set": "true"],
+            marks: [ComposeTiming.Mark(source: "swift", label: "enter", time: 10.050),
+                    ComposeTiming.Mark(source: "swift", label: "returned", time: 16.300)])
+        // Segments are passed GUI-first on purpose: order comes from time, not argument order.
+        XCTAssertEqual(ComposeTiming.csvRows(runId: "R9", segments: [gui, direct]), [
+            "R9,swift,enter,10.000,0,0,not_attempted:version,,,true,direct",
+            "R9,swift,returned,10.040,40,40,not_attempted:version,,,true,direct",
+            "R9,swift,enter,10.050,50,10,ok,default,default,true,gui-mailto",
+            "R9,swift,returned,16.300,6300,6250,ok,default,default,true,gui-mailto",
+        ])
+    }
+
+    func testNoSegmentsProduceNoRows() {
+        XCTAssertEqual(ComposeTiming.csvRows(runId: "R0", segments: []), [])
+        XCTAssertEqual(ComposeTiming.csvRows(runId: "R0", segments: [
+            ComposeTiming.Segment(path: "direct", outcome: "created", config: [:], marks: [])]), [])
+    }
+
+    // MARK: - #475 run context
+
+    private struct Boom: Error {}
+
+    private func seg(_ path: String, _ label: String, _ t: TimeInterval) -> ComposeTiming.Segment {
+        ComposeTiming.Segment(path: path, outcome: "ok", config: [:],
+                              marks: [ComposeTiming.Mark(source: "swift", label: label, time: t)])
+    }
+
+    private func dataLines(_ path: String) throws -> [Substring] {
+        try String(contentsOfFile: path, encoding: .utf8).split(separator: "\n").dropFirst().map { $0 }
+    }
+
+    func testSegmentsRecordedInsideARunShareOneRunIdAndAreWrittenAtTheEnd() async throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        try await ComposeTiming.withRun(csvPath: path) {
+            ComposeTiming.record(seg("direct", "enter", 1.0), csvPath: path)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: path), "nothing is written until the run ends")
+            ComposeTiming.record(seg("gui-mailto", "returned", 2.0), csvPath: path)
+        }
+        let lines = try dataLines(path)
+        XCTAssertEqual(lines.count, 2)
+        XCTAssertEqual(Set(lines.map { $0.split(separator: ",")[0] }).count, 1, "one run_id for the whole call")
+        XCTAssertTrue(lines[0].hasSuffix(",direct"))
+        XCTAssertTrue(lines[1].hasSuffix(",gui-mailto"))
+    }
+
+    func testARunThatThrowsStillWritesItsRows() async throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        do {
+            try await ComposeTiming.withRun(csvPath: path) {
+                ComposeTiming.record(seg("direct", "enter", 1.0), csvPath: path)
+                throw Boom()
+            }
+            XCTFail("the body's error must propagate")
+        } catch is Boom {}
+        XCTAssertEqual(try dataLines(path).count, 1)
+    }
+
+    func testRecordingOutsideARunWritesImmediately() throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        ComposeTiming.record(seg("gui-mailto", "enter", 1.0), csvPath: path)
+        XCTAssertEqual(try dataLines(path).count, 1)
+    }
+
+    func testNoRunAndNoFileWhenTimingIsOff() async throws {
+        let ran = try await ComposeTiming.withRun(csvPath: nil) { () -> Bool in
+            XCTAssertNil(ComposeTiming.currentRun, "no run context without the opt-in")
+            return true
+        }
+        XCTAssertTrue(ran)
+    }
+
+    // MARK: - #475 GUI mailto path marks join the run
+
+    func testGuiTimingInsideARunJoinsTheRunWithTheGuiMailtoPath() async throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        _ = ComposeTiming.takeCapturedMarks()
+        try await ComposeTiming.withRun(csvPath: path) {
+            MailController.shared.recordComposeTiming(enter: 1.0, spawn: 1.1, outcome: "ok",
+                                                      fromAddressSet: true, csvPath: path)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: path), "inside a run the GUI path does not write")
+            XCTAssertEqual(ComposeTiming.currentRun?.collected.first?.path, "gui-mailto")
+        }
+        let lines = try dataLines(path)
+        XCTAssertEqual(lines.map { String($0.split(separator: ",")[2]) }, ["enter", "spawn", "returned"])
+        XCTAssertTrue(lines.allSatisfy { $0.hasSuffix(",ok,default,default,true,gui-mailto") })
+    }
+
+    func testGuiTimingOutsideARunWritesItsOwnRows() throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        _ = ComposeTiming.takeCapturedMarks()
+        MailController.shared.recordComposeTiming(enter: 1.0, spawn: 1.1, outcome: "error",
+                                                  fromAddressSet: false, csvPath: path)
+        let lines = try dataLines(path)
+        XCTAssertEqual(lines.count, 3)
+        XCTAssertTrue(lines.allSatisfy { $0.hasSuffix(",error,default,default,false,gui-mailto") })
     }
 
     func testCapturedMarksAreTakenOnce() {
