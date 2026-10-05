@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The direct-write upload trigger is timed step by step** ([#489](https://github.com/PsychQuant/che-apple-mail-mcp/issues/489)). With `CHE_MAIL_COMPOSE_TIMING_CSV` set, the
+  `direct` segment now also has `trigger_spawn` (before the upload request is handed to osascript) and, logged by the
+  trigger script itself, `trigger_script_start`, `trigger_listed`, `trigger_unread` and `trigger_read`. These marks are
+  moved into the direct segment as soon as the request returns or fails, so none are left for a later GUI segment.
+  Between the two read-status changes the script gains only the `trigger_unread` mark (no delay, no control flow); with
+  timing unset the trigger script is unchanged. First live run (12 drafts): the trigger takes about 0.8 s, of which
+  0.5 s is the read-toggle gap; see #489 for the breakdown.
 - **Opt-in per-step timing for every `create_draft` path** (`CHE_MAIL_COMPOSE_TIMING_CSV=<file>`,
   [#464](https://github.com/PsychQuant/che-apple-mail-mcp/issues/464),
   [#475](https://github.com/PsychQuant/che-apple-mail-mcp/issues/475)). Each call appends one CSV row per
