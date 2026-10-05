@@ -38,7 +38,7 @@ final class ComposeReadinessPollTests: XCTestCase {
     func testWindowChecksAndMessagesAreUnchangedAfterThePoll() {
         let s = script()
         for message in ["mailto did not open a compose window",
-                        "could not identify our new compose window by subject after mailto (safe fallback)",
+                        "could not identify our new compose window by subject after mailto (nothing sent)",
                         "more than one new window is titled the subject"] {
             XCTAssertTrue(s.contains(message), "failure semantics must stay: \(message)")
         }

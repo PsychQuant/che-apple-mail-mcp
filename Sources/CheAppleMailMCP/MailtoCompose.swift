@@ -565,8 +565,8 @@ func isPostDispatchError(_ error: Error) -> Bool {
 /// failure that a caller may retry — the
 /// duplicate-outbound hazard the sentinel exists to prevent (verify #301,
 /// regression lens P0). Draft flows deliberately do NOT gate on this: a
-/// duplicated draft is visible and harmless, and keeping their fallback is
-/// what un-hangs draft creation (#301's own goal).
+/// duplicated draft is visible and harmless, so a draft timeout is reported as
+/// an ordinary failure (#301 un-hung draft creation; the fallback it once fed is gone, #304).
 func isTimeoutError(_ error: Error) -> Bool {
     if case MailError.scriptTimedOut = error { return true }
     return false

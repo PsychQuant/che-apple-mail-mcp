@@ -320,7 +320,7 @@ actor MailController {
                     + "terminated osascript children have not exited (Mail or WindowServer "
                     + "may be hung). Not starting another GUI flow. Restart this MCP server "
                     + "(and check Mail) — or use open_mailto (zero-TCC, no GUI scripting) "
-                    + "as the clean-compose fallback.")
+                    + "as the clean-compose alternative.")
             }
             throw MailError.operationFailed(
                 "osascript subsystem appears wedged: \(Self.maxUnreapedGuiChildren) "

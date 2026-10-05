@@ -77,7 +77,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer asserts when Mail will upload. README, `plugin/CLAUDE.md`, the `draft-update` spec and compose code
   comments stop describing the removed legacy fallback as current. `NoLegacyFallbackClaimGuardTests` now checks
   properties instead of fixed phrases: runtime text must scope "no fallback" to the legacy path and qualify
-  direct write, and a source line mentioning the legacy compose fallback must cite #304.
+  direct write, and a source line mentioning the legacy compose fallback must cite #304. Six compose error
+  messages that reach the caller verbatim (the reply/forward focus guard, the compose-window checks) said
+  "falling back" or "(safe fallback)" while the call actually fails; they now say nothing was sent or that
+  the flow stopped before the next keystroke, and a test scans error literals for fallback claims.
 
 - **The first AppleScript-backed call in a fresh server no longer waits out the 45-second deadline**
   ([#471](https://github.com/PsychQuant/che-apple-mail-mcp/issues/471)). `runScript` and `runScriptAsList`

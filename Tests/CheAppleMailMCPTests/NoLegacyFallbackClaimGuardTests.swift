@@ -27,8 +27,14 @@ final class NoLegacyFallbackClaimGuardTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     }
 
-    /// Every piece of text a caller or user reads about the Accessibility grant.
+    /// Every piece of text a caller or user reads about the Accessibility grant,
+    /// with whitespace folded to single spaces so a hard line wrap (guidance()
+    /// is a multi-line literal) cannot turn a phrase check into a no-op.
     private static var runtimeTexts: [(String, String)] {
+        rawRuntimeTexts.map { ($0.0, $0.1.split(whereSeparator: \.isWhitespace).joined(separator: " ")) }
+    }
+
+    private static var rawRuntimeTexts: [(String, String)] {
         let description = CheAppleMailMCPServer.defineTools()
             .first { $0.name == "check_accessibility" }?.description ?? ""
         return [
@@ -94,10 +100,12 @@ final class NoLegacyFallbackClaimGuardTests: XCTestCase {
             for (index, line) in lines.enumerated() where !line.contains("#304") {
                 let range = NSRange(line.startIndex..., in: line)
                 // The account-reference "legacy" form (`account "<display_name>"`)
-                // is still true; it names display_name / `account on the same
-                // or the next line.
+                // is still true. Skip only when this line names it, or when the
+                // sentence wraps and the next line starts with the `account form.
                 let next = index + 1 < lines.count ? lines[index + 1] : ""
-                if (line + next).contains("display_name") || (line + next).contains("`account") { continue }
+                let nextBody = next.trimmingCharacters(in: .whitespaces)
+                    .drop { $0 == "/" }.trimmingCharacters(in: .whitespaces)
+                if line.contains("display_name") || line.contains("`account") || nextBody.hasPrefix("`account") { continue }
                 if legacyCompose.firstMatch(in: line, range: range) != nil {
                     offenders.append("\(file.lastPathComponent):\(index + 1): \(line.trimmingCharacters(in: .whitespaces))")
                 }
@@ -105,6 +113,42 @@ final class NoLegacyFallbackClaimGuardTests: XCTestCase {
         }
         XCTAssertTrue(offenders.isEmpty,
                       "mentions of the legacy compose fallback must cite #304 (it was removed):\n"
+                      + offenders.joined(separator: "\n"))
+    }
+
+    /// #486 verify: the reply/forward front guard threw "… — falling back" and
+    /// the window checks threw "(safe fallback)". Those AppleScript errors reach
+    /// the caller verbatim (mapRuntimeError returns them unchanged), so a caller
+    /// was told a fallback happened when the call had failed. Read-tool
+    /// fallbacks (SQLite → AppleScript) are real and live elsewhere; this scans
+    /// AppleScript `error "…"` literals everywhere, and every string literal in
+    /// the two compose builders.
+    func testComposeErrorTextDoesNotClaimAFallback() throws {
+        let sources = Self.repoRoot.appendingPathComponent("Sources/CheAppleMailMCP")
+        let files = try XCTUnwrap(FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil))
+            .compactMap { $0 as? URL }.filter { $0.pathExtension == "swift" }
+        let composeBuilders: Set<String> = ["ComposeScriptBuilder.swift", "MailtoCompose.swift"]
+        let appleScriptError = try NSRegularExpression(pattern: #"error \?"([^"\\]|\\.)*\?""#)
+        let stringLiteral = try NSRegularExpression(pattern: #""([^"\\\n]|\\.)*""#)
+        let claim = try NSRegularExpression(pattern: #"fall(s|ing)? ?back|fallback"#, options: [.caseInsensitive])
+        var offenders: [String] = []
+        for file in files {
+            let lines = try String(contentsOf: file, encoding: .utf8).components(separatedBy: "\n")
+            for (index, line) in lines.enumerated() {
+                let code = line.trimmingCharacters(in: .whitespaces)
+                if code.hasPrefix("//") { continue }
+                let pattern = composeBuilders.contains(file.lastPathComponent) ? stringLiteral : appleScriptError
+                let range = NSRange(line.startIndex..., in: line)
+                for match in pattern.matches(in: line, range: range) {
+                    let literal = (line as NSString).substring(with: match.range)
+                    if claim.firstMatch(in: literal, range: NSRange(literal.startIndex..., in: literal)) != nil {
+                        offenders.append("\(file.lastPathComponent):\(index + 1): \(literal)")
+                    }
+                }
+            }
+        }
+        XCTAssertTrue(offenders.isEmpty,
+                      "compose error text must not claim a fallback (the call fails; #304):\n"
                       + offenders.joined(separator: "\n"))
     }
 

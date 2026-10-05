@@ -106,18 +106,18 @@ func recipientFragment(_ addresses: [String], kind: String) -> String {
 //     window-count delta is NOT enough (`activate` can open a viewer). RESIDUAL
 //     (documented): AX has no "send keystroke to a specific window" primitive, so
 //     a TOCTOU gap between raise and keystroke remains — inherent to GUI
-//     automation; a detectable mismatch (our window gone) hard-errors → fallback.
+//     automation; a detectable mismatch (our window gone) hard-errors → the call fails (#304).
 //   - ATTACHMENT COMPLETION: the pre-dispatch check asserts `count of sheets of
 //     _w is 0`, so a still-open File▸Attach panel blocks dispatch; a drain delay
 //     gives the attachment time to bind before ⇧⌘D. RESIDUAL: panel-closed is a
 //     proxy for bind, not per-file completion polling.
-//   - STAGE-AWARE FALLBACK + NO DATA LOSS: the GUI interaction is wrapped in
+//   - STAGE-AWARE FAILURE + NO DATA LOSS: the GUI interaction is wrapped in
 //     try/on-error that closes ONLY a window we created — identified by NEW
 //     `id of window` (captured before the mailto) AND matching subject — so a
 //     pre-existing same-titled draft the user already had open is never
 //     `saving no` discarded (a data-loss bug the second verify round caught).
 //     Dispatch is the last statement, so a pre-dispatch error means nothing was
-//     sent (fallback safe; no double-send).
+//     sent (an ordinary failure, safe to retry; no double-send).
 //   - CLIPBOARD: the per-attachment path is set on the clipboard here, but
 //     save/restore is done by the caller in Swift (full-fidelity NSPasteboard,
 //     failure-safe) — this script does NOT save/restore.
@@ -160,9 +160,9 @@ func buildMailtoComposeScript(
     // BY TITLE (= subject) and best-effort raise it so the NEXT keystroke lands on
     // OUR window. Re-applied before EVERY keystroke phase (each attach + dispatch)
     // — focus the user/system stole during a delay is reclaimed. Hard-errors if
-    // our window is gone (→ safe fallback). Keys off the target `_w`, never
+    // our window is gone (→ the call fails, nothing sent; #304). Keys off the target `_w`, never
     // `front window` (that evaluated unreliably under the actor's in-process
-    // NSAppleScript context and regressed the path to always-fallback); AXRaise is
+    // NSAppleScript context and made the path fail every time); AXRaise is
     // best-effort (wrapped) so an AX quirk can't break the path.
     let raiseOnly = """
                 set _t to "\(subjEsc)"
@@ -175,7 +175,7 @@ func buildMailtoComposeScript(
                     end if
                 end repeat
                 if _w is missing value then error "mailto compose window not found (title)"
-                if _wMatches > 1 then error "AMBIGUOUS: more than one window is titled the subject — cannot safely target our compose window for the next keystroke (safe fallback)"
+                if _wMatches > 1 then error "AMBIGUOUS: more than one window is titled the subject — cannot safely target our compose window for the next keystroke (nothing sent)"
                 try
                     perform action "AXRaise" of _w
                 end try
@@ -286,7 +286,7 @@ func buildMailtoComposeScript(
     // `Name <addr>` format) found Mail's From popup actually renders
     // `Display Name – addr` with a SPACE + EN DASH (U+2013) + SPACE separator —
     // no angle brackets — so (a)/(b) never matched and the clean path always
-    // fell to legacy. Branch (c) is separator-agnostic (en-dash / hyphen / any)
+    // fell to legacy (pre-#304). Branch (c) is separator-agnostic (en-dash / hyphen / any)
     // and anti-spoof-safe: `isSimpleAddrSpec` gates the addr to no-whitespace
     // upstream, so a simple addr is always the final space-delimited token, and
     // the compare is exact `is` (a `… – notche@x` label's last token is
@@ -343,9 +343,9 @@ func buildMailtoComposeScript(
     end repeat
     tell application "Mail"
         if (count of windows) <= _wc then error "mailto did not open a compose window"
-        if _beforeTitles contains "\(subjEsc)" then error "a window titled \\"\(subjEsc)\\" already existed before this compose — cannot safely disambiguate the new window (safe fallback)"
-        if _ourMatches is 0 then error "could not identify our new compose window by subject after mailto (safe fallback)"
-        if _ourMatches > 1 then error "more than one new window is titled the subject — cannot safely identify our compose window (safe fallback)"
+        if _beforeTitles contains "\(subjEsc)" then error "a window titled \\"\(subjEsc)\\" already existed before this compose — cannot safely disambiguate the new window (nothing sent)"
+        if _ourMatches is 0 then error "could not identify our new compose window by subject after mailto (nothing sent)"
+        if _ourMatches > 1 then error "more than one new window is titled the subject — cannot safely identify our compose window (nothing sent)"
     end tell\(tm("window_found"))
     \(flagInit)\(bccFlagInit)try
         tell application "System Events"
@@ -911,8 +911,8 @@ private func buildReplyForwardPasteScript(
     // call instead of keystroking the wrong window.
     let frontGuard = """
         tell application "Mail"
-            if (count of windows) is 0 then error "no Mail window to target (falling back)"
-            if (id of front window) is not in _newIds then error "our reply/forward window is not frontmost (focus changed) — falling back"
+            if (count of windows) is 0 then error "no Mail window to target (stopping before the next keystroke)"
+            if (id of front window) is not in _newIds then error "our reply/forward window is not frontmost (focus changed) — stopping before the next keystroke"
         end tell
     """
 
