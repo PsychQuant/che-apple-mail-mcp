@@ -37,12 +37,17 @@ The system SHALL reject `format: "markdown"` and `format: "html"` with an error 
 ---
 ### Requirement: Plain mode preserves existing behavior
 
-When `format` is `"plain"`, the system SHALL deliver the `body` parameter verbatim: HTML tags SHALL appear literally in the delivered email and no HTML rendering SHALL occur. The body SHALL reach the message through Mail's own editor — the `mailto:` hand-off or the native reply/forward verb plus paste — and SHALL NOT be assigned through the AppleScript `content` property, which is what produces the `<blockquote type="cite">` wrapper.
+When `format` is `"plain"`, the system SHALL deliver the `body` parameter verbatim: HTML tags SHALL appear literally in the delivered email and no HTML rendering SHALL occur. The body SHALL reach the message through one of the two sources in Requirement: Composing tools never inject a body via AppleScript — Mail's own editor (the `mailto:` hand-off or the native reply/forward verb plus paste), or, for `create_draft` under Requirement: Direct-write draft path, a MIME message the system builds with the body HTML-escaped; on that path the `text/plain` part is empty and the body is carried in `text/html`, as in drafts Mail saves itself, and Mail's auto-inserted signature is not added — and SHALL NOT be assigned through the AppleScript `content` property, which is what produces the `<blockquote type="cite">` wrapper.
 
 #### Scenario: Plain body is delivered literally
 
 - **WHEN** a caller invokes `compose_email` with `body: "<b>bold</b>"` and `format: "plain"`
 - **THEN** the delivered email SHALL show the characters `<b>bold</b>` literally
+
+#### Scenario: Plain body written directly is escaped
+
+- **WHEN** `create_draft` creates a draft through the direct-write path with `body: "<b>bold</b>"`
+- **THEN** the draft's HTML part SHALL contain `&lt;b&gt;bold&lt;/b&gt;`, so the characters `<b>bold</b>` are shown literally
 
 #### Scenario: Plain body is not assigned via AppleScript content
 
@@ -114,24 +119,34 @@ Bare addr-specs in `cc` / `bcc` SHALL ride the `mailto:` URL on both tools. A di
 
 The system SHALL NOT assign an outgoing message's body through the AppleScript `content` property, the `html content` property, or a `content:` entry in `make new outgoing message with properties`. Apple Mail wraps any AppleScript-assigned body in `<blockquote type="cite">` at MIME serialization, which several mail clients render as a quotation of the sender's own text and which the sender cannot observe locally.
 
-Every composing tool SHALL obtain its body exclusively from Mail's own editor — via the `mailto:` hand-off for `compose_email` / `create_draft`, and via the native reply/forward verb plus paste for `reply_email` / `forward_email`.
+Every composing tool SHALL obtain its body from exactly one of two sources:
+
+1. Mail's own editor — via the `mailto:` hand-off for `compose_email` / `create_draft`, and via the native reply/forward verb plus paste for `reply_email` / `forward_email`.
+2. For `create_draft` only, and only under the conditions of Requirement: Direct-write draft path, a MIME message the system builds itself and writes into Mail's local store. This source SHALL NOT pass the body through any AppleScript property; the only AppleScript it runs on the draft changes the draft's read status.
+
+No other body source is permitted.
 
 #### Scenario: No composing path assigns content via AppleScript
 
-- **WHEN** the AppleScript emitted by any composing tool is inspected
+- **WHEN** the AppleScript emitted by any composing tool is inspected, including the scripts the direct-write path runs
 - **THEN** it SHALL contain no `set content`, no `set html content`, and no `content:` property in an outgoing-message construction
 
 #### Scenario: A successful compose produces an unwrapped body
 
-- **WHEN** `create_draft` succeeds with `format: "plain"`
+- **WHEN** `create_draft` succeeds with `format: "plain"` through either body source
 - **THEN** the saved draft's source SHALL NOT contain `<blockquote type="cite">` wrapping the supplied body
+
+#### Scenario: The direct-write source is unavailable to the other composing tools
+
+- **WHEN** `compose_email`, `reply_email`, or `forward_email` is invoked with `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1` set
+- **THEN** the tool SHALL obtain its body from Mail's own editor exactly as it does with the variable unset
 
 ---
 ### Requirement: Ineligible composing calls fail without side effects
 
 When a composing tool cannot use its non-injecting path, it SHALL fail with an error that names the reason and states an actionable alternative, and SHALL NOT create a draft, send mail, or delete an existing draft.
 
-The set of ineligibility reasons SHALL be exactly the following six, and SHALL NOT be extended by analogy:
+The set of ineligibility reasons SHALL be exactly the following six, and SHALL NOT be extended by analogy. They govern the GUI path; when `create_draft` creates the draft through Requirement: Direct-write draft path, reason 3 does not apply, because that path sends no keystrokes. When the direct write does not create the draft, the GUI path's reasons apply in full.
 
 1. `format` is `markdown` or `html`
 2. the subject is empty (the clean path identifies its compose window by title)
@@ -142,10 +157,16 @@ The set of ineligibility reasons SHALL be exactly the following six, and SHALL N
 
 #### Scenario: Missing Accessibility fails and names the zero-TCC alternative
 
-- **WHEN** `create_draft` is invoked while Accessibility is not granted
+- **WHEN** `create_draft` is invoked while Accessibility is not granted and the direct-write path does not create the draft
 - **THEN** the tool SHALL fail naming Accessibility as the reason
 - **AND** the error SHALL name `open_mailto` as an alternative that requires no TCC grant, noting that it cannot carry attachments
 - **AND** no draft SHALL be created
+
+#### Scenario: Direct write needs no Accessibility
+
+- **WHEN** `create_draft` is invoked with `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, a call that passes every eligibility condition and every pre-write gate of Requirement: Direct-write draft path, Full Disk Access and Automation granted, and Accessibility not granted
+- **THEN** the draft SHALL be created through the direct-write path
+- **AND** the tool SHALL NOT fail for reason 3
 
 #### Scenario: Non-ASCII attachment path fails with the manual recipe
 
@@ -300,3 +321,68 @@ When the clean compose path fails after its window has been identified and befor
 
 - **WHEN** the discard button was clicked and the compose window still exists
 - **THEN** the failure message SHALL name the window title and state that it was left open
+
+---
+### Requirement: Direct-write draft path
+
+When the environment variable `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT` equals `1`, `create_draft` SHALL first attempt to create the draft by writing it directly into Mail's local store (the Envelope Index and an `.emlx` file) and then asking Mail to upload it. When the variable is unset or has any other value, `create_draft` SHALL NOT attempt the direct write and its result SHALL carry no note about it.
+
+Before writing anything, the system SHALL check eligibility. The call is ineligible, and SHALL take the GUI path, when any of the following holds. This list is closed; no other condition makes a call ineligible at this stage:
+
+1. `format` is not `plain`.
+2. `attachments` is non-empty.
+3. `cc` or `bcc` is non-empty.
+4. `to` is empty.
+5. A `to` entry carries a display name.
+6. A `to` entry is not a plain addr-spec.
+7. `subject` is empty.
+8. `from_address` is absent or empty.
+9. `from_address` is not a bare addr-spec.
+
+After eligibility passes and before writing, the system SHALL also require all of the following, checked in this order, and SHALL take the GUI path at the first that fails: (1) Mail's version is 16.x and the macOS major version is 27; (2) `from_address` maps to exactly one Mail account; (3) the Envelope Index is readable; (4) the account's Drafts mailbox is identified and matched to a mailbox path in the index; (5) the store opens for writing; (6) the store's `messages` columns equal the verified set and every other table it writes has its required columns; (7) that Drafts path corresponds to exactly one mailbox row and its URL is an IMAP URL; (8) a sender address row already exists for `from_address` in that account.
+
+The write SHALL happen inside a single `BEGIN IMMEDIATE` transaction, with the `.emlx` file renamed into place inside that transaction. A failure during the write SHALL roll the transaction back and remove the file, and the call SHALL take the GUI path.
+
+After the write commits, the system SHALL ask Mail to upload the draft by toggling the draft's read status to unread and back to read. The upload request succeeds when that toggle completes without error. If it fails, the system SHALL reverse the write exactly and take the GUI path. If the write cannot be reversed because Mail has already uploaded the draft, the system SHALL report the draft as created and SHALL NOT take the GUI path. If it cannot be reversed for any other reason, the system SHALL report the draft as created with its upload pending, SHALL NOT claim that it was uploaded or when it will be, and SHALL NOT take the GUI path. Once the upload request has succeeded, the system SHALL NOT take the GUI path for that call, because doing so would create a second draft. A reversed direct write that continues on the GUI path is not a retry through a body-assigning path; Requirement: Runtime composing failures propagate without falling back continues to govern failures of the GUI path itself.
+
+After the upload is confirmed, the system SHALL look at the draft's local read flag up to four times until it can be read. If a look shows the draft unread, the system SHALL re-assert its read status once and look again up to eight times. The tool result SHALL end with ` [note: the draft is uploaded but still shows as unread locally]` when no look after the re-assert shows it read but at least one shows it unread, and with ` [note: the draft is uploaded but its local read status could not be read]` when all four looks before any re-assert, or all eight looks after the re-assert, fail to read the flag.
+
+The direct-write path SHALL NOT require Accessibility. It requires Full Disk Access, because it writes Mail's store, and Automation, because it toggles the draft's read status.
+
+Whenever the call takes the GUI path after the direct write was attempted or found ineligible (other than the variable being unset), the tool result SHALL end with ` [experimental direct-write not used: <reason> — GUI path]`, where `<reason>` names the condition that failed.
+
+#### Scenario: Variable unset leaves create_draft unchanged
+
+- **WHEN** `create_draft` is invoked with `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT` unset
+- **THEN** the system SHALL NOT open the store for writing
+- **AND** the tool result SHALL NOT contain `experimental direct-write`
+
+#### Scenario: An ineligible call names its reason and writes nothing
+
+- **WHEN** `create_draft` is invoked with the variable set to `1` and a non-empty `cc`
+- **THEN** the system SHALL NOT open the store for writing
+- **AND** the draft SHALL be created through the GUI path
+- **AND** the tool result SHALL end with ` [experimental direct-write not used: cc/bcc are not written directly — GUI path]`
+
+#### Scenario: A failed upload request reverses the write
+
+- **WHEN** the direct write commits and the request asking Mail to upload the draft fails before Mail has uploaded it
+- **THEN** the system SHALL delete every row and the `.emlx` file the write created
+- **AND** the draft SHALL be created through the GUI path
+
+#### Scenario: No fallback after the upload request succeeds
+
+- **WHEN** the upload request succeeds but the upload is not confirmed within the wait
+- **THEN** the system SHALL NOT take the GUI path
+- **AND** the tool result SHALL state that the draft is in Mail's Drafts with its upload pending
+
+#### Scenario: A failed upload request that cannot be reversed is not reported as uploaded
+
+- **WHEN** the upload request fails and reversing the write fails for a reason other than Mail having uploaded the draft
+- **THEN** the system SHALL NOT take the GUI path
+- **AND** the tool result SHALL state that the upload request failed and the write could not be reversed, and SHALL NOT state that the draft was uploaded
+
+#### Scenario: Unreadable read status after the upload is reported as unknown
+
+- **WHEN** the upload is confirmed, a look shows the draft unread, and every look after the re-assert fails to read the flag
+- **THEN** the tool result SHALL end with ` [note: the draft is uploaded but its local read status could not be read]`
