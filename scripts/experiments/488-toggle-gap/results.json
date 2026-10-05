@@ -1,0 +1,852 @@
+[
+ {
+  "gap": "0.5",
+  "subject": "[idd-488-probe] g0.5 #1",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.4,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.5",
+  "subject": "[idd-488-probe] g0.5 #2",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.2,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.5",
+  "subject": "[idd-488-probe] g0.5 #3",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.2,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.5",
+  "subject": "[idd-488-probe] g0.5 #4",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 3.5,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.5",
+  "subject": "[idd-488-probe] g0.5 #5",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.4,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.5",
+  "subject": "[idd-488-probe] g0.5 #6",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.1,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.5",
+  "subject": "[idd-488-probe] g0.5 #7",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.4,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.5",
+  "subject": "[idd-488-probe] g0.5 #8",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.4,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.5",
+  "subject": "[idd-488-probe] g0.5 #9",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.7,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.5",
+  "subject": "[idd-488-probe] g0.5 #10",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.2,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.4",
+  "subject": "[idd-488-probe] g0.4 #1",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.3,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.4",
+  "subject": "[idd-488-probe] g0.4 #2",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.7,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.4",
+  "subject": "[idd-488-probe] g0.4 #3",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.1,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.4",
+  "subject": "[idd-488-probe] g0.4 #4",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.9,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.4",
+  "subject": "[idd-488-probe] g0.4 #5",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.6,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.4",
+  "subject": "[idd-488-probe] g0.4 #6",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.4,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.4",
+  "subject": "[idd-488-probe] g0.4 #7",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.6,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.4",
+  "subject": "[idd-488-probe] g0.4 #8",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.9,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.4",
+  "subject": "[idd-488-probe] g0.4 #9",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.6,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.4",
+  "subject": "[idd-488-probe] g0.4 #10",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 3.8,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.3",
+  "subject": "[idd-488-probe] g0.3 #1",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.3,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.3",
+  "subject": "[idd-488-probe] g0.3 #2",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.3,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.3",
+  "subject": "[idd-488-probe] g0.3 #3",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.8,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.3",
+  "subject": "[idd-488-probe] g0.3 #4",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.3,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.3",
+  "subject": "[idd-488-probe] g0.3 #5",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.9,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.3",
+  "subject": "[idd-488-probe] g0.3 #6",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.3,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.3",
+  "subject": "[idd-488-probe] g0.3 #7",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.0,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.3",
+  "subject": "[idd-488-probe] g0.3 #8",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.3,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.3",
+  "subject": "[idd-488-probe] g0.3 #9",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.7,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.3",
+  "subject": "[idd-488-probe] g0.3 #10",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.2,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.2",
+  "subject": "[idd-488-probe] g0.2 #1",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.9,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.2",
+  "subject": "[idd-488-probe] g0.2 #2",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.9,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.2",
+  "subject": "[idd-488-probe] g0.2 #3",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.7,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.2",
+  "subject": "[idd-488-probe] g0.2 #4",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.9,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.2",
+  "subject": "[idd-488-probe] g0.2 #5",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.3,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.2",
+  "subject": "[idd-488-probe] g0.2 #6",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.7,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.2",
+  "subject": "[idd-488-probe] g0.2 #7",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.7,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.2",
+  "subject": "[idd-488-probe] g0.2 #8",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.4,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.2",
+  "subject": "[idd-488-probe] g0.2 #9",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.4,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.2",
+  "subject": "[idd-488-probe] g0.2 #10",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.4,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.1",
+  "subject": "[idd-488-probe] g0.1 #1",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 4.0,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.1",
+  "subject": "[idd-488-probe] g0.1 #2",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.4,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.1",
+  "subject": "[idd-488-probe] g0.1 #3",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.3,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.1",
+  "subject": "[idd-488-probe] g0.1 #4",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.6,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.1",
+  "subject": "[idd-488-probe] g0.1 #5",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.4,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.1",
+  "subject": "[idd-488-probe] g0.1 #6",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.9,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.1",
+  "subject": "[idd-488-probe] g0.1 #7",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 2.3,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.1",
+  "subject": "[idd-488-probe] g0.1 #8",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.9,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.1",
+  "subject": "[idd-488-probe] g0.1 #9",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 1.5,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ },
+ {
+  "gap": "0.1",
+  "subject": "[idd-488-probe] g0.1 #10",
+  "isError": false,
+  "uploaded": true,
+  "upload_s": 3.9,
+  "first": "confirmed",
+  "after": null,
+  "drafts_n": 1,
+  "drafts_read": [
+   1
+  ],
+  "allmail_n": 1,
+  "allmail_read": [
+   1
+  ]
+ }
+]
