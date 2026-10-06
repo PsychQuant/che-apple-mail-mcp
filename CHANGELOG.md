@@ -64,6 +64,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The experimental direct-write path reports an upload ~75 ms sooner on average**
+  ([#497](https://github.com/PsychQuant/che-apple-mail-mcp/issues/497)). After the upload request, the
+  store is re-read every 100 ms instead of every 250 ms, so the upload is noticed half an interval
+  sooner on average (an estimate: the upload time itself varies by seconds, and a 10-draft live run
+  showed every draft created once, uploaded and read, without resolving a gap that small). The
+  10-second limit and the read repair are unchanged.
 - **`create_draft` with a sender is ~1.7 s faster: two fixed waits became readiness polls**
   ([#464](https://github.com/PsychQuant/che-apple-mail-mcp/issues/464)). Per-step timing of three
   default calls put 1850 ms on the compose-window wait and 1375 ms on picking and verifying the sender,
