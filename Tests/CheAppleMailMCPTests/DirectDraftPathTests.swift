@@ -240,4 +240,13 @@ final class DirectDraftPathTests: XCTestCase {
         XCTAssertEqual(DirectDraftPath.fallbackNote("cc/bcc are not written directly"),
                        " [experimental direct-write not used: cc/bcc are not written directly — GUI path]")
     }
+
+    /// #497: the upload-confirmation poll interval. Below 50 ms the 10-second
+    /// wait would re-read the store hundreds of times; above 250 ms (the value
+    /// before #497) gives the gain back. Moving it outside this range needs a
+    /// new measurement first, not an edit to this test.
+    func testUploadPollIntervalStaysBetween50And250Milliseconds() {
+        XCTAssertGreaterThanOrEqual(DirectDraftPath.uploadPollNanoseconds, 50_000_000)
+        XCTAssertLessThanOrEqual(DirectDraftPath.uploadPollNanoseconds, 250_000_000)
+    }
 }

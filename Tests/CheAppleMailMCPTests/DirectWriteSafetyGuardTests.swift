@@ -181,7 +181,7 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
         if read == .confirmed { timer.mark("read_ensured") }
         return .created(Self.createdText(seconds: seconds, uploaded: true) + read.note, pending: false)
         }
-        try? await Task.sleep(nanoseconds: 250_000_000)
+        try? await Task.sleep(nanoseconds: Self.uploadPollNanoseconds)
         }
         return .created(Self.createdText(seconds: uploadDeadline, uploaded: false), pending: true)
         }
