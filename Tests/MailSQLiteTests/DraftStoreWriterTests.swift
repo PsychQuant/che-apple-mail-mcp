@@ -170,34 +170,51 @@ final class DraftStoreWriterTests: XCTestCase {
     }
 
     /// #498 (rule item 1): a failure AFTER the .emlx has been placed, still
-    /// inside the transaction, leaves nothing behind — every row rolled back and
-    /// the file removed. The test above only covers a file that could not be
-    /// written at all. The failure is forced by removing
-    /// `WriteTransactionGeneration`, which `insert` reads after placing the
-    /// file; the row is put back afterwards because the snapshot is shared by
-    /// the whole class.
+    /// inside the transaction, leaves nothing behind. The failure is forced by
+    /// removing `WriteTransactionGeneration`, which `insert` reads after placing
+    /// the file; the row is put back afterwards because the snapshot is shared
+    /// by the whole class. Three things are checked, each because a weaker
+    /// check passed a broken writer (#498 verify):
+    /// - the file was really placed: `placeEmlx` creates the row's `Messages`
+    ///   directory, so the directory must be new and empty afterwards;
+    /// - the transaction really ended: a second connection must be able to take
+    ///   the write lock while the writer is still alive (row counts read on
+    ///   another connection cannot see an uncommitted transaction);
+    /// - no row and no file is left.
     func testInsertRemovesThePlacedFileWhenALaterStepFails() throws {
         let db = try snapshot()
         let f = try fixture(db)
         let original = EnvelopeIndexReader.mailStoragePathOverride
-        EnvelopeIndexReader.mailStoragePathOverride = f.root.path
         let wtg = try XCTUnwrap(scalar(db, "SELECT value FROM properties WHERE key = 'WriteTransactionGeneration'"))
-        try exec(db, "DELETE FROM properties WHERE key = 'WriteTransactionGeneration'")
         defer {
-            try? exec(db, "INSERT INTO properties(key, value) VALUES ('WriteTransactionGeneration', \(wtg))")
+            do {
+                try exec(db, "INSERT OR REPLACE INTO properties(key, value) VALUES ('WriteTransactionGeneration', \(wtg))")
+            } catch {
+                XCTFail("could not restore WriteTransactionGeneration in the shared snapshot: \(error)")
+            }
             EnvelopeIndexReader.mailStoragePathOverride = original
             try? FileManager.default.removeItem(at: f.root)
         }
+        EnvelopeIndexReader.mailStoragePathOverride = f.root.path
+        try exec(db, "DELETE FROM properties WHERE key = 'WriteTransactionGeneration'")
+
         let tables = ["messages", "recipients", "conversations", "subjects", "addresses", "message_global_data",
                       "conversation_id_message_id", "searchable_messages", "local_message_actions", "action_messages"]
         let rowsBefore = tables.map { scalar(db, "SELECT count(*) FROM \($0)") }
-        let seqBefore = scalar(db, "SELECT seq FROM sqlite_sequence WHERE name = 'messages'")
+        let seqBefore = try XCTUnwrap(scalar(db, "SELECT seq FROM sqlite_sequence WHERE name = 'messages'"))
         let countBefore = scalar(db, "SELECT total_count FROM mailboxes WHERE ROWID = \(f.mailbox)")
+        let emlxPath = try XCTUnwrap(EmlxParser.newEmlxPath(rowId: Int(seqBefore + 1), mailboxURL: f.url))
+        let messagesDir = (emlxPath as NSString).deletingLastPathComponent
+        XCTAssertFalse(FileManager.default.fileExists(atPath: messagesDir), "the fixture must not pre-create the Messages directory")
 
         let writer = try DraftStoreWriter(databasePath: db)
-        XCTAssertThrowsError(try writer.insert(draft(f), emlx: Data("1234      \nfake message bytes".utf8))) {
-            XCTAssertEqual($0 as? DraftStoreWriter.WriteError, .sql("no WriteTransactionGeneration"),
-                           "the failure must come from the step after the file is placed")
+        try withExtendedLifetime(writer) {
+            XCTAssertThrowsError(try writer.insert(draft(f), emlx: Data("1234      \nfake message bytes".utf8))) {
+                XCTAssertEqual($0 as? DraftStoreWriter.WriteError, .sql("no WriteTransactionGeneration"))
+            }
+            XCTAssertTrue(FileManager.default.fileExists(atPath: messagesDir),
+                          "placeEmlx must have run before the failure (it creates the row's Messages directory)")
+            XCTAssertTrue(try canTakeWriteLock(db), "the writer must have ended its transaction (ROLLBACK), not left it open")
         }
         XCTAssertEqual(tables.map { scalar(db, "SELECT count(*) FROM \($0)") }, rowsBefore)
         XCTAssertEqual(scalar(db, "SELECT seq FROM sqlite_sequence WHERE name = 'messages'"), seqBefore)
@@ -205,13 +222,29 @@ final class DraftStoreWriterTests: XCTestCase {
         XCTAssertEqual(files(under: f.root), [], "the placed .emlx must be removed when the transaction rolls back")
     }
 
+    struct SnapshotEditError: Error { let message: String }
+
     private func exec(_ path: String, _ sql: String) throws {
         var db: OpaquePointer?
         defer { sqlite3_close(db) }
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK,
               sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
-            throw XCTSkip("could not change the snapshot copy: \(String(cString: sqlite3_errmsg(db)))")
+            throw SnapshotEditError(message: String(cString: sqlite3_errmsg(db)))
         }
+    }
+
+    /// Whether another connection can take the write lock right now (no busy
+    /// wait). A writer that left its transaction open still holds the lock.
+    private func canTakeWriteLock(_ path: String) throws -> Bool {
+        var db: OpaquePointer?
+        defer { sqlite3_close(db) }
+        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+            throw SnapshotEditError(message: String(cString: sqlite3_errmsg(db)))
+        }
+        sqlite3_busy_timeout(db, 0)
+        guard sqlite3_exec(db, "BEGIN IMMEDIATE", nil, nil, nil) == SQLITE_OK else { return false }
+        sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+        return true
     }
 
     /// Every regular file under `root`. The fixture creates only directories,
