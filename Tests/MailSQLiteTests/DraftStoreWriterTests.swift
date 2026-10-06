@@ -169,6 +169,60 @@ final class DraftStoreWriterTests: XCTestCase {
         XCTAssertEqual(scalar(db, "SELECT total_count FROM mailboxes WHERE ROWID = \(f.mailbox)"), countBefore)
     }
 
+    /// #498 (rule item 1): a failure AFTER the .emlx has been placed, still
+    /// inside the transaction, leaves nothing behind — every row rolled back and
+    /// the file removed. The test above only covers a file that could not be
+    /// written at all. The failure is forced by removing
+    /// `WriteTransactionGeneration`, which `insert` reads after placing the
+    /// file; the row is put back afterwards because the snapshot is shared by
+    /// the whole class.
+    func testInsertRemovesThePlacedFileWhenALaterStepFails() throws {
+        let db = try snapshot()
+        let f = try fixture(db)
+        let original = EnvelopeIndexReader.mailStoragePathOverride
+        EnvelopeIndexReader.mailStoragePathOverride = f.root.path
+        let wtg = try XCTUnwrap(scalar(db, "SELECT value FROM properties WHERE key = 'WriteTransactionGeneration'"))
+        try exec(db, "DELETE FROM properties WHERE key = 'WriteTransactionGeneration'")
+        defer {
+            try? exec(db, "INSERT INTO properties(key, value) VALUES ('WriteTransactionGeneration', \(wtg))")
+            EnvelopeIndexReader.mailStoragePathOverride = original
+            try? FileManager.default.removeItem(at: f.root)
+        }
+        let tables = ["messages", "recipients", "conversations", "subjects", "addresses", "message_global_data",
+                      "conversation_id_message_id", "searchable_messages", "local_message_actions", "action_messages"]
+        let rowsBefore = tables.map { scalar(db, "SELECT count(*) FROM \($0)") }
+        let seqBefore = scalar(db, "SELECT seq FROM sqlite_sequence WHERE name = 'messages'")
+        let countBefore = scalar(db, "SELECT total_count FROM mailboxes WHERE ROWID = \(f.mailbox)")
+
+        let writer = try DraftStoreWriter(databasePath: db)
+        XCTAssertThrowsError(try writer.insert(draft(f), emlx: Data("1234      \nfake message bytes".utf8))) {
+            XCTAssertEqual($0 as? DraftStoreWriter.WriteError, .sql("no WriteTransactionGeneration"),
+                           "the failure must come from the step after the file is placed")
+        }
+        XCTAssertEqual(tables.map { scalar(db, "SELECT count(*) FROM \($0)") }, rowsBefore)
+        XCTAssertEqual(scalar(db, "SELECT seq FROM sqlite_sequence WHERE name = 'messages'"), seqBefore)
+        XCTAssertEqual(scalar(db, "SELECT total_count FROM mailboxes WHERE ROWID = \(f.mailbox)"), countBefore)
+        XCTAssertEqual(files(under: f.root), [], "the placed .emlx must be removed when the transaction rolls back")
+    }
+
+    private func exec(_ path: String, _ sql: String) throws {
+        var db: OpaquePointer?
+        defer { sqlite3_close(db) }
+        guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK,
+              sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+            throw XCTSkip("could not change the snapshot copy: \(String(cString: sqlite3_errmsg(db)))")
+        }
+    }
+
+    /// Every regular file under `root`. The fixture creates only directories,
+    /// so anything listed here was left behind by the writer.
+    private func files(under root: URL) -> [String] {
+        guard let walk = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
+        return walk.compactMap { $0 as? URL }
+            .filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }
+            .map(\.lastPathComponent)
+    }
+
     func testLooksUpTheSenderRowAndTheMailboxRowForAnAccount() throws {
         let db = try snapshot()
         let f = try fixture(db)
