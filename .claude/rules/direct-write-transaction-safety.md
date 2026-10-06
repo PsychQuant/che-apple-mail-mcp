@@ -87,8 +87,9 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 
 - **第 1 項**：`DraftStoreWriterTests` 有兩條測交易內失敗的行為測試，只涵蓋 writer 本身，不涵蓋 `attemptSteps` 怎麼呼叫它：
   - 檔案寫不進去（`testInsertLeavesNothingBehindWhenTheFileCannotBeWritten`）；
-  - `.emlx` 放好之後才失敗（`testInsertRemovesThePlacedFileWhenALaterStepFails`）：檢查檔案確實放過、writer 的交易確實結束（另一條連線拿得到寫入鎖）、沒有留下任何資料列或檔案。拿掉 ROLLBACK、拿掉刪檔、或把失敗移到放檔之前，這條都會轉紅。
-- **第 2、3、6 項**：只有純函式的單元測試（`outcomeAfterFailedTrigger` 三條、`readOutcome`），以及 writer 端的兩條：提交後的 `rollback()` 會還原全部（`testInsertWritesEveryRowAndTheFileThenRollbackRestoresAll`）、Mail 已上傳就拒絕還原（`testRollbackRefusesOnceTheServerHasTheMessage`）。以下三件事在 `attemptSteps` 層都沒有行為測試，要等 #484 的測試入口：
+  - `.emlx` 放好之後才失敗（`testInsertRemovesThePlacedFileWhenALaterStepFails`）：檢查放檔已執行、writer 的交易確實結束（另一條連線拿得到寫入鎖）、沒有留下任何資料列或檔案。拿掉 ROLLBACK、拿掉刪檔、或把失敗移到放檔之前，這條都會轉紅。
+  - 缺口：交易一開始就拿寫入鎖（`BEGIN IMMEDIATE`）沒有測試，改成一般的 `BEGIN` 這兩條都不會轉紅；失敗後會留下空的 `Messages` 目錄（#503），上面那條測試目前正是靠這個目錄證明放檔已執行。
+- **第 2、3、6 項**：只有純函式的單元測試（`outcomeAfterFailedTrigger` 三條、`readOutcome`）、`createDraft` 層的一條（直接寫入回報已建立時不走 GUI 路徑，`testACreatedDirectDraftSkipsTheGuiPath`），以及 writer 端的兩條：提交後的 `rollback()` 會還原全部（`testInsertWritesEveryRowAndTheFileThenRollbackRestoresAll`）、Mail 已上傳就拒絕還原（`testRollbackRefusesOnceTheServerHasTheMessage`）。以下三件事在 `attemptSteps` 層都沒有行為測試，要等 #484 的測試入口：
   - 觸發失敗時先還原，才改走 GUI 路徑；
   - 觸發成功後不退回；
   - 沒有確認上傳就不回報已上傳。

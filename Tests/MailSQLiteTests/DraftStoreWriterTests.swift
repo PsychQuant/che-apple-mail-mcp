@@ -175,20 +175,25 @@ final class DraftStoreWriterTests: XCTestCase {
     /// the file; the row is put back afterwards because the snapshot is shared
     /// by the whole class. Three things are checked, each because a weaker
     /// check passed a broken writer (#498 verify):
-    /// - the file was really placed: `placeEmlx` creates the row's `Messages`
-    ///   directory, so the directory must be new and empty afterwards;
+    /// - placement was reached before the failure: `placeEmlx` creates the
+    ///   row's `Messages` directory, which did not exist before. This relies on
+    ///   the failed insert leaving that directory behind, empty (#503); if #503
+    ///   removes it, prove placement another way;
     /// - the transaction really ended: a second connection must be able to take
     ///   the write lock while the writer is still alive (row counts read on
     ///   another connection cannot see an uncommitted transaction);
     /// - no row and no file is left.
+    /// Not covered: taking the write lock at the start (`BEGIN IMMEDIATE`);
+    /// a plain `BEGIN` passes this test.
     func testInsertRemovesThePlacedFileWhenALaterStepFails() throws {
         let db = try snapshot()
         let f = try fixture(db)
         let original = EnvelopeIndexReader.mailStoragePathOverride
         let wtg = try XCTUnwrap(scalar(db, "SELECT value FROM properties WHERE key = 'WriteTransactionGeneration'"))
+        let wtgRow = try XCTUnwrap(scalar(db, "SELECT ROWID FROM properties WHERE key = 'WriteTransactionGeneration'"))
         defer {
             do {
-                try exec(db, "INSERT OR REPLACE INTO properties(key, value) VALUES ('WriteTransactionGeneration', \(wtg))")
+                try exec(db, "INSERT INTO properties(ROWID, key, value) VALUES (\(wtgRow), 'WriteTransactionGeneration', \(wtg))")
             } catch {
                 XCTFail("could not restore WriteTransactionGeneration in the shared snapshot: \(error)")
             }
@@ -213,7 +218,8 @@ final class DraftStoreWriterTests: XCTestCase {
                 XCTAssertEqual($0 as? DraftStoreWriter.WriteError, .sql("no WriteTransactionGeneration"))
             }
             XCTAssertTrue(FileManager.default.fileExists(atPath: messagesDir),
-                          "placeEmlx must have run before the failure (it creates the row's Messages directory)")
+                          "placeEmlx must have been reached before the failure: it creates the row's Messages directory, "
+                          + "which a failed insert currently leaves behind, empty (#503). If #503 removes it, prove placement another way.")
             XCTAssertTrue(try canTakeWriteLock(db), "the writer must have ended its transaction (ROLLBACK), not left it open")
         }
         XCTAssertEqual(tables.map { scalar(db, "SELECT count(*) FROM \($0)") }, rowsBefore)
