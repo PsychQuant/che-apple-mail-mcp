@@ -91,7 +91,7 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 | cache 草稿匣辨識結果（省約 470 ms） | **可做** | 只要第 4 項成立：cache 只給候選路徑，8 道閘門照跑、用當下資料庫驗證，對不上就重新辨識 |
 | 觸發後不等上傳確認（省約 1 秒） | **不做** | 違反第 6、7 項：無法發現沒上傳的草稿，也不再補設已讀 |
 | 縮短兩次已讀切換的間隔 | **不做（實驗後維持 0.5 秒）** | 第 8 項：#488 已做 live 實驗（5 種間隔各 10 封全部成功，但 0/10 的單側 95% 上限約 26%），使用者決定維持 0.5 秒；要再縮短，須先有更大的樣本 |
-| 觸發改成 in-process（省下啟動 osascript 的時間，#496） | **不做** | 第 2、3 項：in-process 沒有終止機制，逾時只能放棄 thread，script 仍可能在還原之後才切換已讀。以單行 script 推算每次約可省 65–140 ms；多事件的觸發 script 改 in-process 未必更快（#406 記錄過同一份 script 在背景 NSAppleScript 超過 50 秒）。#489 的 198 ms 裡，計時本身推估約佔 45–120 ms（`scripts/experiments/496-trigger-transport/`） |
+| 觸發改成 in-process（省下啟動 osascript 的時間，#496） | **不做** | 第 2、3 項：in-process 沒有終止機制，逾時只能放棄 thread，script 仍可能在還原之後才切換已讀。以單行 script 推算每次約可省 65–140 ms（觸發 script 本身沒有量過；#406 記錄過草稿掃描 script 在背景 NSAppleScript 反而超過 50 秒）。#489 的 198 ms 裡，計時本身推估約佔 45–120 ms（跨負載相減，`scripts/experiments/496-trigger-transport/`） |
 
 ## 為什麼
 
