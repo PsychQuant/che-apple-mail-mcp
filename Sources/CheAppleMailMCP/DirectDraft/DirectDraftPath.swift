@@ -6,9 +6,18 @@ import MailSQLite
 /// creates a Mail-originated action, which wakes the sync engine; it processes
 /// every action above its cursor, the injected upload included (#463 Round 2:
 /// uploaded 1.8 s after toggling the draft's own read status).
-func buildDirectDraftTriggerScript(rowId: Int64) -> String {
-    """
-    tell application "Mail"
+///
+/// #489 — with `timing` the script also logs `trigger_script_start`,
+/// `trigger_listed`, `trigger_unread` and `trigger_read`. Between the two
+/// toggles it adds only the `trigger_unread` mark: no delay, no control flow
+/// (transaction-safety rule item 8). Without `timing` the script is the same,
+/// character for character, as before #489.
+func buildDirectDraftTriggerScript(rowId: Int64, timing: Bool = ComposeTiming.isEnabled) -> String {
+    func mark(_ label: String) -> String {
+        timing ? "\n        " + ComposeTiming.markStatement(label) : ""
+    }
+    return (timing ? ComposeTiming.prelude : "") + """
+    tell application "Mail"\(mark("trigger_script_start"))
         set _m to missing value
         repeat 40 times
             try
@@ -17,10 +26,10 @@ func buildDirectDraftTriggerScript(rowId: Int64) -> String {
             end try
             delay 0.25
         end repeat
-        if _m is missing value then error "DIRECTDRAFT: Mail did not list the new draft within 10 s"
-        set read status of _m to false
+        if _m is missing value then error "DIRECTDRAFT: Mail did not list the new draft within 10 s"\(mark("trigger_listed"))
+        set read status of _m to false\(mark("trigger_unread"))
         delay 0.5
-        set read status of _m to true
+        set read status of _m to true\(mark("trigger_read"))
         return "toggled"
     end tell
     """
@@ -41,8 +50,8 @@ func buildDirectDraftMarkReadScript(rowId: Int64) -> String {
 
 extension MailController {
     /// Runs the trigger through the cancellable `osascript` transport (#406).
-    func triggerDirectDraftUpload(rowId: Int64) throws -> String {
-        try runDraftScanScript(buildDirectDraftTriggerScript(rowId: rowId), timeout: 20)
+    func triggerDirectDraftUpload(rowId: Int64, timing: Bool) throws -> String {
+        try runDraftScanScript(buildDirectDraftTriggerScript(rowId: rowId, timing: timing), timeout: 20)
     }
 
     func markDirectDraftRead(rowId: Int64) throws -> String {
@@ -232,10 +241,13 @@ struct DirectDraftPath {
         timer.mark("inserted")
 
         let triggered = Date()
+        timer.mark("trigger_spawn")
         do {
-            _ = try await controller.triggerDirectDraftUpload(rowId: inserted.messageRowId)
+            _ = try await controller.triggerDirectDraftUpload(rowId: inserted.messageRowId, timing: timer.isRecording)
+            timer.absorbScriptMarks()
             timer.mark("trigger_sent")
         } catch {
+            timer.absorbScriptMarks()
             let triggerError = error.localizedDescription
             do {
                 try writer.rollback(inserted)
@@ -351,6 +363,18 @@ final class DirectDraftTimer: @unchecked Sendable {
         guard run != nil else { return }
         let mark = ComposeTiming.Mark(source: "swift", label: label, time: Date().timeIntervalSinceReferenceDate)
         lock.lock(); marks.append(mark); lock.unlock()
+    }
+
+    /// True when the marks have a run to go to.
+    var isRecording: Bool { run != nil }
+
+    /// #489 — moves the upload trigger's script marks (`trigger_*`) out of the
+    /// process-wide capture buffer into this segment, leaving any other marks
+    /// there. Without a run nothing is taken.
+    func absorbScriptMarks() {
+        guard run != nil else { return }
+        let taken = ComposeTiming.takeCapturedMarks(where: { $0.source == "script" && $0.label.hasPrefix("trigger_") })
+        lock.lock(); marks.append(contentsOf: taken); lock.unlock()
     }
 
     /// Adds the segment to the run; nothing when the attempt did not run at all

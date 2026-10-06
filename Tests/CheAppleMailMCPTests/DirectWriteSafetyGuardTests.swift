@@ -78,16 +78,20 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
         return .seconds(literals.reduce(0, +))
     }
 
+    /// Both forms of the script: untimed, and with #489's timing marks.
     func testTriggerScriptKeepsTheMeasuredGapBetweenItsReadToggles() {
-        let script = buildDirectDraftTriggerScript(rowId: 305619)
-        switch Self.toggleGap(in: script) {
-        case .seconds(let gap):
-            XCTAssertGreaterThanOrEqual(
-                gap, Self.minimumToggleGap,
-                "rule item 8: the read-toggle gap is a margin known to work, not a known floor (#472 saw 0.3 s leave "
-                + "a draft unread locally). Shortening it needs the #488 live experiment, at least 10 runs per value.")
-        case .unverifiable(let why):
-            XCTFail("rule item 8: the trigger script's read-toggle gap cannot be verified: \(why)")
+        for timing in [false, true] {
+            let script = buildDirectDraftTriggerScript(rowId: 305619, timing: timing)
+            switch Self.toggleGap(in: script) {
+            case .seconds(let gap):
+                XCTAssertGreaterThanOrEqual(
+                    gap, Self.minimumToggleGap,
+                    "rule item 8 (timing: \(timing)): the read-toggle gap is a margin known to work, not a known floor "
+                    + "(#472 saw 0.3 s leave a draft unread locally). Shortening it needs the #488 live experiment, "
+                    + "at least 10 runs per value.")
+            case .unverifiable(let why):
+                XCTFail("rule item 8 (timing: \(timing)): the trigger script's read-toggle gap cannot be verified: \(why)")
+            }
         }
     }
 
@@ -153,10 +157,13 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
     static let frozenPostTrigger = #"""
         timer.mark("inserted")
         let triggered = Date()
+        timer.mark("trigger_spawn")
         do {
-        _ = try await controller.triggerDirectDraftUpload(rowId: inserted.messageRowId)
+        _ = try await controller.triggerDirectDraftUpload(rowId: inserted.messageRowId, timing: timer.isRecording)
+        timer.absorbScriptMarks()
         timer.mark("trigger_sent")
         } catch {
+        timer.absorbScriptMarks()
         let triggerError = error.localizedDescription
         do {
         try writer.rollback(inserted)
