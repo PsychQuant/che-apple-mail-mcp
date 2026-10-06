@@ -15,7 +15,7 @@ final class DirectDraftPathTests: XCTestCase {
         let on = try! XCTUnwrap(s.range(of: "set read status of _m to true"))
         XCTAssertTrue(off.upperBound < on.lowerBound, "false, then true: a net no-op that wakes the sync engine")
         XCTAssertFalse(s.contains("whose content contains"), "#221: never a full-content scan")
-        XCTAssertTrue(s.contains("delay 0.5"), "the gap validated in #463 Round 2 (0.3 s left one draft unread)")
+        XCTAssertTrue(s.contains("delay 0.5"), "the gap #472 records as validated in #463 (#472 saw 0.3 s leave one draft unread)")
     }
 
     func testReadRepairScriptMarksTheDraftRead() {

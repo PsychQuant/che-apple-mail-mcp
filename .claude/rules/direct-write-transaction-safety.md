@@ -18,16 +18,65 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 6. **結果只陳述觀察到的事**：只有確認上傳後才可回報「已上傳」；沒有確認就回報待定或未確認，
    不預測 Mail 何時會上傳。
 7. **上傳確認與已讀補設不得省略**：觸發後等待上傳確認的那段，負責發現「草稿沒有上傳」與補回本機
-   副本的已讀狀態（#482）。拿掉它等於讓工具在草稿可能只存在本機時回報成功。
-8. **已讀切換的間隔是量測出來的安全餘量**：兩次切換之間的 0.5 秒來自 #472 live 實驗
-   （間隔 0.3 秒時，兩封草稿中有一封的本機副本留在未讀）。它不是可調參數；要縮短，必須先用測試帳號
-   重做 live 實驗（每個候選值至少 10 次），把次數、結果與本機／伺服器兩端狀態寫進 issue，
-   證明不會出現未讀殘留或重複草稿，才可以改。
+   副本的已讀狀態（#482）。拿掉它等於讓工具在草稿可能只存在本機時回報成功。等待上限是 10 秒，
+   從送出上傳請求**之前**起算，所以觸發本身花掉的時間也算在這 10 秒內。縮短上限是同一類改動：
+   上限太短，補設已讀就不會執行（它只在確認上傳後才跑）。要縮短，先拿出觸發耗時與上傳確認時間的
+   分布作為證據（觸發的分解計時見 #489）。
+8. **已讀切換的間隔是實驗中可行的值，不是可調參數**：兩次切換之間是 0.5 秒。可查的紀錄只有這些：
+   - #472 寫明 0.5 秒是「#463 驗證過」的值；但 #463〈Round 2 補充（輕量觸發）〉那則 comment 沒有寫出
+     間隔，原始值只留在本機實驗腳本，不在 repo。那則 comment 裡切換草稿**自己**已讀的只有 I4 一次
+     （I3 切換的是垃圾桶裡的探針副本）。
+   - #472 用過 0.3 秒，兩封草稿中有一封的本機副本留在未讀（伺服器端已讀）。改回 0.5 秒後 D3–D6
+     四封都已讀，但那時已同時加上補設已讀，結果不能只歸功於間隔。
+
+   所以 0.5 秒是「已知可行」，不是「已知的下限」。要縮短，必須先用測試帳號重做 live 實驗（每個候選值
+   至少 10 次，#488），把次數、結果與本機／伺服器兩端狀態寫進 issue，證明不會出現未讀殘留或重複
+   草稿，才可以改。
 
 ## 怎麼判斷一個加速提案能不能做
 
 逐條對照上面 8 項：**全部不受影響才做。** 只要有一項被削弱，就不做；不要用「機率很低」「多數情況沒事」
 當理由，那正是這條規則要擋的判斷。
+
+第 7、8 項有守門測試（`Tests/CheAppleMailMCPTests/DirectWriteSafetyGuardTests.swift`，#490）。它們是
+觸發 script 與原始碼的**結構檢查**，不是行為測試（行為測試要等 #484 的測試入口）。這兩條守門測試會轉紅的
+情況**只有以下這些，不得依性質相似推論其他改動也會被擋**：
+
+- **第 8 項**（解析觸發 script；比對前去掉 AppleScript 註解，字串內容清空，關鍵字不分大小寫）：
+  - 兩次切換之間的 `delay` 數字總和低於 0.5 秒；
+  - 兩次切換之間有一行以這些字開頭：`if`、`repeat`、`try`、`considering`、`ignoring`、`tell`、`with`、
+    `using`、`on`、`error`、`return`、`exit`、`end`；或有一個 `delay` 後面不是單純的數字；
+  - `set read status of` 在整個 script 裡不是恰好出現兩次（不分大小寫、不論對哪個變數），或這兩次不是
+    逐字的 `set read status of _m to false` 在前、`set read status of _m to true` 在後。
+- **第 7 項**（比對 `Sources`；比對前去掉 Swift 註解與縮排）：
+  - `uploadDeadline` 的預設值低於 10；
+  - `Sources` 裡提到 `uploadDeadline` 的程式碼行，與這三行不完全相同：預設宣告、等待迴圈條件、待定回報。
+    所以在其他地方用到它（例如在呼叫端覆寫），或改寫這三行的任何文字，都會轉紅；
+  - `Sources` 裡提到 `ensureRead` 或 `attemptSteps(` 的程式碼行，不是恰好它們的宣告與唯一的呼叫
+    （例如宣告同名的局部閉包、改呼叫一份複製出來的函式）；
+  - `attemptSteps` 從 `timer.mark("inserted")` 到函式結尾 `}` 的程式碼行，或 `ensureRead` 整個函式，
+    有任何一行被新增、刪除、改動、註解掉或換順序；或這兩段的結尾 `}` 之後，下一行不是以 `func `、`static func `、
+    `private func `、`private static func `、`fileprivate func `、`fileprivate static func ` 或 `@` 開頭
+    （例如把整段包起來、在後面補上提早回報）；或前一段不在 `attemptSteps` 裡。這兩段是整段凍結的：
+    要改它們（例如 #489 加計時點），必須在同一個 commit 更新測試裡的凍結副本，審查時逐行對照
+    第 2、3、6、7 項。
+
+上面沒列到的改動，都不會讓這兩條守門測試轉紅。凍結段呼叫到的函式不在它們的範圍內；其中另有測試的只有
+`readOutcome`、`outcomeAfterFailedTrigger`、`buildDirectDraftMarkReadScript`、`buildDirectDraftTriggerScript`
+（`DirectDraftPathTests`）與 `uploadState`（`DraftStoreWriterTests`），`readFlag`、`createdText`、
+`markDirectDraftRead`、`triggerDirectDraftUpload` 沒有任何測試。
+
+結構檢查擋不住所有削弱方式。#490 第 4 輪驗證找到下列六種寫法，這兩條守門測試都不會轉紅（#492；根治要靠
+#484 的行為測試）：
+
+1. 在 `timer.mark("inserted")` 之前提早回報；
+2. 讓 `triggerDirectDraftUpload` 送出 `buildDirectDraftTriggerScript` 以外的 script，或在送出前改寫它；
+3. 在 `DirectDraftPath` 裡宣告與凍結段所用名稱同名的型別或函式（例如 `Task`）；
+4. 用 `set the read status of` 之類的寫法多加一次切換；
+5. 用 `if` 等控制流程包住兩次切換；
+6. 另寫一條名稱不同、不經 `attemptSteps` 的平行路徑。
+
+測試轉紅時，先取得上面要求的證據並更新本規則，再改測試；不要只改門檻或凍結副本。第 1–6 項沒有專屬的守門測試，靠既有測試與 spec 部分覆蓋（第 5 項見 #491）。
 
 已評估過的提案（2026-10-05，live 計時：直接寫入 3.17 秒，其中寫入 14 ms、找草稿匣 470 ms、
 觸發 1,667 ms、等上傳確認 1,021 ms）：
@@ -52,3 +101,7 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 - `r-must-direct-db.md` 〈C/U/D 的唯一例外〉——直接寫入的適用界線與「觸發」的定義
 - `openspec/specs/message-composition/spec.md` 〈Direct-write draft path〉——9 項條件與 8 項閘門（以 spec 為準）
 - #463 / #472（實驗與原型）、#475（spec 化）、#482（本機副本未讀）、#481（是否設為預設）
+- #488（切換間隔的 live 實驗）、#489（觸發步驟的分解計時）、#490（本規則的出處修正與守門測試）
+
+本規則只放在本 repo 的 `.claude/rules/`，不複製到 `plugin/rules/` 或全域鏡像：它約束的是維護者怎麼改
+直接寫入，不是呼叫端怎麼使用這個 MCP（#490）。
