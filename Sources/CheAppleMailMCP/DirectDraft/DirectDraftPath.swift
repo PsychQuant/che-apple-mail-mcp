@@ -70,6 +70,12 @@ struct DirectDraftPath {
     var mailInfoPlist: String = "/System/Applications/Mail.app/Contents/Info.plist"
     var uploadDeadline: TimeInterval = 10
 
+    /// How often the wait after the upload request re-reads the store (#497).
+    /// An upload is noticed up to one interval late, about half an interval on
+    /// average, so 100 ms instead of 250 ms reports it ~75 ms sooner. The
+    /// 10-second limit and the read repair are unchanged (rule item 7).
+    static let uploadPollNanoseconds: UInt64 = 100_000_000
+
     /// Why an attempt stopped before writing. `reason` is the human text of the
     /// GUI-path note (unchanged since #472); `code` is the fixed timing-CSV code
     /// (#475) — a closed list, kept free of commas because the CSV is unquoted.
@@ -265,7 +271,7 @@ struct DirectDraftPath {
                 if read == .confirmed { timer.mark("read_ensured") }
                 return .created(Self.createdText(seconds: seconds, uploaded: true) + read.note, pending: false)
             }
-            try? await Task.sleep(nanoseconds: 250_000_000)
+            try? await Task.sleep(nanoseconds: Self.uploadPollNanoseconds)
         }
         return .created(Self.createdText(seconds: uploadDeadline, uploaded: false), pending: true)
     }
