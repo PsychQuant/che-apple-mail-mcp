@@ -201,14 +201,19 @@ fi
 # Unlike the checks above this one CANNOT be evaluated statically: the authority
 # is `defineTools()`, which only exists once Swift compiles. So rather than
 # reimplementing name extraction in bash — a second spec that would drift from
-# the first — run the test that already owns the invariant. There is no CI in
-# this repo (no .github/workflows), so without this line nothing forces that
-# test to run before a release, which is the whole gap #311 was about.
+# the first — run the test that already owns the invariant. Running it here
+# makes manifest parity a release prerequisite, independent of CI configuration.
 # mktemp, not a fixed /tmp path: another local user can pre-create a symlink at
 # a predictable name, and the redirect would then follow it and truncate the
 # target with the release runner's privileges.
 MANIFEST_GATE_LOG="$(mktemp -t che-mail-manifest-tools-gate)"
-trap 'rm -f "$MANIFEST_GATE_LOG"' EXIT
+REPO_GUARD_LOG=""
+cleanup_guard_logs() {
+    rm -f "$MANIFEST_GATE_LOG"
+    if [[ -n "${REPO_GUARD_LOG:-}" ]]; then rm -f "$REPO_GUARD_LOG"; fi
+}
+trap cleanup_guard_logs EXIT
+REPO_GUARD_LOG="$(mktemp -t che-mail-repo-guards)"
 if ! swift test --filter 'ManifestToolsSetEqualityTests' > "$MANIFEST_GATE_LOG" 2>&1; then
     grep -E "ABSENT from|NOT registered|duplicate tool names|descriptions differ|error:" \
         "$MANIFEST_GATE_LOG" >&2 || true
@@ -216,6 +221,37 @@ if ! swift test --filter 'ManifestToolsSetEqualityTests' > "$MANIFEST_GATE_LOG" 
   Full output was shown above.
   Reproduce:   swift test --filter ManifestToolsSetEqualityTests
   Regenerate:  REGENERATE_MCPB_MANIFEST=1 swift test --filter ManifestToolsSetEqualityTests"
+fi
+
+# Same shape, different subject: guards that protect the REPOSITORY rather than
+# the manifest. Before #391, the release path selected only the manifest test;
+# it did not run the index guard. Keep this check before building/tagging so
+# stale tracked artifacts cannot silently enter another release checkout.
+if ! swift test --filter 'NoTrackedBuildArtifactsTests|ManifestVersionTests' > "$REPO_GUARD_LOG" 2>&1; then
+    cat "$REPO_GUARD_LOG" >&2
+    die "repository guards failed — refusing to tag a release (#391/#396).
+  Full output was shown above.
+  Reproduce:   swift test --filter 'NoTrackedBuildArtifactsTests|ManifestVersionTests'"
+fi
+
+# Exit 0 also permits partial filter matches or XCTSkip. Require the named
+# invariant checks to have passed, not just a green test process. These are
+# macOS XCTest completion lines; a rename/output-format change fails closed
+# until this list is consciously updated alongside the tests.
+required_repo_tests=(
+    "NoTrackedBuildArtifactsTests testExactTrackedSetUnderMcpb"
+    "ManifestVersionTests testManifestVersionMatchesNewestRelease"
+    "ManifestVersionTests testMarketplaceEntryVersionMatchesPluginManifest"
+)
+for required_test in "${required_repo_tests[@]}"; do
+    if ! grep -Fq "Test Case '-[CheAppleMailMCPTests.${required_test}]' passed (" "$REPO_GUARD_LOG"; then
+        cat "$REPO_GUARD_LOG" >&2
+        die "repository guard did not complete: $required_test. Check for renamed, skipped, or unmatched tests."
+    fi
+done
+if grep -Eq "^Test Case .*' skipped " "$REPO_GUARD_LOG"; then
+    cat "$REPO_GUARD_LOG" >&2
+    die "repository guard was skipped — refusing to tag a release (#391)."
 fi
 
 # AppVersion.current (the server's self-reported version) MUST match the tag (#303).
