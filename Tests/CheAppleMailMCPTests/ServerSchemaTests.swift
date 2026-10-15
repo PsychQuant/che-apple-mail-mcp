@@ -90,6 +90,26 @@ final class ServerSchemaTests: XCTestCase {
         XCTAssertFalse(required.contains("bcc"), "bcc must stay optional")
     }
 
+    /// #510 — `create_draft` cannot thread: its mailto path always opens a fresh
+    /// compose, and the direct-write MIME carries no `In-Reply-To`/`References`.
+    /// A draft titled `Re: …` therefore sits OUTSIDE the original conversation,
+    /// while the call still reports success. The description is what a calling
+    /// agent reads before it calls, so it must say this and name the tool that
+    /// does thread (`reply_email` with `save_as_draft`).
+    func testCreateDraftDescription_saysItDoesNotThread_andPointsToReplyEmail() {
+        guard let t = tool(named: "create_draft") else {
+            XCTFail("create_draft tool missing")
+            return
+        }
+        let d = t.description ?? ""
+        XCTAssertTrue(d.contains("In-Reply-To"),
+                      "create_draft description must name the threading headers it does not set (#510)")
+        XCTAssertTrue(d.contains("reply_email"),
+                      "create_draft description must point to reply_email for replies (#510)")
+        XCTAssertTrue(d.contains("save_as_draft"),
+                      "create_draft description must name reply_email's draft mode (#510)")
+    }
+
     func testReplyEmail_advertisesFormatEnum() {
         assertFormatParameter(toolName: "reply_email")
     }
