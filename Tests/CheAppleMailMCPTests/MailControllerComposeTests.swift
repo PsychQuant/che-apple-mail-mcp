@@ -39,6 +39,60 @@ final class MailControllerComposeTests: XCTestCase {
                           file: file, line: line)
     }
 
+    /// Compile-only AppleScript syntax check (#510). Hands `script` to
+    /// `/usr/bin/osacompile`, which parses it against Mail's scripting
+    /// dictionary and writes a compiled file — it NEVER executes the script and
+    /// never touches Mail or any mailbox. `script.contains` assertions cannot
+    /// catch an invalid verb (the old `reply all originalMsg …` form was pinned
+    /// by exactly such a test while failing to compile with -2741).
+    ///
+    /// Skips (with the reason) when `osacompile` or the Mail dictionary is not
+    /// available, so a bare CI host reports "skipped", not a false pass or a
+    /// false failure.
+    private func assertCompiles(
+        _ script: String,
+        _ label: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let osacompile = "/usr/bin/osacompile"
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: osacompile),
+                          "osacompile not available — AppleScript compile check skipped")
+
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("osacompile-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        func compile(_ source: String, name: String) throws -> (status: Int32, stderr: String) {
+            let src = dir.appendingPathComponent("\(name).applescript")
+            try source.write(to: src, atomically: true, encoding: .utf8)
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: osacompile)
+            process.arguments = ["-o", dir.appendingPathComponent("\(name).scpt").path, src.path]
+            let errPipe = Pipe()
+            process.standardError = errPipe
+            process.standardOutput = Pipe()
+            try process.run()
+            process.waitUntilExit()
+            let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(),
+                             encoding: .utf8) ?? ""
+            return (process.terminationStatus, err)
+        }
+
+        // Probe first: if even a trivial Mail script cannot compile, the Mail
+        // dictionary is unavailable on this host — that is a skip, not a failure
+        // of the script under test.
+        let probe = try compile("tell application \"Mail\"\nreturn 1\nend tell", name: "probe")
+        try XCTSkipUnless(probe.status == 0,
+                          "Mail scripting dictionary not available — compile check skipped (\(probe.stderr))")
+
+        let result = try compile(script, name: "subject")
+        XCTAssertEqual(result.status, 0,
+                       "\(label) does not compile as AppleScript: \(result.stderr)",
+                       file: file, line: line)
+    }
+
     // MARK: - appleScriptEscape
 
     func testAppleScriptEscape_handlesQuotesAndNewlines() {
@@ -192,10 +246,52 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertTrue(s.contains("Reply saved as draft (paste path)"))
     }
 
-    func testBuildReplyPasteScript_replyAll_usesReplyAllVerb() {
+    // #510 / #458: Mail has no `reply all` verb. The only valid spelling is the
+    // `reply` verb plus its `reply to all` option. The old assertion here pinned
+    // `reply all originalMsg with opening window`, which fails to compile
+    // (-2741 "Expected end of line, etc. but found identifier"), so every
+    // `reply_all: true` call died before Mail was touched.
+    func testBuildReplyPasteScript_replyAll_usesReplyVerbWithReplyToAllOption() {
         let s = buildReplyEmailPasteScript(
             messageRef: "msgRef", newBody: "B", replyAll: true, saveAsDraft: false)
-        XCTAssertTrue(s.contains("reply all originalMsg with opening window"))
+        XCTAssertTrue(s.contains("reply originalMsg with opening window and reply to all"),
+                      "reply-all must be the `reply` verb with the `reply to all` option")
+        XCTAssertFalse(s.contains("reply all originalMsg"),
+                       "`reply all <msg>` is not valid AppleScript (-2741)")
+    }
+
+    func testBuildReplyPasteScript_replyOnly_hasNoReplyToAllOption() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "B", replyAll: false, saveAsDraft: false)
+        XCTAssertTrue(s.contains("set replyMsg to reply originalMsg with opening window\n"),
+                      "plain reply must stay exactly the verb it was before #510")
+        XCTAssertFalse(s.contains("reply to all"),
+                       "plain reply must not turn on reply-to-all")
+    }
+
+    // Compile-level lock (#510): the generated scripts must be valid AppleScript.
+    func testBuildReplyPasteScript_replyAll_compiles() throws {
+        try assertCompiles(
+            buildReplyEmailPasteScript(messageRef: "msgRef", newBody: "B",
+                                       replyAll: true, saveAsDraft: true),
+            "reply-all (save as draft) paste script")
+        try assertCompiles(
+            buildReplyEmailPasteScript(messageRef: "msgRef", newBody: "B",
+                                       replyAll: true, saveAsDraft: false),
+            "reply-all (send) paste script")
+    }
+
+    func testBuildReplyPasteScript_replyOnly_compiles() throws {
+        try assertCompiles(
+            buildReplyEmailPasteScript(messageRef: "msgRef", newBody: "B",
+                                       replyAll: false, saveAsDraft: true),
+            "reply (save as draft) paste script")
+    }
+
+    func testBuildForwardPasteScript_compiles() throws {
+        try assertCompiles(
+            buildForwardEmailPasteScript(messageRef: "msgRef", to: ["a@example.org"], newBody: "B"),
+            "forward paste script")
     }
 
     func testBuildReplyPasteScript_windowIdDeltaGuard_frontWindowNotTitle() {

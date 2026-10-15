@@ -869,13 +869,18 @@ func buildForwardNoBodyScript(messageRef: String, to: [String]) -> String {
 // pre-existing user window (the #175-round-2 data-loss guard).
 
 /// Shared core for the clean reply/forward paste path. `openVerb` is the native
-/// Mail verb (`reply` / `reply all` / `forward`); `nativeLines` is the (already
+/// Mail verb (`reply` / `forward`). Mail has no `reply all` verb (#510 / #458):
+/// reply-all is the `reply` verb plus its `reply to all` option, passed as
+/// `openOptions` (appended after `with opening window`, e.g. `" and reply to all"`;
+/// default `""` leaves the reply and forward scripts byte-identical).
+/// `nativeLines` is the (already
 /// `\n`-prefixed, helper-indented) cc/to/attachment fragment block to set on the
 /// reply/forward message object, or `""` for none. Delays reuse the #175 mailto
 /// env keys (same GUI-timing class).
 private func buildReplyForwardPasteScript(
     messageRef: String,
     openVerb: String,
+    openOptions: String = "",
     msgVar: String,
     newBody: String,
     nativeLines: String,
@@ -925,7 +930,7 @@ private func buildReplyForwardPasteScript(
     tell application "Mail"
         set _beforeIds to (id of every window)
         set originalMsg to \(messageRef)
-        set \(msgVar) to \(openVerb) originalMsg with opening window
+        set \(msgVar) to \(openVerb) originalMsg with opening window\(openOptions)
     end tell
     delay \(windowDelay)
     tell application "Mail"
@@ -1082,7 +1087,8 @@ func buildReplyEmailPasteScript(
 
     return buildReplyForwardPasteScript(
         messageRef: messageRef,
-        openVerb: replyAll ? "reply all" : "reply",
+        openVerb: "reply",
+        openOptions: replyAll ? " and reply to all" : "",
         msgVar: "replyMsg",
         newBody: newBody,
         nativeLines: nativeLines,
