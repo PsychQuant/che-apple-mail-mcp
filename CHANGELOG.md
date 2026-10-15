@@ -86,6 +86,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`reply_email` with `reply_all: true` works again** ([#510](https://github.com/PsychQuant/che-apple-mail-mcp/issues/510),
+  [#458](https://github.com/PsychQuant/che-apple-mail-mcp/issues/458)). The script said
+  `reply all originalMsg with opening window`, but Mail has no `reply all` verb, so AppleScript refused to
+  compile it (`-2741 Expected end of line, etc. but found identifier`) and every reply-all call failed before
+  Mail was touched. It is now the `reply` verb with its `reply to all` option
+  (`reply originalMsg with opening window and reply to all`). The cause was `reply_all`, not full-width
+  punctuation as #458's title said: the same body succeeded with `reply_all: false`. The reply and forward
+  scripts are byte-identical to before. The old unit test pinned the invalid spelling, so it passed while the
+  tool failed; the reply, reply-all and forward scripts are now also handed to `osacompile` (compile only —
+  it never runs the script or touches Mail), skipped with a stated reason when `osacompile` or Mail's
+  scripting dictionary is unavailable. The same gap in the other builders is tracked in
+  [#513](https://github.com/PsychQuant/che-apple-mail-mcp/issues/513).
+- **`create_draft` now says it does not thread** ([#510](https://github.com/PsychQuant/che-apple-mail-mcp/issues/510)).
+  A reply drafted with `create_draft` (subject `Re: …`) sat outside the original conversation in Mail while the
+  call reported success: the mailto path always opens a fresh compose, and the direct-write MIME has no
+  `In-Reply-To`/`References` (read back from a real draft: none present; a `reply_email` draft has both). The tool
+  description now states this and points to `reply_email` with `save_as_draft: true`. The result string is
+  unchanged (many tests pin it); no behavior changed.
 - **Text no longer over-claims after #304／#475** ([#486](https://github.com/PsychQuant/che-apple-mail-mcp/issues/486)).
   `check_accessibility` (all three outputs), its description and the setup window said "nothing falls back"; a
   reversed opt-in direct write does take the GUI path, so they now say it is the legacy path that is gone, and
