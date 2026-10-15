@@ -86,6 +86,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`reply_email` with `reply_all: true` no longer fails to compile** ([#510](https://github.com/PsychQuant/che-apple-mail-mcp/issues/510),
+  [#458](https://github.com/PsychQuant/che-apple-mail-mcp/issues/458)). The script said
+  `reply all originalMsg with opening window`, but Mail has no `reply all` verb, so AppleScript refused to
+  compile it (`-2741 Expected end of line, etc. but found identifier`) and every reply-all call failed before
+  Mail was touched. It is now the `reply` verb with its `reply to all` option
+  (`reply originalMsg with opening window and reply to all`). The cause was `reply_all`, not full-width
+  punctuation as #458's title said: the same body succeeded with `reply_all: false`. Without `reply_all`, and
+  for forward, the generated script text is exactly what it was before. **Not yet verified live**: the script
+  compiles and Mail's dictionary defines the option, but nobody has yet watched the reply reach all
+  recipients. Because the call used to fail before it could send, it can now actually send: with the default
+  `save_as_draft: false`, assume it reaches every recipient of the original (the worst case; Mail's dictionary
+  says the option does that). The `reply_all` description says to save a draft and read its To/Cc first.
+  The old unit test pinned the invalid spelling, so it passed
+  while the tool failed; the reply, reply-all and forward scripts are now also handed to `osacompile`
+  (compile only — it never runs the script or touches Mail). That check is skipped, with the reason, when
+  `osacompile` is missing, when it gives no answer within 30 s while probing, or when a probe that needs
+  Mail's scripting dictionary to parse cannot compile (a script under test that hangs fails the test). The same gap in the other builders is tracked in
+  [#513](https://github.com/PsychQuant/che-apple-mail-mcp/issues/513).
+- **`create_draft` now says it does not thread** ([#510](https://github.com/PsychQuant/che-apple-mail-mcp/issues/510)).
+  A reply drafted with `create_draft` (subject `Re: …`) sat outside the original conversation in Mail while the
+  call reported success. This tool sets no `In-Reply-To`/`References`: the mailto URL it builds adds no header field
+  beyond cc, bcc, subject and body, and the direct-write MIME carries none (checked in the source, not by reading back a
+  direct-write draft). Whether Mail would thread a draft whose mailto URL carried `In-Reply-To` — RFC 6068
+  allows the field — has not been tested; threading for `create_draft` is planned under
+  [#478](https://github.com/PsychQuant/che-apple-mail-mcp/issues/478). A draft made with
+  `reply_email(save_as_draft: true)` has both headers (read back from one real draft); whether Mail's
+  conversation view then groups it was not checked (#43, #47). The tool descriptions now say this, and that
+  `reply_email` has no `from_address`. Descriptions only: no code path and no result string changed.
 - **Text no longer over-claims after #304／#475** ([#486](https://github.com/PsychQuant/che-apple-mail-mcp/issues/486)).
   `check_accessibility` (all three outputs), its description and the setup window said "nothing falls back"; a
   reversed opt-in direct write does take the GUI path, so they now say it is the legacy path that is gone, and
