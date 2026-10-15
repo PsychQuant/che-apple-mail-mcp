@@ -1063,8 +1063,9 @@ private func buildReplyForwardPasteScript(
     return s
 }
 
-/// #218 — wrapper-free reply: native `reply`/`reply all` verb (Mail quotes the
-/// original) + clipboard paste of the plain new body at the cursor. cc/attachments
+/// #218 — wrapper-free reply: native `reply` verb (Mail quotes the original;
+/// reply-all is that verb's `reply to all` option, not a separate `reply all`
+/// verb — #510) + clipboard paste of the plain new body at the cursor. cc/attachments
 /// are set natively on the reply message (unchanged from #34/#60). `saveAsDraft`
 /// ⌘S vs send ⇧⌘D. The new body is NEVER `set content`/`set html content`.
 func buildReplyEmailPasteScript(
