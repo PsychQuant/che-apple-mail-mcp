@@ -65,9 +65,9 @@ final class MailControllerComposeTests: XCTestCase {
 
     /// Runs `osacompile` on `source`: compile only, the script is never executed.
     /// Returns nil when it has not finished after `timeout` seconds (the process
-    /// is terminated then) — osacompile can wait on a "Where is …?" dialog when an
-    /// application named in the script cannot be located, and a test run must not
-    /// hang on that. stderr goes to a file, so nothing has to be drained while
+    /// is terminated then) — osacompile might wait on a "Where is …?" dialog when
+    /// an application named in the script cannot be located (not observed on this
+    /// host), and a test run must not hang on that. stderr goes to a file, so nothing has to be drained while
     /// waiting.
     private func runOsacompile(
         _ source: String,
@@ -105,9 +105,10 @@ final class MailControllerComposeTests: XCTestCase {
     /// catch an invalid verb (the old `reply all originalMsg …` form was pinned
     /// by exactly such a test while failing to compile with -2741).
     ///
-    /// Skips (with the reason) when `osacompile` is missing or gives no answer,
-    /// or when the probe cannot parse a Mail-only command (no Mail dictionary), so
-    /// a bare CI host reports "skipped", not a false pass or a false failure.
+    /// Skips (with the reason) when `osacompile` is missing, gives no answer while
+    /// probing, or when the probe cannot parse a Mail-only command (no Mail
+    /// dictionary), so a bare CI host reports "skipped", not a false pass or a
+    /// false failure. A script under test that does not finish in time FAILS.
     private func assertCompiles(
         _ script: String,
         _ label: String,

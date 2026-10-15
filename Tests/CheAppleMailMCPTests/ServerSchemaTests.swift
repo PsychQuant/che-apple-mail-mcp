@@ -126,6 +126,10 @@ final class ServerSchemaTests: XCTestCase {
                       "create_draft description must name reply_email's draft mode (#510)")
         XCTAssertTrue(d.contains("no from_address"),
                       "create_draft description must say what reply_email lacks (#510)")
+        XCTAssertTrue(d.contains("has not been tested"),
+                      "create_draft description must keep the untested mailto In-Reply-To caveat (#510)")
+        XCTAssertFalse(d.contains("original message's account"),
+                       "which account Mail replies from is Mail's choice and was not verified (#510)")
         XCTAssertFalse(d.contains("cannot set"),
                        "mailto can carry In-Reply-To (RFC 6068); 'cannot' is an over-claim (#510)")
         XCTAssertFalse(d.contains("stays in the thread"),
@@ -150,6 +154,10 @@ final class ServerSchemaTests: XCTestCase {
                       "reply_all must point to save_as_draft as the way to review first (#510)")
         XCTAssertTrue((t.description ?? "").contains("no from_address"),
                       "reply_email must say it has no from_address, since create_draft sends callers here (#510)")
+        XCTAssertTrue((t.description ?? "").contains("#461"),
+                      "reply_email must tell callers to read a saved draft back, since #461 is unresolved (#510)")
+        XCTAssertTrue(d.contains("not yet checked live"),
+                      "reply_all must say the send reach is the worst case and not yet checked live (#510)")
     }
 
     func testReplyEmail_advertisesFormatEnum() {
