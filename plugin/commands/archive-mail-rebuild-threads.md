@@ -1,6 +1,6 @@
 ---
-description: 從 per-email md 的 frontmatter 重建 .threads.json
-argument-hint: [archive-dir]
+description: "從 per-email md 的 frontmatter 重建 .threads.json"
+argument-hint: "[archive-dir]"
 allowed-tools: Read, Write, Glob, Bash(mkdir:*)
 ---
 
