@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-10-19
+
 ### Added
 
 - **The direct-write upload trigger is timed step by step** ([#489](https://github.com/PsychQuant/che-apple-mail-mcp/issues/489)). With `CHE_MAIL_COMPOSE_TIMING_CSV` set, the
