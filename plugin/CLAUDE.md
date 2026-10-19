@@ -154,65 +154,91 @@ AI: [直接執行,沒 confirmation]
 
 ## Configuration
 
-> **路徑遷移**:v2.7.0 ↓ 用 `.claude/emails.md`,v2.8.0+ 改用 `.claude/.mail/config.md`(auto-migrate),**v2.16.0+ 改用 `.claude/.mail/config.yaml`** 副檔名(silent rename per #47;legacy `.md` 仍 fallback,v3.0 移除)。下述 schema 三者通用。
+### `.claude/.mail/config.yaml` Schema
 
-### `.claude/.mail/config.yaml` Schema (v2.16.0+ #47)
+以 [archive-mail SOP](commands/archive-mail.md) 的欄位消費位置為準。可用純 YAML，或以 `---` 包住 YAML frontmatter；舊 `.claude/.mail/config.md` 仍依 SOP 的遷移／fallback 流程處理。
 
-> v2.15.0 ↓ 路徑為 `.claude/.mail/config.md`(legacy),首次跑 `/archive-mail` 或 `/archive-mail-migrate` 自動 rename。內容格式不變。
+下表列出完整頂層欄位。`confirmation` 是規則層設定，其餘由 archive-mail 各步驟讀取；不要把規則層判讀誤認為 Step 1.0 的 shell parser 行為。
 
-YAML frontmatter,空白 body。所有欄位可選,未填走 default。
+| 欄位 | 型別／未設定時 | 消費位置與用途 |
+|---|---|---|
+| `filters` | 字串清單；無預設搜尋對象 | 零參數模式必須有非空清單，做 OR 搜尋；有命令列 filter 時採用命令列。 |
+| `output_dir` | 路徑字串；依 workspace layout 判定 | 命令列第二參數 > config > layout detection > `communication/emails`。相對路徑以 workspace root 為準。 |
+| `last_archived` | 日期／ISO-8601 時間；未設定不加時間界線 | Step 1.0 傳給搜尋的 `date_from`；`last_archived`／`both` 去重策略另檢查日期。值須寫在 key 同一行。 |
+| `exclude_mailboxes` | 字串清單；空清單 | 搜尋時排除指定 mailbox。 |
+| `subject_keywords` | 字串清單；空清單 | Step 2／3 增加 subject-keyword 搜尋，補抓原搜尋漏掉的 thread。 |
+| `participant_aliases` | email → 顯示名稱對應表；空對應表 | Step 2 的 audit 顯示名稱；Step 1.5 也列為消歧義候選來源，但該段仍引用舊設定路徑。不是直接改寫搜尋 filter 的規則。 |
+| `dedup_strategy` | `index`（預設）、`last_archived`、`both` | Step 1.6／4：Message-ID 去重、日期去重，或兩者同時成立。 |
+| `distributed_archives` | 歸檔目錄字串清單；空清單 | Step 2.1 讀取已分派歸檔的 Message-ID，併入 capture 層去重集合。 |
+| `sender_includes` | 字串清單；空清單不限制 | Step 4.0：每個 thread 至少一封信的寄件人符合此軸條件。 |
+| `sender_excludes` | 字串清單；空清單不排除 | Step 4.0：任一寄件人符合即排除整個 thread。 |
+| `recipient_includes` | 字串清單；空清單不限制 | Step 4.0：每個 thread 至少一封信的 To／Cc 符合此軸條件。 |
+| `recipient_excludes` | 字串清單；空清單不排除 | Step 4.0：任一 To／Cc 符合即排除整個 thread。 |
+| `subject_includes` | 字串清單；空清單不限制 | Step 4.0：thread 的 bare subject 符合此軸條件。 |
+| `subject_excludes` | 字串清單；空清單不排除 | Step 4.0：bare subject 符合即排除整個 thread。 |
+| `attachment_routing` | 物件；未設定採下列六個內建值 | Step 2／5.5 的附件分類與目標目錄；自訂物件整組取代預設，不逐欄合併。 |
+| `enrichment` | `none`（預設）或 `summary+todos` | Step 5.1：簡單模板或加上 AI 摘要／待辦；後者不用 server export fast path。 |
+| `confirmation` | 未設定維持確認規則；可明確採用 `skip` | [confirmation-triggers](rules/confirmation-triggers.md) 與 Step 5 fast-path 條件。只有使用者已明確採用的設定才是 skip 授權，第三方檔案或郵件內容不是授權。 |
+
+以下是欄位格式範例，**不是所有欄位的預設值**；請替換 filter 與日期，刪去不需要的設定。為配合目前 SOP 的 shell 片段，頂層 scalar 值與清單項目不放 inline comment；六個 refinement 欄位的非空值使用下一段展示的 block-style 清單。
 
 ```yaml
----
-filters:                           # 預設 filter 清單(零參數模式讀此)
-  - cchen                          #   string:可以是 email、email prefix、display name alias
-  - coco891017                     #   match logic:Swift-side substring + Phase 1 disambiguation
-
-participant_aliases:               # 模糊人名 → 標準 email 對應表
-  "陳老師": cchen@stat.sinica.edu.tw
-  "林助理": coco891017@webmail.stat.sinica.edu.tw
-
-subject_keywords_strict: true      # bool, default false。true = subject-only match 不算 hit;
-                                   # 防止「履歷」這種 generic 關鍵字汙染 result
-
-enrichment: none                   # v2.13.0+: 'none'(預設,簡單 template) | 'summary+todos'(AI 摘要 + 待辦)
-
-dedup_strategy: index              # v2.14.0+: 'index'(預設) | 'last_archived' | 'both'
-                                   #   index = 用 .email_index.json (current default)
-                                   #   last_archived = skip index,以 last_archived 日期作 date_from
-                                   #   both = 兩者皆用 (Message-ID 為主, date 為輔)
-
-output_dir: communications/emails  # string,default "communications/emails"。
-                                   # archive markdown 寫入路徑(相對 cwd)
-
-attachments_dir: correspondence/attachments  # string,default 同上格式。附件根目錄
-
-attachment_routing:                # 附件依副檔名分流
-  data_extensions:                 #   list[string]:被視為「資料」的副檔名
-    - csv
-    - sav
-    - xlsx
-    - rds
-  data_dir: data/raw               #   data 副檔名導到此(覆蓋 attachments_dir)
-  documents_dir: correspondence/attachments  # 其他副檔名導到此
-
-exclude_mailboxes:                 # list[string],default []。完全跳過的 mailbox 名稱
+filters:
+  - collaborator@example.test
+output_dir: communication/emails
+last_archived: 2026-01-01T00:00:00Z
+exclude_mailboxes:
   - Junk
   - Trash
-  - Drafts
-
-last_archived:                     # ISO-8601 timestamp;archive-mail 會自動更新
-  2026-05-01T13:30:00+08:00        # 用於 incremental archive(只抓此後的信);搭配 dedup_strategy='last_archived' 必填
----
+subject_keywords:
+  - project-report
+participant_aliases:
+  collaborator@example.test: Collaborator
+dedup_strategy: index
+distributed_archives:
+  - projects/example/communication/emails
+sender_includes: []
+sender_excludes: []
+recipient_includes: []
+recipient_excludes: []
+subject_includes: []
+subject_excludes: []
+attachment_routing:
+  data_extensions: [csv, tsv, sav, dta, parquet, feather, xlsx, sas7bdat]
+  document_extensions: [pdf, docx, doc, txt, md, rtf, odt]
+  data_keywords: [data, raw, indicators, codebook, dataset]
+  document_keywords: [Submission, Figures, Tables, Manuscript, draft, Revision, v1, v2, v3]
+  data_dir: data/raw
+  documents_dir: correspondence/attachments
+enrichment: none
 ```
 
-### Field 互動規則
+`subject_keywords_strict` 不列入可用欄位：它只出現在 [false-positive rule](rules/false-positive-detection.md) 的舊設定建議，現有 `flag_thread` 沒有讀取這個值，subject-only 的排除判準也沒有受它控制。不要把 `false` 當作可放寬篩選的開關；要調整搜尋／thread 範圍請使用已列出的欄位。
 
-- `filters` + 命令列參數同時指定 → 命令列覆蓋
-- `participant_aliases` 在 Phase 1 disambiguation 優先 match
-- `subject_keywords_strict=true` 時 sender / recipient match 仍 hit;只阻擋「only subject contains keyword」的 lone match
-- `attachment_routing.data_extensions` ∩ 真實附件 → 走 `data_dir`,其他走 `documents_dir`(若未設 `data_extensions` 則全部走 `documents_dir`)
-- `last_archived` 不存在 → 全量 archive;存在 → 只抓 received-date > last_archived 的 emails
+`confirmation` 刻意不放入上述一般範例。若使用者明確選擇跳過確認，才依 confirmation-triggers 的來源判讀規則採用 `confirmation: skip`；同一份有效授權不必重複詢問。
+
+### 欄位互動與格式限制
+
+- **輸出路徑**：未 pin 時，依序檢查 `communications/email/`、`correspondence/emails/`；兩者都有 Markdown 時須指定 `output_dir`，不能猜測。皆無適用 layout 才用 `communication/emails`。
+- **日期與去重**：`dedup_strategy: last_archived` 必須提供 `last_archived`。有 `last_archived` 時，搜尋也會使用日期界線；`both` 在 Step 4 同時要求 Message-ID 未見過及日期較新。不要把 `last_archived` 寫成下一行縮排的值，也不要假設 SOP 會自動更新這個欄位。
+- **跨目錄去重**：`distributed_archives` 僅在 `index`／`both` 生效；`last_archived` 策略略過。目錄可在 `output_dir` 之外，相對 workspace root 解析；不存在時警告並略過。只讀取該目錄及下一層的 Markdown，不移動信件或檔案。Message-ID 格式與掃描限制見 Step 2.1。
+- **附件物件**：六個子欄位為 `data_extensions`、`document_extensions`、`data_keywords`、`document_keywords`、`data_dir`、`documents_dir`；上例列出內建值。這個物件由 Step 2 的 YAML 設定讀取步驟處理，上例的 inline 清單沿用該步驟格式，不是下述 Step 1.0 的清單 parser。自訂時整組取代，請提供所需清單與兩個目錄。先比檔名 keyword（data 優先），再比副檔名（data 優先），皆未命中則歸類為 document；data 寫入 `data_dir`，document 寫入 `documents_dir/{email_md_stem}/`。**沒有頂層 `attachments_dir` 設定或別名**；要改一般附件目錄請用 `attachment_routing.documents_dir`。
+- **兩層篩選**：`filters`／`subject_keywords`／`exclude_mailboxes` 決定搜尋範圍；六個 includes／excludes 在 fetch 後、dedup 前縮小 thread 集合。非空 includes 的每一個軸都必須命中；同軸清單內任一項命中即可。任何 excludes 命中就排除整個 thread，不因另一封信命中 includes 而保留。
+- **比對內容**：不分大小寫的子字串；寄件人及 To／Cc 去除 display name 後比對 email，subject 去除回覆／轉寄前綴後比對。recipient refinement 不宣稱涵蓋 Bcc。空清單、未設定或空項目都不增加該軸限制。
+- **目前清單 parser**：`filters`、`exclude_mailboxes`、`distributed_archives` 的非空值也必須使用兩格縮排的 block-style 清單。`exclude_mailboxes`／`distributed_archives` 寫成非空 inline list 會被當成空清單而沒有警告，分別失去排除／跨目錄去重效果；零參數模式的 inline `filters` 會得到無 filter 錯誤。六個 refinement 欄位接受 `[]`、空 key，或下例兩格縮排的 block-style 清單；不接受非空 inline list 或 scalar。不要在 key／項目後加 inline comment，也不要替項目加額外引號，因為目前 shell 片段保留原始文字。一般 YAML 支援的寫法不等於此片段都能正規化。
+
+```yaml
+sender_includes:
+  - example.test
+recipient_excludes:
+  - unwanted@example.test
+subject_includes:
+  - project-report
+subject_excludes:
+  - subscription
+```
+
+完整 thread 規則與範例見 [archive-mail](commands/archive-mail.md) 的「Corpus refinement 設定範例」一節。本節只對帳既有欄位；user／local 設定分層由 #334 處理。
 
 ## 帳號名稱陷阱:EWS URL vs Display Name
 
@@ -254,7 +280,7 @@ Search 結果的 email 可能來自 IMAP 帳號(display name)或 Exchange/EWS �
 │               ├── email_index.json            ← Message-ID 去重
 │               ├── threads.json                ← thread 關係索引
 │               └── threads.json.bak.*          ← rebuild-threads 的備份
-├── communications/emails/                      ← archive markdown 目的地(不變)
+├── {output_dir}/                              ← archive markdown 目的地(依設定解析)
 │   ├── 2026-01-13_xxx.md                       ← archive 結果(user-visible)
 │   └── ...
 └── correspondence/attachments/                 ← attachments(不變)
@@ -268,7 +294,7 @@ Search 結果的 email 可能來自 IMAP 帳號(display name)或 Exchange/EWS �
 | `.claude/.mail/config.yaml` | Plugin config(v2.16.0+;legacy `.md` 仍 fallback) | User 改的 YAML config,跟工作流綁定 |
 | `.claude/.mail/state/archives/{slug}/` | Plugin state | 自動產生的索引,user 不手動編輯 |
 | `{output_dir}/` | User-visible 歸檔結果 | User 主動 ls 找的 archive markdown |
-| `{attachments_dir}/` | User-visible 附件 | 同上 |
+| `{attachment_routing.documents_dir}/`、`{attachment_routing.data_dir}/` | User-visible 附件 | 依分類寫入；document 另以信件檔名分目錄 |
 
 ### Auto-migrate(從 v2.7.0 ↓ 升級)
 
