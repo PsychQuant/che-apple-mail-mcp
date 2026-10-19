@@ -21,9 +21,19 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 
 ## [Unreleased]
 
+## [2.50.1] - 2026-10-19
+
 ### Changed
+- `binary_version` 3.3.0 → 3.3.1 (bug fixes only, no new tools or parameters). What the binary brings: a failed cleanup no longer hides the original compose error ([#412](https://github.com/PsychQuant/che-apple-mail-mcp/issues/412)); `check_accessibility` and the `check_accessibility` / `open_mailto` descriptions describe the refusal paths that exist after #304, with `open_mailto` as the zero-TCC alternative ([#410](https://github.com/PsychQuant/che-apple-mail-mcp/issues/410)); draft receipts stop at the first read failure instead of retrying for up to about 135 s ([#414](https://github.com/PsychQuant/che-apple-mail-mcp/issues/414)); newly packaged Claude Desktop bundles carry a version sidecar, so the stale-binary check works there too ([#312](https://github.com/PsychQuant/che-apple-mail-mcp/issues/312)).
 - Descriptions 保持短敘述；README／CLAUDE.md 的版本沿革指向本檔，發布時同步 version 與條目（#396）。
 - plugin 的安裝與 Source Code 連結使用 PsychQuant；個人署名與其他 repo 連結保留（#387）。
+
+### Fixed
+- Wrapper download integrity: release assets are chosen from parsed metadata, published digests must verify before installation, and a launch whose runtime record could not be published reports an unknown version instead of a stale one ([#392](https://github.com/PsychQuant/che-apple-mail-mcp/issues/392), [#393](https://github.com/PsychQuant/che-apple-mail-mcp/issues/393)).
+- The first-run Full Disk Access offer no longer depends on `jq` or `ps` ([#394](https://github.com/PsychQuant/che-apple-mail-mcp/issues/394)), and an unknown FDA status keeps the one-time offer instead of using it up ([#403](https://github.com/PsychQuant/che-apple-mail-mcp/issues/403)).
+- `/archive-mail` and its sibling commands treat message content as data and list only the mail tools they need ([#395](https://github.com/PsychQuant/che-apple-mail-mcp/issues/395)).
+- `plugin/CLAUDE.md` documents each archive-mail setting where it is actually read ([#336](https://github.com/PsychQuant/che-apple-mail-mcp/issues/336)).
+- `make test` now runs the plugin regression suites as well as `swift test` ([#337](https://github.com/PsychQuant/che-apple-mail-mcp/issues/337)).
 
 
 ## [2.50.0] - 2026-10-19
