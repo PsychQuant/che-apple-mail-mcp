@@ -9,6 +9,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Fresh marketplace clones no longer contain obsolete build artifacts**
+  ([#391](https://github.com/PsychQuant/che-apple-mail-mcp/issues/391)).
+  The v2.7.1 bundle and old server executable are removed from the tracked
+  tree (the two removed blobs total 22,915,355 bytes, about 21.9 MiB).
+  Release assets remain
+  the distribution path. The exact-set index guard also protects the manifest,
+  icon, privacy document and server directory placeholder, and now runs as a
+  release prerequisite. Generated `.mcpb.sha256` files are ignored too.
+  Existing unmodified tracked copies disappear on update; locally modified
+  tracked copies may make Git refuse the update, so preserve those outputs
+  before updating. Newly generated ignored outputs remain local. History is
+  deliberately not rewritten; old blobs remain in full clones. Fresh shallow
+  clone measurements are recorded in the issue's verification report.
+
+- **Claude Desktop bundles carry executable-derived version metadata**
+  ([#312](https://github.com/PsychQuant/che-apple-mail-mcp/issues/312)).
+  The shared packager writes `server/.CheAppleMailMCP.version` from the copied
+  binary's bounded `--version` query, checks it against the manifest, and builds
+  from a clean staging tree. Invalid queries do not replace an existing output.
+  This supplies the staleness reader for newly built bundles; it does not
+  discover remote releases or prove Desktop's update/restart lifecycle.
+  Restart guidance now names both Claude Code and Claude Desktop.
+
+- **FDA assistance preserves its one-time offer when status is unknown**
+  ([#403](https://github.com/PsychQuant/che-apple-mail-mcp/issues/403)).
+  Setup is offered only after an explicit denial; no Mail data, undetermined
+  status and failed probes leave the marker untouched for a later session.
+
+
+- **The standard test command includes plugin regression suites**
+  ([#337](https://github.com/PsychQuant/che-apple-mail-mcp/issues/337)).
+  `make test` now runs Swift tests followed by plugin shell/Python suites;
+  failures propagate, and the required hook suite or missing dependencies fail
+  explicitly. `make test-plugin` provides a focused entry point.
+
+
+- **First-run Full Disk Access assistance works without jq or ps**
+  ([#394](https://github.com/PsychQuant/che-apple-mail-mcp/issues/394)).
+  Dependency checks apply only to staleness detection, so they no longer
+  suppress the setup offer or later independent hook features. Tests isolate
+  the two missing dependencies and observe the actual detached setup call.
+
+
+- **Wrapper download integrity and runtime-state handling**
+  ([#392](https://github.com/PsychQuant/che-apple-mail-mcp/issues/392),
+  [#393](https://github.com/PsychQuant/che-apple-mail-mcp/issues/393)).
+  Release assets are selected from parsed metadata and their URLs validated
+  after decoding path components; encoded separators are rejected and build
+  metadata retains its logical version.
+  A rejected checksum URL is not treated as an absent checksum. Published
+  digest prerequisites are checked before downloading the executable, and
+  digests must verify before installation, while genuine legacy releases
+  without a digest remain explicitly disclosed. Pin fallback markers have a
+  bounded decimal epoch and are revalidated by the session-start hook.
+  Failed sidecar publication is disclosed and that launch reports an unknown
+  runtime version instead of known-stale metadata. Cooperating server images
+  then publish their own compiled version after exec, so an intervening install
+  cannot leave that running image labeled with an earlier observation; older
+  binaries keep the provisional compatibility record. A contradictory native
+  report invalidates the sidecar-based skip on the next spawn, allowing an
+  interleaved installation to converge. Interrupted launchers
+  clean up and stop before exec, and failed runtime/marker publication does not leak temporary
+  files or claim an unbacked degraded pin.
+
 - **Archive mail treats message content as data and narrows command grants**
   ([#395](https://github.com/PsychQuant/che-apple-mail-mcp/issues/395)).
   Archive and repair commands enumerate their required mail tools. Guards
@@ -19,6 +83,193 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Executable recipe tests cover path, control-character and markup edge cases.
   Migration command grants now use separate mkdir, mv and find permission
   entries, making those intended filesystem operations pre-approved.
+
+## [3.3.0] - 2026-10-19
+
+### Added
+
+- **The direct-write upload trigger is timed step by step** ([#489](https://github.com/PsychQuant/che-apple-mail-mcp/issues/489)). With `CHE_MAIL_COMPOSE_TIMING_CSV` set, the
+  `direct` segment now also has `trigger_spawn` (before the upload request is handed to osascript) and, logged by the
+  trigger script itself, `trigger_script_start`, `trigger_listed`, `trigger_unread` and `trigger_read`. These marks are
+  moved into the direct segment as soon as the request returns or fails, so none are left for a later GUI segment
+  (a request that times out records no script marks at all, since the transport never reads its output).
+  Between the two read-status changes the script gains only the `trigger_unread` mark (no delay, no control flow); with
+  timing unset the trigger script is unchanged. First live run with timing on (12 drafts): `inserted` to
+  `trigger_sent` took about 0.8 s, of which 0.5 s is the read-toggle gap; what timing itself adds could not be
+  separated from that run. See #489 for the breakdown.
+- **Opt-in per-step timing for every `create_draft` path** (`CHE_MAIL_COMPOSE_TIMING_CSV=<file>`,
+  [#464](https://github.com/PsychQuant/che-apple-mail-mcp/issues/464),
+  [#475](https://github.com/PsychQuant/che-apple-mail-mcp/issues/475)). Each call appends one CSV row per
+  step (`run_id, source, step, t_ref, ms_since_start, ms_since_prev, outcome, window_delay, step_delay,
+  from_address_set, path`). The GUI mailto path (`path` = `gui-mailto`, also used by `compose_email`) records
+  Swift-side `enter` / `spawn` / `returned` plus in-script marks from `script_start` to `script_end`, logged to
+  osascript's stderr through an ASObjC clock. The direct-write path (`path` = `direct`) records `enter`, one
+  mark per completed step (`eligibility` … `read_ensured`) and `returned`, with a fixed `outcome` code such as
+  `created`, `not_attempted:ccOrBcc` or `fell_back:trigger`. A `create_draft` that falls back from the direct
+  write to the GUI path is one run: both segments share the `run_id` and `ms_since_start` keeps counting from
+  the direct `enter`, so the fallback's total cost is the last row. A file whose header differs (e.g. one
+  started by a build before #475) is left untouched and a `compose timing:` line on stderr says so — point the
+  variable at a new file. With the variable unset the generated script is byte-for-byte unchanged and no file
+  is written. Writers to one file are serialized (an in-process lock, `flock` across server processes and
+  `O_APPEND`), so concurrent calls no longer truncate or overwrite each other's rows, and double quotes in a
+  value are written as single quotes so a standard CSV reader cannot misparse the row. A file whose last line
+  lacks a line break gets one before new rows, and a writer that cannot get the file lock within about a
+  second — counting any wait behind another timing write in the same process — gives up those rows (stderr)
+  rather than hold up the compose call; a path that is not a regular file (e.g. a FIFO) is refused. `read_ensured` is recorded only
+  when the draft is seen as read locally; the result says "still shows as unread" only when a look after the
+  re-assert saw it unread, and "could not be read" when no look could read it.
+
+- **Experimental direct-write path for `create_draft`** (`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, off by default,
+  [#472](https://github.com/PsychQuant/che-apple-mail-mcp/issues/472)). The draft is written straight into Mail's
+  Envelope Index and `.emlx` store in one `BEGIN IMMEDIATE` transaction, in the shape Mail uses for its own
+  unsent drafts, then AppleScript toggles the draft's read status so Mail's sync engine uploads it (#463). No
+  compose window opens. Only plain-text drafts with bare To addresses, a bare `from_address` on an IMAP account,
+  no cc/bcc and no attachments qualify, on Mail 16 / macOS 27 with the `messages` schema it was verified against;
+  anything else, and any failure before the trigger (rolled back exactly), takes the GUI path with a one-line
+  note. Live on a Gmail-type IMAP account: six drafts (ASCII and Chinese) created in 2.0–3.4 s, uploaded
+  1.5–3.0 s after the trigger, server copies equal to the input in subject and decoded body, `draft=1`; a cc
+  draft fell back to the GUI path with the note. With a 0.3 s gap between the two toggles one draft stayed
+  unread locally, so the gap is 0.5 s and the path re-asserts read status after the upload.
+  The `message-composition` spec now admits this as the second permitted body source for `create_draft`
+  (opt-in only, closed eligibility list, no AppleScript body property); the AppleScript body-injection ban is
+  unchanged ([#475](https://github.com/PsychQuant/che-apple-mail-mcp/issues/475)). The `create_draft` tool
+  description and the compose rules state the exception: within its eligibility list the direct write opens
+  no window and needs no Accessibility (it needs Full Disk Access and Automation instead); the description,
+  README and rules point at the spec's closed lists instead of repeating a partial one. When the upload request
+  fails and the write cannot be reversed, the result reports the draft as created with its upload pending
+  (`created:upload_pending`) unless Mail had already uploaded it — it no longer claims an upload nobody
+  confirmed. `check_accessibility`'s returned text, the setup window and `open_mailto`'s description no
+  longer describe the legacy fallback that #304 removed; a guard test scans the sources for those phrasings.
+
+### Changed
+
+- **The experimental direct-write path reports an upload ~75 ms sooner on average**
+  ([#497](https://github.com/PsychQuant/che-apple-mail-mcp/issues/497)). After the upload request, the
+  store is re-read every 100 ms instead of every 250 ms, so the average delay before the upload is
+  noticed drops from about 125 ms to about 50 ms (an estimate: the upload time itself varies by
+  seconds, and a 10-draft live run showed every draft created once, uploaded and read, without
+  resolving a gap that small). The
+  10-second limit and the read repair are unchanged.
+- **`create_draft` with a sender is ~1.7 s faster: two fixed waits became readiness polls**
+  ([#464](https://github.com/PsychQuant/che-apple-mail-mcp/issues/464)). Per-step timing of three
+  default calls put 1850 ms on the compose-window wait and 1375 ms on picking and verifying the sender,
+  out of ~7.95 s. The window is now polled every 0.1 s (cap: the old `CHE_MAIL_MAILTO_WINDOW_DELAY`,
+  same checks and messages afterwards) and is found in ~90 ms; the sender read-back is polled up to
+  2 s instead of one read after 0.7 s (~810 ms instead of 1375 ms). Because the From popup is now
+  reached while Mail is still setting up the window, its first click failed in 3 of 10 runs with a
+  System Events connection error; the click is now retried up to four times with a fresh lookup and
+  still fails as `SENDERPOPUP` when exhausted. Removing the 0.7 s wait after opening the popup was
+  tried and reverted (the menu poll then took up to 6 s). Measured over ten consecutive calls: 10/10
+  drafts correct (body, From, To), median 6.27 s (5.6–7.0 s) versus ~7.95 s before. The no-sender path
+  shares the window poll but was not exercised live (it would draft on the default account).
+
+### Fixed
+
+- **`reply_email` with `reply_all: true` no longer fails to compile** ([#510](https://github.com/PsychQuant/che-apple-mail-mcp/issues/510),
+  [#458](https://github.com/PsychQuant/che-apple-mail-mcp/issues/458)). The script said
+  `reply all originalMsg with opening window`, but Mail has no `reply all` verb, so AppleScript refused to
+  compile it (`-2741 Expected end of line, etc. but found identifier`) and every reply-all call failed before
+  Mail was touched. It is now the `reply` verb with its `reply to all` option
+  (`reply originalMsg with opening window and reply to all`). The cause was `reply_all`, not full-width
+  punctuation as #458's title said: the same body succeeded with `reply_all: false`. Without `reply_all`, and
+  for forward, the generated script text is exactly what it was before. **Not yet verified live**: the script
+  compiles and Mail's dictionary defines the option, but nobody has yet watched the reply reach all
+  recipients. Because the call used to fail before it could send, it can now actually send: with the default
+  `save_as_draft: false`, assume it reaches every recipient of the original (the worst case; Mail's dictionary
+  says the option does that). The `reply_all` description says to save a draft and read its To/Cc first.
+  The old unit test pinned the invalid spelling, so it passed
+  while the tool failed; the reply, reply-all and forward scripts are now also handed to `osacompile`
+  (compile only — it never runs the script or touches Mail). That check is skipped, with the reason, when
+  `osacompile` is missing, when it gives no answer within 30 s while probing, or when a probe that needs
+  Mail's scripting dictionary to parse cannot compile (a script under test that hangs fails the test). The same gap in the other builders is tracked in
+  [#513](https://github.com/PsychQuant/che-apple-mail-mcp/issues/513).
+- **`create_draft` now says it does not thread** ([#510](https://github.com/PsychQuant/che-apple-mail-mcp/issues/510)).
+  A reply drafted with `create_draft` (subject `Re: …`) sat outside the original conversation in Mail while the
+  call reported success. This tool sets no `In-Reply-To`/`References`: the mailto URL it builds adds no header field
+  beyond cc, bcc, subject and body, and the direct-write MIME carries none (checked in the source, not by reading back a
+  direct-write draft). Whether Mail would thread a draft whose mailto URL carried `In-Reply-To` — RFC 6068
+  allows the field — has not been tested; threading for `create_draft` is planned under
+  [#478](https://github.com/PsychQuant/che-apple-mail-mcp/issues/478). A draft made with
+  `reply_email(save_as_draft: true)` has both headers (read back from one real draft); whether Mail's
+  conversation view then groups it was not checked (#43, #47). The tool descriptions now say this, and that
+  `reply_email` has no `from_address`. Descriptions only: no code path and no result string changed.
+- **Text no longer over-claims after #304／#475** ([#486](https://github.com/PsychQuant/che-apple-mail-mcp/issues/486)).
+  `check_accessibility` (all three outputs), its description and the setup window said "nothing falls back"; a
+  reversed opt-in direct write does take the GUI path, so they now say it is the legacy path that is gone, and
+  that direct write applies only to calls meeting its conditions. The upload-pending result of a direct write no
+  longer asserts when Mail will upload. README, `plugin/CLAUDE.md`, the `draft-update` spec and compose code
+  comments stop describing the removed legacy fallback as current. `NoLegacyFallbackClaimGuardTests` now checks
+  properties instead of fixed phrases: runtime text must scope "no fallback" to the legacy path and qualify
+  direct write, and a source line mentioning the legacy compose fallback must cite #304. Six compose error
+  messages that reach the caller verbatim (the reply/forward focus guard, the compose-window checks) said
+  "falling back" or "(safe fallback)" while the call actually fails; they now say nothing was sent or that
+  the flow stopped before the next keystroke. A test scans every string literal in the two compose builders and,
+  in other files, the first quoted segment of each AppleScript error literal (Swift-side text elsewhere is not
+  scanned); it pins its three patterns against known inputs and fails if either scan reads nothing.
+
+- **The first AppleScript-backed call in a fresh server no longer waits out the 45-second deadline**
+  ([#471](https://github.com/PsychQuant/che-apple-mail-mcp/issues/471)). `runScript` and `runScriptAsList`
+  run NSAppleScript on a detached thread; in a new process, the thread that first initialized the
+  AppleScript component never received its Apple Event replies. The first `list_accounts` took 45–75 s
+  (and fell back to the SQLite listing), and the first `create_draft` ~39 s instead of ~8 s. A standalone
+  reproduction pinned it to where the component is first initialized: a first background call got no
+  reply within 100 s, while running `return 1` once on the main thread made every later background call
+  return in ~0.24 s. Both paths now prime the component on the main thread first (`AppleScriptPrimer`,
+  once per process, no Apple Event, no TCC grant). Measured with the fix: the first `list_accounts` in a
+  fresh server takes 0.43–0.44 s and returns all 8 accounts with their addresses.
+
+## [3.2.0] - 2026-10-04
+
+### Added
+
+- **`get_mail_log_events` — read Mail's own unified log to find where an event chain stops**
+  ([#465](https://github.com/PsychQuant/che-apple-mail-mcp/issues/465)). Read-only; touches no Mail data and needs no
+  Automation or Accessibility. `detail: "brief"` (default) returns, per event, the time (millisecond resolution,
+  truncated), `subsystem`, `category`, the **static format template** as `event`, integer arguments only, an activity
+  id, and an account letter (`A`, `B`, …) for `[account - mailbox]` lines whose template puts that bracket at the start —
+  connection-level lines, the upload receipt included, get none, so one account is not shown as several. It carries no
+  account names, subjects, recipients or Message-IDs as long as the format template is a compile-time string, which is
+  what Mail's own templates are. Integers (at most 20 digits) are read only where a number placed inside an account or
+  mailbox name cannot be mistaken for one (the text after the last placeholder is matched from the end of the message),
+  and the matcher's work per message is bounded; a template that itself looks like an address or UUID, or is longer
+  than 1,024 bytes, is withheld as `<template withheld>` (a heuristic backstop, not a guarantee); and `contains` is
+  refused in this mode because a substring filter on brief output would let a caller probe for exactly those. `detail: "detailed"` adds the raw message (cut at 8,192 bytes of UTF-8 at a safe point — next to
+  whitespace, before `<` or after `>` — so no identifier is split, with `message_truncated`; a single unbroken token
+  longer than that comes back as an empty `message`; every field is capped in
+  bytes, so one event always fits the response), process and thread, an optional best-effort `redact_identifiers` (emails, UUIDs, Message-IDs;
+  off by default, applied to the returned part only, so numbers count only returned identifiers; when it is on,
+  `contains` matches the masked text) and a `contains` filter that sees exactly the returned part (masks written without numbers there); it **contains account identifiers and received-mail content** — the response
+  and the tool description say not to paste it into public issues and to treat it as data, not instructions. Window:
+  `last_minutes` (default 10), `since`/`until`, or `around` ± `radius_seconds`, at most 60 minutes; times must carry an
+  explicit UTC offset and must name a real calendar date. Results are earliest-first, at most `limit` per page. The
+  paging cursor is a position: `next_start` plus `next_offset`, the number of events at that millisecond already
+  returned — pass them back as `since` and `offset` with the same `until`, and every event comes back exactly once as long as the
+  log delivers events in time order (0 inversions in 165,748 events measured; an inversion is reported in `notice`). A
+  time alone cannot point inside the up to 169 events that share one millisecond of one category in the real log, so
+  each time-only rule tried during review either stalled or returned the same page again. After a read cap or deadline
+  stop the cursor is the scan frontier, so a filtered search can be continued; events delivered out of time order are
+  re-sorted and reported. Responses are capped at 64 KiB — a byte cap, roughly 15,000 to 22,000 tokens of ASCII JSON
+  (Claude Code warns above 10,000 tokens of MCP output and saves results above 25,000 to a file, which CJK-heavy
+  detailed output can reach). `status` is `ok`, `no_events_in_window` or `unavailable` (`spawn_failed`,
+  `nonzero_exit`, `unrecognized_output` when the log format has changed, `deadline_exceeded` /
+  `scan_cap_exceeded` when the reader stopped before getting past the cursor); **an empty
+  result never means the action did not happen** (the unified log is retained for a limited time and Mail may not have
+  been running). The one event a template cannot name — the IMAP upload receipt — is recognized only as the response
+  code Mail actually logs, `[APPENDUID (n, n)]` with the numbers on separate lines, directly after the line's own `Read: <tag>
+  OK` (the one following Mail's connection header), with a digits-and-dots tag and nothing after the code — the receipt
+  is the whole chunk Mail read, as all 27 receipts in 40 hours of real log were; neither the RFC wire form, nor a subject
+  that quotes the whole code in a FETCH response, nor a Write line or a split FETCH literal that quotes it counts. In
+  brief mode a receipt cannot be tied to an account (connection lines get no letter, and its activity id is usually 0). It is
+  returned as `kind: "known"`, `event: "imap.append_uid_received"` with no content. The log is read by spawning
+  `/usr/bin/log` (absolute path, argument array, closed stdin, line-by-line, 64 MiB read cap, 30 s deadline enforced by
+  the read loop itself, child always terminated and reaped, window converted with the current time zone). **Verified
+  only on macOS 27.2 / Mail 16.0 with an admin-group user; not yet verified when launched from the Claude Desktop `.mcpb`
+  extension or as a non-admin user.** The log format is private to Apple and unversioned; lines that do not match their
+  template degrade to `kind: "unstructured"`. Brief mode has no event-name filter yet
+  ([#466](https://github.com/PsychQuant/che-apple-mail-mcp/issues/466)). Verified with a 6-reviewer cross-model
+  ensemble; round 1 found six blocking defects, all fixed here.
+
+### Fixed
 
 - **Exited osascript children no longer leave a false unreaped count**
   ([#417](https://github.com/PsychQuant/che-apple-mail-mcp/issues/417)).
@@ -235,6 +486,7 @@ Removing the legacy path costs two things that have **no replacement**:
   and send the draft yourself.
 
 ### Fixed
+
 - Attachments added via `create_draft` / `compose_email` landed at the **start**
   of the body instead of the end
   ([#341](https://github.com/PsychQuant/che-apple-mail-mcp/issues/341),
@@ -507,7 +759,7 @@ Removing the legacy path costs two things that have **no replacement**:
 ### Added
 - **The server can tell you when it is running a stale binary** ([#303](https://github.com/PsychQuant/che-apple-mail-mcp/issues/303)). A long-lived Claude Code window keeps its MCP server process alive across a binary update — the wrapper checks the version only at spawn, then `exec`s itself away, and the `session-start.sh` staleness kill fires only on `SessionStart` — so a window left open across an update keeps serving a stale in-memory image with no external re-check. (The *hang* that used to follow is already prevented by #297; what was missing is knowing you are stale at all.) `preflightAutomation()`, the choke point every AppleScript-backed tool passes through, now compares the compiled `AppVersion.current` against the version sidecar the install wrapper writes next to the running executable, and emits a one-line warning naming both versions and advising a restart. It warns **once**, but keeps checking until it has something to say — a gate consumed on the first (necessarily no-drift) check would never fire again. It **never throws and never refuses** a tool call, and **fails open** on every ambiguous input: no sidecar, unparseable version, or an on-disk version not strictly newer all stay silent, because a spurious restart nag is worse than the staleness it would report. The sidecar read is bounded at the syscall (`O_NOFOLLOW | O_NONBLOCK`, `fstat` requiring a regular file, and a byte cap that rejects rather than truncates an oversized file), because this point runs *outside* #297's timeout guard on the shared actor. The warning is written with the throwing `write(contentsOf:)` and the error swallowed: the non-throwing `FileHandle.standardError.write` raises an uncatchable ObjC exception on a bad descriptor, so a host launching the server with stderr *closed* turned this *advisory* nudge into a `SIGABRT` — an advisory check must never be able to kill the process (the same lesson #301 learned on the osascript stdin path). Boundary, as it stands after [#320](https://github.com/PsychQuant/che-apple-mail-mcp/issues/320) (verify round 6): round 5 recorded this as covering the descriptor-error family (closed / read-only fd 2) but **not** `SIGPIPE`, because a broken-pipe stderr then killed the process in the kernel before `write()` returned. #320 shipped the process-scope fix in v2.26.0 — `main.swift` installs `signal(SIGPIPE, SIG_IGN)` before any transport starts — so a broken pipe now surfaces as an `EPIPE` *error* that this writer catches like any other. Both families are survivable here. That fix is also what makes a *silently failed* warning possible at all, so the one-shot gate is consumed by a **delivered** warning rather than a decided one: `emitDiagnostic` reports whether the line reached fd 2, and a failed write leaves the gate armed for the next preflight (a transient `EPIPE`/`ENOSPC` must not swallow the only warning the process will ever emit).
 
-  **Scope, stated plainly**: this covers installs whose wrapper writes the sidecar (the Claude Code plugin path). A Claude Desktop `.mcpb` install has **no** sidecar next to its executable, so the check finds nothing and stays silent there — the feature is inert for those users, not broken, and closing that gap is tracked separately in [#312](https://github.com/PsychQuant/che-apple-mail-mcp/issues/312). The warning goes to **stderr**, which lands in the MCP server log (`~/Library/Logs/Claude/mcp-server-*.log`) rather than in the Claude UI: treat it as a **diagnostic-log** signal for someone investigating, not a user-facing prompt. Note also that if a server is already unreachable, no tool call arrives and the check never runs — this reports staleness, it does not rescue a dead connection.
+  **Historical scope at this release** (newly packaged bundles gain a sidecar in [#312](https://github.com/PsychQuant/che-apple-mail-mcp/issues/312)): this covers installs whose wrapper writes the sidecar (the Claude Code plugin path). A Claude Desktop `.mcpb` install has **no** sidecar next to its executable, so the check finds nothing and stays silent there — the feature is inert for those users, not broken, and closing that gap is tracked separately in [#312](https://github.com/PsychQuant/che-apple-mail-mcp/issues/312). The warning goes to **stderr**, which lands in the MCP server log (`~/Library/Logs/Claude/mcp-server-*.log`) rather than in the Claude UI: treat it as a **diagnostic-log** signal for someone investigating, not a user-facing prompt. Note also that if a server is already unreachable, no tool call arrives and the check never runs — this reports staleness, it does not rescue a dead connection.
 
 ### Fixed
 - **The test suite no longer drives the user's real Mail.app — and can no longer abort while blaming an innocent test** ([#362](https://github.com/PsychQuant/che-apple-mail-mcp/issues/362)). Every ordinary `swift test` was executing **7 real AppleScript calls against live Mail**. `MailAppIntegrationTests.setUp` throws `XCTSkip` unless `MAIL_APP_INTEGRATION_TESTS` is set, but XCTest runs `tearDown` **even for a skipped test**, and that teardown called `cleanupIntegrationDrafts()` unconditionally. Cost: ~135 s of wall clock per run (165 s → 30 s once fixed), plus a genuinely dangerous failure mode — `runGuarded` abandons its thread on timeout (#297/#301: an AppleScript call cannot be cancelled), so a live Apple Event kept pumping AppleScript's nested event loop after the test ended, XCTest's run-loop observer fired from inside that pump on a thread it never expected, asserted `Run loop nesting count is negative`, and **aborted the whole process**. Because XCTest attributes the wait and the abort to whatever is running at the time, three runs produced three different victims — including a pure-function test on an empty array credited with 333 seconds. Diagnosed from the `SIGABRT` crash report's stack (`UASRemoteSend` → `GetNextEventMatchingMask` → `__CFRunLoopDoObservers` → `XCTestCase performTest:`), not from the symptom.

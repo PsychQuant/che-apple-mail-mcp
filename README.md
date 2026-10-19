@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**The most comprehensive Apple Mail MCP server** - 53 tools with SQLite-powered millisecond search across 250K+ emails.
+**The most comprehensive Apple Mail MCP server** - 54 tools with SQLite-powered millisecond search across 250K+ emails.
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +15,7 @@
 
 | Feature | Other MCPs | che-apple-mail-mcp |
 |---------|------------|-------------------|
-| Total Tools | ~20 | **53** |
+| Total Tools | ~20 | **54** |
 | Language | Python | **Swift (Native)** |
 | Search Speed | Seconds (AppleScript) | **Milliseconds (SQLite)** |
 | Search Fields | Subject/Sender | **Subject/Sender/Recipient/Date** |
@@ -61,7 +61,7 @@ you these are missing (#353):
 
 | Shipped by the plugin | Present with MCP-only |
 |---|---|
-| All 53 MCP tools | ✅ yes |
+| All 54 MCP tools | ✅ yes |
 | `/archive-mail` + `-migrate` / `-rebuild-threads` / `-repair-synthetic-ids` / `-view` | ❌ the archiving SOP does not exist |
 | `rules/compose-wrapper-free.md` — what the cite-block was, and what a refused compose call means | ⚠️ background: since [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304) the wrapper is structurally impossible, so this rule now explains the six refusal reasons and their recipes rather than guarding against a silent fallback |
 | `rules/confirmation-triggers.md`, `rules/false-positive-detection.md` | ❌ no confirmation discipline on destructive operations |
@@ -129,7 +129,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## All 53 Tools
+## All 54 Tools
 
 <details>
 <summary><b>Accounts (2)</b></summary>
@@ -219,7 +219,7 @@ reply_email(
 | Tool | Description |
 |------|-------------|
 | `list_drafts` | List draft emails — each entry carries `subject` + numeric `id` ([#276](https://github.com/PsychQuant/che-apple-mail-mcp/issues/276), additive; feeds `update_draft.draft_id` / `delete_email.id`) |
-| `create_draft` | Create a draft (supports attachments; optional `from_address` for multi-account sender selection — see [#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131), clean path supported via the verified From popup, [#219](https://github.com/PsychQuant/che-apple-mail-mcp/issues/219)). Bodies always come from Mail's own editor — see [#175](https://github.com/PsychQuant/che-apple-mail-mcp/issues/175) / `check_accessibility`; a call that cannot run cleanly FAILS with a named reason and creates nothing ([#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)). Display-name recipients (`Name <addr>`) in `to` / `cc` / `bcc` are filled through the compose window's AX-addressed fields with a token read-back before the save; a hidden Bcc field is revealed and left visible (`bcc_field_revealed: true`); cc/bcc addresses are re-read after the save (`recipients_verified: true|false` + `recipients_diff`, draft always kept) — [#277](https://github.com/PsychQuant/che-apple-mail-mcp/issues/277) / [#404](https://github.com/PsychQuant/che-apple-mail-mcp/issues/404) |
+| `create_draft` | Create a draft (supports attachments; optional `from_address` for multi-account sender selection — see [#131](https://github.com/PsychQuant/che-apple-mail-mcp/issues/131), clean path supported via the verified From popup, [#219](https://github.com/PsychQuant/che-apple-mail-mcp/issues/219)). Bodies come from Mail's own editor — see [#175](https://github.com/PsychQuant/che-apple-mail-mcp/issues/175) / `check_accessibility` — except the opt-in direct write (`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, [#472](https://github.com/PsychQuant/che-apple-mail-mcp/issues/472)), described under Accessibility below; a call that cannot run cleanly FAILS with a named reason and creates nothing ([#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)). Display-name recipients (`Name <addr>`) in `to` / `cc` / `bcc` are filled through the compose window's AX-addressed fields with a token read-back before the save; a hidden Bcc field is revealed and left visible (`bcc_field_revealed: true`); cc/bcc addresses are re-read after the save (`recipients_verified: true|false` + `recipients_diff`, draft always kept) — [#277](https://github.com/PsychQuant/che-apple-mail-mcp/issues/277) / [#404](https://github.com/PsychQuant/che-apple-mail-mcp/issues/404) |
 | `update_draft` | Replace an existing draft (upsert, [#276](https://github.com/PsychQuant/che-apple-mail-mcp/issues/276)): locate by `draft_id` or exact `subject_match` → create replacement (inherits `create_draft` eligibility + disclosure) → delete old. Deliberately create-THEN-delete with a post-create receipt (failure always leans toward keeping drafts — worst case both MAY exist, never neither); 0 or >1 matches always refuse (candidates listed). Replacement gets a NEW id. Display-name `to` / `cc` / `bcc` supported as on `create_draft` ([#404](https://github.com/PsychQuant/che-apple-mail-mcp/issues/404)) |
 
 </details>
@@ -310,13 +310,14 @@ reply_email(
 </details>
 
 <details>
-<summary><b>Diagnostics (3)</b></summary>
+<summary><b>Diagnostics (4)</b></summary>
 
 | Tool | Description |
 |------|-------------|
 | `check_fda` | Check Full Disk Access status (SQLite fast-path availability) |
-| `check_accessibility` | Check Accessibility permission (the compose/reply GUI paths; without it those tools refuse) |
+| `check_accessibility` | Check Accessibility permission (the compose/reply GUI paths; without it those tools refuse — except the opt-in direct-write `create_draft` path, which needs Full Disk Access instead) |
 | `check_automation` | Check Automation permission (Apple Events to Mail) — non-prompting probe, four states with remediation ([#293](https://github.com/PsychQuant/che-apple-mail-mcp/issues/293)); the binary holds its OWN grant, osascript working ≠ binary authorized ([#288](https://github.com/PsychQuant/che-apple-mail-mcp/issues/288)) |
+| `get_mail_log_events` | Read Mail's own unified log to find where an event chain stops (e.g. draft saved → queued → engine notified → IMAP `APPENDUID` receipt) — read-only ([#465](https://github.com/PsychQuant/che-apple-mail-mcp/issues/465)). `detail=brief` (default) returns only the static event template, integer arguments and an account letter for `[account - mailbox]` lines — no account names, subjects or Message-IDs, as long as the template is a compile-time string (Mail's own are); `detail=detailed` adds the raw message, which **contains account identifiers and received-mail content: do not paste it into public issues**. Window ≤ 60 min, times must carry a UTC offset; page with `since=next_start`, `offset=next_offset` and the same `until`. No event-name filter yet ([#466](https://github.com/PsychQuant/che-apple-mail-mcp/issues/466)). An empty result never means the action did not happen. Verified on macOS 27.2 / Mail 16.0 only; needs an admin-group user |
 
 </details>
 
@@ -343,6 +344,26 @@ Both tools return an **envelope object** `{ results, returned, limit, truncated 
 > registers the MCP server alone, which is a strictly smaller install (see
 > [Plugin vs MCP-only](#plugin-vs-mcp-only) for what is missing, since nothing
 > at runtime will tell you).
+
+### Claude Desktop bundle version metadata
+
+New `.mcpb` bundles built by `scripts/package-mcpb.sh` include
+`server/.CheAppleMailMCP.version` beside the executable (#312). The packager
+queries the copied binary's `--version`, requires it to match the manifest,
+and writes the sidecar before zipping. A failed, malformed or timed-out query
+refuses the package; the running server does not create this file on first use.
+Both the development and signed-release paths use this shared packager.
+
+This enables the existing staleness diagnostic when a newer bundle replaces
+files at the running executable's location while an older image remains alive.
+The warning goes to the MCP server's stderr log and asks you to restart the
+host. It does not check GitHub for new releases, update an untouched old install,
+or detect a new bundle installed in a different directory. Desktop's update/
+restart lifecycle has not been verified here; matching versions remain silent.
+Older bundles without the sidecar require an update to obtain it.
+
+Use `make release-signed VERSION=vX.Y.Z` for distribution.
+`scripts/build-mcpb.sh` remains an explicitly unsigned development build.
 
 ### Requirements
 
@@ -420,7 +441,9 @@ macOS grants Full Disk Access to the **responsible process** — the app that *l
 
 None of these can remove the single manual toggle (Apple puts FDA in the manual-only bucket alongside Accessibility / Screen Recording), but they make "what do I do?" obvious and give live feedback the instant you flip it on.
 
-**Accessibility (compose, #175/#304)** — a *separate, optional* grant from Full Disk Access. Mail.app wraps any AppleScript-injected outgoing-message body in `<blockquote type="cite">`, which some mobile clients render as a quotation of your own text — and which the sender cannot see locally, because the wrapper's inline style has no border. Since [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304) **the code that produces it no longer exists**: every composing tool takes its body from Mail's own editor — a `mailto:` hand-off for `compose_email` / `create_draft`, the native reply/forward verb plus paste for `reply_email` / `forward_email` — and drives save/send/attach with keyboard shortcuts, which needs **Accessibility** (System Settings → Privacy & Security → Accessibility), granted to the same responsible process as FDA (your terminal / Claude Desktop). The **`check_accessibility` MCP tool** and the `--setup` window's **Accessibility** row report the status. **Without it these tools now FAIL rather than fall back** — there is no second path to fall back to, so a call that cannot run cleanly returns a named error and creates nothing. The error points at `open_mailto`, which needs no TCC grant at all (it cannot carry attachments; you save or send the window yourself). Exactly six conditions refuse a call: a non-`plain` `format`; an empty subject; Accessibility not granted; a `from_address` that is not a bare addr-spec; an attachment path containing non-ASCII characters ([#220](https://github.com/PsychQuant/che-apple-mail-mcp/issues/220)); and a recipient carrying a display name that this path cannot fill (cc/bcc always; `to` on a send — a draft's `to` display name is filled through the GUI, [#277](https://github.com/PsychQuant/che-apple-mail-mcp/issues/277)). For a clean body from a **non-default account**, pass `from_address`: the GUI selects it in Mail's From popup and reads the selection back, aborting rather than risk the wrong sender ([#219](https://github.com/PsychQuant/che-apple-mail-mcp/issues/219)). **Removed with the legacy path**: `format: "markdown"` / `"html"` — no path shipped today delivers rich text without the body assignment that was deleted. That is what exists, not a proof of impossibility ([#310](https://github.com/PsychQuant/che-apple-mail-mcp/issues/310)): the paste path (#218) is a second wrapper-free route and `NSPasteboard` can carry rich flavors, but the MIME it produces is unverified — [#306](https://github.com/PsychQuant/che-apple-mail-mcp/issues/306) settles it; [#308](https://github.com/PsychQuant/che-apple-mail-mcp/issues/308) / [#309](https://github.com/PsychQuant/che-apple-mail-mcp/issues/309) are alternatives, the `require_wrapper_free` and `sanitize_links` parameters, and the `CHE_MAIL_DISABLE_MAILTO_COMPOSE` / `CHE_MAIL_DISABLE_PASTE_REPLY` escape hatches. Two capabilities go with them, stated plainly: composing **without a visible window** (the hatches' original purpose) is no longer possible, and `compose_email` can no longer **send** to `Name <addr>` — use `create_draft` and send the draft yourself.
+**Accessibility (compose, #175/#304)** — a grant separate from Full Disk Access, needed by the GUI compose paths. Mail.app wraps any AppleScript-injected outgoing-message body in `<blockquote type="cite">`, which some mobile clients render as a quotation of your own text — and which the sender cannot see locally, because the wrapper's inline style has no border. Since [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304) **the code that produces it no longer exists**: every composing tool takes its body from Mail's own editor — a `mailto:` hand-off for `compose_email` / `create_draft`, the native reply/forward verb plus paste for `reply_email` / `forward_email` — and drives save/send/attach with keyboard shortcuts, which needs **Accessibility** (System Settings → Privacy & Security → Accessibility), granted to the same responsible process as FDA (your terminal / Claude Desktop). The **`check_accessibility` MCP tool** and the `--setup` window's **Accessibility** row report the status. **Without it these tools now FAIL rather than fall back** (`forward_email` without a body writes nothing and needs no grant) — the legacy path they used to fall back to is gone, so a call that cannot run cleanly returns a named error and creates nothing. The error points at `open_mailto`, which needs no TCC grant at all (it cannot carry attachments; you save or send the window yourself). Exactly six conditions refuse a call: a non-`plain` `format`; an empty subject; Accessibility not granted; a `from_address` that is not a bare addr-spec; an attachment path containing non-ASCII characters ([#220](https://github.com/PsychQuant/che-apple-mail-mcp/issues/220)); and a recipient carrying a display name that this path cannot fill (cc/bcc always; `to` on a send — a draft's `to` display name is filled through the GUI, [#277](https://github.com/PsychQuant/che-apple-mail-mcp/issues/277)). For a clean body from a **non-default account**, pass `from_address`: the GUI selects it in Mail's From popup and reads the selection back, aborting rather than risk the wrong sender ([#219](https://github.com/PsychQuant/che-apple-mail-mcp/issues/219)). **Removed with the legacy path**: `format: "markdown"` / `"html"` — no path shipped today delivers rich text without the body assignment that was deleted. That is what exists, not a proof of impossibility ([#310](https://github.com/PsychQuant/che-apple-mail-mcp/issues/310)): the paste path (#218) is a second wrapper-free route and `NSPasteboard` can carry rich flavors, but the MIME it produces is unverified — [#306](https://github.com/PsychQuant/che-apple-mail-mcp/issues/306) settles it; [#308](https://github.com/PsychQuant/che-apple-mail-mcp/issues/308) / [#309](https://github.com/PsychQuant/che-apple-mail-mcp/issues/309) are alternatives, the `require_wrapper_free` and `sanitize_links` parameters, and the `CHE_MAIL_DISABLE_MAILTO_COMPOSE` / `CHE_MAIL_DISABLE_PASTE_REPLY` escape hatches. Two capabilities go with them, stated plainly: composing **without a visible window** (the hatches' original purpose) is no longer possible, and `compose_email` can no longer **send** to `Name <addr>` — use `create_draft` and send the draft yourself.
+
+**One exception, opt-in and experimental**: with `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, a `create_draft` call that meets every condition of the direct-write path (the two closed lists in the `message-composition` spec, *Requirement: Direct-write draft path*) writes the draft straight into Mail's store ([#472](https://github.com/PsychQuant/che-apple-mail-mcp/issues/472) / [#475](https://github.com/PsychQuant/che-apple-mail-mcp/issues/475)). That path opens no window and needs no Accessibility; it needs Full Disk Access and Automation. Any call that fails a condition takes the GUI path above, with everything said there.
 
 ### Automation TCC (-1743) and the zero-TCC escape hatch
 
@@ -514,6 +537,8 @@ Most read tools prefer Apple Mail's local Envelope Index (SQLite) and on-disk `.
 | `save_attachment` | ✓ | ✓ on any error |
 | `get_email_metadata` | ✓ | ✓ on any error (since [#71](https://github.com/PsychQuant/che-apple-mail-mcp/issues/71)) |
 
+`get_mail_log_events` is outside this table on purpose: it reads Mail's **unified log** (events: what happened and when) through `/usr/bin/log`, not the Envelope Index (state). It needs no Full Disk Access but does need a user in the admin group, and it is never a source of truth for whether a message exists — see `.claude/rules/r-must-direct-db.md`.
+
 For `save_attachment`'s read path the fast path is **10–100× faster** than AppleScript (per [#12](https://github.com/PsychQuant/che-apple-mail-mcp/issues/12) measurements). Other tools' speedup ratios depend on request shape; in general, large bulk reads see the biggest gain.
 
 The fast path requires:
@@ -601,6 +626,19 @@ Still **not** covered by `account_id` (tracked): `get_account_info` / `list_mail
 **Cross-account move/copy is not supported via `account_id`** ([#129](https://github.com/PsychQuant/che-apple-mail-mcp/issues/129) — from #127 verify). `move_email` and `copy_email` accept a single `account_id`, which is threaded through **both** the source `msgRef` and the destination `mailboxRef`. The architectural choice is correct (movement stays within one account, because Mail.app's AppleScript verb `move msg to <mailboxRef>` requires the destination mailbox to be expressed relative to a single account context). Mail.app's UI permits cross-account move via drag-and-drop, but the AppleScript-routed `move_email` / `copy_email` tools cannot replicate that — calling `move_email` with `account_id` of one account while expecting the destination `to_mailbox` to be resolved against a different account silently picks the wrong account's mailbox of that name (if both accounts happen to have one) or raises `-1719 "Invalid mailbox index"`. If you need a copy of the message's contents under a different account, you can manually rebuild it via `save_attachment` + `compose_email` — note this is **not** a true move/copy: original metadata (Message-ID, received-date, flags, labels) and message identity are not preserved.
 
 ---
+
+## Development tests
+
+Run `make test` on macOS with Xcode Command Line Tools, Python 3 and `jq` on
+PATH. It runs the Swift suite, then the plugin suites; any failure makes the
+command fail. `make test-plugin` runs only the plugin suites for faster iteration.
+
+The plugin runner discovers `plugin/tests/test-*.sh` and `test-*.py`, checks
+that the required hook suite exists, and fails clearly if a dependency is
+missing. Each matching file must be a standalone Bash or Python suite; keep
+shared helpers under a different name or in a subdirectory. Plugin tests use
+isolated fixtures and mock processes/downloads.
+This Makefile wiring does not itself add a GitHub Actions workflow.
 
 ## Technical Details
 
