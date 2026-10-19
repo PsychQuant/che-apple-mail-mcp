@@ -33,9 +33,6 @@ def recipe(name):
 class ArchiveDateRecipesTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # The recipe refuses to load on Python < 3.11 (datetime.fromisoformat differs); say so instead of failing.
-        if sys.version_info < (3, 11):
-            raise unittest.SkipTest("archive date recipe needs Python >= 3.11 (found %s)" % sys.version.split()[0])
         cls.dates = recipe("date")
 
     def test_truncated_rfc822_and_full_rfc822_preserve_calendar_day(self):
@@ -105,7 +102,6 @@ class ArchiveDateRecipesTests(unittest.TestCase):
     def test_full_parser_consumes_tokens_and_validates_years_zones_and_comments(self):
         parse = self.dates["to_ymd"]
         for value in ["Tue, 30 Jun 0000, 19:43:20 +0800",
-                      "Tue, 30 Jun 2026 19:43:20 +2460",
                       "Tue, 00030 Jun 0000 19:43:20 +0800",
                       "Tue, 30 Jun 00000000 19:43:20 +0800",
                       "Tue, 30 Jun 0 19:43:20 +0800"]:
@@ -119,10 +115,12 @@ class ArchiveDateRecipesTests(unittest.TestCase):
         normalize = self.dates["normalize_archive_timestamp"]
         for value in ["Tue, 30 Jun 2026 19:43:20 +0800 garbage",
                       "Tue, 30 Jun 2026 19:43:20 UnknownZone",
-                      "Tue, 30 Jun 2026 19:43:20 +0800 (unterminated"]:
+                      "Tue, 30 Jun 2026 19:43:20 +2460"]:   # overflowing zone: the writer refuses, the day is still the day
             with self.subTest(value=value):
                 self.assertEqual(parse(value), "2026-06-30")
                 self.assertIsNone(normalize(value))
+        # An unterminated comment makes the whole text unreliable: neither reader accepts it.
+        self.assertIsNone(parse("Tue, 30 Jun 2026 19:43:20 +0800 (unterminated"))
 
     def test_timestamp_writer_shares_parser_without_inventing_time_or_zone(self):
         normalize = self.dates["normalize_archive_timestamp"]
@@ -143,9 +141,6 @@ class ArchiveDateRecipesTests(unittest.TestCase):
         # these real Date: shapes drop out of last_updated. The day reader must keep recovering them.
         to_ymd, normalize = self.dates["to_ymd"], self.dates["normalize_archive_timestamp"]
         for value in ["Tue, 30 Jun 2026 19:43:20 +0800 CST",
-                      "Tue, 30 Jun 2026 19:43:20 GMT+0800",
-                      "Tue, 30 Jun 2026 19:43:20 +08:00",
-                      "Tue, 30 Jun 2026 19:43:20 Z",
                       "Tue, 30 Jun 2026 19:43:20 KST",
                       "Tue, 30 Jun 2026 19:43:20 CET",
                       "Tue, 30 Jun 2026 19:43:20 EST5EDT",
@@ -156,10 +151,34 @@ class ArchiveDateRecipesTests(unittest.TestCase):
                 self.assertEqual(to_ymd(value), "2026-06-30")
                 self.assertIsNone(normalize(value), "the writer must not turn an unknown zone into an instant")
 
+    def test_explicit_years_are_never_rewritten_on_the_loose_day_reader(self):
+        to_ymd = self.dates["to_ymd"]
+        self.assertEqual(to_ymd("Tue, 30 Jun 0068 19:43:20 KST"), "0068-06-30")
+        # a number that merely appears in a comment cannot stand in for the real year
+        self.assertEqual(to_ymd("Tue, 30 Jun 0068 19:43:20 KST (2068)"), "0068-06-30")
+        # legacy two-digit years follow the documented pivot on every path
+        for value, day in [("Tue, 30 Jun 26 19:43:20 KST", "2026-06-30"), ("Tue, 30 Jun 68 19:43:20 KST", "2068-06-30"),
+                           ("Tue, 30 Jun 69 19:43:20 KST", "1969-06-30"), ("Tue, 30 Jun 99 19:43:20 CET", "1999-06-30"),
+                           ("Tue Jun 30 19:43:20 CST 26", "2026-06-30")]:
+            with self.subTest(value=value):
+                self.assertEqual(to_ymd(value), day)
+
+    def test_timestamp_writer_accepts_every_unambiguous_numeric_zone_and_nothing_else(self):
+        normalize = self.dates["normalize_archive_timestamp"]
+        for value, expected in [("Tue, 30 Jun 2026 19:43:20 +08:00", "2026-06-30T19:43:20+08:00"),
+                                ("Tue, 30 Jun 2026 19:43:20 GMT+0800", "2026-06-30T19:43:20+08:00"),
+                                ("Tue, 30 Jun 2026 19:43:20 Z", "2026-06-30T19:43:20+00:00"),
+                                ("Tue, 30 Jun 2026 19:43:20 -0500", "2026-06-30T19:43:20-05:00")]:
+            with self.subTest(value=value):
+                self.assertEqual(normalize(value), expected)
+        for value in ["Tue, 30 Jun 2026 19:43:20 KST", "Tue, 30 Jun 2026 19:43:20 CET",
+                      "Tue, 30 Jun 2026 19:43:20 EST5EDT", "Tue, 30 Jun 2026 19:43:20 +24:00"]:
+            with self.subTest(value=value):
+                self.assertIsNone(normalize(value))
+
     def test_fallback_never_accepts_a_pivoted_year_or_malformed_iso(self):
         to_ymd = self.dates["to_ymd"]
         for value in ["Tue, 30 Jun 0000 19:43:20 KST", "Tue, 30 Jun 0 19:43:20 KST",
-                      "Tue, 30 Jun 0068 19:43:20 KST",           # parsedate would pivot 0068 -> 2068
                       "2026-06-30T12:00:00+08:60", "2026-06-30T14:30:00+08:00[Asia/Taipei]",
                       "2026-06-30_x", "not a date", ""]:
             with self.subTest(value=value):
@@ -168,8 +187,12 @@ class ArchiveDateRecipesTests(unittest.TestCase):
     def test_iso_hour_24_and_lowercase_z_are_interpreter_independent(self):
         to_ymd, normalize = self.dates["to_ymd"], self.dates["normalize_archive_timestamp"]
         # Python 3.14's fromisoformat rolls T24:00 into the next day; the recipe rejects it explicitly.
-        self.assertIsNone(to_ymd("2026-06-30T24:00:00+08:00"))
-        self.assertIsNone(normalize("2026-06-30T24:00:00+08:00"))
+        for value in ["2026-06-30T24:00:00+08:00", "2026-06-30T2400", "2026-06-30T24", "2026-06-30 24",
+                      "2026-06-30T240000", "2026-06-30T24+08:00", "2026-06-30T12:00:00+08:00\x00",
+                      "2026-06-30T12:00:00+08:60"]:
+            with self.subTest(value=value):
+                self.assertIsNone(to_ymd(value))
+                self.assertIsNone(normalize(value))
         self.assertEqual(to_ymd("2026-06-30T12:00:00z"), "2026-06-30")
         self.assertEqual(normalize("2026-06-30T12:00:00z"), "2026-06-30T12:00:00+00:00")
 

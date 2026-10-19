@@ -1158,7 +1158,7 @@ direction: received
   4. 若結果為空，用 `no-subject`
   > **歷史檔 caveat**：本規則之前的舊版不去 `回覆:`/`回复:` 且區分大小寫；在此之前歸檔的 md 其 thread_key 可能仍帶 `回覆:` 前綴，與新檔的 thread_key 分屬兩 thread。若某中文回覆 thread 出現此分裂，跑 `/archive-mail-rebuild-threads` 以新規則全量重算即可收斂。
 - `in_reply_to`: 若有，來自郵件的 `In-Reply-To` header；若 MCP 未暴露，從 body 的 quote intro 嘗試提取第一個 Message-ID，否則留空
-- `date`: ISO 8601，**保留原始 Date-header 的時區 offset**（如 `…+08:00`；對齊 batch 工具 #244，兩路徑同表示法——若舊版寫 UTC `Z` 而 batch 寫 offset，跨午夜信的檔名日期前綴會差 ±1 天）。**enforcement（mail#275）**：Date header 為 **RFC822 原樣**（`Thu, 25 Jun 2026 09:30:45 +0800 (CST)`，常見於 webmail 系統寄件）時**必須先轉 ISO 再寫入** frontmatter——`normalize_archive_timestamp(raw)`（Step 8.5 共用日期 recipe；回傳 None 時**照原樣寫入原始 Date 字串**、不猜 offset，並在摘要揭露——它不是完整 timestamp，但 `to_ymd` 仍可由它取出日曆日，不影響 `last_updated`）——直接抄原樣會經 Step 6/8.5 流入 index，汙染 max(date) 計算（mail#275 實證案例即此路徑）。**offset 缺失即錯誤（mail#319）**：任何寫入的 `date` 一律**必須帶時區 offset**（`+08:00` / `Z`）——來源給 naive local time 時不得當 UTC 寫入（mail#319 同批 synthetic 檔實測 +08:00 被當 UTC，差 8 小時，汙染 `last_updated = max(date)` 且跨午夜檔名日期差一天）；無法確定 offset 時比照 unparseable 揭露，不靜默猜
+- `date`: ISO 8601，**保留原始 Date-header 的時區 offset**（如 `…+08:00`；對齊 batch 工具 #244，兩路徑同表示法——若舊版寫 UTC `Z` 而 batch 寫 offset，跨午夜信的檔名日期前綴會差 ±1 天）。**enforcement（mail#275）**：Date header 為 **RFC822 原樣**（`Thu, 25 Jun 2026 09:30:45 +0800 (CST)`，常見於 webmail 系統寄件）時**必須先轉 ISO 再寫入** frontmatter——`normalize_archive_timestamp(raw)`（Step 8.5 共用日期 recipe；回傳 None 時**照原樣寫入原始 Date 字串**、不猜 offset，並在摘要揭露——它不是完整 timestamp；多數情況 `to_ymd` 仍可由它取出日曆日而不影響 `last_updated`，取不出時該 entry 會列入 `date_excluded`）——直接抄原樣會經 Step 6/8.5 流入 index，汙染 max(date) 計算（mail#275 實證案例即此路徑）。**offset 缺失即錯誤（mail#319）**：任何寫入的 `date` 一律**必須帶時區 offset**（`+08:00` / `Z`）——來源給 naive local time 時不得當 UTC 寫入（mail#319 同批 synthetic 檔實測 +08:00 被當 UTC，差 8 小時，汙染 `last_updated = max(date)` 且跨午夜檔名日期差一天）；無法確定 offset 時比照 unparseable 揭露，不靜默猜
 - `sender`: 寄件人 email 地址（display name 剝除，**並轉小寫**——對齊 batch 工具的 `bareEmail().lowercased()`，否則 threads.json 的 participant 去重會把 `A@x` 與 `a@x` 當兩人）
 - `direction`: `received` 或 `sent`。**判定規則（mail#316）**：以 sender identity 判定——bare sender（lowercase）∈ 使用者**全帳號** own addresses 聯集（`list_accounts` 各帳號 `email_addresses` 聯集）→ `sent`，否則 `received`。**絕不可由信所在 mailbox 推導**——Gmail All Mail 是雙向超集，mailbox 不攜帶 direction 資訊（mail#316 實測誤標）。此規則與 batch 工具（binary v2.26.0+）的 server-side 判定同義，兩路徑不漂移
 
@@ -1600,19 +1600,13 @@ Thread 覆蓋: 3 threads, 3 complete ✓
    - message_id 已在 Phase 0 set 或 `${INDEX_FILE}` keys → `verified` +1（不重複補寫）。
    - **`message_id` 匹配 `^synthetic:`（mail#319）→ 記入獨立的 `synthetic_placeholder` 清單**（列檔名報告，不 `verified` 不 `repaired` 不補寫 index）——synthetic key 是過去 session 發明的佔位符，不是真 Message-ID；即使內容衍生格式在本 target 內穩定，也無法可靠對齊真 ID 且可能碰撞，不能當合法 key 收進 index。修復走 `/archive-mail-repair-synthetic-ids`。
    - 無 frontmatter / 無 `message_id` / `message_id_missing: true` → 記入 `unparseable` 清單（列檔名報告，不修改該檔）。
-   - **不在** → 孤兒：**就地補寫 index entry**（append-only），`repaired` +1。補寫的 entry **必須符合 Step 6 的 canonical schema** `{file, date, subject, thread_key}`：`file` = 掃描到的 md 檔名（basename，**必填**）；`date` / `thread_key` 取自 frontmatter——**`date` 若非 ISO 開頭**（如 RFC822 原樣，見 Step 5.1 enforcement）**先以 `normalize_archive_timestamp(raw)`（Step 8.5 共用日期 recipe；回傳 None 時**照原樣寫入原始 Date 字串**、不猜 offset，並在摘要揭露——它不是完整 timestamp，但 `to_ymd` 仍可由它取出日曆日，不影響 `last_updated`） 正規化再寫入 entry**（parse 失敗比照揭露紀律列於摘要、寫原樣不阻斷；mail#275——孤兒補寫是歷史 RFC822 汙染收斂進 ISO 的機會點）；`subject` 從 md 本文的 `Subject:` 行抽取（抽不到 → 填空字串並在摘要揭露）——**此 heuristic 僅 Phase 1 用**（Phase 0 有 preview 的乾淨 subject）。**若 frontmatter 有 `message_id` 但缺 `date` 或 `thread_key`**（罕見——archive-mail 寫的 frontmatter 一律帶這兩欄；只可能是外部/損毀 md）：比照 subject-miss 的「揭露而非靜默」紀律（惟 date/thread_key **無** subject 那種 body-line fallback，缺就是缺），缺的欄位填空字串並在摘要揭露該檔欄位不全，**不得靜默寫 null**。frontmatter 的 `sender` / `direction` **不寫入** entry（非 email_index 欄位）。摘要須揭露 repaired 列為重建而來。
-2. Phase 0 + Phase 1 都補完後，對 **index 全部 entry**（不只本輪新增或頂層 md）執行下列 canonical 日期 recipe。`last_updated` 是所有可還原 entry 的最新 **calendar day**，不是今天。支援合法 ISO 日期／日期時間、完整 RFC822（保留其原時區的日期），以及 `Tue, 30 Jun 2026` 這類日期-only RFC822；完整解析 ISO、RFC-style（日 月 年 時間 時區，允許年份尾逗號／連字號）、asctime（月 日 時間 年）與日期-only 形式；英文縮寫／完整月份、平衡註解可接受；寫入用的 `normalize_archive_timestamp` 對其餘尾隨 token 與未知時區一律拒絕。**只取日曆日的 `to_ymd` 在嚴格 grammar 失敗後，對非 ISO 開頭的字串退回 `email.utils.parsedate_to_datetime`**（#275 既有行為：`+08:00`、`Z`、`KST`、`CET`、`EST5EDT`、`GMT+0800`、12 小時制、asctime 等；時區記號不影響是哪一天）；ISO 開頭但不合法（含溢位 offset、小時 24）一律回 None，不退回寬鬆解析；退回路徑解析出的年份必須**字面出現在原字串**，否則（`parsedate` 會把 `0000`、`0068` 悄悄 pivot 成 2000、2068）視為被改寫而拒絕。明寫的三／四位數年份保留原值（零年拒絕）；舊式兩位數年份沿用既有 email parser 的規則（00–68 → 2000–2068、69–99 → 1969–1999）。非法日期、空值、非字串或未知格式保留為 `date_excluded`，不得靜默濾掉。
+   - **不在** → 孤兒：**就地補寫 index entry**（append-only），`repaired` +1。補寫的 entry **必須符合 Step 6 的 canonical schema** `{file, date, subject, thread_key}`：`file` = 掃描到的 md 檔名（basename，**必填**）；`date` / `thread_key` 取自 frontmatter——**`date` 若非 ISO 開頭**（如 RFC822 原樣，見 Step 5.1 enforcement）**先以 `normalize_archive_timestamp(raw)`（Step 8.5 共用日期 recipe；回傳 None 時**照原樣寫入原始 Date 字串**、不猜 offset，並在摘要揭露——它不是完整 timestamp；多數情況 `to_ymd` 仍可由它取出日曆日而不影響 `last_updated`，取不出時該 entry 會列入 `date_excluded`） 正規化再寫入 entry**（parse 失敗比照揭露紀律列於摘要、寫原樣不阻斷；mail#275——孤兒補寫是歷史 RFC822 汙染收斂進 ISO 的機會點）；`subject` 從 md 本文的 `Subject:` 行抽取（抽不到 → 填空字串並在摘要揭露）——**此 heuristic 僅 Phase 1 用**（Phase 0 有 preview 的乾淨 subject）。**若 frontmatter 有 `message_id` 但缺 `date` 或 `thread_key`**（罕見——archive-mail 寫的 frontmatter 一律帶這兩欄；只可能是外部/損毀 md）：比照 subject-miss 的「揭露而非靜默」紀律（惟 date/thread_key **無** subject 那種 body-line fallback，缺就是缺），缺的欄位填空字串並在摘要揭露該檔欄位不全，**不得靜默寫 null**。frontmatter 的 `sender` / `direction` **不寫入** entry（非 email_index 欄位）。摘要須揭露 repaired 列為重建而來。
+2. Phase 0 + Phase 1 都補完後，對 **index 全部 entry**（不只本輪新增或頂層 md）執行下列 canonical 日期 recipe。`last_updated` 是所有可還原 entry 的最新 **calendar day**，不是今天。支援合法 ISO 日期／日期時間、完整 RFC822（保留其原時區的日期），以及 `Tue, 30 Jun 2026` 這類日期-only RFC822；完整解析 ISO、RFC-style（日 月 年 時間 時區，允許年份尾逗號／連字號）、asctime（月 日 時間 年）與日期-only 形式；英文縮寫／完整月份、平衡註解可接受；寫入用的 `normalize_archive_timestamp` 對其餘尾隨 token 與未知時區一律拒絕。**只取日曆日的 `to_ymd` 在嚴格 grammar 失敗後，對非 ISO 開頭的字串改用同一套「日 月 年 時間」日期部分的寬鬆讀法**：時間之後允許任何尾隨文字（`KST`、`CET`、`EST5EDT`、`PM`、asctime 的 `CST 2026` 等；時區記號不影響是哪一天），年份規則與嚴格版完全相同（沒有第二個解析器，也不會被 pivot 成別的年份）。ISO 開頭但不合法（含溢位 offset、小時 24、尾端多餘字元）一律回 None，ISO 由明確的 regex grammar 解析，不依賴 Python 版本。明寫的三／四位數年份保留原值（零年拒絕）；舊式兩位數年份沿用既有 email parser 的規則（00–68 → 2000–2068、69–99 → 1969–1999）。非法日期、空值、非字串或未知格式保留為 `date_excluded`，不得靜默濾掉。
 
 <!-- archive-mail-date-recipe:start -->
 ```python
 import re
-import sys
 from datetime import date, datetime, timedelta, timezone
-from email.utils import parsedate_to_datetime
-
-if sys.version_info < (3, 11):
-    # datetime.fromisoformat accepts different ISO forms before 3.11; refuse rather than give a different answer per interpreter.
-    raise RuntimeError("archive date recipe needs Python >= 3.11")
 
 _MONTHS = {}
 for number, name in enumerate(
@@ -1621,17 +1615,26 @@ for number, name in enumerate(
 _WEEKDAY = r"(?:Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)"
 _PREFIX = rf"(?:{_WEEKDAY},?\s*)?"
 _CLOCK = r"(?P<hour>[0-9]{1,2}):(?P<minute>[0-9]{2})(?::(?P<second>[0-9]{2}))?"
-_ZONE = r"(?:\s+(?P<zone>[+-][0-9]{4}|UT|UTC|GMT|EST|EDT|CST|CDT|MST|MDT|PST|PDT))?"
-_RFC_FULL = re.compile(
-    _PREFIX + r"(?P<day>[0-9]{1,2})[\s-]+(?P<month>[A-Za-z]+)[\s-]+(?P<year>[0-9]{2,4}),?\s+"
-    + _CLOCK + _ZONE, re.IGNORECASE)
-_ASCTIME = re.compile(
-    _PREFIX + r"(?P<month>[A-Za-z]+)\s+(?P<day>[0-9]{1,2})\s+" + _CLOCK
-    + r"\s+(?P<year>[0-9]{2,4})" + _ZONE, re.IGNORECASE)
+_ZONE = (r"(?:\s+(?P<zone>[+-][0-9]{2}:?[0-9]{2}|(?:UT|UTC|GMT)[+-][0-9]{4}|Z|UT|UTC|GMT"
+         r"|EST|EDT|CST|CDT|MST|MDT|PST|PDT))?")
+_RFC_HEAD = (_PREFIX + r"(?P<day>[0-9]{1,2})[\s-]+(?P<month>[A-Za-z]+)[\s-]+(?P<year>[0-9]{2,4}),?\s+"
+             + _CLOCK)
+_ASCTIME_HEAD = _PREFIX + r"(?P<month>[A-Za-z]+)\s+(?P<day>[0-9]{1,2})\s+" + _CLOCK
+_RFC_FULL = re.compile(_RFC_HEAD + _ZONE, re.IGNORECASE)
+_ASCTIME = re.compile(_ASCTIME_HEAD + r"\s+(?P<year>[0-9]{2,4})" + _ZONE, re.IGNORECASE)
 _RFC_DATE_ONLY = re.compile(
-    _PREFIX + r"(?P<day>[0-9]{1,2})\s+(?P<month>[A-Za-z]+)\s+(?P<year>[0-9]{4})",
-    re.IGNORECASE)
-_NAMED_ZONES = {"UT": 0, "UTC": 0, "GMT": 0, "EST": -5, "EDT": -4,
+    _PREFIX + r"(?P<day>[0-9]{1,2})\s+(?P<month>[A-Za-z]+)\s+(?P<year>[0-9]{4})", re.IGNORECASE)
+# Calendar-day reader only: whatever follows the clock (a zone name, AM/PM, junk) never changes which day it is.
+_TAIL = r"(?:\s+[^\x00-\x1f]*)?"
+_RFC_LOOSE = re.compile(_RFC_HEAD + _TAIL, re.IGNORECASE)
+_ASCTIME_LOOSE = re.compile(
+    _ASCTIME_HEAD + r"(?:\s+[A-Za-z]{1,5})?\s+(?P<year>[0-9]{2,4})" + _TAIL, re.IGNORECASE)
+_ISO = re.compile(
+    r"(?P<year>[0-9]{4})-(?P<month>[0-9]{2})-(?P<day>[0-9]{2})"
+    r"(?:[Tt ](?P<hour>[0-9]{2})(?::(?P<minute>[0-9]{2})(?::(?P<second>[0-9]{2})"
+    r"(?:[.,](?P<fraction>[0-9]{1,6}))?)?)?"
+    r"(?P<zone>[Zz]|[+-][0-9]{2}(?::?[0-9]{2}(?::?[0-9]{2}(?:[.,][0-9]+)?)?)?)?)?")
+_NAMED_ZONES = {"UT": 0, "UTC": 0, "GMT": 0, "Z": 0, "EST": -5, "EDT": -4,
                 "CST": -6, "CDT": -5, "MST": -7, "MDT": -6, "PST": -8, "PDT": -7}
 
 
@@ -1657,26 +1660,59 @@ def _without_date_comments(value):
     return None if depth else " ".join("".join(output).split())
 
 
+def _calendar_date(fields):
+    year_text = fields["year"]
+    year = int(year_text)
+    # Preserve explicit 3/4-digit years; only legacy 2-digit years pivot.
+    if len(year_text) == 2:
+        year += 2000 if year <= 68 else 1900
+    return date(year, _MONTHS[fields["month"].lower()], int(fields["day"]))
+
+
+def _numeric_offset(zone):
+    """+HH[:MM[:SS[.f]]] / +HHMM / GMT+HHMM -> timedelta; None when a field overflows."""
+    match = re.fullmatch(
+        r"(?:UT|UTC|GMT)?([+-])([0-9]{2})(?::?([0-9]{2}))?(?::?([0-9]{2}))?(?:[.,]([0-9]+))?", zone, re.IGNORECASE)
+    if match is None:
+        return None
+    sign, hours, minutes, seconds, fraction = match.groups()
+    hours, minutes, seconds = int(hours), int(minutes or 0), int(seconds or 0)
+    if hours > 23 or minutes > 59 or seconds > 59:
+        return None
+    delta = timedelta(hours=hours, minutes=minutes, seconds=seconds + float("0." + (fraction or "0")))
+    return -delta if sign == "-" else delta
+
+
+def _parse_iso(match):
+    if match is None:
+        return None
+    fields = match.groupdict()
+    try:
+        day = date(int(fields["year"]), int(fields["month"]), int(fields["day"]))
+        if fields["hour"] is None:
+            return day
+        hour, minute, second = int(fields["hour"]), int(fields["minute"] or 0), int(fields["second"] or 0)
+        if hour > 23 or minute > 59 or second > 59:  # hour 24 is never rolled into the next day
+            return None
+        tz = None
+        if fields["zone"]:
+            delta = timedelta(0) if fields["zone"] in "Zz" else _numeric_offset(fields["zone"])
+            if delta is None:
+                return None
+            tz = timezone(delta)
+        microsecond = int((fields["fraction"] or "").ljust(6, "0") or 0)
+        return datetime(day.year, day.month, day.day, hour, minute, second, microsecond, tzinfo=tz)
+    except (ValueError, OverflowError):
+        return None
+
+
 def parse_archive_date(value):
     """Parse explicit ISO, RFC-style or asctime forms without dropping tokens."""
     if not isinstance(value, str) or not value.strip():
         return None
     value = value.strip()
-    if re.match(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}(?:$|[Tt ])", value):
-        # fromisoformat normalizes +08:60 into +09:00; reject malformed
-        # source components before delegating the remaining ISO grammar.
-        if re.search(r"[Tt ]24:", value[10:]):
-            return None  # fromisoformat rolls hour 24 into the next day on Python 3.14
-        offset = re.search(r"[+-]([0-9]{2})(?::?([0-9]{2}))?(?::?([0-9]{2}))?(?:[.,][0-9]+)?$", value[10:])
-        if offset:
-            hours, minutes, seconds = (int(part or 0) for part in offset.groups())
-            if hours > 23 or minutes > 59 or seconds > 59:
-                return None
-        try:
-            return (date.fromisoformat(value) if len(value) == 10
-                    else datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value))
-        except ValueError:
-            return None
+    if re.match(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
+        return _parse_iso(_ISO.fullmatch(value))  # ISO-looking but invalid text is malformed, never "unfamiliar"
     value = _without_date_comments(value)
     if value is None:
         return None
@@ -1686,27 +1722,18 @@ def parse_archive_date(value):
         return None
     fields = match.groupdict()
     try:
-        year_text = fields["year"]
-        year = int(year_text)
-        # Preserve explicit 3/4-digit years; only legacy 2-digit years pivot.
-        if len(year_text) == 2:
-            year += 2000 if year <= 68 else 1900
-        month = _MONTHS[fields["month"].lower()]
-        day = int(fields["day"])
+        day = _calendar_date(fields)
         if full is None:
-            return date(year, month, day)
+            return day
         zone = fields.get("zone")
         tz = None
         if zone and zone != "-0000":  # RFC -0000 means unknown local offset.
-            if zone[0] in "+-":
-                hours, minutes = int(zone[1:3]), int(zone[3:5])
-                if hours > 23 or minutes > 59:
-                    return None
-                offset = (hours * 60 + minutes) * (-1 if zone[0] == "-" else 1)
-            else:
-                offset = _NAMED_ZONES[zone.upper()] * 60
-            tz = timezone(timedelta(minutes=offset))
-        return datetime(year, month, day, int(fields["hour"]), int(fields["minute"]),
+            delta = (timedelta(hours=_NAMED_ZONES[zone.upper()]) if zone.upper() in _NAMED_ZONES
+                     else _numeric_offset(zone))
+            if delta is None:
+                return None
+            tz = timezone(delta)
+        return datetime(day.year, day.month, day.day, int(fields["hour"]), int(fields["minute"]),
                         int(fields.get("second") or 0), tzinfo=tz)
     except (KeyError, TypeError, ValueError, OverflowError):
         return None
@@ -1716,19 +1743,19 @@ def to_ymd(value):
     parsed = parse_archive_date(value)
     if parsed is not None:
         return (parsed.date() if isinstance(parsed, datetime) else parsed).isoformat()
-    # Only the calendar day is needed here, and a zone token never changes which day it is,
-    # so a non-ISO header the strict grammar does not know still gets the pre-#364 recovery.
-    # ISO-looking text that failed the strict grammar is malformed (e.g. an overflowing offset), not unfamiliar.
-    if not isinstance(value, str) or re.match(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}", value.strip()):
+    if not isinstance(value, str) or re.match(r"\s*[0-9]{4}-[0-9]{2}-[0-9]{2}", value):
         return None
+    text = _without_date_comments(value.strip())
+    match = None if text is None else (_RFC_LOOSE.fullmatch(text) or _ASCTIME_LOOSE.fullmatch(text))
+    if match is None:
+        return None
+    fields = match.groupdict()
     try:
-        parsed = parsedate_to_datetime(value.strip())
-    except (TypeError, ValueError, IndexError, OverflowError):
+        if int(fields["hour"]) > 23 or int(fields["minute"]) > 59:
+            return None
+        return _calendar_date(fields).isoformat()
+    except (KeyError, ValueError, OverflowError):
         return None
-    # parsedate silently pivots short or zero years (0000 -> 2000, 0068 -> 2068); a pivoted year is a wrong date.
-    if str(parsed.year) not in value:
-        return None
-    return parsed.date().isoformat()
 
 
 def normalize_archive_timestamp(value):
@@ -1758,7 +1785,6 @@ def reconcile_dates(emails):
 ```
 <!-- archive-mail-date-recipe:end -->
 
-   recipe 需要 Python ≥ 3.11（`datetime.fromisoformat` 的 ISO 語法隨版本改變；較舊版本會拒絕合法 offset）：版本不足時 recipe 會拋出 `RuntimeError`，停止並回報 `recipe-unavailable`，不要改用其他解析。
    `normalize_archive_timestamp` 只回傳具已知時區的完整 timestamp；無時間、無時區或 RFC `-0000` 都回 None，不補造 UTC。具名時區只接受明列的 RFC 傳統代碼；例如 CST 沿用 RFC 的 UTC−06:00 語意，不自行猜成其他地區時區。
 
    Step 6 與本 gate 都使用 `date_audit = reconcile_dates(emails)`，以 `date_audit["last_updated"]` 寫入頂層 `last_updated`，並將整份 audit 留至摘要。`date_excluded_count > 0` 必須標 ⚠、列出每筆 message_id／file／原 date／reason；這些欄位是資料，以 JSON serializer 或文字輸出，不插入 shell。全無有效日期時 `last_updated` 寫空字串並明示 `no-valid-dates`（空 index 則說明 `empty-index`）；不可用今天、舊值或檔名前綴冒充 max，也不可據此推進 `last_archived`。
