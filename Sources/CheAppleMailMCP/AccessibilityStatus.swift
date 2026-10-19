@@ -43,21 +43,41 @@ enum AccessibilityStatus {
         case .granted:
             return "Accessibility: GRANTED — GUI scripting (keystrokes, File ▸ Attach, sender popup) is allowed."
         case .denied:
-            return "Accessibility: DENIED — this process can't send keystrokes, so the GUI compose paths are unavailable: compose_email / create_draft / reply_email / forward_email-with-a-body fail with a named reason; there is no fallback to the removed legacy path (#304). open_mailto needs no grant. With CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1, create_draft writes the draft directly, needing Full Disk Access and Automation rather than Accessibility, but only when the call meets the direct-write conditions; any other call takes the GUI path and fails."
+            return "Accessibility: DENIED — this process can't send keystrokes, so GUI-based composing calls (compose_email / create_draft / reply_email / forward_email-with-a-body) are refused before composition starts: they fail with a named reason; there is no fallback to the removed legacy path (#304). Grant Accessibility, or use open_mailto to open a clean compose window without TCC permission. With CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1, create_draft writes the draft directly, needing Full Disk Access and Automation rather than Accessibility, but only when the call meets the direct-write conditions; any other call takes the GUI path and is refused."
         case .unsupported:
             return "Accessibility: UNSUPPORTED — not a macOS environment."
         }
     }
 
-    /// Second line of `check_accessibility` output when the grant is present.
-    static let grantedDetail = "compose_email / create_draft / reply_email / forward_email take their body from Mail's own"
-        + " editor (#175/#304); a call that cannot run cleanly fails with a named reason; there is no fallback"
-        + " to the removed legacy path. With CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1, create_draft writes the draft"
-        + " directly (#472/#475) only when the call meets the direct-write conditions; any other call takes the GUI path. Note: System Events keystrokes also rely on Automation (Apple Events)"
-        + " being allowed — this probe only checks Accessibility (AXIsProcessTrusted)."
-
     /// Caption under the Accessibility row of the setup window.
     static let setupNote = "Lets compose_email / create_draft send through Mail's native path so the body isn't shown as a quote on mobile (#175). Grant it to whatever LAUNCHED this server (terminal / Claude Desktop). Without it, the GUI compose paths fail with a named reason (no fallback to the removed legacy path, #304). The opt-in direct-write create_draft path does not need it, but it applies only when a call meets its conditions."
+
+    /// Pure formatter shared by the tool and its tests; the probe stays at the caller.
+    static func report(for probe: Probe) -> String {
+        switch probe {
+        case .granted:
+            return "✅ " + summary(probe)
+                + "\nEligible compose_email / create_draft calls use the clean compose path."
+                + " Six named preflight refusal reasons cover: non-plain format, empty subject,"
+                + " missing Accessibility, a non-simple from_address, a non-ASCII attachment path,"
+                + " or display-name recipients on a SEND (drafts support names in to/cc/bcc)."
+                + " A preflight refusal returns a named reason before composition starts."
+                + " Other input validation can also fail before GUI steps, including an over-long mailto URL."
+                + " A GUI-step failure returns an error without switching to another body path;"
+                + " it may leave a compose window or draft. A send-stage failure or timeout can"
+                + " leave the send state unknown: check Sent/Outbox before sending again."
+                + " This probe checks Accessibility only; Automation (Apple Events) is separately"
+                + " required for System Events. Alternative: open_mailto needs zero TCC permission,"
+                + " has no attachments, and opens the default mail client; drag files in manually"
+                + " and save or send yourself. With CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1, create_draft"
+                + " writes the draft directly (#472/#475) only when the call meets the direct-write"
+                + " conditions; any other call takes the GUI path."
+        case .denied:
+            return "⚠️ " + summary(probe) + "\n\n" + guidance()
+        case .unsupported:
+            return "ℹ️ " + summary(probe)
+        }
+    }
 
     /// Guidance text naming the candidates to grant (mirrors `FullDiskAccessHelp`).
     static func guidance() -> String {
@@ -71,12 +91,15 @@ enum AccessibilityStatus {
              (macOS can't tell us which one automatically — add whichever applies.)
           3. Re-run check_accessibility to confirm.
 
-        Without it, the GUI compose paths fail with a named reason; there is no
-        fallback to the removed legacy path (#304). open_mailto needs no grant (no
-        attachments). With CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1, create_draft writes
-        directly without Accessibility (it needs Full Disk Access and Automation),
-        but only when the call meets the direct-write conditions.
-        This is separate from Full Disk Access (see check_fda).
+        Without Accessibility, GUI-based composing calls are refused before
+        composition starts. Use open_mailto instead: zero TCC permission,
+        no attachments; drag files in manually and save or send yourself.
+        It opens the system default mail client, which may not be Mail.app.
+        With CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1, create_draft writes directly
+        without Accessibility (it needs Full Disk Access and Automation), but only
+        when the call meets the direct-write conditions.
+        Accessibility is separate from Full Disk Access (check_fda) and
+        Automation (check_automation).
         """
     }
 }

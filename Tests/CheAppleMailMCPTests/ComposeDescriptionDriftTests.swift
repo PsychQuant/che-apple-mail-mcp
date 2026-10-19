@@ -12,6 +12,9 @@ final class ComposeDescriptionDriftTests: XCTestCase {
 
     private static let forbidden = [
         "legacy path",
+        "legacy AppleScript injection",
+        "compose still works",
+        "env hatch off",
         "To-only",
         "TO ONLY",
         "hidden via Header Fields",
@@ -30,6 +33,14 @@ final class ComposeDescriptionDriftTests: XCTestCase {
             dir = dir.deletingLastPathComponent()
         }
         throw XCTSkip("Server.swift not found from \(#filePath)")
+    }
+
+    func testUpdateDraftExplainsAttachmentRefusalDirectly() throws {
+        let tool = try XCTUnwrap(CheAppleMailMCPServer.defineTools().first { $0.name == "update_draft" })
+        let text = try XCTUnwrap(tool.description)
+        XCTAssertTrue(text.localizedCaseInsensitiveContains("non-ASCII"), text)
+        XCTAssertTrue(text.contains("without attachments"), text)
+        XCTAssertTrue(text.contains("drag"), text)
     }
 
     func testNoDescriptionStillDescribesTheRemovedPaths() throws {

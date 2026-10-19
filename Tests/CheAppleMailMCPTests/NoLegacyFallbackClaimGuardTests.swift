@@ -38,8 +38,8 @@ final class NoLegacyFallbackClaimGuardTests: XCTestCase {
         let description = CheAppleMailMCPServer.defineTools()
             .first { $0.name == "check_accessibility" }?.description ?? ""
         return [
-            ("summary(.granted) + grantedDetail",
-             AccessibilityStatus.summary(.granted) + "\n" + AccessibilityStatus.grantedDetail),
+            ("report(for: .granted)", AccessibilityStatus.report(for: .granted)),
+            ("report(for: .denied)", AccessibilityStatus.report(for: .denied)),
             ("summary(.denied)", AccessibilityStatus.summary(.denied)),
             ("guidance()", AccessibilityStatus.guidance()),
             ("setupNote", AccessibilityStatus.setupNote),
