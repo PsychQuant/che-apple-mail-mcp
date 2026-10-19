@@ -15,6 +15,7 @@ This MCP server accesses the following data on your Mac:
 - **Signatures**: Read email signatures
 - **Accounts**: Read mail account information
 - **VIP Senders**: Read VIP sender list
+- **Mail's unified log** (`get_mail_log_events`, read-only): recent entries that Mail itself wrote to the macOS unified log, read with `/usr/bin/log`. In the default `brief` detail only static event templates, integers and per-response account letters are returned; `detailed` returns the raw log lines, which contain account and mailbox names, addresses and fragments of received mail. Nothing is stored or transmitted; the result goes only to the MCP client that asked for it.
 
 ## Data Storage
 
