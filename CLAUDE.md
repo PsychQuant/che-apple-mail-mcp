@@ -26,6 +26,26 @@ Changes can be parked（暫存）— temporarily moved out of `openspec/changes/
 
 <!-- SPECTRA:END -->
 
+## Testing: 測試郵件的收件人只能是維護者自己（CRITICAL，安全規則）
+
+**任何會產生、儲存或寄出郵件的測試，To／Cc／Bcc 只能是維護者自己的位址**（`list_accounts` 可查）。適用於 live 測試、手動 smoke、診斷重現、agent 自動測試，人與 agent 都一樣。單元測試（不碰 Mail）不受影響。
+
+禁止：
+
+- 拿**真實往來中的信件**當 `reply_email`／`forward_email`／`redirect_email` 的目標。這三個工具的預設收件人都來自原信，目標選錯，收件人就是真人。
+- 在有第三方的信上用 `reply_all`。
+- 用任何真實第三方的位址當測試收件人。
+
+要測 reply／forward／redirect 這類工具，這樣做：
+
+1. 先用 `compose_email` 寄一封**只寄給自己**的測試信（主旨標明「測試」）。
+2. 在收件匣找到那封信，對它操作。
+3. 動手前先說出收件人與目標信件，並確認目標信件的寄件人與收件人都只有維護者自己。
+4. 草稿建出來後，先讀它的 `To`／`Cc`，確認只有自己，再做其他事。
+5. 測完刪除測試草稿與測試信，並回報刪了哪些。
+
+**為什麼這是安全邊界，不是風格規則**：草稿一旦存在，就只差一次按鍵就寄出，所以 `save_as_draft` 不算安全邊界。這個 server 自己記錄的失敗模式也說明「只存草稿」不可靠：#461（成功回報但內文為空）、#242（送出階段失敗時寄送狀態未知，信可能已寄出）。2026-10-15 診斷 #510 時，agent 拿真實往來的信件當 `reply_email(save_as_draft)` 的目標，草稿的預設收件人是真實第三方；沒有寄出，但維護者要求此後一律只寄給自己，並要求寫進本檔（#511）。
+
 ## Release Process
 
 Releases are published with `scripts/release.sh`, which bundles the previously

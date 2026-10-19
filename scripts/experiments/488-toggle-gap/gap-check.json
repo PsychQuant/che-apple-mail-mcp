@@ -1,0 +1,10 @@
+[
+ {
+  "gap": "0.1",
+  "trigger_unread_to_trigger_read_ms": 109
+ },
+ {
+  "gap": "0.5",
+  "trigger_unread_to_trigger_read_ms": 507
+ }
+]
