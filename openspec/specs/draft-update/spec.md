@@ -13,7 +13,7 @@ The system SHALL provide an `update_draft` MCP tool that replaces an existing dr
 #### Scenario: successful upsert
 
 - **WHEN** `update_draft` is called with an `identify` selector matching exactly one existing draft and valid replacement content
-- **THEN** the system SHALL create the replacement draft first, then delete the matched old draft, and return a result reporting `deleted_old: true`, the old draft id, and the create-path result (including any legacy-path disclosure suffix inherited from the create mechanism)
+- **THEN** the system SHALL create the replacement draft first, then delete the matched old draft, and return a result reporting `deleted_old: true`, the old draft id, and the create-path result (including any disclosure suffix inherited from the create mechanism)
 
 #### Scenario: replacement not confirmed — old draft kept
 
