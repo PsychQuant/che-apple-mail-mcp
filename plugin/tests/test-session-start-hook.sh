@@ -202,6 +202,10 @@ case "\${1:-}" in
             echo "\$@" >> "$TEST_DIR/bad-argv.log"
             exit 99
         fi
+        if [ "$fda_exit" = signal ]; then
+            kill -TERM "\$\$"
+            exit 99
+        fi
         exit $fda_exit ;;
     --setup) : > "$TEST_DIR/setup-called"; exit 0 ;;
 esac
@@ -404,6 +408,45 @@ assert "no offer message" "! grep -q 'Full Disk Access' $TEST_DIR/hook.stderr"
 assert "no marker" "[ ! -f $FDA_MARKER ]"
 assert "granted FDA never launches setup" "[ ! -f $TEST_DIR/setup-called ]"
 assert "granted FDA uses the exact quiet probe" "[ ! -f $TEST_DIR/bad-argv.log ]"
+
+# ============================================================
+# #403: Unknown / failed probes must preserve the future denied offer.
+# Use a real signal-terminated mock as well as the four-value contract.
+for probe_status in 2 3 42 signal; do
+    echo "Case 11b: FDA probe $probe_status preserves the offer"
+    reset_state
+    write_plugin_json "2.18.0"
+    write_mock_mcp_binary "2.28.0" "$probe_status"
+    if [ "$probe_status" = signal ]; then
+        # Prove that this mock actually terminates by signal rather than
+        # silently falling through to exit 99 when TERM is inherited ignored.
+        "$TEST_DIR/bin/CheAppleMailMCP" --check-fda --quiet >/dev/null 2>&1
+        MOCK_EXIT=$?
+        assert "signal mock exits with SIGTERM status" "[ $MOCK_EXIT -eq 143 ]"
+    fi
+    run_hook
+    EXIT=$?
+    wait_for_file "$TEST_DIR/setup-called" || true
+    assert "$probe_status: hook still succeeds" "[ $EXIT -eq 0 ]"
+    assert "$probe_status: no false denial message" "! grep -q 'Full Disk Access' $TEST_DIR/hook.stderr"
+    assert "$probe_status: no marker" "[ ! -e $FDA_MARKER ]"
+    assert "$probe_status: setup never launched" "[ ! -f $TEST_DIR/setup-called ]"
+    assert "$probe_status: exact quiet probe was executed" "grep -Fxq -- '--check-fda --quiet' $TEST_DIR/binary-calls.log"
+    assert "$probe_status: valid probe argv" "[ ! -f $TEST_DIR/bad-argv.log ]"
+
+    # Keep the state directory, but clear the launch observation so the next
+    # assertion requires a new setup invocation even if the first step failed.
+    rm -f "$TEST_DIR/setup-called"
+    # Do NOT reset state: noMailData/unknown may turn into denied next session.
+    write_mock_mcp_binary "2.28.0" 1
+    run_hook
+    EXIT=$?
+    wait_for_file "$TEST_DIR/setup-called" || true
+    assert "$probe_status then denied: hook succeeds" "[ $EXIT -eq 0 ]"
+    assert "$probe_status then denied: offer appears" "grep -q 'Full Disk Access is not granted' $TEST_DIR/hook.stderr"
+    assert "$probe_status then denied: marker recorded" "[ -f $FDA_MARKER ]"
+    assert "$probe_status then denied: setup launched" "[ -f $TEST_DIR/setup-called ]"
+done
 
 # ============================================================
 # Case 12 (#394): old binary (< 2.28.0) -> version-gated skip
