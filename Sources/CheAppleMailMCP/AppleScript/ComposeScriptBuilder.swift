@@ -661,7 +661,8 @@ func buildMailtoComposeScript(
     // path pasted into the Go-to-folder (⇧⌘G) field (clipboard set here, restored by
     // the caller in Swift). ASCII-only paths reach this flow: the sheet hangs
     // deterministically on CJK/fullwidth input even via paste (#220 live repro), so
-    // non-ASCII paths are refused upstream with a named reason (#220, #304) — do NOT
+    // non-ASCII paths are refused upstream before composition, with a named reason
+    // (#220, #304) — do NOT
     // remove that gate.
     if !attachments.isEmpty {
         // #341/#321 — put the caret at the END of the body before attaching.
