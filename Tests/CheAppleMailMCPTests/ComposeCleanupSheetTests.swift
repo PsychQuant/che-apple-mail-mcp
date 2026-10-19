@@ -13,6 +13,73 @@ final class ComposeCleanupSheetTests: XCTestCase {
         buildMailtoComposeScript(url: "mailto:a@x?subject=S", subject: "S", attachments: [], send: false)
     }
 
+    func testCleanupFailureHasItsOwnHandler() {
+        for send in [false, true] {
+            let s = buildMailtoComposeScript(url: "mailto:a@example.test?subject=S", subject: "S", attachments: [], send: send)
+            XCTAssertTrue(s.contains("on error _cleanupErr"), "cleanup errors must not escape over the original sentinel")
+            XCTAssertTrue(s.contains("CLEANUPFAILED:"), "the cleanup failure must be appended to the original error")
+        }
+    }
+
+    /// Execute the production handler with a synthetic cleanup body. These
+    /// scripts use only local variables/error statements, never Mail or AX.
+    private func executeHandler(send: Bool, dispatched: Bool = false,
+                                original: String = "FILLFIELD: original reason",
+                                cleanup: String) throws -> String {
+        let handler = buildComposeErrorHandler(cleanupBody: cleanup, send: send)
+        let source = """
+        set _dispatched to \(dispatched ? "true" : "false")
+        set _cleanupRan to false
+        try
+            try
+                error "\(appleScriptEscape(original))"
+            on error _mErr
+        \(handler)
+            end try
+        on error _observed
+            return (_observed as text) & "||" & (_cleanupRan as text)
+        end try
+        error "handler swallowed the original error"
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", source]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .newlines)
+        XCTAssertEqual(process.terminationStatus, 0, text)
+        return text
+    }
+
+    func testOriginalErrorSurvivesSuccessfulCleanup() throws {
+        for send in [false, true] {
+            let result = try executeHandler(send: send, cleanup: "set _cleanupRan to true")
+            XCTAssertEqual(result, "FILLFIELD: original reason||true")
+        }
+    }
+
+    func testCleanupFailureAppendsToOriginalError() throws {
+        for send in [false, true] {
+            let result = try executeHandler(send: send,
+                cleanup: "set _cleanupRan to true\nerror \"cleanup denied\" number -1743")
+            XCTAssertEqual(result, "FILLFIELD: original reason — CLEANUPFAILED: cleanup denied||true")
+        }
+    }
+
+    func testPostDispatchErrorsNeverExecuteCleanup() throws {
+        let cleanup = "set _cleanupRan to true\nerror \"cleanup must not run\""
+        XCTAssertEqual(try executeHandler(send: true,
+            original: "POSTDISPATCH: original reason", cleanup: cleanup),
+            "POSTDISPATCH: original reason||false")
+        XCTAssertEqual(try executeHandler(send: true, dispatched: true,
+            original: "original tail failure", cleanup: cleanup),
+            "POSTDISPATCH: original tail failure||false")
+    }
+
     func testCleanup_dismissesDiscardSheet_byIdentifierAndExactDiscardTitle() {
         let s = draftScript()
         XCTAssertTrue(s.contains("close _cw saving no"), "the close attempt stays — it is the sheet it triggers that must be handled")
