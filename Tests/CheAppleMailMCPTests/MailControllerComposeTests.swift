@@ -39,6 +39,123 @@ final class MailControllerComposeTests: XCTestCase {
                           file: file, line: line)
     }
 
+    private static let osacompilePath = "/usr/bin/osacompile"
+
+    /// The availability probe for `assertCompiles`. It has to NEED Mail's
+    /// scripting dictionary to parse: osacompile resolves a dictionary only when
+    /// the script body uses terms from it, so a bare `tell application "Mail"` /
+    /// `return 1` compiles for ANY app name. That version said "available" on a
+    /// host with no Mail dictionary, after which the script under test failed
+    /// with -2741 — a false failure instead of the documented skip (#514 verify,
+    /// round 1). `reply … with opening window` is a Mail-only command, so this
+    /// parses only where Mail's dictionary is present. It is compiled, never run.
+    private static let mailDictionaryProbe = """
+        tell application "Mail"
+        set probeMessage to first message of inbox
+        return reply probeMessage with opening window
+        end tell
+        """
+
+    private func makeScratchDirectory() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("osacompile-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Runs `osacompile` on `source`: compile only, the script is never executed.
+    /// Returns nil when it has not finished after `timeout` seconds (the process
+    /// is terminated then) — osacompile might wait on a "Where is …?" dialog when
+    /// an application named in the script cannot be located (not observed on this
+    /// host), and a test run must not hang on that. stderr goes to a file, so nothing has to be drained while
+    /// waiting.
+    private func runOsacompile(
+        _ source: String,
+        name: String,
+        in dir: URL,
+        timeout: TimeInterval = 30
+    ) throws -> (status: Int32, stderr: String)? {
+        let src = dir.appendingPathComponent("\(name).applescript")
+        try source.write(to: src, atomically: true, encoding: .utf8)
+        let errURL = dir.appendingPathComponent("\(name).stderr")
+        FileManager.default.createFile(atPath: errURL.path, contents: nil)
+        let errHandle = try FileHandle(forWritingTo: errURL)
+        defer { try? errHandle.close() }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: Self.osacompilePath)
+        process.arguments = ["-o", dir.appendingPathComponent("\(name).scpt").path, src.path]
+        process.standardError = errHandle
+        process.standardOutput = FileHandle.nullDevice
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+        try process.run()
+        guard finished.wait(timeout: .now() + timeout) == .success else {
+            process.terminate()
+            return nil
+        }
+        let stderr = (try? String(contentsOf: errURL, encoding: .utf8)) ?? ""
+        return (process.terminationStatus, stderr)
+    }
+
+    /// Compile-only AppleScript syntax check (#510). Hands `script` to
+    /// `/usr/bin/osacompile`, which parses it against Mail's scripting
+    /// dictionary and writes a compiled file — it NEVER executes the script and
+    /// never touches Mail or any mailbox. `script.contains` assertions cannot
+    /// catch an invalid verb (the old `reply all originalMsg …` form was pinned
+    /// by exactly such a test while failing to compile with -2741).
+    ///
+    /// Skips (with the reason) when `osacompile` is missing, gives no answer while
+    /// probing, or when the probe cannot parse a Mail-only command (no Mail
+    /// dictionary), so a bare CI host reports "skipped", not a false pass or a
+    /// false failure. A script under test that does not finish in time FAILS.
+    private func assertCompiles(
+        _ script: String,
+        _ label: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: Self.osacompilePath),
+                          "osacompile not available — AppleScript compile check skipped")
+        let dir = try makeScratchDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        guard let probe = try runOsacompile(Self.mailDictionaryProbe, name: "probe", in: dir) else {
+            throw XCTSkip("osacompile gave no answer within 30 s while probing Mail's dictionary — compile check skipped")
+        }
+        try XCTSkipUnless(probe.status == 0,
+                          "Mail scripting dictionary not available — compile check skipped (\(probe.stderr))")
+
+        guard let result = try runOsacompile(script, name: "subject", in: dir) else {
+            XCTFail("\(label): osacompile did not finish within 30 s", file: file, line: line)
+            return
+        }
+        XCTAssertEqual(result.status, 0,
+                       "\(label) does not compile as AppleScript: \(result.stderr)",
+                       file: file, line: line)
+    }
+
+    /// The probe is only worth anything if it can tell "this host has no Mail
+    /// dictionary" from "Mail is fine". Aim it at an application that does not
+    /// exist: it must NOT compile. (The original probe compiled for any name.)
+    func testMailDictionaryProbe_doesNotCompileForAnApplicationWithoutADictionary() throws {
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: Self.osacompilePath),
+                          "osacompile not available — probe check skipped")
+        let dir = try makeScratchDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let fake = Self.mailDictionaryProbe.replacingOccurrences(
+            of: "application \"Mail\"",
+            with: "application \"NoSuchApp-\(UUID().uuidString)\"")
+        XCTAssertNotEqual(fake, Self.mailDictionaryProbe, "the test must really swap the application name")
+
+        guard let result = try runOsacompile(fake, name: "fake", in: dir) else {
+            throw XCTSkip("osacompile gave no answer within 30 s — probe check skipped")
+        }
+        XCTAssertNotEqual(result.status, 0,
+                          "the probe compiled against an application with no dictionary, so it cannot detect a missing Mail dictionary")
+    }
+
     // MARK: - appleScriptEscape
 
     func testAppleScriptEscape_handlesQuotesAndNewlines() {
@@ -192,10 +309,52 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertTrue(s.contains("Reply saved as draft (paste path)"))
     }
 
-    func testBuildReplyPasteScript_replyAll_usesReplyAllVerb() {
+    // #510 / #458: Mail has no `reply all` verb. The only valid spelling is the
+    // `reply` verb plus its `reply to all` option. The old assertion here pinned
+    // `reply all originalMsg with opening window`, which fails to compile
+    // (-2741 "Expected end of line, etc. but found identifier"), so every
+    // `reply_all: true` call died before Mail was touched.
+    func testBuildReplyPasteScript_replyAll_usesReplyVerbWithReplyToAllOption() {
         let s = buildReplyEmailPasteScript(
             messageRef: "msgRef", newBody: "B", replyAll: true, saveAsDraft: false)
-        XCTAssertTrue(s.contains("reply all originalMsg with opening window"))
+        XCTAssertTrue(s.contains("reply originalMsg with opening window and reply to all"),
+                      "reply-all must be the `reply` verb with the `reply to all` option")
+        XCTAssertFalse(s.contains("reply all originalMsg"),
+                       "`reply all <msg>` is not valid AppleScript (-2741)")
+    }
+
+    func testBuildReplyPasteScript_replyOnly_hasNoReplyToAllOption() {
+        let s = buildReplyEmailPasteScript(
+            messageRef: "msgRef", newBody: "B", replyAll: false, saveAsDraft: false)
+        XCTAssertTrue(s.contains("set replyMsg to reply originalMsg with opening window\n"),
+                      "plain reply must stay exactly the verb it was before #510")
+        XCTAssertFalse(s.contains("reply to all"),
+                       "plain reply must not turn on reply-to-all")
+    }
+
+    // Compile-level lock (#510): the generated scripts must be valid AppleScript.
+    func testBuildReplyPasteScript_replyAll_compiles() throws {
+        try assertCompiles(
+            buildReplyEmailPasteScript(messageRef: "msgRef", newBody: "B",
+                                       replyAll: true, saveAsDraft: true),
+            "reply-all (save as draft) paste script")
+        try assertCompiles(
+            buildReplyEmailPasteScript(messageRef: "msgRef", newBody: "B",
+                                       replyAll: true, saveAsDraft: false),
+            "reply-all (send) paste script")
+    }
+
+    func testBuildReplyPasteScript_replyOnly_compiles() throws {
+        try assertCompiles(
+            buildReplyEmailPasteScript(messageRef: "msgRef", newBody: "B",
+                                       replyAll: false, saveAsDraft: true),
+            "reply (save as draft) paste script")
+    }
+
+    func testBuildForwardPasteScript_compiles() throws {
+        try assertCompiles(
+            buildForwardEmailPasteScript(messageRef: "msgRef", to: ["a@example.org"], newBody: "B"),
+            "forward paste script")
     }
 
     func testBuildReplyPasteScript_windowIdDeltaGuard_frontWindowNotTitle() {

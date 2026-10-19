@@ -66,7 +66,7 @@ actor MailController {
     /// large mailbox Mail's UI answers slowly. Live evidence (#301): a HEALTHY
     /// sender-popup `create_draft` runs past 45s, so the #297 default killed it
     /// mid-flight — the abandoned (uncancellable) script kept typing into Mail
-    /// while the legacy fallback ran, the reply arrived at ~78s with a WRAPPED
+    /// while the legacy fallback (removed in #304) ran, the reply arrived at ~78s with a WRAPPED
     /// body, and the caller experienced a hang. On the osascript subprocess
     /// path the measured happy path is ~6s (script) / ~33s (worst live E2E with
     /// popup + save), so 90s clears the legitimate ceiling with margin while
@@ -141,6 +141,9 @@ actor MailController {
                 + "Install a seam with setTestSeams(scriptRunner:) around this call, or do not "
                 + "route it through MailController.")
         }
+        // #471: the component must be initialized on the main thread first, or
+        // the detached thread below never receives its Apple Event replies.
+        AppleScriptPrimer.shared.ensurePrimed()
         let granted = try preflightAutomation()
         return try runGuarded(timeout: timeout, automationGranted: granted) {
             var error: NSDictionary?
@@ -159,6 +162,7 @@ actor MailController {
 
     /// Execute AppleScript and return result as list
     func runScriptAsList(_ source: String, timeout: TimeInterval? = nil) throws -> [String] {
+        AppleScriptPrimer.shared.ensurePrimed()  // #471, see runScript
         let granted = try preflightAutomation()
         return try runGuarded(timeout: timeout, automationGranted: granted) {
             var error: NSDictionary?
@@ -316,7 +320,7 @@ actor MailController {
                     + "terminated osascript children have not exited (Mail or WindowServer "
                     + "may be hung). Not starting another GUI flow. Restart this MCP server "
                     + "(and check Mail) — or use open_mailto (zero-TCC, no GUI scripting) "
-                    + "as the clean-compose fallback.")
+                    + "as the clean-compose alternative.")
             }
             throw MailError.operationFailed(
                 "osascript subsystem appears wedged: \(Self.maxUnreapedGuiChildren) "
@@ -346,8 +350,8 @@ actor MailController {
             try process.run()
         } catch {
             // Map the POSIX NSError onto the same MailError family every other
-            // failure uses, so the wrapper-free → legacy fallback ladder still
-            // catches it (verify #301, Lens A P1-3).
+            // failure uses, so callers classify it like
+            // any other script failure (verify #301, Lens A P1-3).
             throw MailError.scriptFailed(
                 message: "could not launch /usr/bin/osascript: \(error.localizedDescription)",
                 code: -1)
@@ -434,6 +438,7 @@ actor MailController {
         // Lossy decode (never nil): stderr embeds CJK mailbox names/subjects,
         // and a decode failure must not erase the diagnostic (Lens A P2-7).
         let errText = String(decoding: errBox.get(), as: UTF8.self)
+        if ComposeTiming.isEnabled { ComposeTiming.captureStderr(errText) }  // #464
         if process.terminationStatus != 0 {
             let (message, code) = Self.parseOsascriptError(errText)
             throw MailError.scriptFailed(message: message, code: code)
@@ -1652,11 +1657,35 @@ actor MailController {
     /// truncation), and runs the GUI script with the user's clipboard preserved
     /// at full fidelity when attachments are involved (the script sets the
     /// clipboard per-attachment for the Go-to-folder paste).
+    /// #464 — append this call's timing rows when `CHE_MAIL_COMPOSE_TIMING_CSV`
+    /// is set. Diagnostics only: a write failure is reported to stderr and never
+    /// fails the compose call.
+    /// #475 — inside a `create_draft` run the rows join the run (path
+    /// `gui-mailto`); outside a run (`compose_email`) they are written at once.
+    nonisolated func recordComposeTiming(enter: TimeInterval, spawn: TimeInterval, outcome: String,
+                                         fromAddressSet: Bool,
+                                         csvPath: String? = ComposeTiming.csvPathFromEnvironment) {
+        guard let csvPath else { return }
+        let env = ProcessInfo.processInfo.environment
+        let marks = [
+            ComposeTiming.Mark(source: "swift", label: "enter", time: enter),
+            ComposeTiming.Mark(source: "swift", label: "spawn", time: spawn),
+            ComposeTiming.Mark(source: "swift", label: "returned", time: Date().timeIntervalSinceReferenceDate),
+        ] + ComposeTiming.takeCapturedMarks()
+        ComposeTiming.record(ComposeTiming.Segment(
+            path: ComposeTiming.guiMailtoPath, outcome: outcome,
+            config: ["window_delay": env["CHE_MAIL_MAILTO_WINDOW_DELAY"] ?? "default",
+                     "step_delay": env["CHE_MAIL_MAILTO_STEP_DELAY"] ?? "default",
+                     "from_address_set": fromAddressSet ? "true" : "false"],
+            marks: marks), csvPath: csvPath)
+    }
+
     private func composeViaMailto(
         to: [String], subject: String, body: String,
         cc: [String]?, bcc: [String]?, attachments: [String]?, send: Bool,
         fromAddress: String? = nil
     ) throws -> String {
+        let timingEnter = Date().timeIntervalSinceReferenceDate  // #464
         // #277/#404: a display name can't ride the mailto URL (RFC 6068). Any
         // list carrying a display name is omitted from the URL as a whole and
         // filled through its AX-addressed field (order preserved; bare + named
@@ -1665,7 +1694,7 @@ actor MailController {
         let partition = partitionRecipientsForMailto(to: to, cc: cc ?? [], bcc: bcc ?? [])
         // #277 defense-in-depth (verify R1 + R2, Codex): display-name fill is
         // DRAFT-ONLY. Eligibility already routes a send with ANY display-name
-        // recipient (To/Cc/Bcc) to the legacy path, so this is unreachable — but
+        // recipient (To/Cc/Bcc) to a refusal (#304), so this is unreachable — but
         // a future routing bug must fail LOUD, never silently clean-send with a
         // display name the mailto URL can't carry (wrong/missing recipient). The
         // guard covers all three lists, not just `fillTo` (#219/#277 verify R2,
@@ -1697,10 +1726,20 @@ actor MailController {
         // #301: the whole keystroke flow is ONE script with deliberate per-phase
         // delays — on a large mailbox a HEALTHY run crosses the 45s default, so
         // it gets the GUI deadline (the default killed it mid-flight and the
-        // caller saw a hang + a wrapped-body legacy fallback).
-        var result = needsClipboard
-            ? try withClipboardPreserved({ try runGuiScript(script, timeout: Self.guiScriptTimeout) })
-            : try runGuiScript(script, timeout: Self.guiScriptTimeout)
+        // caller saw a hang + a wrapped-body legacy fallback, pre-#304).
+        let timingSpawn = Date().timeIntervalSinceReferenceDate
+        var result: String
+        do {
+            result = needsClipboard
+                ? try withClipboardPreserved({ try runGuiScript(script, timeout: Self.guiScriptTimeout) })
+                : try runGuiScript(script, timeout: Self.guiScriptTimeout)
+            recordComposeTiming(enter: timingEnter, spawn: timingSpawn, outcome: "ok",
+                                fromAddressSet: popupAddress?.isEmpty == false)
+        } catch {
+            recordComposeTiming(enter: timingEnter, spawn: timingSpawn, outcome: "error",
+                                fromAddressSet: popupAddress?.isEmpty == false)
+            throw error
+        }
         // #404: the script tags its return value when it had to reveal the Bcc
         // field (the View-menu state is deliberately NOT restored — disclose it).
         // Strip the tag FIRST: it is a suffix of the raw script return, and any

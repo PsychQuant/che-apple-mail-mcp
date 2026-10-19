@@ -106,18 +106,18 @@ func recipientFragment(_ addresses: [String], kind: String) -> String {
 //     window-count delta is NOT enough (`activate` can open a viewer). RESIDUAL
 //     (documented): AX has no "send keystroke to a specific window" primitive, so
 //     a TOCTOU gap between raise and keystroke remains — inherent to GUI
-//     automation; a detectable mismatch (our window gone) hard-errors → fallback.
+//     automation; a detectable mismatch (our window gone) hard-errors → the call fails (#304).
 //   - ATTACHMENT COMPLETION: the pre-dispatch check asserts `count of sheets of
 //     _w is 0`, so a still-open File▸Attach panel blocks dispatch; a drain delay
 //     gives the attachment time to bind before ⇧⌘D. RESIDUAL: panel-closed is a
 //     proxy for bind, not per-file completion polling.
-//   - STAGE-AWARE FALLBACK + NO DATA LOSS: the GUI interaction is wrapped in
+//   - STAGE-AWARE FAILURE + NO DATA LOSS: the GUI interaction is wrapped in
 //     try/on-error that closes ONLY a window we created — identified by NEW
 //     `id of window` (captured before the mailto) AND matching subject — so a
 //     pre-existing same-titled draft the user already had open is never
 //     `saving no` discarded (a data-loss bug the second verify round caught).
 //     Dispatch is the last statement, so a pre-dispatch error means nothing was
-//     sent (fallback safe; no double-send).
+//     sent (no double-send).
 //   - CLIPBOARD: the per-attachment path is set on the clipboard here, but
 //     save/restore is done by the caller in Swift (full-fidelity NSPasteboard,
 //     failure-safe) — this script does NOT save/restore.
@@ -139,8 +139,14 @@ func buildMailtoComposeScript(
     attachments: [String],
     send: Bool,
     fromAddress: String? = nil,
-    fill: [RecipientFill] = []
+    fill: [RecipientFill] = [],
+    timing: Bool = ComposeTiming.isEnabled
 ) -> String {
+    // #464: per-step timing marks, appended at line ends so the disabled
+    // script stays byte-for-byte unchanged (see ComposeTiming).
+    func tm(_ label: String, _ indent: String = "    ") -> String {
+        timing ? "\n" + indent + ComposeTiming.markStatement(label) : ""
+    }
     let windowDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_WINDOW_DELAY", fallback: 1.8)
     let stepDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_STEP_DELAY", fallback: 0.7)
     let attachDrain = resolvedDelay(envKey: "CHE_MAIL_MAILTO_ATTACH_DRAIN", fallback: 1.5)
@@ -154,9 +160,9 @@ func buildMailtoComposeScript(
     // BY TITLE (= subject) and best-effort raise it so the NEXT keystroke lands on
     // OUR window. Re-applied before EVERY keystroke phase (each attach + dispatch)
     // — focus the user/system stole during a delay is reclaimed. Hard-errors if
-    // our window is gone (→ safe fallback). Keys off the target `_w`, never
+    // our window is gone (→ the call fails, nothing sent; #304). Keys off the target `_w`, never
     // `front window` (that evaluated unreliably under the actor's in-process
-    // NSAppleScript context and regressed the path to always-fallback); AXRaise is
+    // NSAppleScript context and made the path fail every time); AXRaise is
     // best-effort (wrapped) so an AX quirk can't break the path.
     let raiseOnly = """
                 set _t to "\(subjEsc)"
@@ -169,7 +175,7 @@ func buildMailtoComposeScript(
                     end if
                 end repeat
                 if _w is missing value then error "mailto compose window not found (title)"
-                if _wMatches > 1 then error "AMBIGUOUS: more than one window is titled the subject — cannot safely target our compose window for the next keystroke (safe fallback)"
+                if _wMatches > 1 then error "AMBIGUOUS: more than one window is titled the subject — cannot safely target our compose window for the next keystroke (nothing sent)"
                 try
                     perform action "AXRaise" of _w
                 end try
@@ -262,7 +268,7 @@ func buildMailtoComposeScript(
     // #175 verify R2 + #219/#277 verify R2, Codex BLOCKING). `id of window` is
     // stable + unique. We do NOT assume exactly one new window: launching Mail
     // from closed opens the viewer too, so we pick the new window by subject
-    // rather than a count==1 assertion (which would over-reject to legacy
+    // rather than a count==1 assertion (which would fail the call
     // whenever Mail wasn't already running).
     // #219/#277 verify (Codex BLOCKING): System Events (where raiseOnly runs)
     // cannot read Mail's window `id`, so the KEYSTROKE-targeting bridge is the
@@ -271,7 +277,7 @@ func buildMailtoComposeScript(
     // (ii) raiseOnly asserts EXACTLY ONE window carries our title before each
     // keystroke phase — a same-title window opening concurrently (after the
     // snapshot) makes raiseOnly error pre-dispatch → cleanup closes only `_ourId`
-    // → legacy fallback, so a race can neither keystroke/dispatch the wrong
+    // → the call fails (no fallback, #304), so a race can neither keystroke/dispatch the wrong
     // window nor lose the user's window. The `my senderMatches` handler is
     // prepended only when a sender popup is driven — see below. It matches the
     // requested addr against a popup label by (a) exact bare addr, (b) the
@@ -280,7 +286,7 @@ func buildMailtoComposeScript(
     // `Name <addr>` format) found Mail's From popup actually renders
     // `Display Name – addr` with a SPACE + EN DASH (U+2013) + SPACE separator —
     // no angle brackets — so (a)/(b) never matched and the clean path always
-    // fell to legacy. Branch (c) is separator-agnostic (en-dash / hyphen / any)
+    // fell to legacy (pre-#304). Branch (c) is separator-agnostic (en-dash / hyphen / any)
     // and anti-spoof-safe: `isSimpleAddrSpec` gates the addr to no-whitespace
     // upstream, so a simple addr is always the final space-delimited token, and
     // the compare is exact `is` (a `… – notche@x` label's last token is
@@ -302,36 +308,50 @@ func buildMailtoComposeScript(
     end senderMatches
 
     """ : ""
-    var s = fillHandlers + senderMatchHandler + """
+    let timingHead = timing ? ComposeTiming.prelude + ComposeTiming.markStatement("script_start") + "\n" : ""
+    var s = timingHead + fillHandlers + senderMatchHandler + """
     tell application "Mail"
         set _wc to (count of windows)
         set _beforeIds to (id of every window)
         set _beforeTitles to (name of every window)
         activate
         mailto "\(appleScriptEscape(url))"
-    end tell
-    delay \(windowDelay)
+    end tell\(tm("mailto_sent"))
+    -- #464: poll for OUR new window instead of a fixed \(windowDelay) s wait. The
+    -- old delay is the cap, and the checks below run unchanged after the loop,
+    -- so a call that succeeded before still succeeds — only sooner.
+    set _winWaited to 0
+    repeat
+        tell application "Mail"
+            set _ourId to missing value
+            set _ourMatches to 0
+            if (count of windows) > _wc then
+                repeat with _cw in windows
+                    try
+                        if (_beforeIds does not contain (id of _cw)) and ((name of _cw) is "\(subjEsc)") then
+                            set _ourId to (id of _cw)
+                            set _ourMatches to _ourMatches + 1
+                        end if
+                    end try
+                end repeat
+            end if
+        end tell
+        if _ourMatches > 0 then exit repeat
+        if _winWaited ≥ \(windowDelay) then exit repeat
+        delay 0.1
+        set _winWaited to _winWaited + 0.1
+    end repeat
     tell application "Mail"
         if (count of windows) <= _wc then error "mailto did not open a compose window"
-        if _beforeTitles contains "\(subjEsc)" then error "a window titled \\"\(subjEsc)\\" already existed before this compose — cannot safely disambiguate the new window (safe fallback)"
-        set _ourId to missing value
-        set _ourMatches to 0
-        repeat with _cw in windows
-            try
-                if (_beforeIds does not contain (id of _cw)) and ((name of _cw) is "\(subjEsc)") then
-                    set _ourId to (id of _cw)
-                    set _ourMatches to _ourMatches + 1
-                end if
-            end try
-        end repeat
-        if _ourMatches is 0 then error "could not identify our new compose window by subject after mailto (safe fallback)"
-        if _ourMatches > 1 then error "more than one new window is titled the subject — cannot safely identify our compose window (safe fallback)"
-    end tell
+        if _beforeTitles contains "\(subjEsc)" then error "a window titled \\"\(subjEsc)\\" already existed before this compose — cannot safely disambiguate the new window (nothing sent)"
+        if _ourMatches is 0 then error "could not identify our new compose window by subject after mailto (nothing sent)"
+        if _ourMatches > 1 then error "more than one new window is titled the subject — cannot safely identify our compose window (nothing sent)"
+    end tell\(tm("window_found"))
     \(flagInit)\(bccFlagInit)try
         tell application "System Events"
             tell process "Mail"
                 set frontmost to true
-    \(raiseOnly)
+    \(raiseOnly)\(tm("raised", "                "))
             end tell
         end tell
     """
@@ -453,13 +473,13 @@ func buildMailtoComposeScript(
     // the last space-delimited token (Mail's real `Name – addr` en-dash format,
     // #219 live-fix) — never by extraction (a quoted local-part could spoof
     // that; the caller normalizes `fromAddress` to a bare addr-spec and a
-    // non-simple one is gated to legacy upstream by `isSimpleAddrSpec`). The
+    // non-simple one is refused upstream by `isSimpleAddrSpec`). The
     // From popup is identified by its stable, locale-independent AXIdentifier
     // "popup_from" (#219 verify, Codex BLOCKING) — NOT a "value contains @"
     // scan, which a signature popup named like an email could satisfy and be
     // driven as the WRONG control. Any SENDERPOPUP error is pre-dispatch: the
-    // on-error handler closes OUR window (saving no) and the Swift router falls
-    // back to legacy `set sender` (correct sender beats clean body, #175).
+    // on-error handler closes OUR window (saving no) and the call fails with
+    // that error, so a wrong sender is never risked (the legacy `set sender` route is gone, #304).
     if let from = fromAddress, !from.isEmpty {
         let fromEsc = appleScriptEscape(from)
         s += """
@@ -504,9 +524,44 @@ func buildMailtoComposeScript(
                     end if
                     delay 0.3
                 end repeat
-                if _fromPopup is missing value then error "SENDERPOPUP: From popup (AXIdentifier popup_from) not found on the compose window"
-                click _fromPopup
-                delay \(stepDelay)
+                if _fromPopup is missing value then error "SENDERPOPUP: From popup (AXIdentifier popup_from) not found on the compose window"\(tm("popup_found", "                "))
+                -- #464 (live): the window is now found ~0.1 s after mailto instead of
+                -- after a fixed 1.8 s, and the first click then failed in 3 of 10 runs
+                -- with "System Events: connection error" while Mail was still setting
+                -- up the window (the value reads just before had succeeded). Retry the
+                -- click, looking the popup up again each time; give up as SENDERPOPUP.
+                set _clickErr to ""
+                repeat with _clickTry from 1 to 4
+                    try
+                        click _fromPopup
+                        set _clickErr to ""
+                        exit repeat
+                    on error _clickErrNow
+                        set _clickErr to _clickErrNow
+                        delay 0.5
+                        set _fromPopup to missing value
+                        set _pbTotal to 0
+                        try
+                            set _pbTotal to (count of pop up buttons of _w)
+                        end try
+                        repeat with _pbi from 1 to _pbTotal
+                            try
+                                set _pb to pop up button _pbi of _w
+                                if (value of attribute "AXIdentifier" of _pb) is "popup_from" then
+                                    set _fromPopup to _pb
+                                    exit repeat
+                                end if
+                            end try
+                        end repeat
+                        if _fromPopup is missing value then error "SENDERPOPUP: From popup (AXIdentifier popup_from) disappeared while retrying the click (" & _clickErr & ")"
+                    end try
+                end repeat
+                if _clickErr is not "" then error "SENDERPOPUP: could not open the From popup: " & _clickErr
+                -- #464 (live): this wait stays. Without it the menu poll below ran
+                -- while the menu was still opening: one run spent 5987 ms there and
+                -- one failed with a System Events connection error; with it the poll
+                -- takes ~100 ms every time.
+                delay \(stepDelay)\(tm("popup_clicked", "                "))
                 -- #296: in-process NSAppleScript can evaluate the menu before it
                 -- has opened/populated (settling-AX sibling of #295, menu layer —
                 -- empirically: the identical matcher passes under osascript and
@@ -532,7 +587,7 @@ func buildMailtoComposeScript(
                         if _miTotal > 0 then exit repeat
                         delay 0.3
                     end repeat
-                end if
+                end if\(tm("menu_ready", "                "))
                 set _pickedItem to missing value
                 ignoring case
                     repeat with _mii from 1 to _miTotal
@@ -550,14 +605,26 @@ func buildMailtoComposeScript(
                     error "SENDERPOPUP: no From account exactly matches \\"\(fromEsc)\\" (menu items seen: " & _miTotal & ")"
                 end if
                 click _pickedItem
-                delay \(stepDelay)
-                set _senderReadback to (value of _fromPopup as text)
+                -- #464: the popup value updates asynchronously (a 0 s wait failed
+                -- the read-back live); poll until it matches instead of a fixed wait.
+                set _senderReadback to ""
+                repeat 20 times
+                    try
+                        set _senderReadback to (value of _fromPopup as text)
+                    end try
+                    set _senderOK to false
+                    ignoring case
+                        set _senderOK to my senderMatches(_senderReadback, "\(fromEsc)")
+                    end ignoring
+                    if _senderOK then exit repeat
+                    delay 0.1
+                end repeat
                 ignoring case
                     if not (my senderMatches(_senderReadback, "\(fromEsc)")) then error "SENDERPOPUP: read-back mismatch — popup shows \\"" & _senderReadback & "\\""
-                end ignoring
+                end ignoring\(tm("sender_verified", "                "))
             end tell
         end tell
-        delay \(stepDelay)
+        delay \(stepDelay)\(tm("sender_settled"))
         """
     }
 
@@ -565,7 +632,7 @@ func buildMailtoComposeScript(
     // path pasted into the Go-to-folder (⇧⌘G) field (clipboard set here, restored by
     // the caller in Swift). ASCII-only paths reach this flow: the sheet hangs
     // deterministically on CJK/fullwidth input even via paste (#220 live repro), so
-    // non-ASCII paths are routed to the legacy native-attach path upstream — do NOT
+    // non-ASCII paths are refused upstream with a named reason (#220, #304) — do NOT
     // remove that gate.
     if !attachments.isEmpty {
         // #341/#321 — put the caret at the END of the body before attaching.
@@ -627,10 +694,10 @@ func buildMailtoComposeScript(
     // #242: for send:true the dispatch keystroke is wrapped in its own
     // POSTDISPATCH sentinel — once ⇧⌘D has been attempted, the send state is
     // UNKNOWN (the mail may already be on the wire), so the Swift layer must
-    // not fall back to a legacy re-send (duplicate outbound). Pre-dispatch
-    // errors (window lost, lingering sheet) stay unmarked → safe fallback.
-    // ⌘S (draft save) keeps the plain fallback: a duplicated draft is visible
-    // and harmless, unlike a duplicated send.
+    // not retry (a re-send would duplicate the outbound mail). Pre-dispatch
+    // errors (window lost, lingering sheet) stay unmarked → an ordinary failure,
+    // since nothing was sent. ⌘S (draft save) needs no sentinel: a duplicated
+    // draft is visible and harmless, unlike a duplicated send.
     let dispatchBlock: String
     if send {
         dispatchBlock = """
@@ -742,13 +809,13 @@ func buildMailtoComposeScript(
         tell application "System Events"
             tell process "Mail"
                 set frontmost to true
-    \(verifyNoSheet)
-    \(dispatchBlock)
+    \(verifyNoSheet)\(tm("pre_dispatch", "                "))
+    \(dispatchBlock)\(tm("dispatched", "                "))
             end tell
         end tell\(preHandlerTail)
     on error _mErr
     \(handlerBlock)
-    end try\(postTryTail)
+    end try\(postTryTail)\(tm("script_end"))
     \(fillsBcc ? "set _bccTag to \"\"\n    if _bccRevealed then set _bccTag to \" [bcc-field-revealed]\"\n    return \"\(dispatchLabel)\" & _bccTag" : "return \"\(dispatchLabel)\"")
     """
     return s
@@ -802,13 +869,18 @@ func buildForwardNoBodyScript(messageRef: String, to: [String]) -> String {
 // pre-existing user window (the #175-round-2 data-loss guard).
 
 /// Shared core for the clean reply/forward paste path. `openVerb` is the native
-/// Mail verb (`reply` / `reply all` / `forward`); `nativeLines` is the (already
+/// Mail verb (`reply` / `forward`). Mail has no `reply all` verb (#510 / #458):
+/// reply-all is the `reply` verb plus its `reply to all` option, passed as
+/// `openOptions` (appended after `with opening window`, e.g. `" and reply to all"`;
+/// default `""` leaves the reply and forward scripts byte-identical).
+/// `nativeLines` is the (already
 /// `\n`-prefixed, helper-indented) cc/to/attachment fragment block to set on the
 /// reply/forward message object, or `""` for none. Delays reuse the #175 mailto
 /// env keys (same GUI-timing class).
 private func buildReplyForwardPasteScript(
     messageRef: String,
     openVerb: String,
+    openOptions: String = "",
     msgVar: String,
     newBody: String,
     nativeLines: String,
@@ -830,22 +902,22 @@ private func buildReplyForwardPasteScript(
     // of Mail's window id. The mailto path (#175) bridges to AX by window TITLE —
     // which does NOT work here: Mail's reply/forward COMPOSE windows expose an
     // EMPTY `name` (the live test proved a reply window's title is ""), so a
-    // title match would either refuse the (common) empty-title case → legacy-wrap,
+    // title match would either refuse the (common) empty-title case (failing every reply),
     // or match the wrong same-titled window. Instead we use the guard the verify
     // reviewers (Logic + Devil's Advocate) recommended: in the MAIL context, gate
     // each keystroke phase on `id of front window` ∈ the id-delta set — i.e. OUR
     // window is the frontmost Mail window. `reply/forward with opening window`
     // opens the window frontmost; if the user stole focus during a delay, the id
     // won't match → error → on-error close (scoped to our ids) → MailController
-    // catch → legacy injection fallback. Then `set frontmost to true` + keystroke
+    // reports the error (no fallback since #304). Then `set frontmost to true` + keystroke
     // hits that frontmost window. RESIDUAL (inherent GUI automation, documented):
     // a sub-second TOCTOU between the Mail-side check and the AX keystroke remains
-    // — same class as the #175 mailto residual; a detectable change degrades to
-    // the legacy fallback.
+    // — same class as the #175 mailto residual; a detectable change fails the
+    // call instead of keystroking the wrong window.
     let frontGuard = """
         tell application "Mail"
-            if (count of windows) is 0 then error "no Mail window to target (falling back)"
-            if (id of front window) is not in _newIds then error "our reply/forward window is not frontmost (focus changed) — falling back"
+            if (count of windows) is 0 then error "no Mail window to target (stopping before the next keystroke)"
+            if (id of front window) is not in _newIds then error "our reply/forward window is not frontmost (focus changed) — stopping before the next keystroke"
         end tell
     """
 
@@ -858,7 +930,7 @@ private func buildReplyForwardPasteScript(
     tell application "Mail"
         set _beforeIds to (id of every window)
         set originalMsg to \(messageRef)
-        set \(msgVar) to \(openVerb) originalMsg with opening window
+        set \(msgVar) to \(openVerb) originalMsg with opening window\(openOptions)
     end tell
     delay \(windowDelay)
     tell application "Mail"
@@ -908,7 +980,8 @@ private func buildReplyForwardPasteScript(
     // without this every quiet draft accumulates a window — and an open compose
     // window also holds the draft, blocking later deletion. The close lives
     // OUTSIDE the `try` (best-effort, own inner `try`): a close failure must NOT
-    // propagate into the legacy fallback, which would save a SECOND draft (the
+    // turn the saved draft into an error, which a retrying caller would answer
+    // with a SECOND draft (the
     // double-dispatch hazard the "dispatch is the last statement in `try`"
     // ordering deliberately avoids). `saving yes` is a harmless re-save of the
     // already-saved draft, never a discard.
@@ -931,10 +1004,10 @@ private func buildReplyForwardPasteScript(
     // #254 (the #242 pattern, verbatim): for send:true the dispatch keystroke
     // gets its own POSTDISPATCH sentinel and the `_dispatched` flag marks any
     // error from the success-path tail — once ⇧⌘D has been attempted the send
-    // state is UNKNOWN and the Swift layer must not fall back to a legacy
-    // re-send (duplicate outbound reply/forward). The draft path (⌘S) keeps
-    // the plain fallback and its post-try window close (a close failure must
-    // never re-enter the legacy fallback — the double-dispatch hazard).
+    // state is UNKNOWN and the Swift layer must not retry (a re-send
+    // would duplicate the reply/forward). The draft path (⌘S) needs no
+    // sentinel and keeps its post-try window close (a close failure must
+    // never turn a saved draft into an error — the double-dispatch hazard).
     let rfDispatchBlock: String
     if send {
         rfDispatchBlock = """
@@ -990,8 +1063,9 @@ private func buildReplyForwardPasteScript(
     return s
 }
 
-/// #218 — wrapper-free reply: native `reply`/`reply all` verb (Mail quotes the
-/// original) + clipboard paste of the plain new body at the cursor. cc/attachments
+/// #218 — wrapper-free reply: native `reply` verb (Mail quotes the original;
+/// reply-all is that verb's `reply to all` option, not a separate `reply all`
+/// verb — #510) + clipboard paste of the plain new body at the cursor. cc/attachments
 /// are set natively on the reply message (unchanged from #34/#60). `saveAsDraft`
 /// ⌘S vs send ⇧⌘D. The new body is NEVER `set content`/`set html content`.
 func buildReplyEmailPasteScript(
@@ -1014,7 +1088,8 @@ func buildReplyEmailPasteScript(
 
     return buildReplyForwardPasteScript(
         messageRef: messageRef,
-        openVerb: replyAll ? "reply all" : "reply",
+        openVerb: "reply",
+        openOptions: replyAll ? " and reply to all" : "",
         msgVar: "replyMsg",
         newBody: newBody,
         nativeLines: nativeLines,
