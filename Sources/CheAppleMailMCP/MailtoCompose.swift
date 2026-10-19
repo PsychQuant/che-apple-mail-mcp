@@ -16,7 +16,7 @@ import Foundation
 // only and needing a GUI keystroke (Accessibility TCC) to save/send.
 //
 // This file holds the PURE, unit-testable pieces: the URL builder and the
-// "use mailto vs fall back to legacy injection" decision. The GUI orchestration
+// "use mailto vs refuse with a named reason" decision (#304 removed the injection fallback). The GUI orchestration
 // (open window → sender popup → attach files → Cmd+S / Cmd+Shift+D) lives in
 // MailController and is gated/live-tested.
 
@@ -37,7 +37,7 @@ private let mailtoUnreserved: CharacterSet =
 
 /// Upper bound on the encoded `mailto:` URL length. Beyond this, the native
 /// compose path risks silent body truncation (URL parsers / Mail), so the caller
-/// falls back to the legacy injection path (which has no length limit). 8000 is
+/// fails with a named reason (#304 removed the injection path that had no length limit). 8000 is
 /// well under typical OS URL ceilings while comfortably fitting ordinary mail.
 let maxMailtoURLLength = 8000
 
@@ -346,8 +346,8 @@ func anyRecipientHasDisplayName(_ recipients: [String]?) -> Bool {
 /// (an exotic quoted local-part such as `"prefix<foo"@evil.example`) could let a
 /// crafted account label end in the literal `<addr>` and suffix-match the WRONG
 /// account. Requires exactly one '@' and none of `" < > ` or whitespace, so a
-/// non-simple custom sender is routed to legacy (native `set sender`, correct
-/// account, body wrapped) instead of the clean popup.
+/// non-simple custom sender is refused with a named reason (#304) instead of
+/// driving the popup.
 func isSimpleAddrSpec(_ addr: String) -> Bool {
     let a = addr.trimmingCharacters(in: .whitespacesAndNewlines)
     if a.isEmpty { return false }
@@ -542,8 +542,8 @@ func dispatchComposePath(
 /// #242 — true iff `error` carries the POSTDISPATCH sentinel that
 /// `buildMailtoComposeScript` (send:true) attaches to any error thrown at or
 /// after the send-keystroke dispatch. Such errors mean the send state is
-/// UNKNOWN (the mail may already be on the wire) — the caller must NOT fall
-/// back to a legacy re-send.
+/// UNKNOWN (the mail may already be on the wire) — the caller must NOT
+/// retry (a re-send could duplicate it).
 func isPostDispatchError(_ error: Error) -> Bool {
     if case MailError.scriptFailed(let message, _) = error {
         // Prefix-only, symmetric with the AppleScript `does not start with`
@@ -561,11 +561,12 @@ func isPostDispatchError(_ error: Error) -> Bool {
 /// and no conclusive script result is available to report which. The #242
 /// POSTDISPATCH sentinel only classifies `.scriptFailed` errors thrown BY the
 /// script; a timeout never carries the sentinel, so without this predicate it
-/// would sail through `!isPostDispatchError` into the legacy re-send — the
+/// would sail through `!isPostDispatchError` and be reported as an ordinary
+/// failure that a caller may retry — the
 /// duplicate-outbound hazard the sentinel exists to prevent (verify #301,
 /// regression lens P0). Draft flows deliberately do NOT gate on this: a
-/// duplicated draft is visible and harmless, and keeping their fallback is
-/// what un-hangs draft creation (#301's own goal).
+/// duplicated draft is visible and harmless, so a draft timeout is reported as
+/// an ordinary failure (#301 un-hung draft creation; the fallback it once fed is gone, #304).
 func isTimeoutError(_ error: Error) -> Bool {
     if case MailError.scriptTimedOut = error { return true }
     return false
@@ -586,7 +587,7 @@ func unknownSendStateError(_ error: Error) -> MailError {
         return MailError.scriptFailed(
             message: "the GUI send flow hit its deadline — "
                 + "the send keystroke may or may not have fired, so the send state is "
-                + "UNKNOWN. NOT retrying via the legacy path (that could send a "
+                + "UNKNOWN. NOT retrying (that could send a "
                 + "duplicate). Check Mail's Sent mailbox / Outbox and any leftover "
                 + "compose window before re-sending. Original error: "
                 + clampedErrorEcho(error.localizedDescription),
@@ -595,7 +596,7 @@ func unknownSendStateError(_ error: Error) -> MailError {
     return MailError.scriptFailed(
         message: "the send keystroke was already dispatched but the GUI step failed "
             + "afterwards — the send state is UNKNOWN and the mail may already be on "
-            + "the wire. NOT retrying via the legacy path (that could send a duplicate). "
+            + "the wire. NOT retrying (that could send a duplicate). "
             + "Check Mail's Sent mailbox / Outbox before re-sending. The compose window "
             + "(if still open) was left untouched for inspection. Original error: "
             + clampedErrorEcho(error.localizedDescription),

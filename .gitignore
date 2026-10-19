@@ -13,6 +13,7 @@ Package.resolved
 
 # MCPB package (generated, rebuild via scripts/build-mcpb.sh)
 mcpb/*.mcpb
+mcpb/*.mcpb.sha256
 
 # Private docs (not for public repo)
 docs/private/

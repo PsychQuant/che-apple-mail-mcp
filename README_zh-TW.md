@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**最完整的 Apple Mail MCP 伺服器** - 53 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
+**最完整的 Apple Mail MCP 伺服器** - 54 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +15,7 @@
 
 | 功能 | 其他 MCP | che-apple-mail-mcp |
 |------|----------|-------------------|
-| 工具總數 | ~20 | **53** |
+| 工具總數 | ~20 | **54** |
 | 開發語言 | Python | **Swift (原生)** |
 | 搜尋速度 | 秒級 (AppleScript) | **毫秒級 (SQLite)** |
 | 搜尋欄位 | 主旨/寄件人 | **主旨/寄件人/收件人/日期** |
@@ -57,7 +57,7 @@ claude plugin install che-apple-mail-mcp@che-apple-mail-mcp
 
 | plugin 提供 | 只裝 MCP |
 |---|---|
-| 全部 53 個 MCP 工具 | ✅ 有 |
+| 全部 54 個 MCP 工具 | ✅ 有 |
 | `/archive-mail` 與 `-migrate` / `-rebuild-threads` / `-repair-synthetic-ids` / `-view` | ❌ 整套歸檔 SOP 不存在 |
 | `rules/compose-wrapper-free.md`——正式信件的 cite-block 紀律 | ❌ **影響最大**：對正式信件產生 `<blockquote type="cite">` 本文是 CRITICAL 缺陷，而這條規則正是防它的 |
 | `rules/confirmation-triggers.md`、`rules/false-positive-detection.md` | ❌ 破壞性操作沒有確認紀律 |
@@ -91,7 +91,7 @@ OneDrive）——同步活動會造成 MCP 連線逾時。
 
 ---
 
-## 全部 53 個工具
+## 全部 54 個工具
 
 <details>
 <summary><b>帳戶 (2)</b></summary>
@@ -256,13 +256,14 @@ OneDrive）——同步活動會造成 MCP 連線逾時。
 </details>
 
 <details>
-<summary><b>診斷 (3)</b></summary>
+<summary><b>診斷 (4)</b></summary>
 
 | 工具 | 說明 |
 |------|------|
 | `check_fda` | 檢查「完整磁碟取用權限」狀態（SQLite 快速路徑可用性） |
 | `check_accessibility` | 檢查「輔助使用」權限（wrapper-free 撰寫／回覆 GUI 路徑） |
 | `check_automation` | 檢查「自動化」權限（對 Mail 的 Apple Events）— 非觸發式 probe、四態各配補救指引（#293）；binary 自持授權、osascript 可用 ≠ binary 已授權（#288） |
+| `get_mail_log_events` | 唯讀查詢 Mail 自己的 unified log，找出事件鏈在哪一步斷掉（例如：草稿存檔 → 進佇列 → 通知引擎 → IMAP `APPENDUID` 回條，[#465](https://github.com/PsychQuant/che-apple-mail-mcp/issues/465)）。`detail=brief`（預設）只回靜態事件模板、整數參數，以及 `[帳號 - 信箱]` 形式那幾行的帳號代號，只要模板是編譯期字串（Mail 自己的都是），就不含帳號名稱、主旨或 Message-ID；`detail=detailed` 另附原始訊息，**內含帳號識別資訊與來信內容，不要貼進公開 issue**。窗口上限 60 分鐘，時間必須帶 UTC 偏移；續查用 `since=next_start`、`offset=next_offset` 加同一個 `until`。還沒有依事件名稱篩選（[#466](https://github.com/PsychQuant/che-apple-mail-mcp/issues/466)）。查不到任何事件不代表動作沒發生。僅在 macOS 27.2／Mail 16.0 驗證過；需要 admin 群組的使用者 |
 
 </details>
 
