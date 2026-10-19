@@ -1,0 +1,29 @@
+diff --git a/Sources/CheAppleMailMCP/DirectDraft/DirectDraftPath.swift b/Sources/CheAppleMailMCP/DirectDraft/DirectDraftPath.swift
+index 19e5c45..4f542d7 100644
+--- a/Sources/CheAppleMailMCP/DirectDraft/DirectDraftPath.swift
++++ b/Sources/CheAppleMailMCP/DirectDraft/DirectDraftPath.swift
+@@ -28,7 +28,7 @@ func buildDirectDraftTriggerScript(rowId: Int64, timing: Bool = ComposeTiming.is
+         end repeat
+         if _m is missing value then error "DIRECTDRAFT: Mail did not list the new draft within 10 s"\(mark("trigger_listed"))
+         set read status of _m to false\(mark("trigger_unread"))
+-        delay 0.5
++        delay \(ProcessInfo.processInfo.environment["CHE_MAIL_EXPERIMENT_488_GAP"] ?? "0.5")
+         set read status of _m to true\(mark("trigger_read"))
+         return "toggled"
+     end tell
+@@ -322,6 +322,7 @@ struct DirectDraftPath {
+             if attempt < 3 { try? await Task.sleep(nanoseconds: 250_000_000) }
+         }
+         let first = Self.readOutcome(looks)
++        FileHandle.standardError.write(Data("EXP488|row=\(inserted.messageRowId)|first=\(first)|looks=\(looks)\n".utf8))
+         guard first == .stillUnread else { return first }
+         _ = try? await controller.markDirectDraftRead(rowId: inserted.messageRowId)
+         var after: [Bool?] = []
+@@ -331,6 +332,7 @@ struct DirectDraftPath {
+             if flag == true { break }
+             try? await Task.sleep(nanoseconds: 250_000_000)
+         }
++        FileHandle.standardError.write(Data("EXP488|row=\(inserted.messageRowId)|after=\(Self.readOutcome(after))|looks=\(after)\n".utf8))
+         return Self.readOutcome(after)
+     }
+ 

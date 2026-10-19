@@ -35,7 +35,10 @@ let package = Package(
         .testTarget(
             name: "CheAppleMailMCPTests",
             dependencies: ["CheAppleMailMCP"],
-            path: "Tests/CheAppleMailMCPTests"
+            path: "Tests/CheAppleMailMCPTests",
+            // Synthetic ndjson inputs for the mail-log tests (#465) are read via
+            // #filePath, not bundled — exclude so SwiftPM does not warn about them.
+            exclude: ["Fixtures"]
         )
     ]
 )

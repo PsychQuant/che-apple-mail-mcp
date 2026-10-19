@@ -59,6 +59,10 @@ final class OpenMailtoLaunchServicesTests: XCTestCase {
         XCTAssertTrue(desc.contains("ZERO Automation TCC"), "must advertise the zero-TCC property")
         XCTAssertTrue(desc.contains("-1743"), "must name the failure code it escapes")
         XCTAssertTrue(desc.contains("cite-block-free"), "must state the cite-block property")
-        XCTAssertTrue(desc.contains("(c) legacy AppleScript injection"), "must spell out the full ladder")
+        // #475 verify R4: the old rung (c), legacy AppleScript injection, was
+        // deleted in #304. The ladder now says so instead of offering it.
+        XCTAssertTrue(desc.contains("(a) create_draft clean path"), "must spell out the ladder")
+        XCTAssertTrue(desc.contains("removed in #304"), "must say the injection rung no longer exists")
+        XCTAssertFalse(desc.contains("never fall to (c)"), "must not describe a third rung that no longer exists")
     }
 }
