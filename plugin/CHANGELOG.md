@@ -21,6 +21,9 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 
 ## [Unreleased]
 
+### Fixed
+- Synthetic-ID repair checks SQLite capability before work, distinguishes lookup failure from no match, and reports quarantine inventory. Candidate uniqueness now uses complete uncollapsed rows and actual Message-IDs, with explicit sender/time normalization and pre-write collision planning. Missing-offset dates are now explicitly left for source/date confirmation before rerunning: the previous secondary offset-repair promise depended on first matching an ambiguous timestamp and is not treated as a reliable automatic capability. This conservative boundary and the manual recovery of partial file/index writes are disclosed. This is source preparation; plugin version changes remain part of release preparation. The removal of the offset repair is a recorded maintainer decision (2026-10-20, #389): synthetic files whose date has no offset are `still-unparseable: date-offset-missing` and need a confirmed source date before a rerun. Shell command paths are never placed in the command string (JSON file + fixed script). (#389)
+
 ## [2.50.1] - 2026-10-19
 
 ### Changed
@@ -50,11 +53,6 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 ### Changed
 - `binary_version` 3.1.0 → 3.2.0: new read tool `get_mail_log_events` reads Mail's own unified log (`/usr/bin/log show`) in brief or detailed mode, to find where an event chain stops (for example whether a draft was queued for upload and whether the IMAP receipt arrived). It is an observation channel for events, not a source of mailbox state. ([#465](https://github.com/PsychQuant/che-apple-mail-mcp/issues/465))
 - The same binary carries the subprocess lifecycle work: draft scans no longer stall on background NSAppleScript ([#406](https://github.com/PsychQuant/che-apple-mail-mcp/issues/406)), GUI script timeouts distinguish requested termination from confirmed exit ([#415](https://github.com/PsychQuant/che-apple-mail-mcp/issues/415)), and exited osascript children no longer leave a false unreaped count ([#417](https://github.com/PsychQuant/che-apple-mail-mcp/issues/417)).
-
-## [Unreleased]
-
-### Fixed
-- Synthetic-ID repair checks SQLite capability before work, distinguishes lookup failure from no match, and reports quarantine inventory. Candidate uniqueness now uses complete uncollapsed rows and actual Message-IDs, with explicit sender/time normalization and pre-write collision planning. Missing-offset dates are now explicitly left for source/date confirmation before rerunning: the previous secondary offset-repair promise depended on first matching an ambiguous timestamp and is not treated as a reliable automatic capability. This conservative boundary and the manual recovery of partial file/index writes are disclosed. This is source preparation; plugin version changes remain part of release preparation. (#389)
 
 ## [2.48.0] - 2026-09-08
 
