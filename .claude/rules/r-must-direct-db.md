@@ -41,6 +41,17 @@
 - create/delete mailbox / rule
 - check_for_new_mail / synchronize_account
 
+### C/U/D 的唯一例外:實驗性直接寫入草稿(#472,opt-in)
+
+> 任何改動(包括加速)都不得削弱它的交易保證,見 `direct-write-transaction-safety.md`。
+
+`create_draft` 在 `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1` 時可**直接寫入** Envelope Index + `.emlx`(`Sources/MailSQLite/DraftStoreWriter.swift`),再用 AppleScript 切換該草稿的已讀狀態,讓 Mail 自己上傳。這是本規則「寫入走 AppleScript」的**唯一**例外,理由是證據而非方便:
+
+- #463 兩輪實驗:注入的草稿 Mail 不必重啟就列出、可開成可編輯撰寫視窗;同帳號一個 Mail 自己建立的 action(包括切換該草稿自身的已讀)就讓同步引擎把注入的 action 一併處理,上傳後伺服器端 `draft=1`,與 Mail 自己的草稿在列形狀與內容上無法區分(標頭與解碼後內文逐欄一致,含中文)。
+- split-brain 的疑慮在這個範圍內被量測過:寫入只在單一 `BEGIN IMMEDIATE` 交易內完成(寫入鎖約 2–5 ms),`.emlx` 在交易內原子改名,絕不碰 `alleged_change_identifier`,由 Mail 自己的 trigger 維護計數。
+
+**界線(封閉,不得依性質相似類推)**:只有這一條路徑、只在 opt-in 時、只在呼叫通過 spec〈Direct-write draft path〉列出的全部條件時（`message-composition` spec：9 項適用條件與 8 項寫入前閘門兩份封閉清單，以 spec 為準，這裡不重抄）。任何其他寫入(標記、搬移、刪除、`update_draft`、`compose_email`)仍走 AppleScript。「觸發」指上傳請求（切換該草稿的已讀狀態）成功完成。在那之前的任何失敗，包括上傳請求本身失敗，都必須精確還原並退回 GUI 路徑；還原若因 Mail 已上傳而被拒，視為已建立、不得退回；還原因其他原因失敗，回報為已建立、上傳未確認，同樣不得退回。上傳請求成功之後不得退回（會產生重複草稿）。殘留風險（#475 verify R3，未實測）：還原只以 `server_messages` 判斷是否已上傳；若上傳請求在切換之後才出錯，而 Mail 的上傳已在進行、尚未寫入 `server_messages`，還原仍可能放行。
+
 ## Hybrid pattern(實作慣例)
 
 每個 read tool 必須:
@@ -87,6 +98,7 @@ return try await mailController.fallback(...)
 - **EWS / Exchange accounts**:`.emlx` 不存在於 Exchange storage(server-side),AppleScript fallback 是**設計上正確**的路徑,不算違反規則。Init / per-call log 仍應產生,讓使用者能 distinguish 「EWS legitimate fallback」vs「Gmail silent failure」(見 #9, #69)。
 - **`get_email_metadata`**:目前(2026-05)缺 AppleScript fallback,SQLite throw 會 propagate。已記錄為 #71,**待修不算豁免** — 修好之前不要新增同型違規。
 - **`get_special_mailboxes`(特殊匣實名解析)**:特殊匣的**名稱**(unified `get name of drafts mailbox`,以及 #179 的 per-account 實名 via unified-children 反查)是 Mail AppleScript object model 的 metadata,**不存在於 Envelope Index**(SQLite 只有 message/mailbox row,沒有「drafts mailbox 的本地化顯示名」這種 app-level 語意)。因此 `get_special_mailboxes` 的名稱解析走 **AppleScript-primary 是設計上正確**,不算違反規則 — 這也修正了一個 pre-existing 描述/實作落差(unified 模式在 #179 之前就一直是 AppleScript)。對比之下,*mailbox 清單*(`list_mailboxes`)仍可由 Envelope Index 推導,維持 SQLite-first。#179 的 per-account 路徑無 SQLite 嘗試是預期的;EWS caveat 同上。
+- **`get_mail_log_events`(unified log 觀察通道,#465)**:它讀的是 Mail 自己寫進 macOS unified log 的**事件**(`/usr/bin/log show`),不是郵件**狀態**,所以不在本規則的 R 清單內,也不是 SQLite 路徑的替代品。它回答「發生了什麼、何時」(例如草稿是否被排入上傳、IMAP 回條是否出現),**不得**被當成狀態來源:要知道一封草稿現在是否存在、其 `remote_id` 是什麼,仍走 Envelope Index。日誌只保留有限時間、格式是 Apple 的私有格式,而且「沒有日誌行」不代表「沒發生」——這三點都是它不能當 truth 的理由。
 - **`list_drafts`(草稿匣**識別**)**:`list_drafts` 維持 **AppleScript-primary 是設計上正確**,不算違反規則 — 與 `get_special_mailboxes` 同根。讀草稿匣的**訊息**本身對 SQLite 友善(`EnvelopeIndexReader.listEmails` 已能用 `mb.url LIKE` 讀某匣訊息),但前一步「**哪個 mailbox 是草稿匣**」是 app-level metadata:Envelope Index `mailboxes` 表只有 `url / total_count / unread_count`,**無 special-mailbox role 欄位**,草稿匣的 `url` 帶 provider/locale 名(`[Gmail]/草稿` / `Drafts`),用名稱 heuristic 比對就是重蹈 #174 的 hardcoded-`Drafts` bug。識別草稿匣本質上要靠 AppleScript(#174 的 `ListDraftsScriptBuilder` unified-children 反查),所以**純 SQLite 的 `list_drafts` 不可達**;#174 已讓 `list_drafts` 在 Gmail/localized 帳號正確,草稿數通常少、AppleScript 延遲可接受。結論(#186,2026-06-14):這是 sanctioned exception 而非待補的 gap;若日後 batch 場景真有 evidence 需要 message-read 加速,走 hybrid(AppleScript 識別草稿匣 → SQLite 讀訊息),但 identification 那步仍是 AppleScript。
 
 ## 違反偵測
@@ -103,6 +115,7 @@ return try await mailController.fallback(...)
 - #71 — `get_email_metadata` AppleScript fallback gap(待修)
 - #9 — EWS / Exchange caveat
 - #186 — `list_drafts` 草稿匣識別是 app-level metadata → sanctioned AppleScript-primary exception(won't-implement,2026-06-14)
+- #463 / #472 — 實驗性直接寫入草稿(C/U/D 唯一例外,opt-in;證據見上方例外段)
 
 ## `whose content contains` 全文掃描禁令 (#221)
 

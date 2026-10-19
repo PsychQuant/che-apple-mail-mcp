@@ -74,7 +74,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "check_accessibility",
-                description: "Check whether Accessibility (GUI-scripting) is granted via AXIsProcessTrusted(). Required for the #175 wrapper-free compose path (compose_email / create_draft use mailto + keystrokes so the body isn't wrapped in <blockquote type=\"cite\"> on mobile clients). Returns status plus steps to grant it. Separate grant from check_fda. If denied, compose still works but the body is wrapped in a quote on some mobile clients.",
+                description: "Check whether Accessibility (GUI-scripting) is granted via AXIsProcessTrusted(). Required for the #175 wrapper-free compose path (compose_email / create_draft use mailto + keystrokes so the body isn't wrapped in <blockquote type=\"cite\"> on mobile clients), except when the experimental direct-write create_draft path (CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1) creates the draft — that path needs Full Disk Access and Automation instead, and applies only when the call meets its conditions. Returns status plus steps to grant it. Separate grant from check_fda. If denied, the GUI compose paths fail with a named reason; there is no fallback to the removed legacy compose route (#304).",
                 inputSchema: .object(["type": .string("object"), "properties": .object([:])])
             ),
             Tool(
@@ -82,6 +82,8 @@ class CheAppleMailMCPServer {
                 description: "Check whether Automation (Apple Events to Mail) is granted TO THIS BINARY — the third TCC axis after check_fda and check_accessibility (#293). Non-prompting probe (AEDeterminePermissionToAutomateTarget, askUserIfNeeded=false). Four states with remediation: granted / denied (recorded -1743 — macOS never re-prompts; System Settings entry or tccutil reset, #288) / not-determined (run any Mail tool to trigger the prompt) / Mail-not-running (open Mail.app first; the probe deliberately has no side effects). Note (#288): the binary holds its OWN grant — osascript working in your shell does NOT mean this binary is authorized. Zero-TCC compose fallback: open_mailto (#287).",
                 inputSchema: .object(["type": .string("object"), "properties": .object([:])])
             ),
+            // #465 — read-only view of Mail's own unified log (find where an event chain stops)
+            MailLogTool.definition,
             Tool(
                 name: "get_account_info",
                 description: "Get detailed information about a specific mail account",
@@ -281,7 +283,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "reply_email",
-                description: "Reply to an email. Mail's native reply verb builds the quoted original (correct threading headers and cite block) and only the NEW body is pasted in at the cursor. The body always comes from Mail's own editor, never from an AppleScript body assignment — that assignment is what makes Mail wrap the whole letter in <blockquote type=\"cite\">, which the sender cannot see locally while Gmail and Outlook show it as quoted text (#304). When the clean path cannot run, the call FAILS with the reason and an alternative and creates/sends nothing. Two reasons apply here: format is not 'plain'; Accessibility not granted. Optionally add extra CC, attach files, and save as draft instead of sending.",
+                description: "Reply to an email. Mail's native reply verb builds the quoted original (correct threading headers and cite block) and only the NEW body is pasted in at the cursor. The body always comes from Mail's own editor, never from an AppleScript body assignment — that assignment is what makes Mail wrap the whole letter in <blockquote type=\"cite\">, which the sender cannot see locally while Gmail and Outlook show it as quoted text (#304). When the clean path cannot run, the call FAILS with the reason and an alternative and creates/sends nothing. Two reasons apply here: format is not 'plain'; Accessibility not granted. Optionally add extra CC, attach files, and save as draft instead of sending. The sender account is chosen by Mail's reply command (no from_address parameter). After a save_as_draft, read the saved draft back to confirm its body is present before sending it (#461).",
 
                 inputSchema: .object([
                     "type": .string("object"),
@@ -291,7 +293,7 @@ class CheAppleMailMCPServer {
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
                         "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
                         "body": .object(["type": .string("string"), "description": .string("Reply content (interpreted according to 'format')")]),
-                        "reply_all": .object(["type": .string("boolean"), "description": .string("Reply to all recipients (default: false)")]),
+                        "reply_all": .object(["type": .string("boolean"), "description": .string("Reply to all recipients (default: false). Mail builds the recipient list from the original message. With save_as_draft false (the default) the reply is SENT to every recipient of the original — the worst case, not yet checked live — so save it as a draft first (save_as_draft: true) and read its To/Cc before sending.")]),
                         "cc_additional": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Extra CC recipients to add on top of those derived from 'reply_all'. Email addresses (RFC 5322 addr-spec). Also accepts RFC 5322 mailbox form (Name <a@b.c>, #251) - the reply paste path sets recipient names natively (no mailto involved, no path change).")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach to the reply.")]),
                         "save_as_draft": .object(["type": .string("boolean"), "description": .string("If true, save the reply as a draft instead of sending it (default: false). Use when you want a human to review before send.")]),
@@ -334,7 +336,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "create_draft",
-                description: "Create a new draft email. Display-name recipients (Name <email>) in to, cc AND bcc ride the clean path on DRAFTS: each list carrying a display name is omitted from the mailto URL and filled through the compose window — the field is located by its AXIdentifier (Mail.toField / Mail.ccField / Mail.bccField), focused, pasted from the clipboard, Tab-committed, and its tokens read back (count + display names) before the save (#277 to, #404 cc/bcc; needs Accessibility). A hidden Bcc field is revealed via View ▸ Bcc Address Field and deliberately left visible — the result says bcc_field_revealed: true. After the save — only when cc or bcc carried a display name; a bare-address call gets no recipients_verified — the draft carrying this subject (newest id wins, #409: another same-subject draft can be selected) has its cc/bcc ADDRESSES re-read and compared with the request: the result says recipients_verified: true, or recipients_verified: false with a recipients_diff JSON object, or recipients_receipt: unavailable when the read could not run — the draft is kept in every case, never deleted. Caveat: that receipt scans every account's drafts mailbox through in-process AppleScript, the path #406 documents as slow on some accounts; when it hits the 45 s deadline the result says unavailable (not \"not found\") and the draft is still saved. Caveat (#408): the field identifiers Mail.toField / Mail.ccField / Mail.bccField were observed on Mail for macOS 27 only; on other macOS versions an unlocatable field fails the call cleanly (FILLFIELD) rather than misfiring, and multi-recipient / Contacts-renamed lists have not been live-verified yet. The body always comes from Mail's own editor, never from an AppleScript body assignment — that assignment is what makes Mail wrap the whole letter in <blockquote type=\"cite\">, which the sender cannot see locally while Gmail and Outlook show it as quoted text (#304). When the clean path cannot run, the call FAILS with the reason and an alternative and creates/sends nothing. Exactly six reasons: format is not 'plain'; empty subject; Accessibility not granted (grant it, or use open_mailto — zero TCC, no attachments); from_address is not a bare addr-spec; an attachment path contains non-ASCII characters (create the draft without attachments and drag the file in, #220); a to/cc/bcc recipient carries a display name on a SEND — never on a draft, where display names are GUI-filled (#277/#404).",
+                description: "Create a new draft email. Display-name recipients (Name <email>) in to, cc AND bcc ride the clean path on DRAFTS: each list carrying a display name is omitted from the mailto URL and filled through the compose window — the field is located by its AXIdentifier (Mail.toField / Mail.ccField / Mail.bccField), focused, pasted from the clipboard, Tab-committed, and its tokens read back (count + display names) before the save (#277 to, #404 cc/bcc; needs Accessibility). A hidden Bcc field is revealed via View ▸ Bcc Address Field and deliberately left visible — the result says bcc_field_revealed: true. After the save — only when cc or bcc carried a display name; a bare-address call gets no recipients_verified — the draft carrying this subject (newest id wins, #409: another same-subject draft can be selected) has its cc/bcc ADDRESSES re-read and compared with the request: the result says recipients_verified: true, or recipients_verified: false with a recipients_diff JSON object, or recipients_receipt: unavailable when the read could not run — the draft is kept in every case, never deleted. Caveat: that receipt scans every account's drafts mailbox through in-process AppleScript, the path #406 documents as slow on some accounts; when it hits the 45 s deadline the result says unavailable (not \"not found\") and the draft is still saved. Caveat (#408): the field identifiers Mail.toField / Mail.ccField / Mail.bccField were observed on Mail for macOS 27 only; on other macOS versions an unlocatable field fails the call cleanly (FILLFIELD) rather than misfiring, and multi-recipient / Contacts-renamed lists have not been live-verified yet. The body comes from Mail's own editor — or, only with CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1 and a call that meets every condition of the experimental direct-write path (the closed lists in the message-composition spec, Requirement: Direct-write draft path; if any condition fails the call takes this GUI path), from a MIME message written straight into Mail's store, which opens no window and needs Full Disk Access and Automation instead of Accessibility (#472/#475) — never from an AppleScript body assignment — that assignment is what makes Mail wrap the whole letter in <blockquote type=\"cite\">, which the sender cannot see locally while Gmail and Outlook show it as quoted text (#304). When the clean path cannot run, the call FAILS with the reason and an alternative and creates/sends nothing. Exactly six reasons (these govern the GUI path; when the opt-in direct write creates the draft, Accessibility is not needed): format is not 'plain'; empty subject; Accessibility not granted (grant it, or use open_mailto — zero TCC, no attachments); from_address is not a bare addr-spec; an attachment path contains non-ASCII characters (create the draft without attachments and drag the file in, #220); a to/cc/bcc recipient carries a display name on a SEND — never on a draft, where display names are GUI-filled (#277/#404). Does NOT thread: this tool sets no In-Reply-To/References (the mailto URL it builds adds no header field beyond cc, bcc, subject and body, and the direct-write MIME carries no such headers), so a reply drafted here is a fresh compose — one such draft was observed outside the original conversation (#510). Whether Mail honors an In-Reply-To passed through mailto has not been tested. For a draft whose headers carry the original's In-Reply-To/References, use reply_email with save_as_draft: true — the sender account is chosen by Mail's reply command (no from_address parameter).",
 
                 inputSchema: .object([
                     "type": .string("object"),
@@ -346,7 +348,7 @@ class CheAppleMailMCPServer {
                         "body": .object(["type": .string("string"), "description": .string("Email body content (interpreted according to 'format')")]),
                         "attachments": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Absolute file paths to attach (optional)")]),
                         "format": .object(["type": .string("string"), "enum": .array([.string("plain")]), "description": .string("Body format. \"plain\" is the ONLY supported value and the default when omitted: the body is delivered verbatim through Mail's own editor. \"markdown\" and \"html\" were removed in #304 — no path this server ships today can deliver rich text without assigning the AppleScript html-content property, and that is what wraps the whole letter in <blockquote type=\"cite\"> (invisible to the sender, shown as quoted text by Gmail and Outlook). That describes what EXISTS, not a proof of impossibility: whether a clipboard paste can carry rich text and stay wrapper-free is UNVERIFIED and is being settled in #306 (#310). Passing either value fails with that explanation; see #308 / #309 for alternative rich-text architectures.")]),
-                        "from_address": .object(["type": .string("string"), "description": .string("Optional — email address of the account to save the draft UNDER (sender selection). Must match one of your Mail.app accounts' addresses. Omit to use Mail.app's default account. Use list_accounts to discover available email addresses. Clean path supported (#219): the GUI selects this account via the compose window's From popup and READS BACK the selection, comparing addr-spec exactly — any mismatch aborts the call rather than risk sending from the wrong account. Needs Accessibility, and the address must be a bare addr-spec (a quoted local-part cannot be matched safely, so it is refused).")]),
+                        "from_address": .object(["type": .string("string"), "description": .string("Optional — email address of the account to save the draft UNDER (sender selection). Must match one of your Mail.app accounts' addresses. Omit to use Mail.app's default account. Use list_accounts to discover available email addresses. Clean path supported (#219): the GUI selects this account via the compose window's From popup and READS BACK the selection, comparing addr-spec exactly — any mismatch aborts the call rather than risk sending from the wrong account. On the GUI path this needs Accessibility (the experimental direct-write path requires from_address and needs Full Disk Access and Automation instead), and the address must be a bare addr-spec (a quoted local-part cannot be matched safely, so it is refused).")]),
                     ]),
                     "required": .array([.string("to"), .string("subject"), .string("body")])
                 ])
@@ -684,7 +686,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "open_mailto",
-                description: "Open a mailto URL in the system default mail client via LaunchServices — ZERO Automation TCC required (#287), so it works even when AppleScript tools fail with -1743 (Not authorized to send Apple events). The mailto compose window is inherently cite-block-free (#175). Cite-block-avoidance ladder: (a) create_draft clean path — needs Automation + Accessibility TCC, carries attachments; (b) THIS TOOL — zero TCC, no attachments (RFC 6068; drag files in manually), window opens in the default mail app which may not be Mail.app; (c) legacy AppleScript injection — body wrapped in blockquote type=cite, unacceptable for formal mail. When TCC is not granted (-1743), (b) is the correct path — never fall to (c).",
+                description: "Open a mailto URL in the system default mail client via LaunchServices — ZERO Automation TCC required (#287), so it works even when AppleScript tools fail with -1743 (Not authorized to send Apple events). The mailto compose window is inherently cite-block-free (#175). Cite-block-avoidance ladder: (a) create_draft clean path — needs Automation + Accessibility TCC (the opt-in direct-write create_draft path needs Full Disk Access + Automation instead), carries attachments; (b) THIS TOOL — zero TCC, no attachments (RFC 6068; drag files in manually), window opens in the default mail app which may not be Mail.app; the legacy AppleScript body injection that wrapped the body in blockquote type=cite was removed in #304, so there is no third path. When TCC is not granted (-1743), (b) is the correct path.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -871,12 +873,7 @@ class CheAppleMailMCPServer {
             let probe = AccessibilityStatus.probe()
             switch probe {
             case .granted:
-                return "✅ " + AccessibilityStatus.summary(probe)
-                    + "\nEligible compose_email / create_draft calls (plain-text, a subject, a simple custom"
-                    + " from_address rides the clean path via the verified From popup (#219), env hatch off) will"
-                    + " attempt the wrapper-free mailto path (#175); other calls and any GUI-step failure fall back"
-                    + " to the legacy path. Note: System Events keystrokes also rely on Automation (Apple Events)"
-                    + " being allowed — this probe only checks Accessibility (AXIsProcessTrusted)."
+                return "✅ " + AccessibilityStatus.summary(probe) + "\n" + AccessibilityStatus.grantedDetail
             case .denied:
                 return "⚠️ " + AccessibilityStatus.summary(probe) + "\n\n"
                     + AccessibilityStatus.guidance()
@@ -889,6 +886,10 @@ class CheAppleMailMCPServer {
             // #293: pure mapping unit-tested in AutomationStatusTests; the
             // probe is the thin live layer (attended residue).
             return AutomationStatus.report(for: AutomationStatus.probe())
+
+        case "get_mail_log_events":
+            // #465: all validation + shaping live in MailLogTool; the server only dispatches.
+            return try await MailLogTool.handle(arguments: arguments, source: LogShowRunner())
 
         case "list_accounts":
             // Primary: AppleScript path — only way to resolve EWS display_name
@@ -1362,7 +1363,21 @@ class CheAppleMailMCPServer {
             let format = try parseBodyFormatArgument(arguments["format"])
             // #131: sender account selection (see compose_email).
             let fromAddress = arguments["from_address"]?.stringValue
-            return try await mailController.createDraft(to: to, subject: subject, body: body, cc: cc, bcc: bcc, attachments: attachments, format: format, fromAddress: fromAddress)
+            // #472: EXPERIMENTAL opt-in (CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1) —
+            // write the draft straight into Mail's store; anything outside the
+            // verified range falls back to the GUI path, with a note. #475: the
+            // whole call is one timing run when CHE_MAIL_COMPOSE_TIMING_CSV is set.
+            let directPath = DirectDraftPath(controller: mailController, reader: indexReader)
+            return try await DirectDraftPath.createDraft(
+                csvPath: ComposeTiming.csvPathFromEnvironment, directEnabled: DirectDraft.isEnabled,
+                direct: {
+                    await directPath.attempt(to: to, subject: subject, body: body, cc: cc, bcc: bcc,
+                                             attachments: attachments, format: format, fromAddress: fromAddress)
+                },
+                gui: {
+                    try await mailController.createDraft(to: to, subject: subject, body: body, cc: cc, bcc: bcc,
+                                                         attachments: attachments, format: format, fromAddress: fromAddress)
+                })
 
         case "update_draft":
             // #276 — upsert: locate existing draft → create replacement →

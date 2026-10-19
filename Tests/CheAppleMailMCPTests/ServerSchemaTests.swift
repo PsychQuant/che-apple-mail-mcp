@@ -90,6 +90,76 @@ final class ServerSchemaTests: XCTestCase {
         XCTAssertFalse(required.contains("bcc"), "bcc must stay optional")
     }
 
+    private func descriptionText(of property: Value) -> String? {
+        guard case .object(let obj) = property,
+              case .string(let text)? = obj["description"] else { return nil }
+        return text
+    }
+
+    /// #510 — `create_draft` does not thread. The description is what a calling
+    /// agent reads before it calls, so it states what is actually known and no
+    /// more (PR #514 verify, round 1):
+    ///
+    /// - this tool sets no `In-Reply-To`/`References`, so a reply drafted here is
+    ///   a fresh compose. That is a statement about this tool's code.
+    /// - it must NOT say "cannot set": RFC 6068 lets a mailto URL carry
+    ///   `In-Reply-To`, this tool just does not build it, and whether Mail honors
+    ///   it is untested.
+    /// - it must NOT say a `reply_email` draft "stays in the thread": that
+    ///   draft's headers were read back, but Mail's conversation view was never
+    ///   checked (#43 / #47).
+    /// - it names the tool whose draft carries the headers, and what that tool
+    ///   lacks, so a caller who needs a sender account is not sent there blind.
+    func testCreateDraftDescription_saysItDoesNotThread_andPointsToReplyEmail() {
+        guard let t = tool(named: "create_draft") else {
+            XCTFail("create_draft tool missing")
+            return
+        }
+        let d = t.description ?? ""
+        XCTAssertTrue(d.contains("Does NOT thread"),
+                      "create_draft description must state the negative itself, not just mention the headers (#510)")
+        XCTAssertTrue(d.contains("sets no In-Reply-To/References"),
+                      "create_draft description must name the threading headers it does not set (#510)")
+        XCTAssertTrue(d.contains("reply_email"),
+                      "create_draft description must point to reply_email for replies (#510)")
+        XCTAssertTrue(d.contains("save_as_draft"),
+                      "create_draft description must name reply_email's draft mode (#510)")
+        XCTAssertTrue(d.contains("no from_address"),
+                      "create_draft description must say what reply_email lacks (#510)")
+        XCTAssertTrue(d.contains("has not been tested"),
+                      "create_draft description must keep the untested mailto In-Reply-To caveat (#510)")
+        XCTAssertFalse(d.contains("original message's account"),
+                       "which account Mail replies from is Mail's choice and was not verified (#510)")
+        XCTAssertFalse(d.contains("cannot set"),
+                       "mailto can carry In-Reply-To (RFC 6068); 'cannot' is an over-claim (#510)")
+        XCTAssertFalse(d.contains("stays in the thread"),
+                       "a reply_email draft's conversation-view grouping was never verified (#43/#47)")
+    }
+
+    /// #510 — `reply_all: true` used to fail at AppleScript compile time, before
+    /// Mail was touched, so it could never send. Now that it compiles, the default
+    /// `save_as_draft: false` SENDS to every recipient of the original. The schema
+    /// a calling agent reads must say so.
+    func testReplyEmail_replyAllDescription_warnsASendReachesEveryRecipient() {
+        guard let t = tool(named: "reply_email"),
+              let props = propertiesObject(of: t),
+              let replyAll = props["reply_all"],
+              let d = descriptionText(of: replyAll) else {
+            XCTFail("reply_email reply_all property description missing")
+            return
+        }
+        XCTAssertTrue(d.contains("SENT to every recipient"),
+                      "reply_all must warn that a send reaches every recipient of the original (#510)")
+        XCTAssertTrue(d.contains("save_as_draft"),
+                      "reply_all must point to save_as_draft as the way to review first (#510)")
+        XCTAssertTrue((t.description ?? "").contains("no from_address"),
+                      "reply_email must say it has no from_address, since create_draft sends callers here (#510)")
+        XCTAssertTrue((t.description ?? "").contains("#461"),
+                      "reply_email must tell callers to read a saved draft back, since #461 is unresolved (#510)")
+        XCTAssertTrue(d.contains("not yet checked live"),
+                      "reply_all must say the send reach is the worst case and not yet checked live (#510)")
+    }
+
     func testReplyEmail_advertisesFormatEnum() {
         assertFormatParameter(toolName: "reply_email")
     }

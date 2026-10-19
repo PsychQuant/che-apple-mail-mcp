@@ -169,7 +169,7 @@ struct SetupView: View {
                 Spacer()
                 Button("Open settings") { model.openAccessibilitySettings() }
             }
-            Text("Lets compose_email / create_draft send through Mail's native path so the body isn't shown as a quote on mobile (#175). Grant it to whatever LAUNCHED this server (terminal / Claude Desktop). Without it, compose still works but the body is wrapped.")
+            Text(AccessibilityStatus.setupNote)
                 .font(.caption).foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 

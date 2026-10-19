@@ -201,14 +201,19 @@ fi
 # Unlike the checks above this one CANNOT be evaluated statically: the authority
 # is `defineTools()`, which only exists once Swift compiles. So rather than
 # reimplementing name extraction in bash — a second spec that would drift from
-# the first — run the test that already owns the invariant. There is no CI in
-# this repo (no .github/workflows), so without this line nothing forces that
-# test to run before a release, which is the whole gap #311 was about.
+# the first — run the test that already owns the invariant. Running it here
+# makes manifest parity a release prerequisite, independent of CI configuration.
 # mktemp, not a fixed /tmp path: another local user can pre-create a symlink at
 # a predictable name, and the redirect would then follow it and truncate the
 # target with the release runner's privileges.
 MANIFEST_GATE_LOG="$(mktemp -t che-mail-manifest-tools-gate)"
-trap 'rm -f "$MANIFEST_GATE_LOG"' EXIT
+REPO_GUARD_LOG=""
+cleanup_guard_logs() {
+    rm -f "$MANIFEST_GATE_LOG"
+    if [[ -n "${REPO_GUARD_LOG:-}" ]]; then rm -f "$REPO_GUARD_LOG"; fi
+}
+trap cleanup_guard_logs EXIT
+REPO_GUARD_LOG="$(mktemp -t che-mail-repo-guards)"
 if ! swift test --filter 'ManifestToolsSetEqualityTests' > "$MANIFEST_GATE_LOG" 2>&1; then
     grep -E "ABSENT from|NOT registered|duplicate tool names|descriptions differ|error:" \
         "$MANIFEST_GATE_LOG" >&2 || true
@@ -216,6 +221,37 @@ if ! swift test --filter 'ManifestToolsSetEqualityTests' > "$MANIFEST_GATE_LOG" 
   Full output was shown above.
   Reproduce:   swift test --filter ManifestToolsSetEqualityTests
   Regenerate:  REGENERATE_MCPB_MANIFEST=1 swift test --filter ManifestToolsSetEqualityTests"
+fi
+
+# Same shape, different subject: guards that protect the REPOSITORY rather than
+# the manifest. Before #391, the release path selected only the manifest test;
+# it did not run the index guard. Keep this check before building/tagging so
+# stale tracked artifacts cannot silently enter another release checkout.
+if ! swift test --filter 'NoTrackedBuildArtifactsTests|ManifestVersionTests' > "$REPO_GUARD_LOG" 2>&1; then
+    cat "$REPO_GUARD_LOG" >&2
+    die "repository guards failed — refusing to tag a release (#391/#396).
+  Full output was shown above.
+  Reproduce:   swift test --filter 'NoTrackedBuildArtifactsTests|ManifestVersionTests'"
+fi
+
+# Exit 0 also permits partial filter matches or XCTSkip. Require the named
+# invariant checks to have passed, not just a green test process. These are
+# macOS XCTest completion lines; a rename/output-format change fails closed
+# until this list is consciously updated alongside the tests.
+required_repo_tests=(
+    "NoTrackedBuildArtifactsTests testExactTrackedSetUnderMcpb"
+    "ManifestVersionTests testManifestVersionMatchesNewestRelease"
+    "ManifestVersionTests testMarketplaceEntryVersionMatchesPluginManifest"
+)
+for required_test in "${required_repo_tests[@]}"; do
+    if ! grep -Fq "Test Case '-[CheAppleMailMCPTests.${required_test}]' passed (" "$REPO_GUARD_LOG"; then
+        cat "$REPO_GUARD_LOG" >&2
+        die "repository guard did not complete: $required_test. Check for renamed, skipped, or unmatched tests."
+    fi
+done
+if grep -Eq "^Test Case .*' skipped " "$REPO_GUARD_LOG"; then
+    cat "$REPO_GUARD_LOG" >&2
+    die "repository guard was skipped — refusing to tag a release (#391)."
 fi
 
 # AppVersion.current (the server's self-reported version) MUST match the tag (#303).
@@ -311,14 +347,30 @@ echo "    ..."
 # ---- Build universal binary --------------------------------------------------
 
 info "Building release binary (universal: arm64 + x86_64)..."
-swift build -c release --arch arm64
-swift build -c release --arch x86_64
+# Ask SwiftPM where each build went, and copy it out before the next build.
+#
+# The native build system wrote one tree per triple (.build/<arch>-apple-macosx/
+# release). swiftbuild, the default from Swift 6.4, writes BOTH arches to one
+# directory, the x86_64 build overwriting the arm64 one, and leaves the per-triple
+# trees holding whatever the last native build produced. The first v3.2.0 attempt
+# lipo'd the v3.1.0 binaries from those trees; only the slice probe below stopped
+# it from being signed. Checking each product's arch catches a build that wrote
+# somewhere else again.
+STAGE_DIR="$DIST_DIR/stage"
+rm -rf "$STAGE_DIR"
+mkdir -p "$STAGE_DIR"
+for arch in arm64 x86_64; do
+    swift build -c release --arch "$arch"
+    BUILT="$(swift build -c release --arch "$arch" --show-bin-path)/$BINARY_NAME"
+    [[ -f "$BUILT" ]] || die "the $arch build left no $BINARY_NAME at $BUILT"
+    BUILT_ARCHS="$(lipo -archs "$BUILT")"
+    [[ "$BUILT_ARCHS" == "$arch" ]] \
+        || die "the $arch build's product at $BUILT is '$BUILT_ARCHS', not $arch"
+    cp "$BUILT" "$STAGE_DIR/$BINARY_NAME-$arch"
+done
 
-ARM64_BINARY=".build/arm64-apple-macosx/release/$BINARY_NAME"
-X64_BINARY=".build/x86_64-apple-macosx/release/$BINARY_NAME"
-if [[ ! -f "$ARM64_BINARY" || ! -f "$X64_BINARY" ]]; then
-    die "expected per-arch binaries missing (arm64: $ARM64_BINARY, x86_64: $X64_BINARY). build failed?"
-fi
+ARM64_BINARY="$STAGE_DIR/$BINARY_NAME-arm64"
+X64_BINARY="$STAGE_DIR/$BINARY_NAME-x86_64"
 
 mkdir -p "$DIST_DIR"
 # rm -f forces a fresh inode (macOS caches code-signature hashes per inode;
