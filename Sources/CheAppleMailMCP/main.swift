@@ -24,6 +24,11 @@ signal(SIGPIPE, SIG_IGN)
 // path stays byte-for-byte untouched.
 switch RunMode.parse(CommandLine.arguments) {
 case .server:
+    do {
+        try publishWrapperRuntimeState(version: AppVersion.current)
+    } catch {
+        MailController.emitDiagnostic("wrapper runtime state update failed: \(error.localizedDescription)")
+    }
     let server = try await CheAppleMailMCPServer()
     try await server.run()
 case .checkFDA:
