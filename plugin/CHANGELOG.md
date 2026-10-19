@@ -26,6 +26,21 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 - plugin 的安裝與 Source Code 連結使用 PsychQuant；個人署名與其他 repo 連結保留（#387）。
 
 
+## [2.50.0] - 2026-10-19
+
+### Changed
+- `binary_version` 3.2.0 → 3.3.0 (the shell itself is unchanged; the installed-plugin cache is keyed by `version`, so it is bumped with the binary). What the binary brings:
+  - `reply_email` with `reply_all: true` no longer fails to compile: Mail has no `reply all` verb, so the script is now the `reply` verb with its `reply to all` option. That the reply then reaches every recipient has not been checked live yet; with the default `save_as_draft: false` it sends, so save a draft and read its To/Cc first ([#510](https://github.com/PsychQuant/che-apple-mail-mcp/issues/510), [#458](https://github.com/PsychQuant/che-apple-mail-mcp/issues/458), [#513](https://github.com/PsychQuant/che-apple-mail-mcp/issues/513); live check tracked in [#516](https://github.com/PsychQuant/che-apple-mail-mcp/issues/516)).
+  - `create_draft` and `reply_email` descriptions now say what they do and do not do: `create_draft` sets no `In-Reply-To`/`References`, so a draft made with it is not threaded; `reply_email` has no `from_address` ([#510](https://github.com/PsychQuant/che-apple-mail-mcp/issues/510), [#478](https://github.com/PsychQuant/che-apple-mail-mcp/issues/478)).
+  - `create_draft` with a sender is about 1.7 s faster ([#464](https://github.com/PsychQuant/che-apple-mail-mcp/issues/464)); the first AppleScript-backed call in a fresh server no longer waits out the 45-second deadline ([#471](https://github.com/PsychQuant/che-apple-mail-mcp/issues/471)); text no longer over-claims after #304／#475 ([#486](https://github.com/PsychQuant/che-apple-mail-mcp/issues/486)).
+  - Experimental direct-write path for `create_draft` (`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, off by default; needs Full Disk Access and Automation instead of Accessibility), with opt-in per-step timing (`CHE_MAIL_COMPOSE_TIMING_CSV`) and an upload report about 75 ms sooner ([#472](https://github.com/PsychQuant/che-apple-mail-mcp/issues/472), [#475](https://github.com/PsychQuant/che-apple-mail-mcp/issues/475), [#489](https://github.com/PsychQuant/che-apple-mail-mcp/issues/489), [#497](https://github.com/PsychQuant/che-apple-mail-mcp/issues/497)).
+
+## [2.49.0] - 2026-10-04
+
+### Changed
+- `binary_version` 3.1.0 → 3.2.0: new read tool `get_mail_log_events` reads Mail's own unified log (`/usr/bin/log show`) in brief or detailed mode, to find where an event chain stops (for example whether a draft was queued for upload and whether the IMAP receipt arrived). It is an observation channel for events, not a source of mailbox state. ([#465](https://github.com/PsychQuant/che-apple-mail-mcp/issues/465))
+- The same binary carries the subprocess lifecycle work: draft scans no longer stall on background NSAppleScript ([#406](https://github.com/PsychQuant/che-apple-mail-mcp/issues/406)), GUI script timeouts distinguish requested termination from confirmed exit ([#415](https://github.com/PsychQuant/che-apple-mail-mcp/issues/415)), and exited osascript children no longer leave a false unreaped count ([#417](https://github.com/PsychQuant/che-apple-mail-mcp/issues/417)).
+
 ## [2.48.0] - 2026-09-08
 
 ### Changed

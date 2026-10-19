@@ -1,0 +1,208 @@
+{
+ "runs": [
+  {
+   "subject": "[idd-497-probe] #1",
+   "isError": false,
+   "seconds": 2.743,
+   "direct": true,
+   "uploaded": true,
+   "upload_s": 2.2,
+   "read_note": false,
+   "drafts_rowids": [
+    306346
+   ],
+   "drafts_read": [
+    1
+   ],
+   "allmail_n": 1,
+   "allmail_read": [
+    1
+   ]
+  },
+  {
+   "subject": "[idd-497-probe] #2",
+   "isError": false,
+   "seconds": 4.152,
+   "direct": true,
+   "uploaded": true,
+   "upload_s": 3.7,
+   "read_note": false,
+   "drafts_rowids": [
+    306347
+   ],
+   "drafts_read": [
+    1
+   ],
+   "allmail_n": 1,
+   "allmail_read": [
+    1
+   ]
+  },
+  {
+   "subject": "[idd-497-probe] #3",
+   "isError": false,
+   "seconds": 5.942,
+   "direct": true,
+   "uploaded": true,
+   "upload_s": 5.2,
+   "read_note": false,
+   "drafts_rowids": [
+    306349
+   ],
+   "drafts_read": [
+    1
+   ],
+   "allmail_n": 1,
+   "allmail_read": [
+    1
+   ]
+  },
+  {
+   "subject": "[idd-497-probe] #4",
+   "isError": false,
+   "seconds": 3.942,
+   "direct": true,
+   "uploaded": true,
+   "upload_s": 3.0,
+   "read_note": false,
+   "drafts_rowids": [
+    306353
+   ],
+   "drafts_read": [
+    1
+   ],
+   "allmail_n": 1,
+   "allmail_read": [
+    1
+   ]
+  },
+  {
+   "subject": "[idd-497-probe] #5",
+   "isError": false,
+   "seconds": 4.178,
+   "direct": true,
+   "uploaded": true,
+   "upload_s": 3.7,
+   "read_note": false,
+   "drafts_rowids": [
+    306356
+   ],
+   "drafts_read": [
+    1
+   ],
+   "allmail_n": 1,
+   "allmail_read": [
+    1
+   ]
+  },
+  {
+   "subject": "[idd-497-probe] #6",
+   "isError": false,
+   "seconds": 2.89,
+   "direct": true,
+   "uploaded": true,
+   "upload_s": 2.4,
+   "read_note": false,
+   "drafts_rowids": [
+    306357
+   ],
+   "drafts_read": [
+    1
+   ],
+   "allmail_n": 1,
+   "allmail_read": [
+    1
+   ]
+  },
+  {
+   "subject": "[idd-497-probe] #7",
+   "isError": false,
+   "seconds": 3.137,
+   "direct": true,
+   "uploaded": true,
+   "upload_s": 2.6,
+   "read_note": false,
+   "drafts_rowids": [
+    306359
+   ],
+   "drafts_read": [
+    1
+   ],
+   "allmail_n": 1,
+   "allmail_read": [
+    1
+   ]
+  },
+  {
+   "subject": "[idd-497-probe] #8",
+   "isError": false,
+   "seconds": 2.654,
+   "direct": true,
+   "uploaded": true,
+   "upload_s": 2.1,
+   "read_note": false,
+   "drafts_rowids": [
+    306362
+   ],
+   "drafts_read": [
+    1
+   ],
+   "allmail_n": 1,
+   "allmail_read": [
+    1
+   ]
+  },
+  {
+   "subject": "[idd-497-probe] #9",
+   "isError": false,
+   "seconds": 4.695,
+   "direct": true,
+   "uploaded": true,
+   "upload_s": 4.2,
+   "read_note": false,
+   "drafts_rowids": [
+    306363
+   ],
+   "drafts_read": [
+    1
+   ],
+   "allmail_n": 1,
+   "allmail_read": [
+    1
+   ]
+  },
+  {
+   "subject": "[idd-497-probe] #10",
+   "isError": false,
+   "seconds": 3.473,
+   "direct": true,
+   "uploaded": true,
+   "upload_s": 3.0,
+   "read_note": false,
+   "drafts_rowids": [
+    306365
+   ],
+   "drafts_read": [
+    1
+   ],
+   "allmail_n": 1,
+   "allmail_read": [
+    1
+   ]
+  }
+ ],
+ "trigger_sent_to_uploaded_ms": [
+  840.0,
+  1681.0,
+  1889.0,
+  1043.0,
+  1265.0,
+  1041.0,
+  1037.0,
+  360.0,
+  2620.0,
+  1775.0
+ ],
+ "poll_ms": 100,
+ "date": "2026-10-06T14:39:29+0800"
+}
