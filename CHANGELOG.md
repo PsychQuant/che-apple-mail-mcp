@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.3.1] - 2026-10-19
+
 ### Fixed
 
 - **Fresh marketplace clones no longer contain obsolete build artifacts**
@@ -95,6 +97,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Shared changelog parsing checks version pins, release notes and historical
   coverage against audited manifest records. Plugin-facing narrative changes
   are recorded in plugin/CHANGELOG.md.
+
+- **A failed cleanup no longer hides the original compose error**
+  ([#412](https://github.com/PsychQuant/che-apple-mail-mcp/issues/412)).
+  When a compose step failed and the cleanup that followed also failed, the
+  cleanup error replaced the original diagnostic (for example `FILLFIELD`).
+  The cleanup now runs in its own `try`: its error is appended to the original
+  message as `CLEANUPFAILED: …` and the original is raised again. Once the
+  message has been dispatched, neither branch enters cleanup.
+
+- **`check_accessibility` and the compose descriptions describe the refusal
+  paths that exist** ([#410](https://github.com/PsychQuant/che-apple-mail-mcp/issues/410)).
+  The `check_accessibility` output and the `check_accessibility` / `open_mailto`
+  descriptions now say what happens without the legacy path #304 removed:
+  GUI-based composing calls are refused with a named reason before composition
+  starts; other input validation (for example an over-long mailto URL) can also
+  fail before any GUI step; a failure during the GUI steps returns an error
+  without switching to another body path and may leave a compose window or
+  draft; after a send-stage failure or timeout the send state is unknown, so
+  check Sent/Outbox before sending again. `open_mailto` is named as the
+  zero-TCC alternative (no attachments; save or send manually), and the opt-in
+  direct-write `create_draft` path is stated as the exception that applies
+  only when a call meets its conditions.
+
+- **Draft receipts stop at the first read failure**
+  ([#414](https://github.com/PsychQuant/che-apple-mail-mcp/issues/414)).
+  The post-create draft-ID receipt treated a read or parse failure as "not
+  found" and kept retrying, which could add about 135 s. Both the recipient
+  receipt and the post-create ID receipt now stop at the first failed read
+  without retrying; only reads that succeed without finding the target are
+  polled (at most three reads, 0.4 s apart). When the ID receipt is
+  unavailable, `update_draft` keeps the old draft and asks you to inspect Mail
+  before retrying the update.
 
 ## [3.3.0] - 2026-10-19
 
