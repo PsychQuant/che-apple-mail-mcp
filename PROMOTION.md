@@ -9,7 +9,7 @@
 3. Add this entry (in alphabetical order):
 
 ```markdown
-- **[che-apple-mail-mcp](https://github.com/kiki830621/che-apple-mail-mcp)** (by Che Cheng) - The most comprehensive Apple Mail MCP with 42 tools covering accounts, mailboxes, emails, rules, signatures, VIP management and more. Built with Swift.
+- **[che-apple-mail-mcp](https://github.com/PsychQuant/che-apple-mail-mcp)** (by Che Cheng) - The most comprehensive Apple Mail MCP with 42 tools covering accounts, mailboxes, emails, rules, signatures, VIP management and more. Built with Swift.
 ```
 
 4. Create PR with title: `Add che-apple-mail-mcp - Comprehensive Apple Mail MCP`
@@ -19,7 +19,7 @@
 ```markdown
 ## New Community Server: che-apple-mail-mcp
 
-**Repository**: https://github.com/kiki830621/che-apple-mail-mcp
+**Repository**: https://github.com/PsychQuant/che-apple-mail-mcp
 
 ### Description
 The most comprehensive Apple Mail MCP server with 42 tools - more than double the tools of existing alternatives. Built natively in Swift using AppleScript for Mail.app automation.
@@ -66,7 +66,7 @@ Introducing che-apple-mail-mcp - the most comprehensive Apple Mail MCP server
 
 Built natively in Swift
 
-https://github.com/kiki830621/che-apple-mail-mcp
+https://github.com/PsychQuant/che-apple-mail-mcp
 
 #Claude #MCP #AppleMail #macOS #Swift
 ```
@@ -78,7 +78,7 @@ https://github.com/kiki830621/che-apple-mail-mcp
 
 Built natively in Swift, it covers nearly ALL Mail.app scripting capabilities
 
-https://github.com/kiki830621/che-apple-mail-mcp
+https://github.com/PsychQuant/che-apple-mail-mcp
 
 2/5 What makes it different?
 
@@ -142,7 +142,7 @@ Existing Apple Mail MCPs only cover ~20 basic operations. I wanted complete cont
 
 ### Links
 
-- GitHub: https://github.com/kiki830621/che-apple-mail-mcp
+- GitHub: https://github.com/PsychQuant/che-apple-mail-mcp
 - Chinese README available: README_zh-TW.md
 
 Would love any feedback or feature requests!
@@ -169,7 +169,7 @@ For anyone using Claude AI with macOS, I built an MCP server that exposes nearly
 
 Built with Swift and the MCP Swift SDK.
 
-GitHub: https://github.com/kiki830621/che-apple-mail-mcp
+GitHub: https://github.com/PsychQuant/che-apple-mail-mcp
 
 Happy to answer any questions about the implementation!
 ```
@@ -182,7 +182,7 @@ Happy to answer any questions about the implementation!
 ```
 I built an MCP (Model Context Protocol) server for Apple Mail with 42 tools - covering nearly all Mail.app AppleScript capabilities.
 
-GitHub: https://github.com/kiki830621/che-apple-mail-mcp
+GitHub: https://github.com/PsychQuant/che-apple-mail-mcp
 
 Key features:
 - Complete mailbox management (CRUD)

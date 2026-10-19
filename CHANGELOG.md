@@ -84,6 +84,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Migration command grants now use separate mkdir, mv and find permission
   entries, making those intended filesystem operations pre-approved.
 
+- **Live repository links use the current organization**
+  ([#387](https://github.com/PsychQuant/che-apple-mail-mcp/issues/387)).
+  Extension metadata, privacy and promotion links now point to
+  PsychQuant. Personal attribution, other repositories and historical links
+  remain unchanged.
+
+- **Release metadata checks share one parser and audited history**
+  ([#396](https://github.com/PsychQuant/che-apple-mail-mcp/issues/396)).
+  Shared changelog parsing checks version pins, release notes and historical
+  coverage against audited manifest records. Plugin-facing narrative changes
+  are recorded in plugin/CHANGELOG.md.
+
 ## [3.3.0] - 2026-10-19
 
 ### Added

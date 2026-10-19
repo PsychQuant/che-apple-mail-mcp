@@ -15,6 +15,7 @@ This MCP server accesses the following data on your Mac:
 - **Signatures**: Read email signatures
 - **Accounts**: Read mail account information
 - **VIP Senders**: Read VIP sender list
+- **Mail's unified log** (`get_mail_log_events`, read-only): recent entries that Mail itself wrote to the macOS unified log, read with `/usr/bin/log`. In the default `brief` detail only static event templates, integers and per-response account letters are returned; `detailed` returns the raw log lines, which contain account and mailbox names, addresses and fragments of received mail. Nothing is stored or transmitted; the result goes only to the MCP client that asked for it.
 
 ## Data Storage
 
@@ -77,7 +78,7 @@ This server does **not** connect to any third-party services:
 
 che-apple-mail-mcp is open source software licensed under the MIT License. You can review the source code to verify these privacy practices:
 
-- Repository: https://github.com/kiki830621/che-apple-mail-mcp
+- Repository: https://github.com/PsychQuant/che-apple-mail-mcp
 - All code is available for inspection
 - No hidden functionality
 - No obfuscated network calls
