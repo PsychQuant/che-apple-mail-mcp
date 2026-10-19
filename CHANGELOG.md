@@ -73,6 +73,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clean up and stop before exec, and failed runtime/marker publication does not leak temporary
   files or claim an unbacked degraded pin.
 
+- **Archive mail treats message content as data and narrows command grants**
+  ([#395](https://github.com/PsychQuant/che-apple-mail-mcp/issues/395)).
+  Archive and repair commands enumerate their required mail tools. Guards
+  reject alternate authorization metadata and unknown named calls, and lock
+  the archive and repair commands against extra grants. The SOP preserves valid user authorization across turns, keeps raw
+  attachment lookup keys separate from safe filenames, transports inline
+  metadata as JSON, and encodes Markdown labels and link destinations separately.
+  Executable recipe tests cover path, control-character and markup edge cases.
+  Migration command grants now use separate mkdir, mv and find permission
+  entries, making those intended filesystem operations pre-approved.
+
 ## [3.3.0] - 2026-10-19
 
 ### Added
