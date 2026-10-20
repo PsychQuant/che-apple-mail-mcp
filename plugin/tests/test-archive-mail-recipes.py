@@ -64,11 +64,14 @@ class ArchiveDateRecipesTests(unittest.TestCase):
         self.assertEqual(audit["date_excluded_count"], len(bad))
         self.assertEqual(audit["last_updated"], "")
         self.assertEqual(entries, before)
-        for zone in ["+08", "+0800", "+08:00", "-23:59", "+08:59:59.5"]:
+        for zone in ["+08", "+0800", "+08:00", "-23:59"]:
             with self.subTest(zone=zone):
                 value = "2026-06-30T12:00:00" + zone
                 self.assertEqual(self.dates["to_ymd"](value), "2026-06-30")
                 self.assertIsNotNone(self.dates["normalize_archive_timestamp"](value))
+        # a sub-minute offset is a valid day but not a valid RFC 3339 offset: the writer refuses it
+        self.assertEqual(self.dates["to_ymd"]("2026-06-30T12:00:00+08:59:59.5"), "2026-06-30")
+        self.assertIsNone(self.dates["normalize_archive_timestamp"]("2026-06-30T12:00:00+08:59:59.5"))
 
     def test_calendar_validation_and_nonstring_values_do_not_crash_or_guess(self):
         parse = self.dates["to_ymd"]
@@ -119,8 +122,9 @@ class ArchiveDateRecipesTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(parse(value), "2026-06-30")
                 self.assertIsNone(normalize(value))
-        # An unterminated comment makes the whole text unreliable: neither reader accepts it.
-        self.assertIsNone(parse("Tue, 30 Jun 2026 19:43:20 +0800 (unterminated"))
+        # A truncated comment is exactly what a cut-off header looks like; it cannot change the day either.
+        self.assertEqual(parse("Tue, 30 Jun 2026 19:43:20 +0800 (unterminated"), "2026-06-30")
+        self.assertIsNone(normalize("Tue, 30 Jun 2026 19:43:20 +0800 (unterminated"))
 
     def test_timestamp_writer_shares_parser_without_inventing_time_or_zone(self):
         normalize = self.dates["normalize_archive_timestamp"]
@@ -136,7 +140,7 @@ class ArchiveDateRecipesTests(unittest.TestCase):
         self.assertNotIn("parsedate_to_datetime(raw).isoformat()", document)
         self.assertGreaterEqual(document.count("normalize_archive_timestamp(raw)"), 2)
 
-    def test_calendar_day_recovery_keeps_every_header_shape_the_275_recipe_recovered(self):
+    def test_calendar_day_recovery_keeps_the_header_shapes_listed_here(self):
         # #364 verify: a single strict grammar shared by the day reader and the timestamp writer made
         # these real Date: shapes drop out of last_updated. The day reader must keep recovering them.
         to_ymd, normalize = self.dates["to_ymd"], self.dates["normalize_archive_timestamp"]
@@ -150,6 +154,41 @@ class ArchiveDateRecipesTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(to_ymd(value), "2026-06-30")
                 self.assertIsNone(normalize(value), "the writer must not turn an unknown zone into an instant")
+
+    def test_day_reader_keeps_the_shapes_the_pre_364_parser_recovered_that_round_3_found_lost(self):
+        to_ymd, normalize = self.dates["to_ymd"], self.dates["normalize_archive_timestamp"]
+        for value in ["Tue, 30 Jun 2026 19.43.20 +0800", "Tue, Jun 30 2026 19:43:20 +0800",
+                      "Jun 30 2026 19:43:20 +0800", "Tue, 30 Jun 2026 19:43:20+0800",
+                      "Tue, 30 Jun 2026 19:43:20 +0800 (CST", "Tue, 30 Jun 2026 19:43:20 +0800 CST)",
+                      "Di, 30 Jun 2026 19:43:20 +0800", "Tues, 30 Jun 2026 19:43:20 +0800",
+                      "Tue Jun 30 19:43:20 +0800 2026", "Tue, 30 Jun 19:43:20 2026",
+                      "\ufeffTue, 30 Jun 2026 19:43:20 +0800",
+                      "Tue Jun 30 2026 19:43:20 GMT+0800 (China Standard Time)",
+                      "2026-06-30 19:43:20 +0800", "2026-06-30T19:43:20.123456789Z",
+                      "2026-06-30T14:30:00 UTC", "30-Sept-26 10:00:00"]:
+            with self.subTest(value=value):
+                self.assertEqual(to_ymd(value)[:2], "20")
+                self.assertEqual(to_ymd(value)[5:], "09-30" if "Sept" in value else "06-30")
+        # a corrupt clock is not a date, on either reader
+        for value in ["Tue, 30 Jun 2026 19:43:99 +0800", "Tue Jun 30 19:43:99 2026",
+                      "Tue, 30 Jun 2026 24:00:00 +0800", "Tue, 30 Jun 2026 trailing"]:
+            with self.subTest(value=value):
+                self.assertIsNone(to_ymd(value))
+                self.assertIsNone(normalize(value))
+        # the writer stays strict: only a shape it can turn into one unambiguous instant is written
+        self.assertEqual(normalize("2026-06-30 19:43:20 +0800"), "2026-06-30T19:43:20+08:00")
+        self.assertEqual(normalize("2026-06-30T19:43:20.123456789Z"), "2026-06-30T19:43:20.123456+00:00")
+        for value in ["Tue, 30 Jun 2026 19.43.20 +0800", "Tue, 30 Jun 2026 19:43:20+0800",
+                      "Tue, 30 Jun 2026 19:43:20 -00:00", "Tue, 30 Jun 2026 19:43:20 GMT-0000",
+                      "2026-06-30T19:43:20-00:00", "2026-06-30T19:43:20+08:00:30"]:
+            with self.subTest(value=value):
+                self.assertIsNone(normalize(value))
+
+    def test_a_non_object_emails_value_is_reported_not_a_crash(self):
+        for emails in [None, [], "x"]:
+            audit = self.dates["reconcile_dates"](emails)
+            self.assertEqual(audit["index_error"], "emails-not-object")
+            self.assertEqual(audit["last_updated"], "")
 
     def test_explicit_years_are_never_rewritten_on_the_loose_day_reader(self):
         to_ymd = self.dates["to_ymd"]
