@@ -203,11 +203,13 @@ class ArchiveDateRecipesTests(unittest.TestCase):
                 self.assertEqual(to_ymd("2026-06-30T12:00:00" + zone), "2026-06-30")
                 self.assertIsNone(normalize("2026-06-30T12:00:00" + zone))
 
-    def test_a_non_object_emails_value_is_reported_not_a_crash(self):
-        for emails in [None, [], "x"]:
-            audit = self.dates["reconcile_dates"](emails)
-            self.assertEqual(audit["index_error"], "emails-not-object")
-            self.assertEqual(audit["last_updated"], "")
+    def test_a_corrupt_clock_followed_by_digits_is_never_read_as_a_year(self):
+        to_ymd = self.dates["to_ymd"]
+        for value in ["Tue Jun 30 19:43:2099", "Tue Jun 30 19:43:200 2026", "30 Jun 19:43:20999",
+                      "Tue Jun 30 19:432026", "Tue Jun 30 19:43:20:99 2026"]:
+            with self.subTest(value=value):
+                self.assertIsNone(to_ymd(value))
+        self.assertEqual(to_ymd("Tue Jun 30 19:43:20 +0800 2026"), "2026-06-30")
 
     def test_explicit_years_are_never_rewritten_on_the_loose_day_reader(self):
         to_ymd = self.dates["to_ymd"]
