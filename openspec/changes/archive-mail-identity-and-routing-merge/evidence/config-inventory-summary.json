@@ -1,0 +1,9 @@
+{
+  "scope": "read-only Developer workspaces config.yaml/config.md; no files modified",
+  "total": 1,
+  "counts": {
+    "full_six_keys": 1
+  },
+  "valid_complete_routing_objects": 1,
+  "identity_file_present": false
+}

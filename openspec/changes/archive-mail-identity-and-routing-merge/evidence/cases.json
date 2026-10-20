@@ -1,0 +1,117 @@
+[
+  {
+    "id": "absent",
+    "identity": null,
+    "workspace": "participant_aliases:\n  local@example.invalid: Local\n",
+    "files": [
+      "raw_indicators.csv",
+      "notes.pdf"
+    ]
+  },
+  {
+    "id": "global",
+    "identity": "participant_aliases:\n  office@example.invalid: Office\n",
+    "workspace": "{}",
+    "files": []
+  },
+  {
+    "id": "conflict",
+    "identity": "participant_aliases:\n  \" OFFICE@example.invalid \": Office\n",
+    "workspace": "participant_aliases:\n  office@example.invalid: Local name\n  local@example.invalid: Local\n",
+    "files": []
+  },
+  {
+    "id": "same_name",
+    "identity": "participant_aliases:\n  a@example.invalid: Same\n",
+    "workspace": "participant_aliases:\n  a@example.invalid: Same\n",
+    "files": []
+  },
+  {
+    "id": "plus_distinct",
+    "identity": "participant_aliases:\n  a@example.invalid: Base\n",
+    "workspace": "participant_aliases:\n  a+tag@example.invalid: Tagged\n",
+    "files": []
+  },
+  {
+    "id": "malformed",
+    "identity": "participant_aliases: [broken",
+    "workspace": "participant_aliases:\n  local@example.invalid: Local\n",
+    "files": []
+  },
+  {
+    "id": "duplicate_yaml",
+    "identity": "participant_aliases:\n  a@example.invalid: One\n  a@example.invalid: Two\n",
+    "workspace": "participant_aliases:\n  local@example.invalid: Local\n",
+    "files": []
+  },
+  {
+    "id": "duplicate_normalized",
+    "identity": "participant_aliases:\n  A@example.invalid: One\n  a@example.invalid: Two\n",
+    "workspace": "{}",
+    "files": []
+  },
+  {
+    "id": "unknown_identity",
+    "identity": "own_addresses: [me@example.invalid]\nparticipant_aliases:\n  office@example.invalid: Office\n",
+    "workspace": "{}",
+    "files": []
+  },
+  {
+    "id": "routing_partial",
+    "identity": null,
+    "workspace": "attachment_routing:\n  document_keywords: [calendar]\n",
+    "files": [
+      "NTUcalendar115.xlsx",
+      "raw_indicators.csv",
+      "plain.xlsx"
+    ]
+  },
+  {
+    "id": "routing_replace",
+    "identity": null,
+    "workspace": "attachment_routing:\n  data_keywords: [indicators]\n",
+    "files": [
+      "raw_notes.txt",
+      "codebook.pdf",
+      "indicators.pdf"
+    ]
+  },
+  {
+    "id": "routing_empty",
+    "identity": null,
+    "workspace": "attachment_routing:\n  data_keywords: []\n",
+    "files": [
+      "raw_notes.pdf",
+      "raw_values.csv",
+      "Manuscript.xlsx"
+    ]
+  },
+  {
+    "id": "routing_unknown",
+    "identity": null,
+    "workspace": "attachment_routing:\n  data_dirs: wrong\n  document_keywords: [calendar]\n",
+    "files": [
+      "calendar.xlsx",
+      "values.csv"
+    ]
+  },
+  {
+    "id": "routing_invalid",
+    "identity": null,
+    "workspace": "attachment_routing:\n  data_extensions: null\n  data_dir: \"\"\n  document_keywords: [calendar]\n",
+    "files": [
+      "calendar.xlsx",
+      "values.csv"
+    ]
+  },
+  {
+    "id": "routing_full",
+    "identity": null,
+    "workspace": "attachment_routing:\n  data_extensions: [csv]\n  document_extensions: [pdf]\n  data_keywords: []\n  document_keywords: []\n  data_dir: research/raw\n  documents_dir: research/docs\n",
+    "files": [
+      "a.csv",
+      "raw.xlsx",
+      "a.pdf"
+    ]
+  }
+]

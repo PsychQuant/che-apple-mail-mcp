@@ -38,7 +38,9 @@ description: Disambiguate vague email search filters before executing search. Tr
 ```
 
 **怎麼找候選**:
-- 從 `.claude/emails.md` 的 `participant_aliases` 讀別名對應
+- 在 archive-mail 內，使用 Step 1.4 已解析的 `EFFECTIVE_PARTICIPANT_ALIASES`：全域 `~/.claude/.mail/identity.yaml` 為基底，workspace `${CONFIG_FILE}` 的 aliases 只補充未涵蓋的 bare email；重複鍵以全域為準並留待報告具名揭露。
+- 獨立使用本 skill 時先依 `commands/archive-mail.md` Step 1.4 的同一規則解析（含缺檔靜默、格式錯誤警告、trim + lowercase、衝突揭露）。不可回頭讀已遷移的 `.claude/emails.md` 或建立另一套覆寫優先序。
+- email → 顯示名稱只能提供候選；顯示名稱命中多個 email 時逐一列出，保留 email 讓使用者選擇，不自動改 filter 或略過確認。
 - 從 contacts 或之前 archive 的 thread participants 找匹配
 - 如果完全找不到,問 user「我找不到匹配的 contact,你能給我 email 地址嗎?」
 

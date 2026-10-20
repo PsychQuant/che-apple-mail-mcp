@@ -1,0 +1,139 @@
+{
+  "absent": [
+    {
+      "local@example.invalid": "Local"
+    },
+    [],
+    {
+      "raw_indicators.csv": "data",
+      "notes.pdf": "document"
+    },
+    0
+  ],
+  "global": [
+    {
+      "office@example.invalid": "Office"
+    },
+    [],
+    {},
+    0
+  ],
+  "conflict": [
+    {
+      "office@example.invalid": "Office",
+      "local@example.invalid": "Local"
+    },
+    [
+      "office@example.invalid"
+    ],
+    {},
+    0
+  ],
+  "same_name": [
+    {
+      "a@example.invalid": "Same"
+    },
+    [
+      "a@example.invalid"
+    ],
+    {},
+    0
+  ],
+  "plus_distinct": [
+    {
+      "a@example.invalid": "Base",
+      "a+tag@example.invalid": "Tagged"
+    },
+    [],
+    {},
+    0
+  ],
+  "malformed": [
+    {
+      "local@example.invalid": "Local"
+    },
+    [],
+    {},
+    1
+  ],
+  "duplicate_yaml": [
+    {
+      "local@example.invalid": "Local"
+    },
+    [],
+    {},
+    1
+  ],
+  "duplicate_normalized": [
+    {},
+    [],
+    {},
+    1
+  ],
+  "unknown_identity": [
+    {
+      "office@example.invalid": "Office"
+    },
+    [],
+    {},
+    1
+  ],
+  "routing_partial": [
+    {},
+    [],
+    {
+      "NTUcalendar115.xlsx": "document",
+      "raw_indicators.csv": "data",
+      "plain.xlsx": "data"
+    },
+    0
+  ],
+  "routing_replace": [
+    {},
+    [],
+    {
+      "raw_notes.txt": "document",
+      "codebook.pdf": "document",
+      "indicators.pdf": "data"
+    },
+    0
+  ],
+  "routing_empty": [
+    {},
+    [],
+    {
+      "raw_notes.pdf": "document",
+      "raw_values.csv": "data",
+      "Manuscript.xlsx": "document"
+    },
+    0
+  ],
+  "routing_unknown": [
+    {},
+    [],
+    {
+      "calendar.xlsx": "document",
+      "values.csv": "data"
+    },
+    1
+  ],
+  "routing_invalid": [
+    {},
+    [],
+    {
+      "calendar.xlsx": "document",
+      "values.csv": "data"
+    },
+    2
+  ],
+  "routing_full": [
+    {},
+    [],
+    {
+      "a.csv": "data",
+      "raw.xlsx": "document",
+      "a.pdf": "document"
+    },
+    0
+  ]
+}
