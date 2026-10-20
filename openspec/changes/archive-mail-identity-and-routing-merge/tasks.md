@@ -6,9 +6,9 @@
 
 - [ ] 1.1 在 `plugin/commands/archive-mail.md` 的「讀取搜尋擴展設定」段落之前，新增一段 identity 檔讀取指示：從 `~/.claude/.mail/identity.yaml` 讀 `participant_aliases`。缺檔時靜默繼續（不得產生警告）；檔案存在但 YAML 無法解析時，回報解析失敗並以空身份資料繼續，**不得中止歸檔**。驗收：依 spec scenario「Absent identity file is not an error」手動走一次 —— 移除該檔跑一次歸檔，run 完成且輸出無任何關於缺檔的字樣。
 
-- [ ] 1.2 落實 Decision 3：identity 檔是「另一份檔案」，不是「config 的第二層」，並實現 requirement Machine-global identity file 的 supplement 條款 —— 在同一段落定義合併規則：identity 檔的條目為基底；workspace config 的 `participant_aliases` 只補充 identity 檔未涵蓋的位址。兩邊都有的位址以 identity 檔為準。驗收：依 spec Example「Department office address resolved in an audit report」，identity 檔含 `oxalislin@ntu.edu.tw` 而 workspace 無此鍵時，coverage audit 報告渲染出 identity 檔的顯示字串。
+- [ ] 1.2 落實 Decision 3：identity 檔是「另一份檔案」，不是「config 的第二層」，並實現 requirement Machine-global identity file 的 supplement 條款 —— 在同一段落定義合併規則：identity 檔的條目為基底；workspace config 的 `participant_aliases` 只補充 identity 檔未涵蓋的位址。兩邊都有的位址以 identity 檔為準。驗收：依 spec Example「Department office address resolved in an audit report」，identity 檔含 `staff@example.invalid` 而 workspace 無此鍵時，coverage audit 報告渲染出 identity 檔的顯示字串。
 
-- [ ] 1.3 落實 Decision 3：identity 檔是「另一份檔案」，不是「config 的第二層」的顯式回報要求，補齊 requirement Machine-global identity file 的衝突揭露 —— 為衝突條目加上回報：workspace config 定義了 identity 檔已有的位址時，run 報告須具名列出該位址為「已忽略的 workspace 覆寫」。**不得靜默忽略**。驗收：依 spec Example「Conflicting entry is ignored and disclosed」建構兩份檔案（identity 為 `Hsu Yung-Feng`、workspace 為 `YF`），跑一次歸檔，確認解析結果為 `Hsu Yung-Feng` 且報告中出現 `yfhsu@ntu.edu.tw` 的忽略提示。
+- [ ] 1.3 落實 Decision 3：identity 檔是「另一份檔案」，不是「config 的第二層」的顯式回報要求，補齊 requirement Machine-global identity file 的衝突揭露 —— 為衝突條目加上回報：workspace config 定義了 identity 檔已有的位址時，run 報告須具名列出該位址為「已忽略的 workspace 覆寫」。**不得靜默忽略**。驗收：依 spec Example「Conflicting entry is ignored and disclosed」建構兩份檔案（identity 為 `Example Person`、workspace 為 `YF`），跑一次歸檔，確認解析結果為 `Example Person` 且報告中出現 `person@example.invalid` 的忽略提示。
 
 ## 2. Attachment routing sub-key merge —— 實現 requirement「Attachment routing configuration override granularity」（specs/archive-mail-attachments/spec.md）
 

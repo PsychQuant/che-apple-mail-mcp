@@ -1,6 +1,6 @@
 ## Why
 
-`/archive-mail` 產出的歸檔目前**看不懂人**。frontmatter 只有 `sender: oxalislin@ntu.edu.tw`，讀者得自行知道那是誰；而唯一能記錄「誰是誰」的 `participant_aliases` 綁在單一 workspace 的 config 內，於是同一位 collaborator 在不同 workspace 會有不同別名、或根本沒有。
+`/archive-mail` 產出的歸檔目前**看不懂人**。frontmatter 只有 `sender: staff@example.invalid`，讀者得自行知道那是誰；而唯一能記錄「誰是誰」的 `participant_aliases` 綁在單一 workspace 的 config 內，於是同一位 collaborator 在不同 workspace 會有不同別名、或根本沒有。
 
 同時，`attachment_routing` 的「partial override 取代整組預設」語意造成一個反覆出現的摩擦：只想新增一個 keyword，也必須把 `data_extensions` / `document_extensions` / `data_keywords` / `document_keywords` 四組清單完整複製一份。2026-08-05 一次實際歸檔就為了讓一個 `.xlsx` 公文附件不被誤判為研究資料，複製了整組再加兩個詞。
 

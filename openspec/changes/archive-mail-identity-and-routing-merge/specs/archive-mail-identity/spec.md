@@ -15,9 +15,9 @@ When the file is absent, the workflow SHALL proceed with no identity data and SH
 
 ##### Example: Department office address resolved in an audit report
 
-- **GIVEN** `~/.claude/.mail/identity.yaml` contains `participant_aliases` with the entry `oxalislin@ntu.edu.tw: "Lin Hsin-Yi (PSY dept office)"`, and the workspace configuration file has no `participant_aliases` key
+- **GIVEN** `~/.claude/.mail/identity.yaml` contains `participant_aliases` with the entry `staff@example.invalid: "Example Staff (dept office)"`, and the workspace configuration file has no `participant_aliases` key
 - **WHEN** an archive run produces a coverage-audit report naming that address
-- **THEN** the report SHALL render `Lin Hsin-Yi (PSY dept office)` rather than the bare address
+- **THEN** the report SHALL render `Example Staff (dept office)` rather than the bare address
 
 #### Scenario: Workspace config supplements but cannot redefine
 
@@ -26,9 +26,9 @@ When the file is absent, the workflow SHALL proceed with no identity data and SH
 
 ##### Example: Conflicting entry is ignored and disclosed
 
-- **GIVEN** the identity file maps `yfhsu@ntu.edu.tw` to `"Hsu Yung-Feng"` and the workspace configuration file maps the same address to `"YF"`
+- **GIVEN** the identity file maps `person@example.invalid` to `"Example Person"` and the workspace configuration file maps the same address to `"YF"`
 - **WHEN** the archive run resolves participant display names
-- **THEN** the resolved name SHALL be `Hsu Yung-Feng`, and the run report SHALL name `yfhsu@ntu.edu.tw` as an ignored workspace override
+- **THEN** the resolved name SHALL be `Example Person`, and the run report SHALL name `person@example.invalid` as an ignored workspace override
 
 #### Scenario: Workspace-only address is honoured
 
