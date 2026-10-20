@@ -184,6 +184,21 @@ class ArchiveDateRecipesTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertIsNone(normalize(value))
 
+    def test_round_4_wrong_year_and_wrong_day_inputs_are_rejected_not_guessed(self):
+        to_ymd, normalize = self.dates["to_ymd"], self.dates["normalize_archive_timestamp"]
+        for value in ["Tue Jun 30 19:43:20 2026 45", "30 Jun 19:43:20 2026 45", "Tue Jun 30 19:43:20 2026 08:00"]:
+            with self.subTest(value=value):   # the real year, not a number that merely follows it
+                self.assertEqual(to_ymd(value), "2026-06-30")
+        for value in ["Tue Jun 30 19:43:20 KST 19:43", "Week 26 Jun 2026", "Day 1 Jul 2026",
+                      "Tue, 30 Jun 202", "Tue, 30 Jun 20", "Tue, 30-Jun-20"]:
+            with self.subTest(value=value):
+                self.assertIsNone(to_ymd(value))
+        self.assertEqual(to_ymd("Tue Jun 30 19:43:20 2026 trailing"), "2026-06-30")
+        for zone in ["+08:00:00.5", "-08:00:00.5", "+00:00:00.000001"]:
+            with self.subTest(zone=zone):
+                self.assertEqual(to_ymd("2026-06-30T12:00:00" + zone), "2026-06-30")
+                self.assertIsNone(normalize("2026-06-30T12:00:00" + zone))
+
     def test_a_non_object_emails_value_is_reported_not_a_crash(self):
         for emails in [None, [], "x"]:
             audit = self.dates["reconcile_dates"](emails)

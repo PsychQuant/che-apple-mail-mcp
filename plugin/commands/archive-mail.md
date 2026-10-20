@@ -1626,16 +1626,16 @@ _RFC_DATE_ONLY = re.compile(
     _PREFIX + r"(?P<day>[0-9]{1,2})\s+(?P<month>[A-Za-z]+)\s+(?P<year>[0-9]{4})", re.IGNORECASE)
 # Calendar-day reader only (to_ymd): which day a header names does not depend on the weekday word, the field order,
 # the clock separator, a zone name, AM/PM or a truncated comment, so none of those can exclude an entry.
-_LEAD = r"(?:[^\W\d_]+\.?(?:,\s*|\s+))?"
+_LEAD = r"(?:[^\W\d_]+\.?,\s*|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*\.?\s+)?"  # "Di," or an English weekday
 _LOOSE_CLOCK = r"(?P<hour>[0-9]{1,2})[:.](?P<minute>[0-9]{2})(?:[:.](?P<second>[0-9]{2}))?"
 _LOOSE_TAIL = rf"(?:$|[,\s]+{_LOOSE_CLOCK}.*)"
 _LOOSE = [re.compile(pattern, re.IGNORECASE) for pattern in (
     _LEAD + r"(?P<day>[0-9]{1,2})[\s-]+(?P<month>[^\W\d_]+)\.?[\s-]+(?P<year>[0-9]{2,4})(?![0-9])" + _LOOSE_TAIL,
     _LEAD + r"(?P<month>[^\W\d_]+)\.?\s+(?P<day>[0-9]{1,2}),?\s+(?P<year>[0-9]{4})(?![0-9])" + _LOOSE_TAIL,
     _LEAD + r"(?P<month>[^\W\d_]+)\.?\s+(?P<day>[0-9]{1,2})\s+" + _LOOSE_CLOCK
-    + r"(?:\s+\S+)?\s+(?P<year>[0-9]{2,4})(?![0-9]).*",
+    + r"(?:\s+(?![0-9]{2,4}(?![0-9]))\S+)?\s+(?P<year>[0-9]{2,4})(?![0-9:]).*",
     _LEAD + r"(?P<day>[0-9]{1,2})\s+(?P<month>[^\W\d_]+)\.?\s+" + _LOOSE_CLOCK
-    + r"(?:\s+\S+)?\s+(?P<year>[0-9]{2,4})(?![0-9]).*",
+    + r"(?:\s+(?![0-9]{2,4}(?![0-9]))\S+)?\s+(?P<year>[0-9]{2,4})(?![0-9:]).*",
 )]
 _ISO = re.compile(
     r"(?P<year>[0-9]{4})-(?P<month>[0-9]{2})-(?P<day>[0-9]{2})"
@@ -1788,6 +1788,8 @@ def to_ymd(value):
         fields = match.groupdict()
         try:
             clock = [fields.get(name) for name in ("hour", "minute", "second")]
+            if clock[0] is None and len(fields["year"]) != 4:
+                continue  # a date with no clock must name a full 4-digit year, like the strict date-only form
             if clock[0] is not None and (int(clock[0]) > 23 or int(clock[1]) > 59 or int(clock[2] or 0) > 59):
                 continue
             return _calendar_date({**fields, "month": _loose_month(fields["month"])}).isoformat()
@@ -1798,7 +1800,7 @@ def to_ymd(value):
 
 def normalize_archive_timestamp(value):
     parsed = parse_archive_date(value)
-    if not isinstance(parsed, datetime) or parsed.utcoffset() is None or parsed.utcoffset().seconds % 60:
+    if not isinstance(parsed, datetime) or parsed.utcoffset() is None or parsed.utcoffset() % timedelta(minutes=1):
         return None  # Calendar-only, unknown-zone and sub-minute-offset values cannot become instants.
     return parsed.isoformat()
 
@@ -1841,7 +1843,7 @@ Index Reconcile: Phase 0 manifest 12 written（乾淨補齊）; Phase 1 135 md �
 ```
 
 5. `unparseable > 0` → 摘要標 ⚠ 並列出檔名，**不得靜默**；由 user 決定補 frontmatter 或排除。**這不使 run 失敗**——會失敗的是跳過本 gate 或靜默吞掉清單。
-6. 日期 audit 獨立於 Phase 1 的 md 計數：即使所有 md 都 `verified` 且 `last_updated` 等於可解析 max，也必須顯示 `date_excluded_count`（0 也要顯示）。非零時可完成 gate 並保留警告，但不得宣稱「全綠／日期全部有效」；省略 audit 或吞掉失敗 entry 才是 gate 失敗。報告的有效日期數＋排除數必須等於本 index 的 entry 總數。另外列出本 run 因 `normalize_archive_timestamp` 回傳 None 而以原 Date 字串寫入的檔案（Step 5.1／孤兒補寫的揭露），它們不在 `date_excluded` 內，但不是完整 timestamp。
+6. 日期 audit 獨立於 Phase 1 的 md 計數：即使所有 md 都 `verified` 且 `last_updated` 等於可解析 max，也必須顯示 `date_excluded_count`（0 也要顯示）。非零時可完成 gate 並保留警告，但不得宣稱「全綠／日期全部有效」；省略 audit 或吞掉失敗 entry 才是 gate 失敗。報告的有效日期數＋排除數必須等於本 index 的 entry 總數。另外列出本 run 因 `normalize_archive_timestamp` 回傳 None 而以原 Date 字串寫入的檔案（Step 5.1／孤兒補寫的揭露），它們不在 `date_excluded` 內，但不是完整 timestamp。若 `date_audit` 含 `index_error`（index 的 `emails` 不是物件），必須標 ⚠ 並停止：**不得**把 `last_updated` 寫成空字串覆蓋舊值、不得寫回 index、不得標成 `no-valid-dates` 或宣稱日期全綠；回報該 index 檔損毀由使用者處理。
 7. 全部完成後才 `TaskUpdate reconcile_index → completed`。**跳過本步 = run 失敗**。
 
 ## 注意事項
