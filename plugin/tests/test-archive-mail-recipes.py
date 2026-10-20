@@ -188,7 +188,10 @@ class ArchiveDateRecipesTests(unittest.TestCase):
         to_ymd, normalize = self.dates["to_ymd"], self.dates["normalize_archive_timestamp"]
         self.assertEqual(to_ymd("Tue Jun 30 19:43:20 2026 08:00"), "2026-06-30")
         # two bare numbers after the clock: which one is the year cannot be told, so the entry is excluded
-        for value in ["Tue Jun 30 19:43:20 2026 45", "30 Jun 19:43:20 2026 45", "Tue Jun 30 19:43:20 45 2026",
+        self.assertEqual(to_ymd("Tue Jun 30 07:43:20 PM CST 2026"), "2026-06-30")   # glibc `date` output
+        self.assertEqual(to_ymd("Wed Jul  1 07:43:20 AM KST 2026"), "2026-07-01")
+        for value in ["Tue Jun 30 19:43:20 45 KST 2026", "Tue Jun 30 19:43:20 2026 CST 45", "Tue Jun 30 19:43:20 CST",
+                      "Tue Jun 30 19:43:20 2026 45", "30 Jun 19:43:20 2026 45", "Tue Jun 30 19:43:20 45 2026",
                       "Tue Jun 30 19:43:20 0800 2026", "30 Jun 19:43:20 9999 2026", "Tue Jun 30 19:43:20 12 2026",
                       "Tue Jun 30 19:43:20 KST 19:43", "Week 26 Jun 2026", "Day 1 Jul 2026",
                       "Tue, 30 Jun 202", "Tue, 30 Jun 20", "Tue, 30-Jun-20"]:
