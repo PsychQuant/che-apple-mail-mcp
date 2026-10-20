@@ -186,10 +186,11 @@ class ArchiveDateRecipesTests(unittest.TestCase):
 
     def test_round_4_wrong_year_and_wrong_day_inputs_are_rejected_not_guessed(self):
         to_ymd, normalize = self.dates["to_ymd"], self.dates["normalize_archive_timestamp"]
-        for value in ["Tue Jun 30 19:43:20 2026 45", "30 Jun 19:43:20 2026 45", "Tue Jun 30 19:43:20 2026 08:00"]:
-            with self.subTest(value=value):   # the real year, not a number that merely follows it
-                self.assertEqual(to_ymd(value), "2026-06-30")
-        for value in ["Tue Jun 30 19:43:20 KST 19:43", "Week 26 Jun 2026", "Day 1 Jul 2026",
+        self.assertEqual(to_ymd("Tue Jun 30 19:43:20 2026 08:00"), "2026-06-30")
+        # two bare numbers after the clock: which one is the year cannot be told, so the entry is excluded
+        for value in ["Tue Jun 30 19:43:20 2026 45", "30 Jun 19:43:20 2026 45", "Tue Jun 30 19:43:20 45 2026",
+                      "Tue Jun 30 19:43:20 0800 2026", "30 Jun 19:43:20 9999 2026", "Tue Jun 30 19:43:20 12 2026",
+                      "Tue Jun 30 19:43:20 KST 19:43", "Week 26 Jun 2026", "Day 1 Jul 2026",
                       "Tue, 30 Jun 202", "Tue, 30 Jun 20", "Tue, 30-Jun-20"]:
             with self.subTest(value=value):
                 self.assertIsNone(to_ymd(value))
