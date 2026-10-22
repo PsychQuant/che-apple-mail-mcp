@@ -1,6 +1,6 @@
 # Tasks: archive-mail-identity-and-routing-merge
 
-> 前置：issue #335（plugin shell 遷入本 repo）必須先落地 —— 以下路徑皆為遷移後位置，且 `archive-mail-attachments` 的 base spec 隨該遷移一併移入。開工前先確認 `plugin/commands/archive-mail.md` 存在於本 repo。
+> 前置 #335（plugin shell 遷入本 repo）已落地；`archive-mail-attachments` 的 base spec 摘要由本 PR 帶入（來源見 verification.md）。
 
 ## 1. Identity 檔讀取 —— 實現 requirement「Machine-global identity file」（specs/archive-mail-identity/spec.md）
 
@@ -12,11 +12,11 @@
 
 ## 2. Attachment routing sub-key merge —— 實現 requirement「Attachment routing configuration override granularity」（specs/archive-mail-attachments/spec.md）
 
-- [x] 2.1 落實 Decision 4：sub-key 是 replace，不是 append，實現 requirement Attachment routing configuration override granularity —— 改寫 `plugin/commands/archive-mail.md` 中「讀取附件設定」段落的合併語意：把現行「若有，載入自訂規則（all-or-nothing 取代，不做 merge）」改為 sub-key 合併 —— 使用者未提及的 sub-key 沿用內建預設，有寫的 sub-key 整組取代（list 不做 append）。內建預設表本身維持原值不動。驗收：依 spec Example「Adding one keyword no longer requires restating the table」，config 僅寫 `document_keywords` 含 `calendar` 時，`NTUcalendar115.xlsx` 判為 document、`raw_indicators.csv` 仍判為 data。
+- [ ] 2.1 落實 Decision 4：sub-key 是 replace，不是 append，實現 requirement Attachment routing configuration override granularity —— 改寫 `plugin/commands/archive-mail.md` 中「讀取附件設定」段落的合併語意：把現行「若有，載入自訂規則（all-or-nothing 取代，不做 merge）」改為 sub-key 合併 —— 使用者未提及的 sub-key 沿用內建預設，有寫的 sub-key 整組取代（list 不做 append）。內建預設表本身維持原值不動。驗收：依 spec Example「Adding one keyword no longer requires restating the table」，config 僅寫 `document_keywords` 含 `calendar` 時，`NTUcalendar115.xlsx` 判為 document、`raw_indicators.csv` 仍判為 data。
 
-- [x] 2.2 落實 Decision 4：sub-key 是 replace，不是 append 的 BREAKING 面，補齊 requirement Attachment routing configuration override granularity 的空清單條款 —— 在同段落寫明「省略 vs 顯式空清單」的分別：省略某個 sub-key 代表沿用預設；要停用某組預設必須寫顯式空清單。驗收：依 spec scenario「Disabling a default requires an explicit empty list」，設 `data_keywords: []` 後該 tier 不再匹配任何附件，分類落到下一 tier。
+- [ ] 2.2 落實 Decision 4：sub-key 是 replace，不是 append 的 BREAKING 面，補齊 requirement Attachment routing configuration override granularity 的空清單條款 —— 在同段落寫明「省略 vs 顯式空清單」的分別：省略某個 sub-key 代表沿用預設；要停用某組預設必須寫顯式空清單。驗收：依 spec scenario「Disabling a default requires an explicit empty list」，設 `data_keywords: []` 後該 tier 不再匹配任何附件，分類落到下一 tier。
 
-- [x] 2.3 加入未識別 sub-key 的回報規則：`attachment_routing` 下出現六個合法 sub-key（`data_extensions`、`document_extensions`、`data_keywords`、`document_keywords`、`data_dir`、`documents_dir`）以外的鍵時，回報該鍵未識別並以預設值繼續，**不得靜默接受**。驗收：塞一個 `data_dirs`（多一個 s 的常見手誤）進 config，跑一次歸檔，確認輸出點名該鍵。
+- [ ] 2.3 加入未識別 sub-key 的回報規則：`attachment_routing` 下出現六個合法 sub-key（`data_extensions`、`document_extensions`、`data_keywords`、`document_keywords`、`data_dir`、`documents_dir`）以外的鍵時，回報該鍵未識別並以預設值繼續，**不得靜默接受**。驗收：塞一個 `data_dirs`（多一個 s 的常見手誤）進 config，跑一次歸檔，確認輸出點名該鍵。
 
 ## 3. 文件同步
 
@@ -28,7 +28,7 @@
 
 ## 4. 迴歸與 BREAKING 影響確認
 
-- [x] 4.1 掃過本機已知 workspace 的 `.claude/.mail/config.yaml`，逐一判定其 `attachment_routing` 寫法在新語意下行為是否改變，把結果記入實作 PR 的 description。已知：目前唯一使用該欄位的 config 採完整六 sub-key 寫法，不受影響 —— 需實際確認而非沿用此假設。
+- [ ] 4.1 掃過本機已知 workspace 的 `.claude/.mail/config.yaml`，逐一判定其 `attachment_routing` 寫法在新語意下行為是否改變，把結果記入實作 PR 的 description。已知：目前唯一使用該欄位的 config 採完整六 sub-key 寫法，不受影響 —— 需實際確認而非沿用此假設。
 
 - [ ] 4.2 跑一次真實歸檔（既有 workspace、既有 config，不改設定），確認 identity 檔缺席時的行為與本 change 之前**逐項相同**：新歸檔封數、附件分類去向、coverage audit 結果三者一致。這是 backward-compat 的驗收依據。
 
@@ -38,8 +38,20 @@
 - [x] 5.1 驗證 Decision 1：不做 per-field 兩層 config 與 Decision 2：`own_addresses` 不進設定檔仍成立；用 diff 對帳確認只有 identity 與 routing 契約改動，未新增 generic loader 或 own_addresses 欄位。
 - [x] 5.2 同步實際 alias 候選消費端 email-search-disambiguation，與 Step 1.4 / Step 7 共用 effective aliases；以候選演練及文件對帳驗證沒有舊路徑或繞過確認。
 - [x] 5.3 以匿名合成 YAML 情境演練 absent / malformed / conflict / supplement 與 routing defaults / replace / [] / unknown key；記錄實際演練輸出，不取代 4.2 的真實歸檔驗收。
-- [ ] 5.4 完成獨立審查、Spectra validate 與 PR 紀錄；Claude OAuth 未恢復時保留五個 Claude reviewer 與真實歸檔 gate。
+- [ ] 5.4 完成獨立審查、Spectra validate 與 PR 紀錄（Spectra 須在獨立副本中驗證：在 worktree 內執行時，CLI 解析到的是主 checkout 與 park 區的舊副本）。
 
+
+## 6. 審查後的取捨（Decision 5，2026-10-22）
+
+- [x] 6.1 實現 requirement「Attachment routing classifies user-written lists before retained defaults」：SOP Step 2 的分類優先序與 Step 5.5 的 classify 改為兩輪（使用者寫的清單 → 沿用內建的清單）；比對全部轉小寫，空項目丟棄。驗收：spec 兩個 scenario 的檔名（`budget.xlsx`、`responses_v2.csv`）在真實歸檔演練中依規則分類，見 verification.md。
+- [x] 6.2 實現 requirement「Partial routing configuration keeps unmentioned defaults」：未提及的清單沿用內建值，清單鍵寫了但沒給值等同 `[]` 並在報告揭露；BREAKING 說明改寫成機制描述，並標明受影響最大的是只寫兩個目錄的設定。
+- [x] 6.3 Step 1.4：workspace alias 原樣使用、不丟棄；正規化只用於與 identity 比對；identity 內正規化重複只忽略衝突鍵；被忽略的 identity 條目不佔用地址；警告不寫原始行或顯示名稱；舊 `.claude/emails.md` 並存與在家目錄執行時各提示一行。
+- [x] 6.4 Step 1.5 與 `email-search-disambiguation`：候選標來源，只來自全域 identity 的候選不標「推薦」；`--no-confirm` 時模糊人名若只有全域 identity 命中仍列候選；獨立使用 skill 時的 workspace config 解析方式寫明。
+- [x] 6.5 #334 Decision C（frontmatter 記下我方帳號）另開 #535；Open Question 4（逃生口）寫入 Non-Goals。
+
+## 7. 發佈準備
+
+- [ ] 7.1 下一個 plugin 版本須為主版號升級（`attachment_routing` 為 BREAKING）；發佈時一併確認 `plugin/CHANGELOG.md` 的 `[Unreleased]` 條目。
 
 ## 2026-09-14 驗證進度
 

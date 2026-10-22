@@ -10,8 +10,8 @@ Defines how `/archive-mail` downloads attachment files from archived emails, whe
 
 - Skill downloads attachments from archived emails
 - Attachment directory matches email Markdown stem
-- Attachment routing follows config-keyword-extension precedence
-- Default routing rules when config is absent
+- Attachment routing follows config-keyword-extension precedence — superseded by mail#334: user-written lists are checked before retained defaults (change `archive-mail-identity-and-routing-merge`)
+- Default routing rules when config is absent — the partial-configuration rule is superseded by mail#334: unmentioned lists keep their defaults (change `archive-mail-identity-and-routing-merge`)
 - Filename preservation on disk with URL encoding in Markdown links only
 - Attachment block placement in Markdown
 - Reply without attachments emits cross-reference

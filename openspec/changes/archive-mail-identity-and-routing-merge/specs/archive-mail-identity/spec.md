@@ -1,3 +1,7 @@
+## Purpose
+
+Defines the machine-global participant identity file read by `/archive-mail`, how it combines with workspace `participant_aliases`, and how the resolved names are used for disambiguation candidates and reports.
+
 ## ADDED Requirements
 
 ### Requirement: Machine-global identity file
@@ -7,6 +11,8 @@ The archive-mail workflow SHALL read participant identity data from a machine-gl
 The file SHALL support a single top-level key, `participant_aliases`, mapping a bare email address to a human-readable display string.
 
 When the file is absent, the workflow SHALL proceed with no identity data and SHALL NOT emit an error. When the file is present but unparseable as YAML, the workflow SHALL report the parse failure and continue with no identity data rather than aborting the archive run.
+
+Addresses SHALL be compared after trimming and lowercasing, without removing plus tags or dots; this normalization SHALL be used only to decide whether two entries name the same address. Workspace `participant_aliases` entries SHALL be used as written and SHALL NOT be dropped or rewritten by this step, so that a run without an identity file behaves exactly as before this change. Within the identity file, keys that collide after normalization SHALL be ignored with a warning while the other identity entries remain in use. Warnings SHALL name only the offending address or key and the error class, never a raw line or a display name.
 
 #### Scenario: Identity file supplies a display name absent from workspace config
 
@@ -38,7 +44,7 @@ When the file is absent, the workflow SHALL proceed with no identity data and SH
 #### Scenario: Absent identity file is not an error
 
 - **WHEN** `~/.claude/.mail/identity.yaml` does not exist
-- **THEN** the archive run SHALL complete normally using only workspace-level `participant_aliases`, and SHALL NOT emit a warning about the missing file
+- **THEN** the archive run SHALL complete normally using only workspace-level `participant_aliases`, exactly as written, and SHALL NOT emit a warning about the missing file
 
 
 #### Scenario: Invalid identity file does not abort
@@ -50,3 +56,8 @@ When the file is absent, the workflow SHALL proceed with no identity data and SH
 
 - **WHEN** an identity supplies a display name for an email
 - **THEN** Phase 1 candidate generation and the audit report SHALL use the same effective aliases, retaining the bare email for inspection and SHALL NOT silently change filters or skip confirmation
+
+#### Scenario: Global-only matches are never resolved without the user
+
+- **WHEN** the filter is an ambiguous name, the user skipped confirmation with `--no-confirm`, and the only address matching that name comes from the identity file (neither the workspace aliases nor the archive's thread participants contain it)
+- **THEN** the workflow SHALL still present the candidates for the user to choose, and SHALL NOT mark a candidate that comes only from the identity file as recommended

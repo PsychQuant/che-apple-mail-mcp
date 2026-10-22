@@ -167,7 +167,7 @@ AI: [直接執行,沒 confirmation]
 | `last_archived` | 日期／ISO-8601 時間；未設定不加時間界線 | Step 1.0 傳給搜尋的 `date_from`；`last_archived`／`both` 去重策略另檢查日期。值須寫在 key 同一行。 |
 | `exclude_mailboxes` | 字串清單；空清單 | 搜尋時排除指定 mailbox。 |
 | `subject_keywords` | 字串清單；空清單 | Step 2／3 增加 subject-keyword 搜尋，補抓原搜尋漏掉的 thread。 |
-| `participant_aliases` | email → 顯示名稱對應表；空對應表 | Step 1.4 以全域 identity 為基底，workspace 僅補充新地址；衝突以全域為準且具名揭露。Phase 1 候選與 audit 共用結果，不直接改 filter。 |
+| `participant_aliases` | email → 顯示名稱對應表；空對應表 | Step 1.4 以全域 identity 為基底，workspace 條目原樣補充新地址；衝突以全域為準且具名揭露。沒有 identity 檔時與改版前相同。Phase 1 候選與 audit 共用結果，不直接改 filter。 |
 | `dedup_strategy` | `index`（預設）、`last_archived`、`both` | Step 1.6／4：Message-ID 去重、日期去重，或兩者同時成立。 |
 | `distributed_archives` | 歸檔目錄字串清單；空清單 | Step 2.1 讀取已分派歸檔的 Message-ID，併入 capture 層去重集合。 |
 | `sender_includes` | 字串清單；空清單不限制 | Step 4.0：每個 thread 至少一封信的寄件人符合此軸條件。 |
@@ -222,8 +222,8 @@ enrichment: none
 - **輸出路徑**：未 pin 時，依序檢查 `communications/email/`、`correspondence/emails/`；兩者都有 Markdown 時須指定 `output_dir`，不能猜測。皆無適用 layout 才用 `communication/emails`。
 - **日期與去重**：`dedup_strategy: last_archived` 必須提供 `last_archived`。有 `last_archived` 時，搜尋也會使用日期界線；`both` 在 Step 4 同時要求 Message-ID 未見過及日期較新。不要把 `last_archived` 寫成下一行縮排的值，也不要假設 SOP 會自動更新這個欄位。
 - **跨目錄去重**：`distributed_archives` 僅在 `index`／`both` 生效；`last_archived` 策略略過。目錄可在 `output_dir` 之外，相對 workspace root 解析；不存在時警告並略過。只讀取該目錄及下一層的 Markdown，不移動信件或檔案。Message-ID 格式與掃描限制見 Step 2.1。
-- **全域身份檔（mail#334）**：`~/.claude/.mail/identity.yaml` 只支援 `participant_aliases`（bare email → 非空顯示名稱字串）。不是一般 config 的第二層，沒有 `own_addresses` 或其他設定繼承。Step 1.4 在消歧義之前讀取；缺檔靜默沿用 workspace aliases。存在但無法讀取、YAML 無法解析、重複 key 或根節點非 mapping 時，警告並捨棄該檔資料，歸檔仍繼續。未知鍵與無效條目警告後忽略。email trim + lowercase，不移除 plus tag／dots；同一來源正規化後重複鍵則警告並捨棄該來源 alias map。
-- **身份優先權**：identity 已有的 email 不能被 workspace 改寫（即使名稱相同，仍具名列入忽略清單）；workspace 只補充新 email。Phase 1 候選與 Step 7 報告使用同一 effective map，附上 bare email。此資料不改 search filter、direction、frontmatter 或確認授權。檔案由使用者自行維護／同步，工作流只讀；不把 home 路徑誤稱為自動跨機器同步。
+- **全域身份檔（mail#334）**：`~/.claude/.mail/identity.yaml` 只支援 `participant_aliases`（bare email → 非空顯示名稱字串）。不是一般 config 的第二層，沒有 `own_addresses` 或其他設定繼承。Step 1.4 在消歧義之前讀取；缺檔靜默沿用 workspace aliases。存在但無法讀取、YAML 無法解析、重複 key 或根節點非 mapping 時，警告並捨棄該檔資料，歸檔仍繼續。未知鍵與無效條目警告後忽略，被忽略的條目不佔用該地址。trim + lowercase 只用來判斷是不是同一個地址（不移除 plus tag／dots）；identity 檔內正規化後重複的鍵只忽略那幾個鍵。workspace 條目原樣使用、不丟棄，無效條目只在報告警告。警告只寫 email 或鍵與錯誤類型，不寫原始行或顯示名稱。
+- **身份優先權**：identity 已有的 email 不能被 workspace 改寫（即使名稱相同，仍具名列入忽略清單）；workspace 只補充新 email。Phase 1 候選與 Step 7 報告使用同一 effective map，附上 bare email 並標示來源；只來自全域 identity 的候選不標「推薦」，`--no-confirm` 時模糊人名若只有全域 identity 命中仍要列候選。此資料不改 search filter、direction、frontmatter 或確認授權。檔案由使用者自行維護／同步，工作流只讀；不把 home 路徑誤稱為自動跨機器同步。
 
 ```yaml
 # ~/.claude/.mail/identity.yaml
@@ -232,7 +232,7 @@ participant_aliases:
   "collaborator@example.invalid": "研究夥伴"
 ```
 
-- **附件物件**：六個子欄位為 `data_extensions`、`document_extensions`、`data_keywords`、`document_keywords`、`data_dir`、`documents_dir`；上例列出內建值。這個物件由 Step 2 的 YAML 設定讀取步驟處理，上例的 inline 清單沿用該步驟格式，不是下述 Step 1.0 的清單 parser。自訂時逐子欄位 replace：省略沿用內建值，明寫清單完整取代、`[]` 停用該清單；兩個目錄須為非空字串。未知鍵與型別錯誤具名警告、忽略該鍵，其他合法覆寫仍生效。**BREAKING**：舊設定若依賴省略來停用，需改為顯式 `[]`；完整六鍵設定不變。先比檔名 keyword（data 優先），再比副檔名（data 優先），皆未命中則歸類為 document；data 寫入 `data_dir`，document 寫入 `documents_dir/{email_md_stem}/`。**沒有頂層 `attachments_dir` 設定或別名**；要改一般附件目錄請用 `attachment_routing.documents_dir`。
+- **附件物件**：六個子欄位為 `data_extensions`、`document_extensions`、`data_keywords`、`document_keywords`、`data_dir`、`documents_dir`；上例列出內建值。這個物件由 Step 2 的 YAML 設定讀取步驟處理，上例的 inline 清單沿用該步驟格式，不是下述 Step 1.0 的清單 parser。自訂時逐子欄位 replace：省略沿用內建值，明寫清單完整取代、`[]` 或空值停用該清單；清單項目轉小寫、空項目丟棄；兩個目錄須為非空字串。未知鍵與型別錯誤具名警告、忽略該鍵，其他合法覆寫仍生效。分類先比使用者寫的清單、再比沿用內建的清單，各自先比檔名 keyword（data 優先）再比副檔名（data 優先），皆未命中則歸類為 document。**BREAKING**：以往沒寫的四個清單是空的，現在沿用內建值；命中你寫的清單的檔案不變，沒命中任何你寫的清單的檔案會再比內建清單（例如 `.csv`、`.xlsx` 可能改歸 data），只寫兩個目錄的設定受影響最大。要維持舊行為請把不要的清單明寫為 `[]`；四個清單都寫出的設定不變。data 寫入 `data_dir`，document 寫入 `documents_dir/{email_md_stem}/`。**沒有頂層 `attachments_dir` 設定或別名**；要改一般附件目錄請用 `attachment_routing.documents_dir`。
 - **兩層篩選**：`filters`／`subject_keywords`／`exclude_mailboxes` 決定搜尋範圍；六個 includes／excludes 在 fetch 後、dedup 前縮小 thread 集合。非空 includes 的每一個軸都必須命中；同軸清單內任一項命中即可。任何 excludes 命中就排除整個 thread，不因另一封信命中 includes 而保留。
 - **比對內容**：不分大小寫的子字串；寄件人及 To／Cc 去除 display name 後比對 email，subject 去除回覆／轉寄前綴後比對。recipient refinement 不宣稱涵蓋 Bcc。空清單、未設定或空項目都不增加該軸限制。
 - **目前清單 parser**：`filters`、`exclude_mailboxes`、`distributed_archives` 的非空值也必須使用兩格縮排的 block-style 清單。`exclude_mailboxes`／`distributed_archives` 寫成非空 inline list 會被當成空清單而沒有警告，分別失去排除／跨目錄去重效果；零參數模式的 inline `filters` 會得到無 filter 錯誤。六個 refinement 欄位接受 `[]`、空 key，或下例兩格縮排的 block-style 清單；不接受非空 inline list 或 scalar。不要在 key／項目後加 inline comment，也不要替項目加額外引號，因為目前 shell 片段保留原始文字。一般 YAML 支援的寫法不等於此片段都能正規化。
@@ -284,6 +284,7 @@ Search 結果的 email 可能來自 IMAP 帳號(display name)或 Exchange/EWS �
 {cwd}/
 ├── .claude/.mail/                              ← namespace root
 │   ├── config.yaml                             ← v2.16.0+;legacy v2.7.0 ↓ 路徑為 .claude/emails.md;v2.8.0–v2.15.0 為 config.md
+│   │                                             (workspace aliases 只補充;全域身份檔見下方)
 │   └── state/
 │       └── archives/
 │           └── {slug}/                          ← per-archive-target,slug = output_dir.replace("/", "-")
@@ -295,6 +296,8 @@ Search 結果的 email 可能來自 IMAP 帳號(display name)或 Exchange/EWS �
 │   └── ...
 └── correspondence/attachments/                 ← attachments(不變)
     └── 2026-01-13_xxx/
+
+~/.claude/.mail/identity.yaml                   ← 全域身份檔(mail#334):只放 participant_aliases;使用者維護,工作流只讀
 ```
 
 ### 為什麼這樣分
@@ -302,6 +305,7 @@ Search 結果的 email 可能來自 IMAP 帳號(display name)或 Exchange/EWS �
 | 路徑 | 性質 | 為什麼 |
 |------|------|--------|
 | `.claude/.mail/config.yaml` | Plugin config(v2.16.0+;legacy `.md` 仍 fallback) | User 改的 YAML config,跟工作流綁定 |
+| `~/.claude/.mail/identity.yaml` | 全域身份資料(使用者維護,工作流只讀) | 同一個人在每個 workspace 叫同一個名字;不是 config 的第二層 |
 | `.claude/.mail/state/archives/{slug}/` | Plugin state | 自動產生的索引,user 不手動編輯 |
 | `{output_dir}/` | User-visible 歸檔結果 | User 主動 ls 找的 archive markdown |
 | `{attachment_routing.documents_dir}/`、`{attachment_routing.data_dir}/` | User-visible 附件 | 依分類寫入；document 另以信件檔名分目錄 |

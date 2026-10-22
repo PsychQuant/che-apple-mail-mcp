@@ -142,12 +142,14 @@ archive-mail v2.17.0+ 會:
 ```
 {cwd}/
 ├── .claude/.mail/                              ← namespace root
-│   ├── config.yaml                             ← YAML(filters / aliases / attachment routing) — v2.16.0+;legacy .md fallback 至 v3.0
+│   ├── config.yaml                             ← YAML(filters / workspace aliases / attachment routing) — v2.16.0+;legacy .md fallback 至 v3.0
 │   └── state/archives/{slug}/                  ← per-archive-target indices
 │       ├── email_index.json                    ← Message-ID 去重
 │       └── threads.json                        ← thread 關係索引
 ├── communications/emails/                      ← archive markdown 目的地（不變）
 └── correspondence/attachments/                 ← attachments（不變）
+
+~/.claude/.mail/identity.yaml                   ← 全域身份檔（只放 participant_aliases；使用者維護，工作流只讀）
 ```
 
 從 v2.7.0 ↓ 升級會 silent auto-migrate（archive-mail / view / rebuild-threads 跑時都會 detect 舊位置並搬遷）。也可主動跑 `/archive-mail-migrate` 一次完成。

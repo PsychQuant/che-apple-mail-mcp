@@ -38,9 +38,9 @@ description: Disambiguate vague email search filters before executing search. Tr
 ```
 
 **怎麼找候選**:
-- 在 archive-mail 內，使用 Step 1.4 已解析的 `EFFECTIVE_PARTICIPANT_ALIASES`：全域 `~/.claude/.mail/identity.yaml` 為基底，workspace `${CONFIG_FILE}` 的 aliases 只補充未涵蓋的 bare email；重複鍵以全域為準並留待報告具名揭露。
-- 獨立使用本 skill 時先依 `commands/archive-mail.md` Step 1.4 的同一規則解析（含缺檔靜默、格式錯誤警告、trim + lowercase、衝突揭露）。不可回頭讀已遷移的 `.claude/emails.md` 或建立另一套覆寫優先序。
-- email → 顯示名稱只能提供候選；顯示名稱命中多個 email 時逐一列出，保留 email 讓使用者選擇，不自動改 filter 或略過確認。
+- 在 archive-mail 內，使用 Step 1.4 已解析的 `EFFECTIVE_PARTICIPANT_ALIASES`：全域 `~/.claude/.mail/identity.yaml` 為基底，workspace `${CONFIG_FILE}` 的 aliases 原樣補充未涵蓋的地址；重複鍵以全域為準並留待報告具名揭露。
+- 獨立使用本 skill 時（不在 archive-mail 內），workspace config 取目前目錄的 `.claude/.mail/config.yaml`（不存在即空），不執行 archive-mail Step 1.6 的 legacy 遷移，其餘依 `commands/archive-mail.md` Step 1.4 的同一規則（缺檔靜默、格式錯誤警告、只為比對做正規化、衝突揭露）。不回頭讀 `.claude/emails.md`，也不建立另一套覆寫優先序。
+- email → 顯示名稱只能提供候選；顯示名稱命中多個 email 時逐一列出，保留 email 讓使用者選擇，不自動改 filter 或略過確認。每個候選標示來源（`identity`／`workspace`／thread participants）；**只來自全域 identity 的候選不得標「推薦」**。使用者以 `--no-confirm`／「直接做」跳過確認時，若模糊人名只有全域 identity 命中，仍要列候選，不自動採用。
 - 從 contacts 或之前 archive 的 thread participants 找匹配
 - 如果完全找不到,問 user「我找不到匹配的 contact,你能給我 email 地址嗎?」
 
