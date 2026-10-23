@@ -1,0 +1,719 @@
+[
+  {
+    "id": "absent",
+    "aliases": {
+      "local@example.invalid": "Local"
+    },
+    "ignored": [],
+    "warnings": [],
+    "classifications": {
+      "raw_indicators.csv": "data",
+      "notes.pdf": "document"
+    },
+    "routing": {
+      "data_extensions": [
+        "csv",
+        "tsv",
+        "sav",
+        "dta",
+        "parquet",
+        "feather",
+        "xlsx",
+        "sas7bdat"
+      ],
+      "document_extensions": [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "rtf",
+        "odt"
+      ],
+      "data_keywords": [
+        "data",
+        "raw",
+        "indicators",
+        "codebook",
+        "dataset"
+      ],
+      "document_keywords": [
+        "Submission",
+        "Figures",
+        "Tables",
+        "Manuscript",
+        "draft",
+        "Revision",
+        "v1",
+        "v2",
+        "v3"
+      ],
+      "data_dir": "data/raw",
+      "documents_dir": "correspondence/attachments"
+    }
+  },
+  {
+    "id": "global",
+    "aliases": {
+      "office@example.invalid": "Office"
+    },
+    "ignored": [],
+    "warnings": [],
+    "classifications": {},
+    "routing": {
+      "data_extensions": [
+        "csv",
+        "tsv",
+        "sav",
+        "dta",
+        "parquet",
+        "feather",
+        "xlsx",
+        "sas7bdat"
+      ],
+      "document_extensions": [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "rtf",
+        "odt"
+      ],
+      "data_keywords": [
+        "data",
+        "raw",
+        "indicators",
+        "codebook",
+        "dataset"
+      ],
+      "document_keywords": [
+        "Submission",
+        "Figures",
+        "Tables",
+        "Manuscript",
+        "draft",
+        "Revision",
+        "v1",
+        "v2",
+        "v3"
+      ],
+      "data_dir": "data/raw",
+      "documents_dir": "correspondence/attachments"
+    }
+  },
+  {
+    "id": "conflict",
+    "aliases": {
+      "office@example.invalid": "Office",
+      "local@example.invalid": "Local"
+    },
+    "ignored": [
+      "office@example.invalid"
+    ],
+    "warnings": [],
+    "classifications": {},
+    "routing": {
+      "data_extensions": [
+        "csv",
+        "tsv",
+        "sav",
+        "dta",
+        "parquet",
+        "feather",
+        "xlsx",
+        "sas7bdat"
+      ],
+      "document_extensions": [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "rtf",
+        "odt"
+      ],
+      "data_keywords": [
+        "data",
+        "raw",
+        "indicators",
+        "codebook",
+        "dataset"
+      ],
+      "document_keywords": [
+        "Submission",
+        "Figures",
+        "Tables",
+        "Manuscript",
+        "draft",
+        "Revision",
+        "v1",
+        "v2",
+        "v3"
+      ],
+      "data_dir": "data/raw",
+      "documents_dir": "correspondence/attachments"
+    }
+  },
+  {
+    "id": "same_name",
+    "aliases": {
+      "a@example.invalid": "Same"
+    },
+    "ignored": [
+      "a@example.invalid"
+    ],
+    "warnings": [],
+    "classifications": {},
+    "routing": {
+      "data_extensions": [
+        "csv",
+        "tsv",
+        "sav",
+        "dta",
+        "parquet",
+        "feather",
+        "xlsx",
+        "sas7bdat"
+      ],
+      "document_extensions": [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "rtf",
+        "odt"
+      ],
+      "data_keywords": [
+        "data",
+        "raw",
+        "indicators",
+        "codebook",
+        "dataset"
+      ],
+      "document_keywords": [
+        "Submission",
+        "Figures",
+        "Tables",
+        "Manuscript",
+        "draft",
+        "Revision",
+        "v1",
+        "v2",
+        "v3"
+      ],
+      "data_dir": "data/raw",
+      "documents_dir": "correspondence/attachments"
+    }
+  },
+  {
+    "id": "plus_distinct",
+    "aliases": {
+      "a@example.invalid": "Base",
+      "a+tag@example.invalid": "Tagged"
+    },
+    "ignored": [],
+    "warnings": [],
+    "classifications": {},
+    "routing": {
+      "data_extensions": [
+        "csv",
+        "tsv",
+        "sav",
+        "dta",
+        "parquet",
+        "feather",
+        "xlsx",
+        "sas7bdat"
+      ],
+      "document_extensions": [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "rtf",
+        "odt"
+      ],
+      "data_keywords": [
+        "data",
+        "raw",
+        "indicators",
+        "codebook",
+        "dataset"
+      ],
+      "document_keywords": [
+        "Submission",
+        "Figures",
+        "Tables",
+        "Manuscript",
+        "draft",
+        "Revision",
+        "v1",
+        "v2",
+        "v3"
+      ],
+      "data_dir": "data/raw",
+      "documents_dir": "correspondence/attachments"
+    }
+  },
+  {
+    "id": "malformed",
+    "aliases": {
+      "local@example.invalid": "Local"
+    },
+    "ignored": [],
+    "warnings": [
+      "identity_warning: identity.yaml YAML parsing failed because participant_aliases contains an unclosed flow sequence; using an empty identity alias map."
+    ],
+    "classifications": {},
+    "routing": {
+      "data_extensions": [
+        "csv",
+        "tsv",
+        "sav",
+        "dta",
+        "parquet",
+        "feather",
+        "xlsx",
+        "sas7bdat"
+      ],
+      "document_extensions": [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "rtf",
+        "odt"
+      ],
+      "data_keywords": [
+        "data",
+        "raw",
+        "indicators",
+        "codebook",
+        "dataset"
+      ],
+      "document_keywords": [
+        "Submission",
+        "Figures",
+        "Tables",
+        "Manuscript",
+        "draft",
+        "Revision",
+        "v1",
+        "v2",
+        "v3"
+      ],
+      "data_dir": "data/raw",
+      "documents_dir": "correspondence/attachments"
+    }
+  },
+  {
+    "id": "duplicate_yaml",
+    "aliases": {
+      "local@example.invalid": "Local"
+    },
+    "ignored": [],
+    "warnings": [
+      "identity_warning: identity.yaml contains the duplicate YAML key 'a@example.invalid' in participant_aliases; using an empty identity alias map."
+    ],
+    "classifications": {},
+    "routing": {
+      "data_extensions": [
+        "csv",
+        "tsv",
+        "sav",
+        "dta",
+        "parquet",
+        "feather",
+        "xlsx",
+        "sas7bdat"
+      ],
+      "document_extensions": [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "rtf",
+        "odt"
+      ],
+      "data_keywords": [
+        "data",
+        "raw",
+        "indicators",
+        "codebook",
+        "dataset"
+      ],
+      "document_keywords": [
+        "Submission",
+        "Figures",
+        "Tables",
+        "Manuscript",
+        "draft",
+        "Revision",
+        "v1",
+        "v2",
+        "v3"
+      ],
+      "data_dir": "data/raw",
+      "documents_dir": "correspondence/attachments"
+    }
+  },
+  {
+    "id": "duplicate_normalized",
+    "aliases": {},
+    "ignored": [],
+    "warnings": [
+      "identity_warning: identity.yaml participant_aliases keys 'A@example.invalid' and 'a@example.invalid' both normalize to 'a@example.invalid'; ignoring all aliases from the identity source."
+    ],
+    "classifications": {},
+    "routing": {
+      "data_extensions": [
+        "csv",
+        "tsv",
+        "sav",
+        "dta",
+        "parquet",
+        "feather",
+        "xlsx",
+        "sas7bdat"
+      ],
+      "document_extensions": [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "rtf",
+        "odt"
+      ],
+      "data_keywords": [
+        "data",
+        "raw",
+        "indicators",
+        "codebook",
+        "dataset"
+      ],
+      "document_keywords": [
+        "Submission",
+        "Figures",
+        "Tables",
+        "Manuscript",
+        "draft",
+        "Revision",
+        "v1",
+        "v2",
+        "v3"
+      ],
+      "data_dir": "data/raw",
+      "documents_dir": "correspondence/attachments"
+    }
+  },
+  {
+    "id": "unknown_identity",
+    "aliases": {
+      "office@example.invalid": "Office"
+    },
+    "ignored": [],
+    "warnings": [
+      "identity_warning: ignoring unknown top-level identity.yaml key 'own_addresses'; it is not used as configuration."
+    ],
+    "classifications": {},
+    "routing": {
+      "data_extensions": [
+        "csv",
+        "tsv",
+        "sav",
+        "dta",
+        "parquet",
+        "feather",
+        "xlsx",
+        "sas7bdat"
+      ],
+      "document_extensions": [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "rtf",
+        "odt"
+      ],
+      "data_keywords": [
+        "data",
+        "raw",
+        "indicators",
+        "codebook",
+        "dataset"
+      ],
+      "document_keywords": [
+        "Submission",
+        "Figures",
+        "Tables",
+        "Manuscript",
+        "draft",
+        "Revision",
+        "v1",
+        "v2",
+        "v3"
+      ],
+      "data_dir": "data/raw",
+      "documents_dir": "correspondence/attachments"
+    }
+  },
+  {
+    "id": "routing_partial",
+    "aliases": {},
+    "ignored": [],
+    "warnings": [],
+    "classifications": {
+      "NTUcalendar115.xlsx": "document",
+      "raw_indicators.csv": "data",
+      "plain.xlsx": "data"
+    },
+    "routing": {
+      "data_extensions": [
+        "csv",
+        "tsv",
+        "sav",
+        "dta",
+        "parquet",
+        "feather",
+        "xlsx",
+        "sas7bdat"
+      ],
+      "document_extensions": [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "rtf",
+        "odt"
+      ],
+      "data_keywords": [
+        "data",
+        "raw",
+        "indicators",
+        "codebook",
+        "dataset"
+      ],
+      "document_keywords": [
+        "calendar"
+      ],
+      "data_dir": "data/raw",
+      "documents_dir": "correspondence/attachments"
+    }
+  },
+  {
+    "id": "routing_replace",
+    "aliases": {},
+    "ignored": [],
+    "warnings": [],
+    "classifications": {
+      "raw_notes.txt": "document",
+      "codebook.pdf": "document",
+      "indicators.pdf": "data"
+    },
+    "routing": {
+      "data_extensions": [
+        "csv",
+        "tsv",
+        "sav",
+        "dta",
+        "parquet",
+        "feather",
+        "xlsx",
+        "sas7bdat"
+      ],
+      "document_extensions": [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "rtf",
+        "odt"
+      ],
+      "data_keywords": [
+        "indicators"
+      ],
+      "document_keywords": [
+        "Submission",
+        "Figures",
+        "Tables",
+        "Manuscript",
+        "draft",
+        "Revision",
+        "v1",
+        "v2",
+        "v3"
+      ],
+      "data_dir": "data/raw",
+      "documents_dir": "correspondence/attachments"
+    }
+  },
+  {
+    "id": "routing_empty",
+    "aliases": {},
+    "ignored": [],
+    "warnings": [],
+    "classifications": {
+      "raw_notes.pdf": "document",
+      "raw_values.csv": "data",
+      "Manuscript.xlsx": "document"
+    },
+    "routing": {
+      "data_extensions": [
+        "csv",
+        "tsv",
+        "sav",
+        "dta",
+        "parquet",
+        "feather",
+        "xlsx",
+        "sas7bdat"
+      ],
+      "document_extensions": [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "rtf",
+        "odt"
+      ],
+      "data_keywords": [],
+      "document_keywords": [
+        "Submission",
+        "Figures",
+        "Tables",
+        "Manuscript",
+        "draft",
+        "Revision",
+        "v1",
+        "v2",
+        "v3"
+      ],
+      "data_dir": "data/raw",
+      "documents_dir": "correspondence/attachments"
+    }
+  },
+  {
+    "id": "routing_unknown",
+    "aliases": {},
+    "ignored": [],
+    "warnings": [
+      "Ignoring unknown attachment_routing key 'data_dirs'; no routing path is created from it."
+    ],
+    "classifications": {
+      "calendar.xlsx": "document",
+      "values.csv": "data"
+    },
+    "routing": {
+      "data_extensions": [
+        "csv",
+        "tsv",
+        "sav",
+        "dta",
+        "parquet",
+        "feather",
+        "xlsx",
+        "sas7bdat"
+      ],
+      "document_extensions": [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "rtf",
+        "odt"
+      ],
+      "data_keywords": [
+        "data",
+        "raw",
+        "indicators",
+        "codebook",
+        "dataset"
+      ],
+      "document_keywords": [
+        "calendar"
+      ],
+      "data_dir": "data/raw",
+      "documents_dir": "correspondence/attachments"
+    }
+  },
+  {
+    "id": "routing_invalid",
+    "aliases": {},
+    "ignored": [],
+    "warnings": [
+      "Invalid attachment_routing.data_extensions: null is not a list of strings; ignoring this override and retaining the built-in default.",
+      "Invalid attachment_routing.data_dir: an empty string is not a nonempty directory string; ignoring this override and retaining 'data/raw'."
+    ],
+    "classifications": {
+      "calendar.xlsx": "document",
+      "values.csv": "data"
+    },
+    "routing": {
+      "data_extensions": [
+        "csv",
+        "tsv",
+        "sav",
+        "dta",
+        "parquet",
+        "feather",
+        "xlsx",
+        "sas7bdat"
+      ],
+      "document_extensions": [
+        "pdf",
+        "docx",
+        "doc",
+        "txt",
+        "md",
+        "rtf",
+        "odt"
+      ],
+      "data_keywords": [
+        "data",
+        "raw",
+        "indicators",
+        "codebook",
+        "dataset"
+      ],
+      "document_keywords": [
+        "calendar"
+      ],
+      "data_dir": "data/raw",
+      "documents_dir": "correspondence/attachments"
+    }
+  },
+  {
+    "id": "routing_full",
+    "aliases": {},
+    "ignored": [],
+    "warnings": [],
+    "classifications": {
+      "a.csv": "data",
+      "raw.xlsx": "document",
+      "a.pdf": "document"
+    },
+    "routing": {
+      "data_extensions": [
+        "csv"
+      ],
+      "document_extensions": [
+        "pdf"
+      ],
+      "data_keywords": [],
+      "document_keywords": [],
+      "data_dir": "research/raw",
+      "documents_dir": "research/docs"
+    }
+  }
+]
