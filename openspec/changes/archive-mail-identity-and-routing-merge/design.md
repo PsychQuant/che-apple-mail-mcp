@@ -19,7 +19,7 @@
 - per-field 兩層 config（U/L/D 分類）—— 見下方 Decision 1。
 - `own_addresses` 進設定檔 —— 見下方 Decision 2。
 - 新增 frontmatter 欄位表達「我方是哪個帳號」—— 動到 frozen 6 欄位契約，另案（#535）。
-- 讓 workspace 宣告「不讀全域 identity」的逃生口（issue 的 Open Question 4，例如 `--no-user-config`）—— 本 change 不做。identity 檔只提供顯示名稱、不改 filter 也不授權略過確認，目前沒有需要逃生口的情境；出現時另開 issue。
+- 讓 workspace 宣告「不讀全域 identity」的逃生口（issue 的 Open Question 4，例如 `--no-user-config`）—— 本 change 不做。identity 檔單憑自己不改 filter、不授權略過確認；唯一會讓別名影響 filter 的是使用者自己下 `--no-confirm` 且本地也有佐證的情況（Decision 5 第 3 項）。目前沒有需要逃生口的情境；出現時另開 issue。
 
 ## Decisions
 
@@ -57,7 +57,7 @@
 
 1. **分類先比使用者寫的清單，再比沿用內建的清單**；兩輪各自 keyword 先於 extension、data 先於 document。否則 `document_extensions: [xlsx]` 會被沿用的內建 `data_extensions`（含 `xlsx`）搶走，而只寫 data 清單的舊 config，檔名含 `v1`／`v2`／`draft` 的 `.csv` 會被內建 `document_keywords` 改判。
 2. **workspace alias 只為比對做正規化**：條目原樣使用、不丟棄，無效條目只在報告警告。原 PR 對 workspace 也套用「丟棄無效條目、正規化後重複就丟掉整份」，與「沒有 identity 檔時行為不變」矛盾。
-3. **`--no-confirm` 時，模糊人名若只有全域 identity 命中，仍列候選**；只來自全域檔的候選不標「推薦」。避免全域檔在無關的 workspace 成為最高權重的人名來源。
+3. **`--no-confirm` 時，模糊人名若只有全域 identity 命中，仍列候選**；只來自全域檔的候選不標「推薦」。避免全域檔在無關的 workspace 成為最高權重的人名來源。實作時補上兩點：直接採用要求名稱只對應一個地址、且該地址也出現在本 workspace；同一顯示名稱對應多個地址時，一律列候選、不標「推薦」（round 2 審查）。
 4. **清單鍵寫了但沒給值（YAML `null`）等同 `[]`**，與同一份 config 其他清單一致，並在報告揭露。
 
 ## Risks / Trade-offs

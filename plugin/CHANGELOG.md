@@ -23,7 +23,7 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 
 ### Added
 
-- `archive-mail` 從 `~/.claude/.mail/identity.yaml` 讀取 `participant_aliases`，workspace 條目原樣補充新地址，衝突採全域值並具名揭露；沒有 identity 檔時 alias 行為與改版前相同。缺檔靜默、解析失敗警告後沿用 workspace。消歧義候選與 audit 共用同一結果，候選標示來源，只來自全域檔的候選不標「推薦」；`--no-confirm` 時若模糊人名只有全域檔命中，仍列候選讓使用者選。不新增 own_addresses 或 frontmatter 欄位。舊的 `.claude/emails.md` 與 `config.yaml` 並存時，前者的 alias 不再讀取，報告會提示。（#334）
+- `archive-mail` 從 `~/.claude/.mail/identity.yaml` 讀取 `participant_aliases`，workspace 條目原樣補充新地址，衝突採全域值並具名揭露；沒有 identity 檔時 alias 行為與改版前相同。缺檔靜默、解析失敗警告後沿用 workspace。消歧義候選與 audit 共用同一結果，候選標示來源，只來自全域檔的候選不標「推薦」，同一顯示名稱對應多個地址時也不標；`--no-confirm` 時，模糊人名只有在「只對應一個地址、且該地址也出現在本 workspace」時才直接採用，否則仍列候選讓使用者選。不新增 own_addresses 或 frontmatter 欄位。舊的 `.claude/emails.md` 與 `config.yaml` 並存時，前者的 alias 不再讀取，報告會提示。（#334）
 
 ### Changed
 

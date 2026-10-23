@@ -28,7 +28,7 @@
 
 ## 4. 迴歸與 BREAKING 影響確認
 
-- [~] 4.1 掃過本機已知 workspace 的 `.claude/.mail/config.yaml`，逐一判定其 `attachment_routing` 寫法在新語意下行為是否改變，把結果記入實作 PR 的 description。已知：目前唯一使用該欄位的 config 採完整六 sub-key 寫法，不受影響 —— 需實際確認而非沿用此假設。 — 2026-10-23 擴大到 `~` 與 Dropbox：17 份 config，可讀的 10 份都不受影響（5 份沒寫 `attachment_routing`、5 份四個清單都寫出），2 份有 `participant_aliases` 也照原樣保留；另 7 份是 Dropbox 雲端佔位檔，讀不到內容，未判定（evidence/config-inventory-summary.json）。
+- [~] 4.1 掃過本機已知 workspace 的 `.claude/.mail/config.yaml`，逐一判定其 `attachment_routing` 寫法在新語意下行為是否改變，把結果記入實作 PR 的 description。已知：目前唯一使用該欄位的 config 採完整六 sub-key 寫法，不受影響 —— 需實際確認而非沿用此假設。 — 2026-10-23 擴大到家目錄與雲端同步資料夾：17 份 config，可讀的 10 份都不受影響（5 份沒寫 `attachment_routing`、5 份四個清單都寫出），2 份有 `participant_aliases` 也照原樣保留；另 7 份是雲端佔位檔，讀不到內容，未判定（evidence/config-inventory-summary.json）。
 
 - [x] 4.2 跑一次真實歸檔（既有 workspace、既有 config，不改設定），確認 identity 檔缺席時的行為與本 change 之前**逐項相同**：新歸檔封數、附件分類去向、coverage audit 結果三者一致。這是 backward-compat 的驗收依據。
 
@@ -43,7 +43,7 @@
 
 ## 6. 審查後的取捨（Decision 5，2026-10-22）
 
-- [x] 6.1 實現 requirement「Attachment routing classifies user-written lists before retained defaults」：SOP Step 2 的分類優先序與 Step 5.5 的 classify 改為兩輪（使用者寫的清單 → 沿用內建的清單）；比對全部轉小寫，空項目丟棄。驗收：spec 兩個 scenario 的檔名（`budget.xlsx`、`responses_v2.csv`）在真實歸檔演練中依規則分類，見 verification.md。
+- [x] 6.1 實現 requirement「Attachment routing classifies user-written lists before retained defaults」：SOP Step 2 的分類優先序與 Step 5.5 的 classify 改為兩輪（使用者寫的清單 → 沿用內建的清單）；比對全部轉小寫，空項目丟棄。驗收：只有 spec 的兩個 scenario（`budget.xlsx`、`responses_v2.csv`）。真實歸檔的附件無法區分兩種順序（沒有一個附件會被沿用的預設搶走），所以這條順序沒有經過真實資料驗證，見 verification.md「沒有涵蓋」。
 - [x] 6.2 實現 requirement「Partial routing configuration keeps unmentioned defaults」：未提及的清單沿用內建值，清單鍵寫了但沒給值等同 `[]` 並在報告揭露；BREAKING 說明改寫成機制描述，並標明受影響最大的是只寫兩個目錄的設定。
 - [x] 6.3 Step 1.4：workspace alias 原樣使用、不丟棄；正規化只用於與 identity 比對；identity 內正規化重複只忽略衝突鍵；被忽略的 identity 條目不佔用地址；警告不寫原始行或顯示名稱；舊 `.claude/emails.md` 並存與在家目錄執行時各提示一行。
 - [x] 6.4 Step 1.5 與 `email-search-disambiguation`：候選標來源，只來自全域 identity 的候選不標「推薦」；`--no-confirm` 時模糊人名若只有全域 identity 命中仍列候選；獨立使用 skill 時的 workspace config 解析方式寫明。
@@ -55,7 +55,7 @@
 
 ## 2026-10-23 驗證進度
 
-1.1、1.2、1.3、2.1–2.3、4.2 以真實 Mail 歸檔驗收（工作區副本，Mail 只讀，真實 workspace 未動）：A（改版前 SOP）與 B（改版後 SOP）在沒有 identity 檔時，新信、md 檔、index、thread 與 coverage audit 完全相同；C 用暫時 identity 檔與部分 routing 設定，別名呈現、衝突揭露、未識別鍵、空值清單、兩輪分類全部符合事先寫下的預期。細節見 verification.md 與 evidence/real-archive-2026-10-23.json。6.1 的「使用者清單勝過沿用預設」在這批真實附件上沒有可區分的檔名，只由 spec scenario 涵蓋。
+1.1、1.2、1.3、2.1–2.3、4.2 以真實 Mail 歸檔驗收（工作區副本，Mail 只讀，真實 workspace 未動）：A（改版前 SOP）與 B（改版後 SOP）在沒有 identity 檔時，新信、md 檔、index、thread 與 coverage audit 完全相同；C 用暫時 identity 檔與部分 routing 設定，別名呈現、衝突揭露、未識別鍵、空值清單、兩輪分類全部符合事先寫下的預期。細節見 verification.md 與 evidence/real-archive-2026-10-23.json。6.1 的「使用者清單勝過沿用預設」在這批真實附件上沒有可區分的檔名，只由 spec scenario 涵蓋；6.1 打勾表示規則已寫進 SOP，不表示已用真實資料驗過。
 
 ## 2026-09-14 驗證進度
 

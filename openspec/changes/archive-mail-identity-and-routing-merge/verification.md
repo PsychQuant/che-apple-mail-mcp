@@ -2,18 +2,18 @@
 
 ### 真實歸檔驗收（tasks 1.1–1.3、2.1–2.3、4.2）
 
-以使用者既有的一個 workspace（config、index、threads 與已歸檔 md）複製三份副本，用真實 Mail 跑 `/archive-mail`。Mail 只讀；每個 agent 只使用讀取與匯出工具；真實 workspace 沒有任何檔案變動。結果摘要（地址已改成代號）在 `evidence/real-archive-2026-10-23.json`。
+以使用者既有的一個 workspace（config、index、threads 與已歸檔 md）複製三份副本（2026-10-23，Asia/Taipei），用真實 Mail 跑 `/archive-mail`。Mail 只讀；每個 agent 只使用讀取與匯出工具；真實 workspace 沒有任何檔案變動。結果摘要（地址已改成代號）在 `evidence/real-archive-2026-10-23.json`。
 
 - **A（改版前 SOP）vs B（改版後 SOP），沒有 identity 檔**：兩邊都歸檔同一組 12 封新信、跳過 2 封既有信；md 檔逐位元相同，index 40 筆相同，thread 36 個相同（只差頂層更新時間），附件 0／0，coverage audit 都是 12 個 thread 全部完整。B 的報告沒有任何缺檔字樣。→ 4.2、1.1 通過。限制：這個 workspace 沒有 alias、四個清單都寫出，新信也沒有附件，所以新規則在 A、B 都沒被觸發。
-- **C（改版後 SOP），暫時 identity 檔 + 副本設定改動**：identity 檔只在這次執行期間存在，執行後刪除並確認不存在。結果與執行前寫下的預期逐項相符：
+- **C（改版後 SOP），暫時 identity 檔 + 副本設定改動**：identity 檔的路徑是固定的，無法指向副本，所以這次直接建立了真正的 `~/.claude/.mail/identity.yaml`（約 18 分鐘），執行後刪除並確認不存在。這段時間若有其他 workspace 的 `/archive-mail` 在跑，也會讀到這份測試用別名；就我們所知當時沒有，但無法完全排除。結果與執行前寫下的預期逐項相符：
   - identity 獨有的地址以 identity 的名稱呈現（1.2）；identity 與 workspace 都有的地址採 identity 的名稱，workspace 那筆列入 `IGNORED_WORKSPACE_ALIASES` 並在報告具名揭露（1.3）；workspace 獨有的地址照用；不是 email 的 workspace 鍵原樣保留、只警告一行，警告不含顯示名稱（Decision 5-2）。
-  - 部分 routing：`data_keywords: [Receipt]` 命中 `Receipt-*.pdf`（不分大小寫）→ data；`Invoice-*.pdf` 落到沿用的內建 `document_extensions`（pdf）→ document；拼錯的 `data_dirs` 具名警告且沒有建立目錄；沒給值的 `document_keywords` 視為停用並揭露（2.1–2.3、Decision 5-1、5-4）。
+  - 部分 routing：重新歸檔一封帶兩個 PDF 附件的既有信。檔名含使用者 keyword 的那個 PDF 由使用者寫的 `data_keywords` 命中（不分大小寫）→ data；另一個 PDF 落到沿用的內建 `document_extensions`（pdf）→ document；拼錯的 `data_dirs` 具名警告且沒有建立目錄；沒給值的 `document_keywords` 視為停用並揭露（2.1–2.3、Decision 5-1、5-4）。
   - Phase 1 乾跑：只有全域 identity 命中的模糊人名，即使 `--no-confirm` 仍列候選、不標推薦；地址也在本 workspace thread participants 的名字可直接採用（Decision 5-3）。
 - **沒有涵蓋**：「使用者清單勝過沿用的預設」在這批真實附件上沒有可區分的檔名（沒有一個附件會被沿用的預設搶走），只由 spec 的兩個 scenario 涵蓋。
 
 ### 盤點（task 4.1）
 
-掃描 `~`（不含 `~/Library`）與 Dropbox：17 份 config，可讀的 10 份都不受 routing 改動影響，2 份有 alias 也照原樣保留；7 份 Dropbox 雲端佔位檔讀不到內容，未判定（`evidence/config-inventory-summary.json`）。2026-09-14 的盤點只掃了 `~/Developer`，漏掉 proposal 引用的 workspace。
+掃描家目錄與雲端同步資料夾：17 份 config，可讀的 10 份都不受 routing 改動影響，2 份有 alias 也照原樣保留；7 份雲端佔位檔讀不到內容，未判定（`evidence/config-inventory-summary.json`）。2026-09-14 的盤點只掃了 `~/Developer`，漏掉 proposal 引用的 workspace。
 
 ### 審查後的取捨
 

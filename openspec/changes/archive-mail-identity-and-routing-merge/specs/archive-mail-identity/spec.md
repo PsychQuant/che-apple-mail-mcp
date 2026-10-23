@@ -12,7 +12,7 @@ The file SHALL support a single top-level key, `participant_aliases`, mapping a 
 
 When the file is absent, the workflow SHALL proceed with no identity data and SHALL NOT emit an error. When the file is present but unparseable as YAML, the workflow SHALL report the parse failure and continue with no identity data rather than aborting the archive run.
 
-Addresses SHALL be compared after trimming and lowercasing, without removing plus tags or dots; this normalization SHALL be used only to decide whether two entries name the same address. Workspace `participant_aliases` entries SHALL be used as written and SHALL NOT be dropped or rewritten by this step, so that a run without an identity file behaves exactly as before this change. Within the identity file, keys that collide after normalization SHALL be ignored with a warning while the other identity entries remain in use. Warnings SHALL name only the offending address or key and the error class, never a raw line or a display name.
+Addresses SHALL be compared after trimming and lowercasing, without removing plus tags or dots; this normalization SHALL be used only to decide whether two entries name the same address. Workspace `participant_aliases` entries SHALL be used as written and SHALL NOT be dropped or rewritten by this step, so that a run without an identity file behaves exactly as before this change. Within the identity file, keys that are identical or collide after normalization SHALL be ignored with a warning while the other identity entries remain in use. Warnings SHALL name only the offending address and the error class; an entry whose key is not an address SHALL be identified by position, never by echoing a raw line, a key or a display name. Display names SHALL be rendered as quoted data with control characters removed and a length cap, and the source label and any recommendation SHALL be placed by the workflow, never taken from a display name.
 
 #### Scenario: Identity file supplies a display name absent from workspace config
 
@@ -49,15 +49,20 @@ Addresses SHALL be compared after trimming and lowercasing, without removing plu
 
 #### Scenario: Invalid identity file does not abort
 
-- **WHEN** the identity file is malformed YAML, has duplicate YAML keys, or has a non-mapping root
+- **WHEN** the identity file is malformed YAML, has a non-mapping root or a non-mapping `participant_aliases`, or contains a YAML tag, anchor, alias or merge key under `participant_aliases`
 - **THEN** the workflow SHALL disclose the failure, ignore that identity file, and continue with workspace aliases
 
 #### Scenario: Candidate and display consumers share resolution
 
 - **WHEN** an identity supplies a display name for an email
-- **THEN** Phase 1 candidate generation and the audit report SHALL use the same effective aliases, retaining the bare email for inspection and SHALL NOT silently change filters or skip confirmation
+- **THEN** Phase 1 candidate generation and the audit report SHALL use the same effective aliases, retaining the bare email for inspection, and the identity file alone SHALL NOT change filters or skip confirmation
 
 #### Scenario: Global-only matches are never resolved without the user
 
 - **WHEN** the filter is an ambiguous name, the user skipped confirmation with `--no-confirm`, and the only address matching that name comes from the identity file (neither the workspace aliases nor the archive's thread participants contain it)
 - **THEN** the workflow SHALL still present the candidates for the user to choose, and SHALL NOT mark a candidate that comes only from the identity file as recommended
+
+#### Scenario: A name that maps to several addresses is never resolved without the user
+
+- **WHEN** one display name maps to two or more addresses across the identity file and the workspace aliases
+- **THEN** no candidate SHALL be marked recommended, the workflow SHALL present the candidates even when the user skipped confirmation, and the run report SHALL name the colliding addresses

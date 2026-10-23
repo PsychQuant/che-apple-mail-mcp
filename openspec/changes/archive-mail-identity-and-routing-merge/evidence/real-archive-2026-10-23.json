@@ -1,6 +1,6 @@
 {
- "date": "2026-10-23 (Asia/Tokyo host clock; +09:00)",
- "what": "Real /archive-mail runs against Apple Mail in scratch copies of one existing workspace (config, index, threads, archived md). Mail was only read; the real workspace was not modified. Addresses are replaced by placeholders (P1, P2 = two sender addresses of one company; G = the maintainer's own address).",
+ "date": "2026-10-23 (Asia/Taipei)",
+ "what": "Real /archive-mail runs against Apple Mail in scratch copies of one existing workspace (config, index, threads, archived md). Mail was only read; the real workspace was not modified. Addresses are replaced by placeholders (P1, P2 = two sender addresses; G = the maintainer's own address).",
  "sop_versions": {
   "A": "origin/main before PR #445",
   "B": "PR #445 at 07744e0",
@@ -33,11 +33,11 @@
   "caveat": "this workspace has no participant_aliases, writes all four routing lists, and the new mail had no attachments, so the new alias and routing rules were not exercised by A/B; run C exercises them"
  },
  "run_C_temporary_identity_file": {
-  "identity_file": "created by the coordinator for this run only (P1, P2 and one address used nowhere else), read-only during the run, deleted afterwards",
+  "identity_file": "created by the coordinator for this run only (P1, P2 and one address used nowhere else), read-only during the run, deleted afterwards; the path is fixed, so the real file was used for about 18 minutes; any other /archive-mail run in that window would have read it (none known)",
   "workspace_config_changes_in_the_copy": [
    "participant_aliases: P2 (conflicting name), G, and one key that is not an email",
-   "partial attachment_routing: data_keywords [Receipt], document_keywords with no value, misspelled data_dirs, documents_dir",
-   "earlier last_archived so one receipt email with two PDF attachments is fetched again"
+   "partial attachment_routing: one data_keywords entry, document_keywords with no value, a misspelled data_dirs, documents_dir",
+   "earlier last_archived so one previously archived email with two PDF attachments is fetched again"
   ],
   "new_emails": 13,
   "alias_resolution": {
@@ -63,18 +63,18 @@
    ],
    "attachments": [
     {
-     "file": "Receipt-*.pdf",
+     "file": "PDF whose name contains the user keyword",
      "pass": "user-written",
-     "rule": "data_keywords receipt (case-insensitive)",
+     "rule": "data_keywords (case-insensitive)",
      "class": "data",
-     "dest": "data/raw/"
+     "dest": "data_dir (default)"
     },
     {
-     "file": "Invoice-*.pdf",
+     "file": "the other PDF",
      "pass": "retained default",
      "rule": "document_extensions pdf",
      "class": "document",
-     "dest": "communication/attachments/<md stem>/"
+     "dest": "documents_dir/<md stem>/"
     }
    ],
    "misspelled_key_created_no_directory": true
@@ -87,7 +87,7 @@
  },
  "not_covered": [
   "the 'user-written list beats retained default' ordering on a real file where a retained default would otherwise win (no such attachment in this mail); covered only by the spec scenarios",
-  "7 Dropbox workspaces whose config could not be downloaded (see config-inventory-summary.json)"
+  "7 cloud-synced workspaces whose config could not be downloaded (see config-inventory-summary.json)"
  ],
  "side_findings_filed": {
   "#536": "concurrent tool calls livelock the SQLite connection",
