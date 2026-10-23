@@ -4,19 +4,19 @@
 
 ## 1. Identity 檔讀取 —— 實現 requirement「Machine-global identity file」（specs/archive-mail-identity/spec.md）
 
-- [ ] 1.1 在 `plugin/commands/archive-mail.md` 的「讀取搜尋擴展設定」段落之前，新增一段 identity 檔讀取指示：從 `~/.claude/.mail/identity.yaml` 讀 `participant_aliases`。缺檔時靜默繼續（不得產生警告）；檔案存在但 YAML 無法解析時，回報解析失敗並以空身份資料繼續，**不得中止歸檔**。驗收：依 spec scenario「Absent identity file is not an error」手動走一次 —— 移除該檔跑一次歸檔，run 完成且輸出無任何關於缺檔的字樣。
+- [x] 1.1 在 `plugin/commands/archive-mail.md` 的「讀取搜尋擴展設定」段落之前，新增一段 identity 檔讀取指示：從 `~/.claude/.mail/identity.yaml` 讀 `participant_aliases`。缺檔時靜默繼續（不得產生警告）；檔案存在但 YAML 無法解析時，回報解析失敗並以空身份資料繼續，**不得中止歸檔**。驗收：依 spec scenario「Absent identity file is not an error」手動走一次 —— 移除該檔跑一次歸檔，run 完成且輸出無任何關於缺檔的字樣。
 
-- [ ] 1.2 落實 Decision 3：identity 檔是「另一份檔案」，不是「config 的第二層」，並實現 requirement Machine-global identity file 的 supplement 條款 —— 在同一段落定義合併規則：identity 檔的條目為基底；workspace config 的 `participant_aliases` 只補充 identity 檔未涵蓋的位址。兩邊都有的位址以 identity 檔為準。驗收：依 spec Example「Department office address resolved in an audit report」，identity 檔含 `staff@example.invalid` 而 workspace 無此鍵時，coverage audit 報告渲染出 identity 檔的顯示字串。
+- [x] 1.2 落實 Decision 3：identity 檔是「另一份檔案」，不是「config 的第二層」，並實現 requirement Machine-global identity file 的 supplement 條款 —— 在同一段落定義合併規則：identity 檔的條目為基底；workspace config 的 `participant_aliases` 只補充 identity 檔未涵蓋的位址。兩邊都有的位址以 identity 檔為準。驗收：依 spec Example「Department office address resolved in an audit report」，identity 檔含 `staff@example.invalid` 而 workspace 無此鍵時，coverage audit 報告渲染出 identity 檔的顯示字串。
 
-- [ ] 1.3 落實 Decision 3：identity 檔是「另一份檔案」，不是「config 的第二層」的顯式回報要求，補齊 requirement Machine-global identity file 的衝突揭露 —— 為衝突條目加上回報：workspace config 定義了 identity 檔已有的位址時，run 報告須具名列出該位址為「已忽略的 workspace 覆寫」。**不得靜默忽略**。驗收：依 spec Example「Conflicting entry is ignored and disclosed」建構兩份檔案（identity 為 `Example Person`、workspace 為 `YF`），跑一次歸檔，確認解析結果為 `Example Person` 且報告中出現 `person@example.invalid` 的忽略提示。
+- [x] 1.3 落實 Decision 3：identity 檔是「另一份檔案」，不是「config 的第二層」的顯式回報要求，補齊 requirement Machine-global identity file 的衝突揭露 —— 為衝突條目加上回報：workspace config 定義了 identity 檔已有的位址時，run 報告須具名列出該位址為「已忽略的 workspace 覆寫」。**不得靜默忽略**。驗收：依 spec Example「Conflicting entry is ignored and disclosed」建構兩份檔案（identity 為 `Example Person`、workspace 為 `YF`），跑一次歸檔，確認解析結果為 `Example Person` 且報告中出現 `person@example.invalid` 的忽略提示。
 
 ## 2. Attachment routing sub-key merge —— 實現 requirement「Attachment routing configuration override granularity」（specs/archive-mail-attachments/spec.md）
 
-- [ ] 2.1 落實 Decision 4：sub-key 是 replace，不是 append，實現 requirement Attachment routing configuration override granularity —— 改寫 `plugin/commands/archive-mail.md` 中「讀取附件設定」段落的合併語意：把現行「若有，載入自訂規則（all-or-nothing 取代，不做 merge）」改為 sub-key 合併 —— 使用者未提及的 sub-key 沿用內建預設，有寫的 sub-key 整組取代（list 不做 append）。內建預設表本身維持原值不動。驗收：依 spec Example「Adding one keyword no longer requires restating the table」，config 僅寫 `document_keywords` 含 `calendar` 時，`NTUcalendar115.xlsx` 判為 document、`raw_indicators.csv` 仍判為 data。
+- [x] 2.1 落實 Decision 4：sub-key 是 replace，不是 append，實現 requirement Attachment routing configuration override granularity —— 改寫 `plugin/commands/archive-mail.md` 中「讀取附件設定」段落的合併語意：把現行「若有，載入自訂規則（all-or-nothing 取代，不做 merge）」改為 sub-key 合併 —— 使用者未提及的 sub-key 沿用內建預設，有寫的 sub-key 整組取代（list 不做 append）。內建預設表本身維持原值不動。驗收：依 spec Example「Adding one keyword no longer requires restating the table」，config 僅寫 `document_keywords` 含 `calendar` 時，`NTUcalendar115.xlsx` 判為 document、`raw_indicators.csv` 仍判為 data。
 
-- [ ] 2.2 落實 Decision 4：sub-key 是 replace，不是 append 的 BREAKING 面，補齊 requirement Attachment routing configuration override granularity 的空清單條款 —— 在同段落寫明「省略 vs 顯式空清單」的分別：省略某個 sub-key 代表沿用預設；要停用某組預設必須寫顯式空清單。驗收：依 spec scenario「Disabling a default requires an explicit empty list」，設 `data_keywords: []` 後該 tier 不再匹配任何附件，分類落到下一 tier。
+- [x] 2.2 落實 Decision 4：sub-key 是 replace，不是 append 的 BREAKING 面，補齊 requirement Attachment routing configuration override granularity 的空清單條款 —— 在同段落寫明「省略 vs 顯式空清單」的分別：省略某個 sub-key 代表沿用預設；要停用某組預設必須寫顯式空清單。驗收：依 spec scenario「Disabling a default requires an explicit empty list」，設 `data_keywords: []` 後該 tier 不再匹配任何附件，分類落到下一 tier。
 
-- [ ] 2.3 加入未識別 sub-key 的回報規則：`attachment_routing` 下出現六個合法 sub-key（`data_extensions`、`document_extensions`、`data_keywords`、`document_keywords`、`data_dir`、`documents_dir`）以外的鍵時，回報該鍵未識別並以預設值繼續，**不得靜默接受**。驗收：塞一個 `data_dirs`（多一個 s 的常見手誤）進 config，跑一次歸檔，確認輸出點名該鍵。
+- [x] 2.3 加入未識別 sub-key 的回報規則：`attachment_routing` 下出現六個合法 sub-key（`data_extensions`、`document_extensions`、`data_keywords`、`document_keywords`、`data_dir`、`documents_dir`）以外的鍵時，回報該鍵未識別並以預設值繼續，**不得靜默接受**。驗收：塞一個 `data_dirs`（多一個 s 的常見手誤）進 config，跑一次歸檔，確認輸出點名該鍵。
 
 ## 3. 文件同步
 
@@ -28,9 +28,9 @@
 
 ## 4. 迴歸與 BREAKING 影響確認
 
-- [ ] 4.1 掃過本機已知 workspace 的 `.claude/.mail/config.yaml`，逐一判定其 `attachment_routing` 寫法在新語意下行為是否改變，把結果記入實作 PR 的 description。已知：目前唯一使用該欄位的 config 採完整六 sub-key 寫法，不受影響 —— 需實際確認而非沿用此假設。
+- [~] 4.1 掃過本機已知 workspace 的 `.claude/.mail/config.yaml`，逐一判定其 `attachment_routing` 寫法在新語意下行為是否改變，把結果記入實作 PR 的 description。已知：目前唯一使用該欄位的 config 採完整六 sub-key 寫法，不受影響 —— 需實際確認而非沿用此假設。 — 2026-10-23 擴大到 `~` 與 Dropbox：17 份 config，可讀的 10 份都不受影響（5 份沒寫 `attachment_routing`、5 份四個清單都寫出），2 份有 `participant_aliases` 也照原樣保留；另 7 份是 Dropbox 雲端佔位檔，讀不到內容，未判定（evidence/config-inventory-summary.json）。
 
-- [ ] 4.2 跑一次真實歸檔（既有 workspace、既有 config，不改設定），確認 identity 檔缺席時的行為與本 change 之前**逐項相同**：新歸檔封數、附件分類去向、coverage audit 結果三者一致。這是 backward-compat 的驗收依據。
+- [x] 4.2 跑一次真實歸檔（既有 workspace、既有 config，不改設定），確認 identity 檔缺席時的行為與本 change 之前**逐項相同**：新歸檔封數、附件分類去向、coverage audit 結果三者一致。這是 backward-compat 的驗收依據。
 
 
 ## 5. 接續時的契約對帳
@@ -52,6 +52,10 @@
 ## 7. 發佈準備
 
 - [ ] 7.1 下一個 plugin 版本須為主版號升級（`attachment_routing` 為 BREAKING）；發佈時一併確認 `plugin/CHANGELOG.md` 的 `[Unreleased]` 條目。
+
+## 2026-10-23 驗證進度
+
+1.1、1.2、1.3、2.1–2.3、4.2 以真實 Mail 歸檔驗收（工作區副本，Mail 只讀，真實 workspace 未動）：A（改版前 SOP）與 B（改版後 SOP）在沒有 identity 檔時，新信、md 檔、index、thread 與 coverage audit 完全相同；C 用暫時 identity 檔與部分 routing 設定，別名呈現、衝突揭露、未識別鍵、空值清單、兩輪分類全部符合事先寫下的預期。細節見 verification.md 與 evidence/real-archive-2026-10-23.json。6.1 的「使用者清單勝過沿用預設」在這批真實附件上沒有可區分的檔名，只由 spec scenario 涵蓋。
 
 ## 2026-09-14 驗證進度
 

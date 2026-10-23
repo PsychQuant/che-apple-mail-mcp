@@ -1,0 +1,97 @@
+{
+ "date": "2026-10-23 (Asia/Tokyo host clock; +09:00)",
+ "what": "Real /archive-mail runs against Apple Mail in scratch copies of one existing workspace (config, index, threads, archived md). Mail was only read; the real workspace was not modified. Addresses are replaced by placeholders (P1, P2 = two sender addresses of one company; G = the maintainer's own address).",
+ "sop_versions": {
+  "A": "origin/main before PR #445",
+  "B": "PR #445 at 07744e0",
+  "C": "PR #445 at 07744e0"
+ },
+ "run_A_vs_B_no_identity_file": {
+  "identity_file": "absent in both runs",
+  "new_emails": [
+   12,
+   12
+  ],
+  "same_message_ids": true,
+  "md_files_byte_identical": true,
+  "index_entries": [
+   40,
+   40
+  ],
+  "index_identical": true,
+  "threads": [
+   36,
+   36
+  ],
+  "threads_identical_except_top_level_timestamp": true,
+  "attachments": [
+   0,
+   0
+  ],
+  "coverage_audit": "12 of 12 threads complete in both; attachments 0/0 in both",
+  "missing_identity_file_text_in_report": false,
+  "caveat": "this workspace has no participant_aliases, writes all four routing lists, and the new mail had no attachments, so the new alias and routing rules were not exercised by A/B; run C exercises them"
+ },
+ "run_C_temporary_identity_file": {
+  "identity_file": "created by the coordinator for this run only (P1, P2 and one address used nowhere else), read-only during the run, deleted afterwards",
+  "workspace_config_changes_in_the_copy": [
+   "participant_aliases: P2 (conflicting name), G, and one key that is not an email",
+   "partial attachment_routing: data_keywords [Receipt], document_keywords with no value, misspelled data_dirs, documents_dir",
+   "earlier last_archived so one receipt email with two PDF attachments is fetched again"
+  ],
+  "new_emails": 13,
+  "alias_resolution": {
+   "P1": "Identity Sender A (identity)",
+   "P2": "Identity Sender B (identity), workspace entry listed in IGNORED_WORKSPACE_ALIASES",
+   "G": "Workspace Self (workspace)",
+   "not-an-email": "kept as written, one warning naming only the key"
+  },
+  "routing": {
+   "effective_user_written": [
+    "data_keywords",
+    "document_keywords",
+    "documents_dir"
+   ],
+   "effective_retained_default": [
+    "data_extensions",
+    "document_extensions",
+    "data_dir"
+   ],
+   "warnings": [
+    "unknown key data_dirs ignored",
+    "document_keywords empty, disabled"
+   ],
+   "attachments": [
+    {
+     "file": "Receipt-*.pdf",
+     "pass": "user-written",
+     "rule": "data_keywords receipt (case-insensitive)",
+     "class": "data",
+     "dest": "data/raw/"
+    },
+    {
+     "file": "Invoice-*.pdf",
+     "pass": "retained default",
+     "rule": "document_extensions pdf",
+     "class": "document",
+     "dest": "communication/attachments/<md stem>/"
+    }
+   ],
+   "misspelled_key_created_no_directory": true
+  },
+  "phase1_dry_check": {
+   "ambiguous name only in identity, --no-confirm": "candidates shown, none marked 推薦",
+   "name whose address is also in .threads.json participants, --no-confirm": "Phase 1 skipped (local corroboration)"
+  },
+  "all_outcomes_match_expectations_written_before_results": true
+ },
+ "not_covered": [
+  "the 'user-written list beats retained default' ordering on a real file where a retained default would otherwise win (no such attachment in this mail); covered only by the spec scenarios",
+  "7 Dropbox workspaces whose config could not be downloaded (see config-inventory-summary.json)"
+ ],
+ "side_findings_filed": {
+  "#536": "concurrent tool calls livelock the SQLite connection",
+  "#537": "index init failure at startup is permanent; check_fda contradicts it",
+  "#538": "mislabelled US-ASCII text/plain with UTF-8 bytes exported as mojibake"
+ }
+}
