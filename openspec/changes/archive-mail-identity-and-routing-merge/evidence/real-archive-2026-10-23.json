@@ -1,10 +1,10 @@
 {
- "date": "2026-10-23 (Asia/Taipei)",
+ "date": "2026-10-23 to 2026-10-24 (Asia/Taipei)",
  "what": "Real /archive-mail runs against Apple Mail in scratch copies of one existing workspace (config, index, threads, archived md). Mail was only read; the real workspace was not modified. Addresses are replaced by placeholders (P1, P2 = two sender addresses; G = the maintainer's own address).",
  "sop_versions": {
   "A": "origin/main before PR #445",
-  "B": "PR #445 at 07744e0",
-  "C": "PR #445 at 07744e0"
+  "B, C": "PR #445 at 07744e0 (first runs, kept as history)",
+  "B2, C2": "PR #445 at 229555e (final SOP text; the acceptance runs)"
  },
  "run_A_vs_B_no_identity_file": {
   "identity_file": "absent in both runs",
@@ -87,11 +87,43 @@
  },
  "not_covered": [
   "the 'user-written list beats retained default' ordering on a real file where a retained default would otherwise win (no such attachment in this mail); covered only by the spec scenarios",
-  "7 cloud-synced workspaces whose config could not be downloaded (see config-inventory-summary.json)"
+  "7 cloud-synced workspaces whose config could not be downloaded (see config-inventory-summary.json)",
+  "YAML tags, anchors and merge keys in identity.yaml (no such construct in the test file)"
  ],
  "side_findings_filed": {
   "#536": "concurrent tool calls livelock the SQLite connection",
   "#537": "index init failure at startup is permanent; check_fda contradicts it",
   "#538": "mislabelled US-ASCII text/plain with UTF-8 bytes exported as mojibake"
+ },
+ "final_runs_at_229555e": {
+  "corpus_freeze": "one new email from the same sender arrived after run A, so B2 and C2 added date_to 2026-10-22 to every search to reproduce run A's corpus",
+  "run_A_vs_B2_no_identity_file": {
+   "new_emails": [
+    12,
+    12
+   ],
+   "same_message_ids": true,
+   "md_files_byte_identical": true,
+   "index_identical": true,
+   "threads_identical_except_top_level_timestamp": true,
+   "attachments": [
+    0,
+    0
+   ],
+   "missing_identity_file_text_in_report": false
+  },
+  "run_C2": {
+   "new_emails": 13,
+   "alias_resolution": "same as run C; the non-email workspace key is reported by position without printing the key or a name",
+   "name_collision_notice": "identity and workspace give one display name to different addresses: a Step 7 notice lists only the two addresses; neither candidate marked 推薦",
+   "routing": "same as run C: PDF matched by the user-written data_keywords -> data (default data_dir); the other PDF -> document via the retained document_extensions; misspelled key warned and no directory created; document_keywords with no value disabled and disclosed",
+   "phase1_dry_check": {
+    "name mapped by identity to an address absent from this workspace, --no-confirm": "candidates shown, none 推薦",
+    "name mapped by identity to an address present in .threads.json participants, --no-confirm": "exception not triggered; Phase 1 skipped and the filter used as typed",
+    "name colliding between identity and workspace, --no-confirm": "candidates shown (the identity address is absent from this workspace), neither 推薦"
+   },
+   "all_outcomes_match_expectations_written_before_results": true
+  },
+  "identity_file": "created for run C2 only (about 22 minutes), read-only during the run, unchanged, deleted afterwards"
  }
 }

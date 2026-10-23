@@ -10,7 +10,7 @@
 
 - **新增 machine-global 身份檔** `~/.claude/.mail/identity.yaml`，承載 `participant_aliases`。它**不是 config 的第二層** —— 沒有 merge 語意、沒有 workspace 版本可以覆寫它，因為「誰是誰」跨 workspace 恆定。
 - workspace config 的 `participant_aliases` 維持可用但降為**補充**：identity 檔提供基底，workspace 只能新增該檔未涵蓋的條目，不得改寫既有條目。
-- **`attachment_routing` 由 all-or-nothing 改為 sub-key merge against 內建預設**。未提及的 sub-key 沿用內建預設；有寫的 sub-key 整組 replace（非 append）。**BREAKING**：既有 config 若刻意依賴「省略某組清單即停用」的寫法，行為會改變 —— 需以顯式空清單表達。
+- **`attachment_routing` 由 all-or-nothing 改為 sub-key merge against 內建預設**。未提及的 sub-key 沿用內建預設；有寫的 sub-key 整組 replace（非 append）。**BREAKING**：以往只要寫了 `attachment_routing`，沒寫的四個清單都是空的；現在沒寫的清單沿用內建預設，分類先比使用者寫的清單、再比沿用的內建清單。命中使用者清單的附件結果不變；沒有命中任何使用者清單的附件會再比內建清單，可能從 document 改歸 data。要維持舊行為，把不要的清單明寫為 `[]`。
 - 兩份文件同步：SOP 的設定說明與 plugin CLAUDE.md 的 schema 區塊。
 
 ## Non-Goals

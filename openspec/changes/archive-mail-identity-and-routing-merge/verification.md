@@ -2,14 +2,17 @@
 
 ### 真實歸檔驗收（tasks 1.1–1.3、2.1–2.3、4.2）
 
-以使用者既有的一個 workspace（config、index、threads 與已歸檔 md）複製三份副本（2026-10-23，Asia/Taipei），用真實 Mail 跑 `/archive-mail`。Mail 只讀；每個 agent 只使用讀取與匯出工具；真實 workspace 沒有任何檔案變動。結果摘要（地址已改成代號）在 `evidence/real-archive-2026-10-23.json`。
+以使用者既有的一個 workspace（config、index、threads 與已歸檔 md）複製副本，用真實 Mail 跑 `/archive-mail`（2026-10-23 至 10-24，Asia/Taipei）。Mail 只讀；每個 agent 只使用讀取與匯出工具；真實 workspace 沒有任何檔案變動。結果摘要（地址已改成代號）在 `evidence/real-archive-2026-10-23.json`。
 
-- **A（改版前 SOP）vs B（改版後 SOP），沒有 identity 檔**：兩邊都歸檔同一組 12 封新信、跳過 2 封既有信；md 檔逐位元相同，index 40 筆相同，thread 36 個相同（只差頂層更新時間），附件 0／0，coverage audit 都是 12 個 thread 全部完整。B 的報告沒有任何缺檔字樣。→ 4.2、1.1 通過。限制：這個 workspace 沒有 alias、四個清單都寫出，新信也沒有附件，所以新規則在 A、B 都沒被觸發。
-- **C（改版後 SOP），暫時 identity 檔 + 副本設定改動**：identity 檔的路徑是固定的，無法指向副本，所以這次直接建立了真正的 `~/.claude/.mail/identity.yaml`（約 18 分鐘），執行後刪除並確認不存在。這段時間若有其他 workspace 的 `/archive-mail` 在跑，也會讀到這份測試用別名；就我們所知當時沒有，但無法完全排除。結果與執行前寫下的預期逐項相符：
-  - identity 獨有的地址以 identity 的名稱呈現（1.2）；identity 與 workspace 都有的地址採 identity 的名稱，workspace 那筆列入 `IGNORED_WORKSPACE_ALIASES` 並在報告具名揭露（1.3）；workspace 獨有的地址照用；不是 email 的 workspace 鍵原樣保留、只警告一行，警告不含顯示名稱（Decision 5-2）。
-  - 部分 routing：重新歸檔一封帶兩個 PDF 附件的既有信。檔名含使用者 keyword 的那個 PDF 由使用者寫的 `data_keywords` 命中（不分大小寫）→ data；另一個 PDF 落到沿用的內建 `document_extensions`（pdf）→ document；拼錯的 `data_dirs` 具名警告且沒有建立目錄；沒給值的 `document_keywords` 視為停用並揭露（2.1–2.3、Decision 5-1、5-4）。
-  - Phase 1 乾跑：只有全域 identity 命中的模糊人名，即使 `--no-confirm` 仍列候選、不標推薦；地址也在本 workspace thread participants 的名字可直接採用（Decision 5-3）。
-- **沒有涵蓋**：「使用者清單勝過沿用的預設」在這批真實附件上沒有可區分的檔名（沒有一個附件會被沿用的預設搶走），只由 spec 的兩個 scenario 涵蓋。
+**驗收以最終 SOP（`229555e`）的 B2、C2 為準。** 第一批的 B、C 跑在 `07744e0`，之後 Step 1.4／1.5 依第 2、3 輪審查改寫，所以在最終版上重跑；B、C 的結果保留在 evidence 作為歷史。B2、C2 之後只再改了三處文字：Step 7 的警告措辭、workspace `participant_aliases` 不是 mapping 時的處理、Step 5.5 pseudocode 的註解；都不在兩次執行走過的路徑上（C2 的警告本來就以位置指出）。A 跑完後同一寄件者又來了一封新信，B2、C2 在每個搜尋加上 `date_to: 2026-10-22`，重現 A 當時的信件範圍。
+
+- **A（改版前 SOP）vs B2（最終 SOP），沒有 identity 檔**：同一組 12 封新信、跳過 2 封既有信；md 檔逐位元相同，index 40 筆相同，thread 36 個相同（只差頂層更新時間），附件 0／0，coverage audit 都是 12 個 thread 全部完整；B2 報告沒有任何缺檔字樣。→ 4.2、1.1 通過。限制：這個 workspace 沒有 alias、四個清單都寫出，新信也沒有附件，所以 4.2 的「附件去向一致」只驗到 0 對 0；新規則要靠 C2 觸發。
+- **C2（最終 SOP），暫時 identity 檔 + 副本設定改動**：identity 檔的路徑是固定的，無法指向副本，所以直接建立了真正的 `~/.claude/.mail/identity.yaml`（約 22 分鐘），執行後刪除並確認不存在；這段時間若有其他 workspace 的 `/archive-mail` 在跑，也會讀到這份測試用別名，就我們所知當時沒有，但無法完全排除。結果與執行前寫下的預期逐項相符：
+  - identity 獨有的地址以 identity 的名稱呈現（1.2）；identity 與 workspace 都有的地址採 identity 的名稱，workspace 那筆列入 `IGNORED_WORKSPACE_ALIASES` 並具名揭露（1.3）；workspace 獨有的地址照用；不是 email 的 workspace 鍵原樣保留，警告以位置指出、不重印鍵或名稱。
+  - identity 與 workspace 以同一顯示名稱指向不同地址時，報告提示一行、只列地址，兩個候選都不標「推薦」。
+  - 部分 routing：重新歸檔一封帶兩個 PDF 附件的既有信。檔名含使用者 keyword 的 PDF 由使用者寫的 `data_keywords` 命中（不分大小寫）→ data（沿用預設 `data_dir`）；另一個 PDF 落到沿用的內建 `document_extensions` → document；拼錯的 `data_dirs` 具名警告且沒有建立目錄；沒給值的 `document_keywords` 視為停用並揭露（2.3、Decision 5 第 4 項）。
+  - Phase 1 乾跑（`--no-confirm`）：identity 把名稱對到本 workspace 沒有的地址 → 列候選、不標推薦；對到本 workspace thread participants 已有的地址 → 例外不觸發，照舊跳過、filter 照輸入；同名衝突 → 列候選、都不標推薦（Decision 5 第 3 項）。
+- **沒有涵蓋**：(1)「使用者清單勝過沿用的預設」在這批真實附件上沒有可區分的檔名，只由 spec 的兩個 scenario 涵蓋；(2) task 2.1、2.2 原文的驗收例子（`calendar` keyword、`data_keywords: []`）沒有出現在真實信件，2.1–2.2 以 C2 的部分設定驗收；(3) identity 檔裡的 YAML tag、anchor、merge key（測試檔沒有這些寫法）。
 
 ### 盤點（task 4.1）
 
@@ -32,6 +35,8 @@ evidence/ 裡的 `cases.json`、`expected.json`、`agent-replay.json` 是 2026-0
 - #536：多個工具呼叫同時進來時，SQLite 連線陷入活鎖，server 滿載 CPU 卻不回應。
 - #537：server 啟動時開不起索引就永遠不再重試；`check_fda` 卻回報已授予。
 - #538：`text/plain` 宣告 US-ASCII 但內容是 UTF-8 時，匯出內文變成亂碼。
+- #539：plugin 其他既有範例裡的真實第三方地址（本 PR 只換掉它改到的範例區塊）。
+- #540：`/archive-mail` 沒有把 `--no-confirm` 解析成旗標（Step 1.5 的例外假設它有）。
 
 ## 驗證紀錄（2026-09-14）
 

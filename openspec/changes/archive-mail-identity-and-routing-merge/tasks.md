@@ -53,10 +53,10 @@
 
 - [ ] 7.1 下一個 plugin 版本須為主版號升級（`attachment_routing` 為 BREAKING）；發佈時一併確認 `plugin/CHANGELOG.md` 的 `[Unreleased]` 條目。
 
-## 2026-10-23 驗證進度
+## 2026-10-24 驗證進度
 
-1.1、1.2、1.3、2.1–2.3、4.2 以真實 Mail 歸檔驗收（工作區副本，Mail 只讀，真實 workspace 未動）：A（改版前 SOP）與 B（改版後 SOP）在沒有 identity 檔時，新信、md 檔、index、thread 與 coverage audit 完全相同；C 用暫時 identity 檔與部分 routing 設定，別名呈現、衝突揭露、未識別鍵、空值清單、兩輪分類全部符合事先寫下的預期。細節見 verification.md 與 evidence/real-archive-2026-10-23.json。6.1 的「使用者清單勝過沿用預設」在這批真實附件上沒有可區分的檔名，只由 spec scenario 涵蓋；6.1 打勾表示規則已寫進 SOP，不表示已用真實資料驗過。
+1.1、1.2、1.3、2.3、4.2 以最終 SOP（`229555e`）的真實 Mail 歸檔驗收（工作區副本，Mail 只讀，真實 workspace 未動）：A（改版前）與 B2（最終）在沒有 identity 檔時結果完全相同；C2 用暫時 identity 檔與部分 routing 設定，別名呈現、衝突揭露、同名不同址、未識別鍵、空值清單、`--no-confirm` 例外全部符合事先寫下的預期。2.1、2.2 原文的驗收例子沒有出現在真實信件，改以 C2 的部分設定驗收（使用者 keyword 命中 → data、沿用的 extension → document、停用的清單不再命中）；4.2 的附件去向只驗到 0 對 0。6.1 的「使用者清單勝過沿用預設」只由 spec scenario 涵蓋；6.1 打勾表示規則已寫進 SOP，不表示已用真實資料驗過。6.3、6.4 由 C2 驗收。細節見 verification.md 與 evidence/real-archive-2026-10-23.json。
 
-## 2026-09-14 驗證進度
+## 2026-09-14 驗證進度（已被上方取代，保留作為歷史）
 
 1.1–1.3 的 SOP 實作已完成，15 組合成演練亦通過；仍保留未勾選，因原驗收敘述要求歸檔執行與報告。4.2 真實歸檔尚未執行，Claude 四個 lens + DA 尚待登入。不得將上述項目視為已驗證，合成演練也不取代真實歸檔。

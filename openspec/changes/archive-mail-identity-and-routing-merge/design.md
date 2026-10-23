@@ -49,7 +49,7 @@
 
 未提及的 sub-key 沿用內建預設；有寫的 sub-key 整組取代。不做 append 的理由：append 對 `data_extensions` 這類「判定集合」語意上合理，但對 `documents_dir` 這類純量無意義，兩者混在同一個區塊會需要 per-sub-key 規則 —— 又回到本 change 極力避免的 per-field 分類。統一 replace 是唯一能用一句話說完、且對六個 sub-key 都成立的規則。
 
-代價是「停用某組預設」必須寫顯式空清單。這是 **BREAKING** 的一面：舊語意下省略即全部清空，新語意下省略是保留。
+代價是「停用某組預設」必須寫顯式空清單（或寫了鍵但不給值）。這是 **BREAKING** 的一面：舊語意下省略的清單是空的，新語意下省略是保留；分類順序見 Decision 5 第 1 項。
 
 ### Decision 5：審查後的四個取捨（使用者決定，2026-10-22）
 
@@ -68,7 +68,7 @@
 
 ## In scope / Out of scope
 
-**In scope**：`plugin/commands/archive-mail.md` 的兩處設定讀取段落（附件路由設定、搜尋擴展設定），以及 `plugin/CLAUDE.md` 的 schema 區塊。
+**In scope**：`plugin/commands/archive-mail.md` 的 Step 1.4（identity）、Step 1.5（候選與 `--no-confirm` 例外）、Step 2 的附件路由與搜尋擴展設定、Step 5.5 的分類、Step 7 的報告，`plugin/CLAUDE.md` 的 schema 區塊，`email-search-disambiguation` skill，以及 plugin 的 README 與 CHANGELOG。
 
 **Out of scope**：16 條 awk 解析的收斂重構（與本 change 正交，且本 change 兩個欄位都不走 awk）；四個 companion command（實測皆不解析設定）；`subject_keywords`（同屬散文模態但本 change 不動它）。
 
