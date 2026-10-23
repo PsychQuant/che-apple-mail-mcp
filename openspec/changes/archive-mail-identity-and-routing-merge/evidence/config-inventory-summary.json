@@ -2,20 +2,19 @@
  "scope": "read-only scan of the home directory (excluding Library) and the cloud-synced folder for .claude/.mail/config.yaml, legacy .claude/emails.md and email_index.json; test fixtures excluded; no files modified; 2026-10-23",
  "previous_scan": "2026-09-14 scanned only one development directory and found 1 config; that missed the cloud-synced workspaces, including the one the proposal cites",
  "total": 17,
- "readable": 10,
+ "readable": 17,
  "counts": {
-  "attachment_routing_absent": 5,
+  "attachment_routing_absent": 12,
   "attachment_routing_all_four_lists_written": 5,
   "attachment_routing_partial": 0,
   "null_valued_list_keys": 0,
-  "with_participant_aliases": 2
+  "with_participant_aliases": 6
  },
  "unreadable": {
-  "count": 7,
-  "reason": "cloud online-only placeholders; reads timed out repeatedly and the files were not materialized",
-  "status": "not classified"
+  "count": 0,
+  "note": "the 7 cloud placeholders that timed out on 2026-10-22 were downloaded later and classified on 2026-10-24"
  },
  "legacy_emails_md_found": 0,
  "identity_file_present": false,
- "conclusion": "Every readable config is unaffected by the routing change (absent or all four lists written). Both configs with participant_aliases keep their aliases as written, since workspace entries are no longer dropped. The 7 unreadable configs remain unclassified."
+ "conclusion": "All 17 configs are unaffected by the routing change (12 have no attachment_routing, 5 write all four lists); the only change that reaches them is case-insensitive matching. The 6 configs with participant_aliases keep their aliases as written."
 }
