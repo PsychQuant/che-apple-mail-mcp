@@ -59,10 +59,15 @@ Addresses SHALL be compared after trimming and lowercasing, without removing plu
 
 #### Scenario: Global-only matches are never resolved without the user
 
-- **WHEN** the filter is an ambiguous name, the user skipped confirmation with `--no-confirm`, and the only address matching that name comes from the identity file (neither the workspace aliases nor the archive's thread participants contain it)
+- **WHEN** the filter is an ambiguous name, the user skipped confirmation with `--no-confirm`, and the identity file maps that name to an address that neither the workspace aliases nor the archive's thread participants contain
 - **THEN** the workflow SHALL still present the candidates for the user to choose, and SHALL NOT mark a candidate that comes only from the identity file as recommended
 
-#### Scenario: A name that maps to several addresses is never resolved without the user
+#### Scenario: Identity and workspace give one name to different addresses
 
-- **WHEN** one display name maps to two or more addresses across the identity file and the workspace aliases
-- **THEN** no candidate SHALL be marked recommended, the workflow SHALL present the candidates even when the user skipped confirmation, and the run report SHALL name the colliding addresses
+- **WHEN** the identity file and the workspace aliases use the same display name for different addresses
+- **THEN** no candidate for that name SHALL be marked recommended, and the run report SHALL name the addresses involved
+
+#### Scenario: Without an identity file, skipping confirmation behaves as before
+
+- **WHEN** `~/.claude/.mail/identity.yaml` does not exist and the user skips confirmation with `--no-confirm`
+- **THEN** Phase 1 SHALL be skipped and the filter SHALL be used as typed, exactly as before this change

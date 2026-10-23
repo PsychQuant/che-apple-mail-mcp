@@ -19,7 +19,7 @@
 - **`own_addresses` 進 config** —— 已由 binary 解決。`specs/batch-operations/spec.md` 的 requirement「Export direction derived per email from sender identity」規定系統從 local account mapping 解析 own-addresses 聯集，無需 config。把它寫進 config 等於複製一個 runtime 已解析的事實，正是本專案剛踩過的 drift 模式。
 - **alias 地址（Gmail plus-addressing、自訂網域轉寄）的 own-address 補充** —— `export-direction-sender-identity` 的 design 已將其列為已知殘留。目前無該情境的具體案例，不預先建設。
 - **frontmatter 增補「我方身份」欄位** —— 回答使用者第二個問句（「我的哪一個信箱」）需要新的 frontmatter 欄位，動到 6 欄位 frozen 契約，成本與本 change 不同量級，另開 issue（#535）。
-- **workspace 不讀全域 identity 的逃生口**（issue Open Question 4）—— 本 change 不做；identity 檔單憑自己不改 filter、不授權略過確認（唯一例外是使用者自己下 `--no-confirm` 且本地也有佐證，見 design.md Decision 5），目前沒有需要它的情境。
+- **workspace 不讀全域 identity 的逃生口**（issue Open Question 4）—— 本 change 不做；identity 檔不改 filter、不授權略過確認（對確認流程只會讓一種情況多問一次，見 design.md Decision 5），目前沒有需要它的情境。
 - **companion commands** —— 實測 `archive-mail-view` / `archive-mail-rebuild-threads` / `archive-mail-repair-synthetic-ids` 完全不讀 config，`archive-mail-migrate` 只搬檔案不解析。本 change 不觸及它們。
 
 ## Capabilities

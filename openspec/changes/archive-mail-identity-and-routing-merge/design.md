@@ -19,7 +19,7 @@
 - per-field 兩層 config（U/L/D 分類）—— 見下方 Decision 1。
 - `own_addresses` 進設定檔 —— 見下方 Decision 2。
 - 新增 frontmatter 欄位表達「我方是哪個帳號」—— 動到 frozen 6 欄位契約，另案（#535）。
-- 讓 workspace 宣告「不讀全域 identity」的逃生口（issue 的 Open Question 4，例如 `--no-user-config`）—— 本 change 不做。identity 檔單憑自己不改 filter、不授權略過確認；唯一會讓別名影響 filter 的是使用者自己下 `--no-confirm` 且本地也有佐證的情況（Decision 5 第 3 項）。目前沒有需要逃生口的情境；出現時另開 issue。
+- 讓 workspace 宣告「不讀全域 identity」的逃生口（issue 的 Open Question 4，例如 `--no-user-config`）—— 本 change 不做。identity 檔不改 filter、不授權略過確認，對確認流程只會讓一種情況多問一次（Decision 5 第 3 項）。目前沒有需要逃生口的情境；出現時另開 issue。
 
 ## Decisions
 
@@ -57,7 +57,7 @@
 
 1. **分類先比使用者寫的清單，再比沿用內建的清單**；兩輪各自 keyword 先於 extension、data 先於 document。否則 `document_extensions: [xlsx]` 會被沿用的內建 `data_extensions`（含 `xlsx`）搶走，而只寫 data 清單的舊 config，檔名含 `v1`／`v2`／`draft` 的 `.csv` 會被內建 `document_keywords` 改判。
 2. **workspace alias 只為比對做正規化**：條目原樣使用、不丟棄，無效條目只在報告警告。原 PR 對 workspace 也套用「丟棄無效條目、正規化後重複就丟掉整份」，與「沒有 identity 檔時行為不變」矛盾。
-3. **`--no-confirm` 時，模糊人名若只有全域 identity 命中，仍列候選**；只來自全域檔的候選不標「推薦」。避免全域檔在無關的 workspace 成為最高權重的人名來源。實作時補上兩點：直接採用要求名稱只對應一個地址、且該地址也出現在本 workspace；同一顯示名稱對應多個地址時，一律列候選、不標「推薦」（round 2 審查）。
+3. **`--no-confirm` 時，模糊人名若只有全域 identity 命中，仍列候選**；只來自全域檔的候選不標「推薦」。避免全域檔在無關的 workspace 成為最高權重的人名來源。「本地也有佐證時才自動採用」的「採用」解讀為照改版前處理（跳過 Phase 1、filter 照輸入），不把別名對到的地址代入 filter，所以 identity 檔永遠不會改寫 filter，沒有 identity 檔時這條例外不觸發（round 3 審查後定案；round 2 一度寫成「代入唯一地址」，會在沒有 identity 檔時也改變行為）。另外，identity 與 workspace 以同一名稱指向不同地址時不標「推薦」。
 4. **清單鍵寫了但沒給值（YAML `null`）等同 `[]`**，與同一份 config 其他清單一致，並在報告揭露。
 
 ## Risks / Trade-offs
@@ -81,7 +81,7 @@
 
 接續時以此段校正上文 2026-08-05 的環境描述：runtime own-address 探測由 binary 負責，#375 的快取並非本 change 的相依。本工作分支基於 #364 / #336 的 plugin 文件 stack。
 
-- Step 1.4 先讀全域 identity 與已解析 CONFIG_FILE 的 workspace alias。trim + lowercase 只用於判斷兩個條目是不是同一個地址，不移除 plus tag 或 dots；identity 的值必須為非空顯示字串。缺檔為空且不警告；存在但無法解析、重複 YAML key 或根節點非 mapping 時警告並捨棄該份 identity；identity 內正規化後重複的鍵只忽略那幾個。未知頂層鍵與無效 identity 條目警告後忽略，且不佔用該地址；不採用 own_addresses。workspace 條目原樣使用、不丟棄。
+- Step 1.4 先讀全域 identity 與已解析 CONFIG_FILE 的 workspace alias。trim + lowercase 只用於判斷兩個條目是不是同一個地址，不移除 plus tag 或 dots；identity 的值必須為非空顯示字串。缺檔為空且不警告；存在但無法解析、根節點或 `participant_aliases` 非 mapping，或用了 YAML 的 tag／anchor／merge key 時警告並捨棄該份 identity；identity 內相同或正規化後相同的鍵（含完全重複）只忽略那幾個。未知頂層鍵與無效 identity 條目警告後忽略，且不佔用該地址；不採用 own_addresses。workspace 條目原樣使用、不丟棄。
 - identity 與 workspace 相同鍵時 identity 贏，具名記入 ignored_workspace_aliases（即使顯示名稱相同也揭露）；新地址才補入。這是選定的 supplement 契約，非一般 config merge。
 - Phase 1 消歧義候選與 Step 7 audit 顯示共用同一 effective aliases。保留 bare email 供核對；不改 search filter、不新增 frontmatter 欄位、不把 alias 當確認授權。
 - routing 每次先複製既有六個內建預設，再逐 sub-key replace；清單不 append，[] 只停用該清單，其餘 tier 保留。未知鍵、錯誤型別與空目錄字串揭露並忽略該鍵；未識別鍵不抹掉其他合法覆寫。既有附件分類順序與寫入路徑檢查照常。
