@@ -57,7 +57,7 @@
 
 1. **分類先比使用者寫的清單，再比沿用內建的清單**；兩輪各自 keyword 先於 extension、data 先於 document。否則 `document_extensions: [xlsx]` 會被沿用的內建 `data_extensions`（含 `xlsx`）搶走，而只寫 data 清單的舊 config，檔名含 `v1`／`v2`／`draft` 的 `.csv` 會被內建 `document_keywords` 改判。
 2. **workspace alias 只為比對做正規化**：條目原樣使用、不丟棄，無效條目只在報告警告。原 PR 對 workspace 也套用「丟棄無效條目、正規化後重複就丟掉整份」，與「沒有 identity 檔時行為不變」矛盾。
-3. **`--no-confirm` 時，模糊人名若只有全域 identity 命中，仍列候選**；只來自全域檔的候選不標「推薦」。避免全域檔在無關的 workspace 成為最高權重的人名來源。「本地也有佐證時才自動採用」的「採用」解讀為照改版前處理（跳過 Phase 1、filter 照輸入），不把別名對到的地址代入 filter，所以 identity 檔永遠不會改寫 filter，沒有 identity 檔時這條例外不觸發（round 3 審查後定案；round 2 一度寫成「代入唯一地址」，會在沒有 identity 檔時也改變行為）。另外，identity 與 workspace 以同一名稱指向不同地址時不標「推薦」。
+3. **`--no-confirm` 時，模糊人名若只有全域 identity 命中，仍列候選**；只來自全域檔的候選不標「推薦」。避免全域檔在無關的 workspace 成為最高權重的人名來源。判斷以地址為單位：identity 把這個名稱對到的任一地址不在本 workspace，就列候選（同一個人有幾個信箱時也一樣）。「本地也有佐證時才自動採用」的「採用」解讀為照改版前處理（跳過 Phase 1、filter 照輸入），不把別名對到的地址代入 filter，所以 identity 檔永遠不會改寫 filter，沒有 identity 檔時這條例外不觸發（round 3 審查後定案；round 2 一度寫成「代入唯一地址」，會在沒有 identity 檔時也改變行為）。另外，identity 與 workspace 以同一名稱指向不同地址時不標「推薦」。
 4. **清單鍵寫了但沒給值（YAML `null`）等同 `[]`**，與同一份 config 其他清單一致，並在報告揭露。
 
 ## Risks / Trade-offs
@@ -74,7 +74,7 @@
 
 ## Migration
 
-`attachment_routing` 語意變更於實作 PR 的 CHANGELOG 條目標註 **BREAKING**，並在 `plugin/CLAUDE.md` 的 schema 區塊寫明「省略 = 沿用預設；顯式空清單 = 停用」。identity 檔為純新增，無遷移動作；workspace alias 條目原樣使用、不丟棄，所以未建立該檔的使用者 alias 行為與今日相同（Decision 5）。唯一例外是舊的 `.claude/emails.md` 與 `config.yaml` 並存時，前者的 alias 不再讀取，報告會提示。下一個 plugin 版本須為主版號升級。
+`attachment_routing` 語意變更於實作 PR 的 CHANGELOG 條目標註 **BREAKING**，並在 `plugin/CLAUDE.md` 的 schema 區塊寫明「省略 = 沿用預設；顯式空清單 = 停用」。identity 檔為純新增，無遷移動作；workspace alias 條目原樣使用、不丟棄，所以未建立該檔的使用者，搜尋與 alias 解析與今日相同（Decision 5；例外以 SOP Step 1.4 第 4 項的封閉列舉為準）。唯一例外是舊的 `.claude/emails.md` 與 `config.yaml` 並存時，前者的 alias 不再讀取，報告會提示。下一個 plugin 版本須為主版號升級。
 
 
 ## Implementation Contract
@@ -86,7 +86,7 @@
 - Phase 1 消歧義候選與 Step 7 audit 顯示共用同一 effective aliases。保留 bare email 供核對；不改 search filter、不新增 frontmatter 欄位、不把 alias 當確認授權。
 - routing 每次先複製既有六個內建預設，再逐 sub-key replace；清單不 append，[] 只停用該清單，其餘 tier 保留。未知鍵、錯誤型別與空目錄字串揭露並忽略該鍵；未識別鍵不抹掉其他合法覆寫。既有附件分類順序與寫入路徑檢查照常。
 - SOP 仍由 agent 解讀 YAML；不新增未串接的 parser/helper。以匿名合成 YAML 案例作文件工作流演練與獨立審查，不將參考程式的結果冒稱為實際 SOP 執行。
-- 未建立 identity 檔時 alias 舊行為維持；routing 只有「部分清單、且附件沒命中任何使用者清單」時結果改變。4.2 以真實歸檔驗收（verification.md），合成案例不取代它。
+- 未建立 identity 檔時搜尋與 alias 解析不變（例外見 SOP Step 1.4 第 4 項）；routing 的改變見 SOP Step 2 的 BREAKING 說明。4.2 以真實歸檔驗收（verification.md），合成案例不取代它。
 
 ## 來源與前置查證
 

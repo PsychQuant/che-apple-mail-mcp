@@ -55,7 +55,7 @@
 
 ## 2026-10-24 驗證進度
 
-1.1、1.2、1.3、2.3、4.2 以最終 SOP（`229555e`）的真實 Mail 歸檔驗收（工作區副本，Mail 只讀，真實 workspace 未動）：A（改版前）與 B2（最終）在沒有 identity 檔時結果完全相同；C2 用暫時 identity 檔與部分 routing 設定，別名呈現、衝突揭露、同名不同址、未識別鍵、空值清單、`--no-confirm` 例外全部符合事先寫下的預期。2.1、2.2 原文的驗收例子沒有出現在真實信件，改以 C2 的部分設定驗收（使用者 keyword 命中 → data、沿用的 extension → document、停用的清單不再命中）；4.2 的附件去向只驗到 0 對 0。6.1 的「使用者清單勝過沿用預設」只由 spec scenario 涵蓋；6.1 打勾表示規則已寫進 SOP，不表示已用真實資料驗過。6.3、6.4 由 C2 驗收。細節見 verification.md 與 evidence/real-archive-2026-10-23.json。
+1.1、1.2、1.3、2.3、4.2 以最終 SOP（`229555e`）的真實 Mail 歸檔驗收（工作區副本，Mail 只讀，真實 workspace 未動）：A（改版前）與 B2（最終）在沒有 identity 檔時結果完全相同；C2 用暫時 identity 檔與部分 routing 設定，別名呈現、衝突揭露、同名不同址、未識別鍵、空值清單全部符合事先寫下的預期；`--no-confirm` 的三個情境只做了 Phase 1 乾跑。2.1、2.2 原文的驗收例子沒有出現在真實信件，改以 C2 的部分設定驗收（使用者 keyword 命中 → data、沿用的 extension → document）；「停用的清單不再命中」沒有附件可以區分。4.2 的附件去向只驗到 0 對 0。6.1 的「使用者清單勝過沿用預設」只由 spec scenario 涵蓋；6.1 打勾表示規則已寫進 SOP，不表示已用真實資料驗過。6.3、6.4 的規則由 C2 部分驗收，未涵蓋的項目列在 verification.md「沒有涵蓋」。細節見 verification.md 與 evidence/real-archive-2026-10-23.json。
 
 ## 2026-09-14 驗證進度（已被上方取代，保留作為歷史）
 

@@ -12,7 +12,7 @@ The file SHALL support a single top-level key, `participant_aliases`, mapping a 
 
 When the file is absent, the workflow SHALL proceed with no identity data and SHALL NOT emit an error. When the file is present but unparseable as YAML, the workflow SHALL report the parse failure and continue with no identity data rather than aborting the archive run.
 
-Addresses SHALL be compared after trimming and lowercasing, without removing plus tags or dots; this normalization SHALL be used only to decide whether two entries name the same address. Workspace `participant_aliases` entries SHALL be used as written and SHALL NOT be dropped or rewritten by this step, so that a run without an identity file behaves exactly as before this change. Within the identity file, keys that are identical or collide after normalization SHALL be ignored with a warning while the other identity entries remain in use. Warnings SHALL name only the offending address and the error class; an entry whose key is not an address SHALL be identified by position, never by echoing a raw line, a key or a display name. Display names SHALL be rendered as quoted data with control characters removed and a length cap, and the source label and any recommendation SHALL be placed by the workflow, never taken from a display name.
+Addresses SHALL be compared after trimming and lowercasing, without removing plus tags or dots; this normalization SHALL be used only to decide whether two entries name the same address. Workspace `participant_aliases` entries SHALL be used as written and SHALL NOT be dropped or rewritten by this step, so that, without an identity file, alias resolution and search behave as before this change; the only differences are the candidate presentation (source labels, quoted names) and that a legacy `.claude/emails.md` left beside the configuration file is no longer read. Within the identity file, keys that are identical or collide after normalization SHALL be ignored with a warning while the other identity entries remain in use. Warnings SHALL name only the offending address and the error class; an entry whose key is not an address SHALL be identified by position, never by echoing a raw line, a key or a display name. Display names SHALL be rendered as quoted data with control characters removed and a length cap, and the source label and any recommendation SHALL be placed by the workflow, never taken from a display name.
 
 #### Scenario: Identity file supplies a display name absent from workspace config
 
@@ -44,7 +44,7 @@ Addresses SHALL be compared after trimming and lowercasing, without removing plu
 #### Scenario: Absent identity file is not an error
 
 - **WHEN** `~/.claude/.mail/identity.yaml` does not exist
-- **THEN** the archive run SHALL complete normally using only workspace-level `participant_aliases`, exactly as written, and SHALL NOT emit a warning about the missing file
+- **THEN** the archive run SHALL complete normally using only workspace-level `participant_aliases`, as written, and SHALL NOT emit a warning about the missing file
 
 
 #### Scenario: Invalid identity file does not abort

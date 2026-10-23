@@ -167,7 +167,7 @@ AI: [直接執行,沒 confirmation]
 | `last_archived` | 日期／ISO-8601 時間；未設定不加時間界線 | Step 1.0 傳給搜尋的 `date_from`；`last_archived`／`both` 去重策略另檢查日期。值須寫在 key 同一行。 |
 | `exclude_mailboxes` | 字串清單；空清單 | 搜尋時排除指定 mailbox。 |
 | `subject_keywords` | 字串清單；空清單 | Step 2／3 增加 subject-keyword 搜尋，補抓原搜尋漏掉的 thread。 |
-| `participant_aliases` | email → 顯示名稱對應表；空對應表 | Step 1.4 以全域 identity 為基底，workspace 條目原樣補充新地址；衝突以全域為準且具名揭露。沒有 identity 檔時與改版前相同。Phase 1 候選與 audit 共用結果，不直接改 filter。 |
+| `participant_aliases` | email → 顯示名稱對應表；空對應表 | Step 1.4 以全域 identity 為基底，workspace 條目原樣補充新地址；衝突以全域為準且具名揭露。沒有 identity 檔時搜尋與 alias 解析不變（例外見 SOP Step 1.4 第 4 項）。Phase 1 候選與 audit 共用結果，不直接改 filter。 |
 | `dedup_strategy` | `index`（預設）、`last_archived`、`both` | Step 1.6／4：Message-ID 去重、日期去重，或兩者同時成立。 |
 | `distributed_archives` | 歸檔目錄字串清單；空清單 | Step 2.1 讀取已分派歸檔的 Message-ID，併入 capture 層去重集合。 |
 | `sender_includes` | 字串清單；空清單不限制 | Step 4.0：每個 thread 至少一封信的寄件人符合此軸條件。 |

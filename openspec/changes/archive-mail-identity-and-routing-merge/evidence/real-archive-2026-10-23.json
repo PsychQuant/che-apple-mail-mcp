@@ -110,7 +110,21 @@
     0,
     0
    ],
-   "missing_identity_file_text_in_report": false
+   "missing_identity_file_text_in_report": false,
+   "skipped_as_already_indexed": [
+    2,
+    2
+   ],
+   "index_entries": [
+    40,
+    40
+   ],
+   "threads": [
+    36,
+    36
+   ],
+   "coverage_audit": "12 of 12 threads complete in both; attachments 0/0 in both",
+   "search_parameters_note": "B2 added date_to 2026-10-22; A had none"
   },
   "run_C2": {
    "new_emails": 13,
