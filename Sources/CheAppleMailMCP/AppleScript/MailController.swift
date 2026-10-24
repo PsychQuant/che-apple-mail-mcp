@@ -1890,14 +1890,7 @@ actor MailController {
                 guard isPostDispatchError(error) || (sendFlow && isTimeoutError(error)) else {
                     return error
                 }
-                return MailError.scriptFailed(
-                    message: "the send keystroke was already dispatched but a GUI step failed "
-                        + "afterwards — the send state is UNKNOWN and the reply/forward may already "
-                        + "be on the wire. Check Mail's Sent mailbox / Outbox and the original thread "
-                        + "before re-sending. The compose window (if still open) was left untouched "
-                        + "for inspection. Original error: "
-                        + clampedErrorEcho(error.localizedDescription),
-                    code: -1)
+                return unknownReplyForwardSendStateError(noun: "reply/forward", error: error)
             })
     }
 
@@ -1930,14 +1923,7 @@ actor MailController {
             // other runtime failure propagates verbatim.
             mapRuntimeError: { error in
                 guard isPostDispatchError(error) || isTimeoutError(error) else { return error }
-                return MailError.scriptFailed(
-                    message: "the send keystroke was already dispatched but a GUI step failed "
-                        + "afterwards — the send state is UNKNOWN and the forward may already "
-                        + "be on the wire. Check Mail's Sent mailbox / Outbox and the original thread "
-                        + "before re-sending. The compose window (if still open) was left untouched "
-                        + "for inspection. Original error: "
-                        + clampedErrorEcho(error.localizedDescription),
-                    code: -1)
+                return unknownReplyForwardSendStateError(noun: "forward", error: error)
             })
     }
 
