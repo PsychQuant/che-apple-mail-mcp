@@ -96,7 +96,7 @@ error: <保留實際工具錯誤；沒有有效 envelope 時說明實際回應�
 
 每檔必須依序完成下列 1–4 階段，不能在前面的查詢成功時提前接受；任何歧義都不進入寫入：
 
-先完成本批所有重新定位，再進入 Step 3 寫入。任一搜尋／headers 工具錯誤、無法辨識的回應，或階段 4 的 Message-ID recipe 無法執行 → 停止本批，報 `status: lookup-unavailable`、錯誤與受影響檔案／尚未評估清單，本批 `repaired: 0`；不得當成零候選繼續。來源欄位不足、成功查詢後的無匹配／歧義、候選資料不可解析、headers缺真Message-ID及寫入前碰撞，都屬於具名的 `still-unparseable`（原因碼只能用詞彙表內的）；工具／回應本身失效則是整批 `lookup-unavailable`，兩者不可混用。
+先完成本批所有重新定位，再進入 Step 3 寫入。任一搜尋／headers 工具錯誤、無法辨識的回應，或寫入前的 recipe 無法執行（見「計畫 recipe」）→ 停止本批，報 `status: lookup-unavailable`、錯誤與受影響檔案／尚未評估清單，本批 `repaired: 0`；不得當成零候選繼續。來源欄位不足、成功查詢後的無匹配／歧義、候選資料不可解析、headers缺真Message-ID及寫入前碰撞，都屬於具名的 `still-unparseable`（原因碼只能用詞彙表內的）；工具／回應本身失效則是整批 `lookup-unavailable`，兩者不可混用。
 
 1. **先固定比對語意**：bare subject來源為本文Subject行，不能用歷史thread_key直接替代；來源與候選subject兩邊均採archive-mail.md的thread_key／stripReplyPrefixes同一規則，反覆去除回覆／轉寄前綴，保留其餘大小寫與標點。缺少／空 bare subject 先記 `still-unparseable: subject-unavailable`，不發空查詢。兩邊 sender 都解析為單一裸 email 位址後不分大小寫比對，不能拿 display name 當位址或做 substring 比對；缺少可用位址記 `still-unparseable: sender-unavailable`。frontmatter date 以日期 recipe 的 `resolve_instant` 轉成絕對時刻再比較：有明確 offset 者直接換算；沒有 offset（含 RFC 的 `-0000`）者，沒有 `--naive-date-zone` 時記 `still-unparseable: date-offset-missing`，不得猜時區；有該參數時依使用者給的時區換算，該檔標記 `zone-assumed`，是否採用要等 P3-A 的使用者確認；本地時間落在夏令時間空檔或重疊（不存在或有兩個）記 `still-unparseable: date-ambiguous-local-time`，不選一個，固定偏移沒有這個問題；格式不明（含只有日期沒有時間）記 `still-unparseable: date-unparseable`，時區救不了。其餘判定順序與代碼不變。summary 的 date 是收信時間、frontmatter date 通常是 Date header 的寄出時間，傳遞延遲或歷史 offset 汙染可能造成保守漏配，不能因零候選自動放寬時間窗。
 2. **取得完整原始候選**：`search_emails(field: "subject", query: <bare subject>, projection: "summary", dedup: "none", limit: 200)`。不要用 logical 去重判定唯一，因為同 subject/sender/date_received 的不同 Message-ID 也可能被塌成一列。若 `truncated: true`，相同查詢最多再以 `limit: 1000` 讀一次；仍不完整就記 `still-unparseable: search-truncated`，不使用部分結果宣稱唯一。以 bare subject 精確相同、上述 sender 相同、絕對時間差 < 2 分鐘篩選。先排除能確定不符任一條件的列；對仍可能匹配的列，sender無法解析為單一位址或date無法解析為帶offset時間時，不得忽略該列來宣稱唯一，整組分別記 `still-unparseable: candidate-sender-unparseable`／`candidate-date-unparseable`；零候選記 `still-unparseable: no-match`；`zone-assumed` 的檔案在 `no-match` 旁註明「時區假設錯誤與原信已從 Mail 刪除無法區分」，另外 `date` 帶 `Z` 卻實為本地時間的檔案（mail#319 實測有 +08:00 被當 UTC）不在本參數範圍，結果同樣是 `no-match`，這是診斷提示，不做自動重解讀。
@@ -388,6 +388,8 @@ P1 第 4、5 項與 Step 5 的狀態判定是純函式，放在下面的區塊�
 - `residue-report`：`index_after`（提交後重新讀取的 index）、`files_after`（本輪動過、提交後仍在頂層的檔案及其重讀的 `message_id`）、`touched`（本輪改寫、隔離、保留的檔名）。輸出 `residual_synthetic_index_keys`、`index_file_mismatches` 與 `status`。
 
 輸入不符合上述形狀（例如計畫中的檔案不是被掃描到的 synthetic 檔）時程式會報錯停止，不當作通過。
+
+寫入前的 recipe（日期 recipe、Message-ID recipe，以及這一節的 `check-index-references`、`classify-pair`）無法執行時，不論原因是沒有 Python、授權被拒、程式報錯或輸出不是預期形狀，都停止整批，報 `status: lookup-unavailable`、`repaired: 0` 與實際錯誤；不退回手動推導，也不憑記憶判斷。`residue-report` 在寫入之後才執行，不在此列。
 
 <!-- archive-mail-repair-plan-recipe:start -->
 ```python
@@ -763,7 +765,7 @@ error: <實際失敗>
 | `completed` | Step 5 | 計畫內的操作全部完成，且 `residual_synthetic_index_keys` 與 `index_file_mismatches` 都是 0；`still-unparseable` 與 `pending` 的檔案保持原狀 | 依報告處理 `still-unparseable`；可接 `/archive-mail-rebuild-threads` |
 | `completed-with-residue` | Step 5 | 計畫內的操作全部完成，但 `residual_synthetic_index_keys` 或 `index_file_mismatches` 不是空的（含 `apply-incomplete` 之後重跑：frontmatter 已是真 ID、index 仍是舊 key） | 先逐一處理報告列出的殘留，再接 `/archive-mail-rebuild-threads` |
 | `environment-unavailable` | Step 0.5 | SQLite 能力 preflight 失敗；沒有掃描任何檔案 | 依報告中的實際錯誤補救（授權、連線、版本）後重跑 |
-| `lookup-unavailable` | Step 2 | 搜尋或 headers 工具中途失效、回應無法辨識，或階段 4 的 Message-ID recipe 無法執行；`repaired: 0` | 恢復工具或 Python 後重跑 |
+| `lookup-unavailable` | Step 2 | 搜尋或 headers 工具中途失效、回應無法辨識，或寫入前的 recipe 無法執行；`repaired: 0` | 恢復工具或 Python 後重跑 |
 | `apply-unavailable` | Step 1、Step 2.5 | 缺少檔案檢查或套用所需的能力／授權，或 index 缺少／身分不明；沒有修改任何東西 | 補齊能力或授權、確認 index 位置後重跑 |
 | `apply-incomplete` | Step 2.5、Step 3、Step 4 | 套用中途停止，部分操作可能已完成；`automatic_rerun_recovery: false` | 依報告的 `completed_operations`、`pending_operations`、`residual_index_keys` 人工核對；重跑不會自動收斂 |
 
