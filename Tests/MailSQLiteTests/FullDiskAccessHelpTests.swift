@@ -53,6 +53,14 @@ final class FullDiskAccessHelpTests: XCTestCase {
         XCTAssertFalse(FullDiskAccessHelp.binaryPath().isEmpty)
     }
 
+    /// #537 — when the grant is already in place, "grant it and reopen the app" is
+    /// the wrong advice: the server may only need to retry opening the index.
+    func testUnavailableSuffixPointsAtCheckFdaForAnAlreadyGrantedCase() {
+        let s = FullDiskAccessHelp.unavailableSuffix()
+        XCTAssertTrue(s.contains("check_fda"), "suffix should point at check_fda, which retries the open; got: \(s)")
+        XCTAssertTrue(s.contains("already"), "suffix should address the already-granted case; got: \(s)")
+    }
+
     func testUnavailableSuffixIsActionableResponsibleProcessFirstAndKeepsBinary() {
         let s = FullDiskAccessHelp.unavailableSuffix()
         XCTAssertTrue(s.contains("Privacy_AllFiles"), "suffix must carry the deep-link; got: \(s)")

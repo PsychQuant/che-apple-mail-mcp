@@ -260,7 +260,7 @@ OneDrive）——同步活動會造成 MCP 連線逾時。
 
 | 工具 | 說明 |
 |------|------|
-| `check_fda` | 檢查「完整磁碟取用權限」狀態（SQLite 快速路徑可用性） |
+| `check_fda` | 檢查「完整磁碟取用權限」狀態，並讓 server 立刻重試開啟自己的 index reader；回報 server 實際的 SQLite 快速路徑狀態（已開啟／剛恢復／仍不可用） |
 | `check_accessibility` | 檢查「輔助使用」權限（wrapper-free 撰寫／回覆 GUI 路徑） |
 | `check_automation` | 檢查「自動化」權限（對 Mail 的 Apple Events）— 非觸發式 probe、四態各配補救指引（#293）；binary 自持授權、osascript 可用 ≠ binary 已授權（#288） |
 | `get_mail_log_events` | 唯讀查詢 Mail 自己的 unified log，找出事件鏈在哪一步斷掉（例如：草稿存檔 → 進佇列 → 通知引擎 → IMAP `APPENDUID` 回條，[#465](https://github.com/PsychQuant/che-apple-mail-mcp/issues/465)）。`detail=brief`（預設）只回靜態事件模板、整數參數，以及 `[帳號 - 信箱]` 形式那幾行的帳號代號，只要模板是編譯期字串（Mail 自己的都是），就不含帳號名稱、主旨或 Message-ID；`detail=detailed` 另附原始訊息，**內含帳號識別資訊與來信內容，不要貼進公開 issue**。窗口上限 60 分鐘，時間必須帶 UTC 偏移；續查用 `since=next_start`、`offset=next_offset` 加同一個 `until`。還沒有依事件名稱篩選（[#466](https://github.com/PsychQuant/che-apple-mail-mcp/issues/466)）。查不到任何事件不代表動作沒發生。僅在 macOS 27.2／Mail 16.0 驗證過；需要 admin 群組的使用者 |
