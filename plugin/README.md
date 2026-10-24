@@ -91,8 +91,8 @@ archive-mail v2.17.0+ 會:
 ### `/archive-mail-view` — 生成 thread 聚合視圖（v2.6.0+）
 
 ```bash
-/archive-mail-view "SE manuscript 10xx-2025"
-/archive-mail-view "SE manuscript" communications
+/archive-mail-view "Aster manuscript 2025"
+/archive-mail-view "Aster manuscript" communications
 ```
 
 讀 `threads.json` + per-email md，依時序聚合成一個 thread 視圖檔（存在 `.threads/` 子目錄）。視圖是 derived 資料，原始 md 不變，可重複生成。
@@ -186,11 +186,11 @@ This MCP follows internationalization best practices:
 
 ```
 # Step 1: Discover mailboxes
-list_mailboxes(account="your@email.com")
+list_mailboxes(account="you@example.invalid")
 # Returns: 收件匣, 草稿, 寄件備份, ...
 
 # Step 2: Use exact name
-search_emails(account="your@email.com", mailbox="收件匣", query="keyword")
+search_emails(account="you@example.invalid", mailbox="收件匣", query="keyword")
 ```
 
 ## Permissions Required

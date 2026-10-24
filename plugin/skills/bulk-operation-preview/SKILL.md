@@ -34,9 +34,9 @@ Threads 分布(按時間排序):
 
 ```
 Mail
-  -> filter(sender = 'cchen@stat.sinica.edu.tw' 
-            OR sender = 'coco891017@webmail.stat.sinica.edu.tw'
-            OR subject contains '陳君厚')
+  -> filter(sender = 'fang@dept.example.invalid' 
+            OR sender = 'asst.ye@webmail.dept.example.invalid'
+            OR subject contains 'Fang')
   -> group(thread_key)
   -> sort(first_message asc)
 ```
@@ -86,21 +86,21 @@ Mail
    First: {first_sender}, Last: {last_sender}
 ```
 
-對 chchen 案例:
+對方老師案例(虛構):
 
 ```
-[2026-04-29] 新聘博士後研究學者繳交資料 (2 msgs)
-   Participants: yijulee, che830621, cchen, coco891017
-   First: yijulee, Last: che830621
+[2026-04-29] 新進人員繳交資料 (2 msgs)
+   Participants: staff.hall, me, fang, asst.ye
+   First: staff.hall, Last: me
 
-[2026-04-19] 後續面試報告時間請教 (5 msgs)
-   Participants: che830621, cchen, coco891017, yijulee, tsoping
-   First: che830621, Last: che830621
+[2026-04-19] 報告時間請教 (5 msgs)
+   Participants: me, fang, asst.ye, staff.hall, dean.ito
+   First: me, Last: me
 
-⚠ [2026-03-15] 應徵資料科學統計合作社... (1 msg)
-   Participants: che830621, scchen
-   First/Last: che830621
-   ⚠ Reason: sender (scchen) 不在 filter pattern,subject 含「陳」但實際對象是另一個 unit
+⚠ [2026-03-15] 應徵 Fangshan 資料科學合作計畫研究員 (1 msg)
+   Participants: me, hr
+   First/Last: me
+   ⚠ Reason: 收件人 (hr) 不在 filter pattern,subject 含「Fang」但只是計畫名稱 Fangshan 的字首,實際對象是另一個 unit
 ```
 
 ## 與 confirmation-protocol 的關係
@@ -120,24 +120,24 @@ Workflow:
 
 Filter:
   Mail
-    -> filter(sender contains 'cchen@stat.sinica.edu.tw'
-              OR sender contains 'coco891017'
-              OR subject contains '陳君厚')
+    -> filter(sender contains 'fang@dept.example.invalid'
+              OR sender contains 'asst.ye'
+              OR subject contains 'Fang')
     -> sort(date desc)
 
 Threads 分布:
-  ✓ [2026-04-29] 新聘博士後研究學者繳交資料_鄭澈博士 (2 msgs)
-       Participants: yijulee, che830621, cchen, coco891017
-  ✓ [2026-04-19] 後續面試報告時間請教 (5 msgs)
-       Participants: che830621, cchen, coco891017, yijulee, tsoping
-  ✓ [2026-03-31] 面試提醒 (1 msg)
-       Participants: che830621, coco891017
-  ✓ [2026-03-27] 君厚老師面試時間與地點 (時間異動) (2 msgs)
-  ✓ [2026-03-26] 君厚老師面試時間與地點 (2 msgs)
-  ✓ [2026-03-18] 應徵博士後研究員(鄭澈) (6 msgs)
-  ⚠ [2026-03-15] 應徵資料科學統計合作社... (1 msg)
-       Participants: che830621, scchen
-       ⚠ sender 不是 cchen,subject 含「陳」但實際寄給統計所其他單位
+  ✓ [2026-04-29] 新進人員繳交資料 (2 msgs)
+       Participants: staff.hall, me, fang, asst.ye
+  ✓ [2026-04-19] 報告時間請教 (5 msgs)
+       Participants: me, fang, asst.ye, staff.hall, dean.ito
+  ✓ [2026-03-31] 面談提醒 (1 msg)
+       Participants: me, asst.ye
+  ✓ [2026-03-27] Fang 老師面談時間與地點 (時間異動) (2 msgs)
+  ✓ [2026-03-26] Fang 老師面談時間與地點 (2 msgs)
+  ✓ [2026-03-18] 應徵研究助理(申請人) (6 msgs)
+  ⚠ [2026-03-15] 應徵 Fangshan 資料科學合作計畫研究員 (1 msg)
+       Participants: me, hr
+       ⚠ 收件人不是 fang,subject 含「Fang」但只是計畫名稱 Fangshan,實際寄給另一個單位
 
 附件:1 個 (handout.pdf, ~100 KB)
 
