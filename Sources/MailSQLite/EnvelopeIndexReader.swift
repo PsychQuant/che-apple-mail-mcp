@@ -124,6 +124,29 @@ public final class EnvelopeIndexReader {
         // serialized connection a busy wait also holds the connection mutex, so
         // this value bounds how long one wait can delay the other readers.
         sqlite3_busy_timeout(db, Self.busyTimeoutMilliseconds)
+
+        // `sqlite3_open_v2` reads nothing: it succeeds for any file, and for a WAL
+        // database it does not touch `-wal` / `-shm` yet. A reader that only
+        // "opened" would be handed out as available while every query fails
+        // (#537), so prove the connection reads before calling it open.
+        var probeStmt: OpaquePointer?
+        var probeRC = sqlite3_prepare_v2(db, "SELECT 1 FROM sqlite_master LIMIT 1", -1, &probeStmt, nil)
+        if probeRC == SQLITE_OK {
+            probeRC = sqlite3_step(probeStmt)
+        }
+        let probeResult = probeRC
+        let probeMessage = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
+        let probeExtended = db.map { sqlite3_extended_errcode($0) } ?? probeResult
+        sqlite3_finalize(probeStmt)
+        guard probeResult == SQLITE_ROW || probeResult == SQLITE_DONE else {
+            sqlite3_close(db)
+            db = nil
+            throw MailSQLiteError.databaseNotAccessible(
+                FullDiskAccessHelp.guidance(
+                    reason: "Failed to read database: \(probeMessage) (SQLite result code \(probeExtended))."
+                )
+            )
+        }
     }
 
     deinit {
