@@ -598,5 +598,91 @@ class ArchiveArgsRecipeTests(unittest.TestCase):
             self.assertIn(b"usage", done.stderr)
 
 
+PLUGIN = DOCUMENT.parents[1]
+
+
+def between(text, start, end):
+    """The text from `start` up to the next `end`; fails by naming the missing anchor."""
+    for anchor in (start, end):
+        if anchor not in text:
+            raise AssertionError(f"anchor not found: {anchor!r}")
+    return text.split(start, 1)[1].split(end, 1)[0]
+
+
+class ArchiveArgsStructureTests(unittest.TestCase):
+    """#540: the command file may read the typed arguments in exactly one place."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.document = DOCUMENT.read_text()
+
+    def test_the_only_argument_placeholder_is_the_ARGS_RAW_line(self):
+        # Claude Code replaces every unescaped placeholder with the typed text before the agent reads
+        # the file, so each extra one re-creates the failure this fixes: the flag showing up as a positional.
+        hits = list(re.finditer(r"(?<!\\)\$ARGUMENTS", self.document))
+        self.assertEqual(len(hits), 1, [self.document.count("\n", 0, h.start()) + 1 for h in hits])
+        start = self.document.rfind("\n", 0, hits[0].start()) + 1
+        self.assertEqual(self.document[start:self.document.find("\n", start)], "ARGS_RAW: $ARGUMENTS")
+
+    def test_no_indexed_argument_placeholder_survives_even_escaped(self):
+        self.assertEqual(re.findall(r"\\?\$ARGUMENTS\[", self.document), [])
+
+    def test_argument_hint_lists_the_flag_as_one_json_string_line(self):
+        lines = [l for l in self.document.split("---", 2)[1].splitlines() if l.startswith("argument-hint:")]
+        self.assertEqual(len(lines), 1)
+        hint = json.loads(lines[0].split(":", 1)[1].strip())
+        self.assertIn("[--no-confirm]", hint)
+        self.assertIn("[email-filter] [output-dir]", hint)
+
+    def test_usage_block_shows_the_flag_the_terminator_and_the_unknown_flag_error(self):
+        usage = between(self.document, "## 使用方式", "#### 零參數模式")
+        self.assertIn("/archive-mail user@example.com --no-confirm", usage)
+        self.assertIn("/archive-mail --no-confirm", usage)
+        self.assertRegex(usage, r"/archive-mail \S+ -- --")
+        self.assertIn("不認得的旗標", usage)
+
+    def test_step_zero_task_text_names_the_parse_step_not_the_placeholder(self):
+        task = between(self.document, 'TaskCreate(subject="resolve_filter_and_paths",', "TaskCreate(subject=\"load_participant_identity\"")
+        self.assertIn("Step 1 引數解析", task)
+        self.assertIn("ARGS_RAW", task)
+
+    def test_flag_only_invocation_takes_the_zero_arg_path(self):
+        zero = between(self.document, "#### Zero-arg 模式", "#### 命令列覆寫")
+        self.assertIn('if [ "${#POSITIONAL[@]}" -eq 0 ]; then', zero)
+        self.assertIn("只給 `--no-confirm`", zero)
+        override = between(self.document, "#### 命令列覆寫", "#### Workspace Layout Detection")
+        self.assertIn("`POSITIONAL` 非空", override)
+        self.assertIn("`POSITIONAL[0]`", override)
+        self.assertIn("`OUTPUT_DIR_ARG`", override)
+
+    def test_config_parsing_and_output_dir_precedence_read_the_parsed_variables(self):
+        step1 = between(self.document, "#### Config parsing", "#### Zero-arg 模式")
+        self.assertIn("`POSITIONAL`", step1)
+        self.assertIn("independent of POSITIONAL state", step1)
+        self.assertIn("1. OUTPUT_DIR_ARG (cmdline second positional)", step1)
+        detection = between(self.document, "#### Workspace Layout Detection", "**Probe 順序**")
+        self.assertIn("`OUTPUT_DIR_ARG`", detection)
+        self.assertIn("after OUTPUT_DIR_ARG + ${CONFIG_FILE} resolution", self.document)
+        precedence = between(self.document, "**Detection 與 explicit config 的關係**", "#### 模糊 filter")
+        self.assertIn("1. `OUTPUT_DIR_ARG`", precedence)
+
+    def test_directories_are_created_with_the_terminator(self):
+        # "--" lets a directory whose name starts with "-" be an ordinary, valid output_dir.
+        self.assertIn('mkdir -p -- "${INDEX_DIR}"', self.document)
+        self.assertIn('mkdir -p -- "${output_dir}"', self.document)
+        self.assertEqual(re.findall(r'mkdir -p "\$\{(?:INDEX_DIR|output_dir)\}"', self.document), [])
+
+    def test_a_dash_led_output_dir_survives_slug_and_mkdir(self):
+        with tempfile.TemporaryDirectory() as directory:
+            slug = subprocess.run(
+                ["/bin/bash", "-c", r"""printf '%s' "$1" | tr '/' '-' | sed 's/^[-.]*//;s/[-.]*$//'""", "_", "--odd-dir"],
+                capture_output=True, text=True, check=True, timeout=5).stdout
+            self.assertEqual(slug, "odd-dir")
+            made = subprocess.run(["/bin/bash", "-c", 'mkdir -p -- "$1"', "_", "--odd-dir"],
+                                  cwd=directory, capture_output=True, text=True, timeout=5)
+            self.assertEqual(made.returncode, 0, made.stderr)
+            self.assertTrue((Path(directory) / "--odd-dir").is_dir())
+
+
 if __name__ == "__main__":
     unittest.main()

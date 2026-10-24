@@ -1,6 +1,6 @@
 ---
 description: "歸檔指定聯絡人的 Apple Mail 郵件到 Markdown 檔案"
-argument-hint: "[email-filter] [output-dir]  # 零參數時讀 .claude/.mail/config.yaml"
+argument-hint: "[email-filter] [output-dir] [--no-confirm]  # 零參數時讀 .claude/.mail/config.yaml"
 allowed-tools: mcp__plugin_che-apple-mail-mcp_mail__search_emails, mcp__plugin_che-apple-mail-mcp_mail__get_email, mcp__plugin_che-apple-mail-mcp_mail__get_email_headers, mcp__plugin_che-apple-mail-mcp_mail__list_accounts, mcp__plugin_che-apple-mail-mcp_mail__get_special_mailboxes, mcp__plugin_che-apple-mail-mcp_mail__list_attachments, mcp__plugin_che-apple-mail-mcp_mail__list_attachments_batch, mcp__plugin_che-apple-mail-mcp_mail__save_attachment, mcp__plugin_che-apple-mail-mcp_mail__batch_export_emails_markdown, Bash(mkdir:*), Read, Write, Glob
 ---
 
@@ -14,10 +14,15 @@ allowed-tools: mcp__plugin_che-apple-mail-mcp_mail__search_emails, mcp__plugin_c
 /archive-mail                                    # 零參數(v2.12.0+;v2.16.0+ 讀 .claude/.mail/config.yaml,.md fallback)
 /archive-mail user@example.com
 /archive-mail user@example.com communication/emails
+/archive-mail user@example.com --no-confirm      # 略過確認(旗標可放在任何位置;見 Step 1)
+/archive-mail --no-confirm                       # 只給旗標:仍走零參數模式,filters 來自 config
+/archive-mail user@example.com -- --odd-dir      # `--` 之後一律是位置參數(目錄名以 - 開頭時用)
 ```
 
 - 第一個參數(**v2.12.0+ 可選**):Email 過濾條件(寄件人或收件人包含此字串)
 - 第二個參數(可選):輸出目錄,預設 `communication/emails`
+- `--no-confirm`(可選,#540):等同使用者說「直接做」,略過 Phase 1–3 的確認(Step 1.5 的 mail#334 例外與 Step 4.5 的略過範圍不變,Step 7 報告會揭露)。只認這一次叫用實際打的旗標
+- 其他以 `--` 開頭的旗標(含智慧破折號打成的 `—no-confirm`)會回 `不認得的旗標` 並停止,不會被當成輸出目錄;引號不成對也會停止
 
 #### 零參數模式
 
@@ -208,7 +213,7 @@ def yaml_scalar(value):
 
 ```
 TaskCreate(subject="resolve_filter_and_paths",
-           description="Step 1 + 1.6: 解析 $ARGUMENTS → filter + output_dir. 計算 .claude/.mail/state/archives/{slug} 路徑。Auto-migrate legacy .email_index.json / .threads.json / .claude/emails.md。")
+           description="Step 1 引數解析(ARGS_RAW → POSITIONAL + NO_CONFIRM,未知旗標具名停止) + 1.6: filter + output_dir. 計算 .claude/.mail/state/archives/{slug} 路徑。Auto-migrate legacy .email_index.json / .threads.json / .claude/emails.md。")
 
 TaskCreate(subject="load_participant_identity",
            description="Step 1.4: 在消歧義之前讀全域 identity.yaml 與 workspace aliases，保留全域優先及衝突／格式警告；workspace 條目原樣使用、不丟棄（沒有 identity 檔時的例外見 Step 1.4 第 4 項）；不寫入身份檔、不新增確認授權。")
@@ -341,12 +346,12 @@ if __name__ == "__main__":
 
 #### Config parsing(always-on,v2.17.0+ #49)
 
-不論 `$ARGUMENTS` 是空還是有內容,**只要 `${CONFIG_FILE}` 存在就先 parse**。理由:`/archive-mail <filter>`(只給第一個 arg)的 user 也應該尊重 config `output_dir:` pin,不能 silently fall through 到 detection。
+不論 `POSITIONAL` 是空還是有內容,**只要 `${CONFIG_FILE}` 存在就先 parse**。理由:`/archive-mail <filter>`(只給第一個 arg)的 user 也應該尊重 config `output_dir:` pin,不能 silently fall through 到 detection。
 
 > **Forward reference**:`${CONFIG_FILE}` 由 Step 1.6 計算(`.claude/.mail/config.yaml`,legacy `.md` fallback)。AI executor 整段 skill 讀完才開始執行,所以 forward-reference 在 markdown skill 慣例下 OK;若有人手動 copy bash 出來跑,先看 Step 1.6 的 `CONFIG_FILE` 賦值。
 
 ```bash
-# Always parse config if file exists — independent of $ARGUMENTS state
+# Always parse config if file exists — independent of POSITIONAL state
 CFG_OUTPUT_DIR=""
 LAST_ARCHIVED=""
 EXCLUDE_MBX=""
@@ -411,7 +416,7 @@ if [ -f "${CONFIG_FILE}" ]; then
 fi
 
 # output_dir precedence (高 → 低):
-#   1. $ARGUMENTS[2] (cmdline second arg) — 若已設,跳過下面的 fallback
+#   1. OUTPUT_DIR_ARG (cmdline second positional) — 已設在 output_dir 時,跳過下面的 fallback
 #   2. ${CONFIG_FILE} 的 output_dir: 欄位(本 step,both zero-arg and single-arg modes)
 #   3. Workspace Layout Detection(下方,v2.17.0+)
 #   4. Baseline default `communication/emails`(detection 中的 Probe 3)
@@ -422,10 +427,10 @@ fi
 
 #### Zero-arg 模式(v2.12.0+,resolves #13)
 
-若 `$ARGUMENTS` 為空,從 `${CONFIG_FILE}` 讀取 `filters`(否則無 filter 可搜):
+若 `POSITIONAL` 為空(含只給 `--no-confirm`、沒有任何位置參數的 `/archive-mail --no-confirm`),從 `${CONFIG_FILE}` 讀取 `filters`(否則無 filter 可搜);`NO_CONFIRM` 照常適用:
 
 ```bash
-if [ -z "$ARGUMENTS" ]; then
+if [ "${#POSITIONAL[@]}" -eq 0 ]; then
     if [ ! -f "${CONFIG_FILE}" ]; then
         echo "Error: 沒有給 filter 也找不到 ${CONFIG_FILE}。" >&2
         echo "請建立 \${CONFIG_FILE} 並設定 filters,或直接傳 filter 參數。" >&2
@@ -444,18 +449,18 @@ fi
 
 #### 命令列覆寫(現行行為,backward compat)
 
-若 `$ARGUMENTS` 非空,命令列參數覆寫 config:
-- `filter` = 第一個 arg(視為單一 filter,即使 config 有多個 filters 仍只用此一個)
-- `output_dir` = 第二個 arg(若有);**否則仍走上方 Config parsing 區段已 apply 的 `CFG_OUTPUT_DIR`**(v2.17.0+ 修掉 explicit-config-bypass-in-non-zero-arg-mode 漏洞);config 沒設則走 **Workspace Layout Detection**(v2.17.0+) / default
+若 `POSITIONAL` 非空,命令列參數覆寫 config:
+- `filter` = `POSITIONAL[0]`(視為單一 filter,即使 config 有多個 filters 仍只用此一個)
+- `output_dir` = `OUTPUT_DIR_ARG`,即 `POSITIONAL[1]`(若有);**否則仍走上方 Config parsing 區段已 apply 的 `CFG_OUTPUT_DIR`**(v2.17.0+ 修掉 explicit-config-bypass-in-non-zero-arg-mode 漏洞);config 沒設則走 **Workspace Layout Detection**(v2.17.0+) / default
 
 #### Workspace Layout Detection(v2.17.0+,#49)
 
-當 `output_dir` 既非 `$ARGUMENTS[1]` 也非 `${CONFIG_FILE}` 的 `output_dir:` 欄位給定時,probe 工作目錄看是否符合已知的 workspace layout。**Detection 只在「沒有 explicit choice」時觸發**——如果 user 在 config 或命令列已 pin,detection 完全不跑,既有行為 100% backward compat。
+當 `output_dir` 既非 `OUTPUT_DIR_ARG` 也非 `${CONFIG_FILE}` 的 `output_dir:` 欄位給定時,probe 工作目錄看是否符合已知的 workspace layout。**Detection 只在「沒有 explicit choice」時觸發**——如果 user 在 config 或命令列已 pin,detection 完全不跑,既有行為 100% backward compat。
 
 **Probe 順序**(命中即停):
 
 ```bash
-# Only run when output_dir is still empty after $ARGUMENTS[1] + ${CONFIG_FILE} resolution
+# Only run when output_dir is still empty after OUTPUT_DIR_ARG + ${CONFIG_FILE} resolution
 if [ -z "$output_dir" ]; then
     # Probe 1: communications/<channel>/ pattern (v2.17.0+ canonical)
     if [ -d "communications/email" ]; then
@@ -493,7 +498,7 @@ fi
 
 **Detection 與 explicit config 的關係**(precedence,高 → 低):
 
-1. `$ARGUMENTS[1]`(命令列 `/archive-mail <filter> <output_dir>` 的第二個參數)
+1. `OUTPUT_DIR_ARG`(命令列 `/archive-mail <filter> <output_dir>` 的第二個位置參數)
 2. `${CONFIG_FILE}` 的 `output_dir:` 欄位(zero-arg 模式)
 3. **Workspace Layout Detection**(本節,v2.17.0+)
 4. Baseline default `communication/emails`
@@ -576,7 +581,7 @@ THREADS_FILE="${INDEX_DIR}/threads.json"
 CONFIG_FILE="${NAMESPACE_DIR}/config.yaml"
 [ ! -f "$CONFIG_FILE" ] && [ -f "${NAMESPACE_DIR}/config.md" ] && CONFIG_FILE="${NAMESPACE_DIR}/config.md"
 
-mkdir -p "${INDEX_DIR}"
+mkdir -p -- "${INDEX_DIR}"
 ```
 
 **Resolve dedup strategy** (v2.14.0+, issue #18):
@@ -649,7 +654,7 @@ fi
 若上次回報索引未完成，或索引不存在但輸出目錄已有 Markdown，先依 Step 6 的復原流程補齊 canonical index，再做新信搜尋。權限仍不足時停止，不重新輸出已存在的信件。
 
 ```bash
-mkdir -p "${output_dir}"   # archive markdown 目的地(不變)
+mkdir -p -- "${output_dir}"   # archive markdown 目的地(`--` 讓以 `-` 開頭的目錄名也是合法輸出目錄)
 ```
 
 **讀取兩個索引檔**(v2.8.0+ 從 `${INDEX_DIR}/` 讀;v2.14.0+ 條件 skip per `dedup_strategy`):
