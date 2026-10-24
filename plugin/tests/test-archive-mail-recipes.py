@@ -787,6 +787,62 @@ class ArchiveDateRuleTests(unittest.TestCase):
         self.assertNotIn("|CST|", document)
 
 
+class ArchiveDateEdgeShapeDecisionTests(unittest.TestCase):
+    """#533 item 4: a decision, not a fix. These shapes stay excluded until a real corpus shows hits; the table is
+    what the recipe did when the decision was made, so a later change has to be deliberate."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dates = recipe("date")
+
+    def both(self, value):
+        return self.dates["to_ymd"](value), self.dates["normalize_archive_timestamp"](value)
+
+    def test_asctime_year_followed_by_punctuation_a_glued_zone_or_z_is_excluded_on_both_readers(self):
+        for value in ["Tue Jun 30 19:43:20 2026.", "Tue Jun 30 19:43:20 2026,",
+                      "Tue Jun 30 19:43:20 2026+0800", "Tue Jun 30 19:43:20 2026Z"]:
+            with self.subTest(value=value):
+                self.assertEqual(self.both(value), (None, None))
+
+    def test_the_year_followed_by_a_dot_before_the_clock_is_excluded_on_both_readers(self):
+        self.assertEqual(self.both("Tue, 30 Jun 2026. 19:43:20 +0800"), (None, None))
+
+    def test_the_leap_second_is_excluded_in_both_field_orders_on_both_readers(self):
+        # stricter than RFC 5322 section 3.3 (seconds 00-60) by choice: the issue text said "asctime order only"
+        for value in ["Tue, 30 Jun 2026 19:43:60 +0800", "Tue Jun 30 19:43:60 2026", "30 Jun 2026 23:59:60 GMT"]:
+            with self.subTest(value=value):
+                self.assertEqual(self.both(value), (None, None))
+        self.assertEqual(self.dates["to_ymd"]("Tue, 30 Jun 2026 23:59:59 GMT"), "2026-06-30")
+
+    def test_a_one_digit_second_is_excluded_in_asctime_order_but_the_day_first_day_reader_keeps_the_day(self):
+        self.assertEqual(self.both("Tue Jun 30 19:43:5 2026"), (None, None))
+        # Accepted as trailing text and kept as measured: the day reader takes ":5" with whatever follows the
+        # minute. This asymmetry (reader accepts, writer refuses) is arguably an accident; it is pinned, not fixed.
+        self.assertEqual(self.both("Tue, 30 Jun 2026 19:43:5 +0800"), ("2026-06-30", None))
+        self.assertEqual(self.both("Tue, 30 Jun 2026 19:43:5"), ("2026-06-30", None))
+
+    def test_an_asctime_year_followed_by_a_spaced_numeric_zone_is_accepted_by_both_readers(self):
+        self.assertEqual(self.both("Tue Jun 30 19:43:20 2026 +0800"), ("2026-06-30", "2026-06-30T19:43:20+08:00"))
+        # with the zone before the year the day is kept, but the writer will not guess which number is the year
+        self.assertEqual(self.both("Tue Jun 30 19:43:20 +0800 2026"), ("2026-06-30", None))
+
+    def test_every_excluded_shape_is_reported_not_dropped(self):
+        shapes = ["Tue Jun 30 19:43:20 2026.", "Tue Jun 30 19:43:5 2026", "Tue, 30 Jun 2026 19:43:60 +0800",
+                  "Tue, 30 Jun 2026. 19:43:20 +0800"]
+        emails = {f"id-{i}": {"date": value, "file": f"{i}.md"} for i, value in enumerate(shapes)}
+        audit = self.dates["reconcile_dates"](emails)
+        self.assertEqual(audit["date_excluded_count"], len(shapes))
+        self.assertEqual(audit["valid_date_count"] + audit["date_excluded_count"], len(emails))
+        self.assertEqual({r["date_shape"] for r in audit["date_excluded"]},
+                         {"aaa aaa 99 99:99:99 9999.", "aaa aaa 99 99:99:9 9999", "aaa, 99 aaa 9999 99:99:99 +9999",
+                          "aaa, 99 aaa 9999. 99:99:99 +9999"})
+
+    def test_the_sop_states_the_decision(self):
+        line = next(line for line in DOCUMENT.read_text().split("\n") if "閏秒" in line)
+        for needle in ["#533", "`:60`", "一位數秒數", "`to_ymd`", "`normalize_archive_timestamp`"]:
+            self.assertIn(needle, line)
+
+
 class ArchiveIndexSopTests(unittest.TestCase):
     """#531: no step parses the index file on its own, and the write barrier is stated where files are written."""
 
