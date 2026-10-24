@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Execute the shipped SOP recipes, rather than a second implementation."""
+import copy
 import json
 from pathlib import Path
 import re
@@ -411,6 +412,167 @@ class ArchiveRecipesTests(unittest.TestCase):
                                cwd=root, check=True, timeout=5)
                 self.assertTrue(path.is_dir())
             self.assertFalse((root / "PWNED").exists())
+
+
+def sop_section(heading):
+    """The text under one SOP heading, up to the next heading of the same or a higher level (code fences skipped)."""
+    lines = DOCUMENT.read_text().split("\n")
+    level = len(heading) - len(heading.lstrip("#"))
+    start = next(i for i, line in enumerate(lines) if line.startswith(heading))
+    end, fenced = len(lines), False
+    for i in range(start + 1, len(lines)):
+        if lines[i].startswith("```"):
+            fenced = not fenced
+        elif not fenced and re.match(r"#{1,%d} " % level, lines[i]):
+            end = i
+            break
+    return "\n".join(lines[start:end])
+
+
+class ArchiveIndexLoaderTests(unittest.TestCase):
+    """#531: what `emails` must be is an executable contract, checked once at load time."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.index = recipe("index")
+        cls.dates = recipe("date")
+
+    def load(self, content):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "email_index.json"
+            path.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
+            return self.index["load_email_index"](str(path))
+
+    def test_a_new_index_is_not_an_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(self.index["load_email_index"](str(Path(directory) / "absent.json")), ({}, None))
+        for content in ['{}', '{"version": "1.0"}', '{"emails": {}}', '{"version": "1.0", "emails": {}}']:
+            with self.subTest(content=content):
+                self.assertEqual(self.load(content), ({}, None))
+
+    def test_entries_are_returned_intact(self):
+        entry = {"file": "a.md", "date": "2026-06-30T12:00:00+08:00", "subject": "s", "thread_key": "t"}
+        self.assertEqual(self.load(json.dumps({"emails": {"<a@example.invalid>": entry}})),
+                         ({"<a@example.invalid>": entry}, None))
+
+    def test_a_non_object_emails_is_named(self):
+        for value in ["null", "[]", '"x"', "0", "false", '""', "true", "5", '[["a", {}]]']:
+            with self.subTest(emails=value):
+                self.assertEqual(self.load('{"emails": %s}' % value), (None, "emails-not-object"))
+
+    def test_a_non_object_top_level_is_named(self):
+        for value in ["null", "[]", '"x"', "5", "true", '[{"emails": {}}]']:
+            with self.subTest(top_level=value):
+                self.assertEqual(self.load(value), (None, "index-not-object"))
+
+    def test_unparseable_content_is_named(self):
+        for label, content in [("zero bytes", b""), ("whitespace only", b" \n"), ("truncated", b'{"emails": {'),
+                               ("BOM", b'\xef\xbb\xbf{"emails": {}}'),
+                               ("invalid UTF-8", b'{"emails": {"\xff": 1}}'),
+                               ("not JSON", b"emails: {}"),
+                               ("nested past the parser limit", b"[" * 200000)]:
+            with self.subTest(case=label):
+                self.assertEqual(self.load(content), (None, "index-not-json"))
+
+    def test_the_loader_only_reads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            absent = root / "email_index.json"
+            self.index["load_email_index"](str(absent))
+            self.assertFalse(absent.exists())
+            self.assertEqual(list(root.iterdir()), [])
+            for content in [b'{"emails": null}', b"not json", b'{"emails": {"a": {}}}']:
+                absent.write_bytes(content)
+                self.index["load_email_index"](str(absent))
+                self.assertEqual(absent.read_bytes(), content)
+                self.assertEqual([p.name for p in root.iterdir()], ["email_index.json"])
+
+    def test_cli_takes_the_path_as_data_and_prints_one_json_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "recipe.py"
+            script.write_text(recipe_code("index"))
+            hostile = Path(directory) / "$(touch PWNED) `touch PWNED`; 'x'"
+            hostile.mkdir()
+            path = hostile / "email_index.json"
+            for content, expected in [(b'{"emails": {"a": {}, "b": {}}}', {"error": None, "entries": 2}),
+                                      (b'{"emails": null}', {"error": "emails-not-object", "entries": None}),
+                                      (b"[]", {"error": "index-not-object", "entries": None}),
+                                      (b"", {"error": "index-not-json", "entries": None})]:
+                path.write_bytes(content)
+                done = subprocess.run([sys.executable, "-I", str(script), str(path)], check=True, timeout=5,
+                                      capture_output=True, text=True, cwd=directory)
+                self.assertEqual(json.loads(done.stdout), expected)
+                self.assertEqual(done.stdout.count("\n"), 1)
+                self.assertEqual(path.read_bytes(), content)
+            self.assertFalse((Path(directory) / "PWNED").exists())
+            self.assertFalse((hostile / "PWNED").exists())
+
+    def test_reconcile_dates_never_raises_on_a_non_object_and_does_not_look_like_no_dates(self):
+        reconcile = self.dates["reconcile_dates"]
+        for emails in [None, [], "x", 5, True, [["a", {"date": "2026-06-30"}]], [("a", {"date": "2026-06-30"})]]:
+            with self.subTest(emails=emails):
+                before = copy.deepcopy(emails)
+                audit = reconcile(emails)
+                self.assertEqual(audit["index_error"], "emails-not-object")
+                self.assertIsNone(audit["last_updated"])   # "" already means "no valid dates"
+                self.assertEqual((audit["valid_date_count"], audit["date_excluded_count"]), (0, 0))
+                self.assertEqual(audit["date_excluded"], [])
+                self.assertEqual(emails, before)
+
+    def test_reconcile_dates_keeps_one_return_shape(self):
+        reconcile = self.dates["reconcile_dates"]
+        keys = {"index_error", "last_updated", "valid_date_count", "date_excluded_count", "date_excluded"}
+        for emails in [{}, {"a": {"date": "2026-06-30"}}, {"a": {"date": "bad"}}, {"a": None}, None, []]:
+            with self.subTest(emails=emails):
+                self.assertEqual(set(reconcile(emails)), keys)
+        ok = reconcile({"a": {"date": "2026-06-30"}})
+        self.assertIsNone(ok["index_error"])
+        self.assertEqual(ok["last_updated"], "2026-06-30")
+        for emails in [{}, {"a": {"date": "bad"}}]:
+            audit = reconcile(emails)
+            self.assertIsNone(audit["index_error"])
+            self.assertEqual(audit["last_updated"], "")   # no valid dates is still the empty string, never None
+
+
+class ArchiveIndexSopTests(unittest.TestCase):
+    """#531: no step parses the index file on its own, and the write barrier is stated where files are written."""
+
+    def test_the_headings_this_class_relies_on_exist(self):
+        for heading in ["### Step 2:", "#### Step 4.1:", "### Step 6:", "### Step 8.5:", "### Step 7:"]:
+            self.assertTrue(sop_section(heading).startswith(heading))
+
+    def test_every_index_consumer_goes_through_the_loader_or_stops_on_its_error(self):
+        for heading in ["### Step 2:", "#### Step 4.1:", "### Step 6:", "### Step 8.5:"]:
+            with self.subTest(step=heading):
+                text = sop_section(heading)
+                self.assertTrue("load_email_index" in text or "index_error" in text, heading)
+        task = sop_section("### Step 0:").split('subject="load_indices_and_config"', 1)[1].split("TaskCreate(", 1)[0]
+        self.assertIn("index_error", task)
+        self.assertNotIn("load_json(INDEX_FILE)", DOCUMENT.read_text())
+
+    def test_step_2_loads_before_it_recovers_and_never_rebuilds_a_bad_index(self):
+        text = sop_section("### Step 2:")
+        recovery = text.index("先依 Step 6 的復原流程")
+        self.assertLess(text.index("load_email_index"), recovery)
+        self.assertIn("index_error", text[:recovery])
+        for name in ["emails-not-object", "index-not-object", "index-not-json"]:
+            self.assertIn(name, text)
+        self.assertIn("只有在 loader 沒有回報錯誤", text[recovery - 80:recovery + 200])
+        self.assertIn("不自動重建", text)
+
+    def test_step_4_1_uses_the_loaded_emails(self):
+        text = sop_section("#### Step 4.1:")
+        self.assertIn("set(emails.keys())", text)
+        self.assertIn("沒有 `emails` key", text)
+
+    def test_the_write_barrier_is_stated_next_to_the_writes(self):
+        for heading in ["### Step 6:", "### Step 8.5:"]:
+            with self.subTest(step=heading):
+                text = sop_section(heading)
+                self.assertIn("index_error", text)
+                self.assertIn("${INDEX_FILE}.tmp", text)
+                self.assertIn("Archive Mail 完成", text)
+                self.assertIn("TaskUpdate reconcile_index", text)
 
 
 if __name__ == "__main__":

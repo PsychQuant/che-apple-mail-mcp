@@ -217,7 +217,7 @@ TaskCreate(subject="phase1_disambiguation",
            description="Step 1.5: 若 filter 模糊(中文人名「陳老師」/相對時間「最近」/通用 scope「全部」) → 列候選讓 user 選;明確 email/Message-ID/--no-confirm → skip(例外:--no-confirm 或「直接做」時,模糊人名經全域 identity 對到的地址不在本 workspace aliases 與 .threads.json participants → 仍列候選;其餘照舊 skip,filter 照輸入);候選標來源,只來自全域 identity 的不標推薦。由 confirmation-protocol skill Phase 1 + email-search-disambiguation 處理。")
 
 TaskCreate(subject="load_indices_and_config",
-           description="Step 2: 從 ${INDEX_DIR}/ 讀 email_index.json + threads.json；attachment_routing 逐子欄位套預設（記下哪些清單是使用者寫的，分類先比它們），subject_keywords 讀 ${CONFIG_FILE}，participant_aliases 使用 Step 1.4 的共同結果。")
+           description="Step 2: 從 ${INDEX_DIR}/ 讀 email_index.json（經 load_email_index 驗證；loader 回報 index_error 就在 Step 3 之前停止，#531）+ threads.json；attachment_routing 逐子欄位套預設（記下哪些清單是使用者寫的，分類先比它們），subject_keywords 讀 ${CONFIG_FILE}，participant_aliases 使用 Step 1.4 的共同結果。")
 
 TaskCreate(subject="search_emails",
            description="Step 3 + 3b + 3c + 3d: 對每個帳號跑 sender 搜尋 + Sent-scoped recipient 搜尋(寄出信,plugins#109) + subject_keywords 搜尋 + bare-subject thread expansion,四組結果套 mailbox 後過濾規則(統一 drop-set,勿裸 ==)後 Message-ID 去重 → corpus。注意 account_name 必須用 display name 不可用 ews:// URL。")
@@ -563,7 +563,9 @@ fi
 
 ### Step 2: 建立目錄和載入索引
 
-若上次回報索引未完成，或索引不存在但輸出目錄已有 Markdown，先依 Step 6 的復原流程補齊 canonical index，再做新信搜尋。權限仍不足時停止，不重新輸出已存在的信件。
+**先驗證索引形狀（#531）**：`dedup_strategy` 為 `index` 或 `both` 時，`${INDEX_FILE}` 一解析出來就先過 `load_email_index`（recipe 與回傳表在下方「讀取兩個索引檔」；`last_archived` 照舊不讀）。loader 回報 `index_error` 時，**本 run 在 Step 3 之前停止**：只印一行 `⚠ index_error: <名稱>`（`emails-not-object`、`index-not-object` 或 `index-not-json`），請使用者把該檔移開或修好再重跑。不搜尋、不寫任何檔、不自動重建、不自動移開：壞掉的 index 可能是某些 entry 唯一的副本。移開後重跑，下一段的復原流程就會從 Markdown 重建。
+
+只有在 loader 沒有回報錯誤時，若上次回報索引未完成，或索引不存在但輸出目錄已有 Markdown，先依 Step 6 的復原流程補齊 canonical index，再做新信搜尋。權限仍不足時停止，不重新輸出已存在的信件。
 
 ```bash
 mkdir -p "${output_dir}"   # archive markdown 目的地(不變)
@@ -573,7 +575,7 @@ mkdir -p "${output_dir}"   # archive markdown 目的地(不變)
 
 `${INDEX_FILE}` (`.claude/.mail/state/archives/${SLUG}/email_index.json`) — Message-ID 去重索引(canonical key):
 - 若 `dedup_strategy=last_archived`(v2.14.0+) → **skip**, 完全不讀 index
-- 若 `dedup_strategy=index`(default)或 `both` → 載入已歸檔 Message-ID;不存在則建立空索引 `{"version": "1.0", "emails": {}}`
+- 若 `dedup_strategy=index`(default)或 `both` → 載入已歸檔 Message-ID;不存在則建立空索引 `{"version": "1.0", "emails": {}}`。載入一律經 `load_email_index`（下方 recipe），Step 4.1、Step 6、Step 8.5 都使用這次載入的 `emails`，不再各自解析檔案
 
 `${THREADS_FILE}` (`.claude/.mail/state/archives/${SLUG}/threads.json`) — Thread 關係索引(append-only thread view):
 - 若存在,載入既有 thread 結構
@@ -581,6 +583,54 @@ mkdir -p "${output_dir}"   # archive markdown 目的地(不變)
 - 格式見 Step 5.7
 
 兩個索引**獨立維護**,thread 索引純粹為了快速查詢 thread 關係,不影響單封信的儲存。若 `threads.json` 損壞,可用 `/archive-mail-rebuild-threads` 從 md frontmatter 重建。
+
+**載入並驗證 `${INDEX_FILE}`（#531）**：`emails` 必須是 JSON object。這是可執行的契約，不是每個步驟各自的假設。`load_email_index(path)` 只讀、不寫、不建檔，回傳 `(emails, error)`；路徑是函式引數，不得插進 Python 或 shell 原始碼（見「Trust boundary」）：
+
+| 檔案內容 | 回傳 |
+|---|---|
+| 檔案不存在 | `({}, None)`（新 index） |
+| `{}`，或沒有 `emails` key 的 object | `({}, None)`（新 index） |
+| `emails` 是 object（含 `{}`） | `(emails, None)` |
+| `emails` 是 `null`、array、string、number、bool（以 `isinstance(…, dict)` 判斷，不看真假值，所以 `0`、`false`、`""` 也是錯誤） | `(None, "emails-not-object")` |
+| 最上層不是 object（`null`、array、string、number、bool） | `(None, "index-not-object")` |
+| 不是可解析的 JSON（空檔、截斷、BOM、無效 UTF-8、巢狀過深） | `(None, "index-not-json")` |
+
+其他 `OSError`（權限不足、該路徑是目錄）刻意不攔：照既有的權限不足處理走，不在這個 loader 的範圍。有錯誤時 `emails` 是 `None`，不得拿 `{}` 代替繼續往下走。
+
+<!-- archive-mail-index-recipe:start -->
+```python
+import json
+
+
+def load_email_index(path):
+    """Read the dedup index once and name what is wrong with it; never writes, never creates the file."""
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except FileNotFoundError:
+        return {}, None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return None, "index-not-json"
+    if not isinstance(data, dict):
+        return None, "index-not-object"
+    emails = data.get("emails", {})   # no `emails` key is a new index; `null` is not
+    if not isinstance(emails, dict):
+        return None, "emails-not-object"
+    return emails, None
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: index_recipe.py email_index.json")
+    emails, error = load_email_index(sys.argv[1])
+    print(json.dumps({"error": error, "entries": None if emails is None else len(emails)}))
+```
+<!-- archive-mail-index-recipe:end -->
+
+實際呼叫時把上述程式存成固定腳本，以引數陣列傳入索引檔路徑（或 `shlex.quote`），讀它印出的那一行 JSON：`error` 非 `null` 就依 Step 2 開頭的規則停止。`entries` 只是筆數，不是 Message-ID 清單。
 
 #### Step 2.1: Sibling-archive dedup extension(v2.17.0+,#49;v2.38.0+ #285 泛化)
 
@@ -888,7 +938,8 @@ Refinement runs **before** dedup,所以被排除的 thread Message-ID **不會**
 
 ```python
 # Build the canonical "known" Message-ID set per dedup_strategy
-existing_ids = set(load_json(INDEX_FILE)["emails"].keys()) if DEDUP_STRATEGY in ("index", "both") else set()
+# `emails` is what Step 2's load_email_index returned (an index_error already stopped the run); INDEX_FILE is not parsed again
+existing_ids = set(emails.keys()) if DEDUP_STRATEGY in ("index", "both") else set()
 extended_ids = set(EXTENDED_DEDUP_IDS)  # v2.17.0+ — populated by Step 2.1 if symlinked siblings exist
 known_ids = existing_ids | extended_ids
 
@@ -905,6 +956,8 @@ def is_new(email):
 
 new_emails = [e for e in fetched if is_new(e)]
 ```
+
+`INDEX_FILE` 不存在，或存在但沒有 `emails` key，都是新 index（`emails` 為 `{}`），不是錯誤；以前這個情形在這裡是 `KeyError`（#531）。`emails` 不是 object 則 Step 2 已經停止，這裡不會看到。
 
 對每封新郵件:
 1. 檢查其 Message-ID 是否已在 `known_ids`(`INDEX_FILE` ∪ `EXTENDED_DEDUP_IDS`)中
@@ -1481,6 +1534,8 @@ v2.6.0+ 在每個 email entry 多記一個 `thread_key`，方便反向查詢。
 
 > **原子寫入（plugins#110，partial-write-safe）**：寫 `${INDEX_FILE}` **一律 temp+rename**——先寫 `${INDEX_FILE}.tmp`（完整 JSON），再 `os.replace(tmp, INDEX_FILE)`（同檔系統的 atomic rename）。中斷（agent abort / 寫到一半失敗）只會留下半寫的 `.tmp`（下次覆寫），**絕不**讓 `${INDEX_FILE}` 本身變成半寫/損壞的 JSON。這是 #261 diagnosis「先解有 gate、durable fix 待補」的根治，針對的威脅是 **interrupted/partial write**；**嚴格 power-fail durability** 另需 `fsync(檔案)+fsync(目錄)`（本 SOP 威脅模型不含斷電，故不強制，但要斷電安全時可加）。Step 8.5 reconcile gate 擋的是 cross-file 孤兒（md 有、index 無 entry），原子寫入擋的是 single-file partial-write 損壞——兩者互補。Step 6 與 Step 8.5 的 index 寫入都走此路徑。
 
+> **寫入屏障（#531）**：Step 2 的 `load_email_index` 或 `reconcile_dates` 回報 `index_error` 時，不寫 `${INDEX_FILE}`（也不留 `${INDEX_FILE}.tmp`）、不動頂層 `last_updated`、不執行 `TaskUpdate reconcile_index → completed`、不宣稱本 run 成功。摘要第一行是 `⚠ index_error: <名稱>`，Step 7 不印「Archive Mail 完成」橫幅。處置是請使用者把該檔移開或修好再重跑；Step 2 的復原流程會從 Markdown 重建，SOP 本身不自動重建、不自動移開。這條寫在文字裡，測試只能釘住 recipe 與文字，釘不住 agent 執行時怎麼做；所以第一道關在 Step 2 載入時，那時還沒有任何檔案會變成孤兒，這裡是第二道。
+
 ### Step 7: 輸出報告
 
 參與者以 Step 1.4 的 `EFFECTIVE_PARTICIPANT_ALIASES` 顯示，附上 bare email；列出 `identity_warning`、workspace alias 警告、`IGNORED_WORKSPACE_ALIASES` 的具名忽略提示、Step 1.4 第 7、8 項的提示，以及 Step 2 的 routing 警告（未識別鍵、型別錯誤、空清單停用、丟棄的空項目）。沒有 identity 檔時不列缺檔警告。`participant_aliases` 相關的警告只寫 email 與錯誤類型，不是 email 的鍵以位置指出，不重印原始行、鍵或顯示名稱；routing 與頂層設定的警告寫出鍵名（固定的設定名稱，不是信件資料），但不印值或整行。
@@ -1863,6 +1918,10 @@ def normalize_archive_timestamp(value):
 
 def reconcile_dates(emails):
     """Inspect every index entry, including files moved outside the current glob."""
+    if not isinstance(emails, dict):
+        # None, not "": "" already means "no valid dates", and a caller must not overwrite last_updated with it
+        return {"index_error": "emails-not-object", "last_updated": None, "valid_date_count": 0,
+                "date_excluded_count": 0, "date_excluded": []}
     valid, excluded = [], []
     for message_id, entry in emails.items():
         if not isinstance(entry, dict):
@@ -1876,7 +1935,7 @@ def reconcile_dates(emails):
                              "date": raw, "reason": "missing-or-invalid-date"})
         else:
             valid.append(day)
-    return {"last_updated": max(valid, default=""), "valid_date_count": len(valid),
+    return {"index_error": None, "last_updated": max(valid, default=""), "valid_date_count": len(valid),
             "date_excluded_count": len(excluded), "date_excluded": excluded}
 ```
 <!-- archive-mail-date-recipe:end -->
@@ -1884,6 +1943,8 @@ def reconcile_dates(emails):
    `normalize_archive_timestamp` 只回傳具已知時區的完整 timestamp；無時間、無時區或 RFC `-0000` 都回 None，不補造 UTC。具名時區只接受明列的 RFC 傳統代碼；例如 CST 沿用 RFC 的 UTC−06:00 語意，不自行猜成其他地區時區。
 
    Step 6 與本 gate 都使用 `date_audit = reconcile_dates(emails)`，以 `date_audit["last_updated"]` 寫入頂層 `last_updated`，並將整份 audit 留至摘要。`date_excluded_count > 0` 必須標 ⚠、列出每筆 message_id／file／原 date／reason；這些欄位是資料，以 JSON serializer 或文字輸出，不插入 shell。全無有效日期時 `last_updated` 寫空字串並明示 `no-valid-dates`（空 index 則說明 `empty-index`）；不可用今天、舊值或檔名前綴冒充 max，也不可據此推進 `last_archived`。
+
+   **`index_error` 與寫入屏障（#531）**：`date_audit["index_error"]` 一律存在（正常時是 `None`，呼叫端不必用 `.get`）。非 `None`（目前只有 `emails-not-object`）時 `last_updated` 是 `None`，**不是**「全無有效日期」的空字串，兩者不得互相代替。此時不寫 `${INDEX_FILE}`（也不留 `${INDEX_FILE}.tmp`）、不動頂層 `last_updated`、不執行 `TaskUpdate reconcile_index → completed`、不宣稱本 run 成功；摘要第一行是 `⚠ index_error: <名稱>`，Step 7 不印「Archive Mail 完成」橫幅。本 gate 使用 Step 2 `load_email_index` 載入的 `emails`；Step 2 因 `dedup_strategy=last_archived` 沒有載入時，本 gate 要讀檔也經同一個 loader，並照同一條屏障處理它的錯誤。`last_archived` 模式該不該寫 index 是 #545，這裡不決定。
 
    **Append-only 邊界（mail#364）**：recipe 只做日期判讀與 audit，不改既有 entry 或其 `file`，也不讀取／搬移該檔。即使檔名前綴可提供佐證，也不自動覆寫原 date。日期-only 的 `2026-06-30` 是 calendar watermark，不代表 `2026-06-30T00:00:00Z`；原信缺少時間／時區時不得猜補。若要清理歷史 entry，另做可預覽的修復流程。
 
