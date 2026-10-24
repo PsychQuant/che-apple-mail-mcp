@@ -22,6 +22,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [#552](https://github.com/PsychQuant/che-apple-mail-mcp/issues/552)), so a
   genuinely slow query still holds up the reads queued behind it.
 
+- **An index that was refused at startup is retried, and `check_fda` reports the
+  server's real state**
+  ([#537](https://github.com/PsychQuant/che-apple-mail-mcp/issues/537)).
+  The server opened its Envelope Index reader once, at startup, so a refusal at
+  that moment (observed as `authorization denied`, with access granted minutes
+  later) sent every read tool to the slower AppleScript path until the process
+  was restarted, while `check_fda` said the SQLite fast path "should now work".
+  Read tools now retry the open when the last attempt is at least 30 seconds
+  old, and `check_fda` retries at once and answers from the server's own reader:
+  open, just recovered (with a note that SQLite and AppleScript decide
+  `truncated` differently), or still unavailable with the open error and the
+  reconnect step. Every log line carries `FDA probe: <result> (errno N)`, which
+  is what tells apart the three candidate explanations for the original refusal
+  (grant changed afterwards, transient attribution failure, probe and open
+  disagreeing); this fix does not say which one happened. A failure that repeats
+  unchanged is logged once, so a setup without Mail does not log every 30
+  seconds. The reader also runs `SELECT 1 FROM sqlite_master LIMIT 1` before it
+  counts as open, so a file that opens but cannot be read is refused at open
+  time.
+
 ## [3.3.1] - 2026-10-19
 
 ### Fixed

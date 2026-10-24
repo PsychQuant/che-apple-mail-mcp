@@ -314,7 +314,7 @@ reply_email(
 
 | Tool | Description |
 |------|-------------|
-| `check_fda` | Check Full Disk Access status (SQLite fast-path availability) |
+| `check_fda` | Check Full Disk Access status and retry opening this server's index reader now; reports the server's actual SQLite fast-path state (open / just recovered / still unavailable) |
 | `check_accessibility` | Check Accessibility permission (the compose/reply GUI paths; without it those tools refuse — except the opt-in direct-write `create_draft` path, which needs Full Disk Access instead) |
 | `check_automation` | Check Automation permission (Apple Events to Mail) — non-prompting probe, four states with remediation ([#293](https://github.com/PsychQuant/che-apple-mail-mcp/issues/293)); the binary holds its OWN grant, osascript working ≠ binary authorized ([#288](https://github.com/PsychQuant/che-apple-mail-mcp/issues/288)) |
 | `get_mail_log_events` | Read Mail's own unified log to find where an event chain stops (e.g. draft saved → queued → engine notified → IMAP `APPENDUID` receipt) — read-only ([#465](https://github.com/PsychQuant/che-apple-mail-mcp/issues/465)). `detail=brief` (default) returns only the static event template, integer arguments and an account letter for `[account - mailbox]` lines — no account names, subjects or Message-IDs, as long as the template is a compile-time string (Mail's own are); `detail=detailed` adds the raw message, which **contains account identifiers and received-mail content: do not paste it into public issues**. Window ≤ 60 min, times must carry a UTC offset; page with `since=next_start`, `offset=next_offset` and the same `until`. No event-name filter yet ([#466](https://github.com/PsychQuant/che-apple-mail-mcp/issues/466)). An empty result never means the action did not happen. Verified on macOS 27.2 / Mail 16.0 only; needs an admin-group user |
@@ -437,7 +437,7 @@ macOS grants Full Disk Access to the **responsible process** — the app that *l
 
 - **`CheAppleMailMCP --setup`** opens a small window with **live** Full Disk Access status (re-checked on a timer, flips to "Ready ✅" the moment you grant) plus an **on-demand** Automation check, and "Open Full Disk Access settings" / "Copy binary path" buttons.
 - **`CheAppleMailMCP --check-fda`** prints the status headlessly (and opens the pane when access is **denied**) — handy from a terminal or script.
-- The **`check_fda` MCP tool** reports the same status to Claude on demand (call it when a SQLite-only feature errors).
+- The **`check_fda` MCP tool** reports the same status to Claude on demand (call it when a SQLite-only feature errors). It also makes the running server retry opening its own index reader and reports the result ([#537](https://github.com/PsychQuant/che-apple-mail-mcp/issues/537)): a granted probe is no longer taken to mean the server can use the index. If the reader was unavailable and the retry opens it, the answer says it recovered; if the probe can read the file but the server's open still fails, it shows that error and says to reconnect the server (`/mcp` in Claude Code).
 
 None of these can remove the single manual toggle (Apple puts FDA in the manual-only bucket alongside Accessibility / Screen Recording), but they make "what do I do?" obvious and give live feedback the instant you flip it on.
 
@@ -558,8 +558,12 @@ Exchange (EWS) accounts in Apple Mail **do not materialize `.emlx` files** — m
 
 When the fast path fails for a non-EWS account, the failure is logged to stderr (since [#69](https://github.com/PsychQuant/che-apple-mail-mcp/issues/69)). Run the binary in a terminal and watch stderr to distinguish:
 
-- `EnvelopeIndexReader init failed: ...` — DB unreachable (commonly: Full Disk Access missing)
+- `EnvelopeIndexReader init failed: ...` — DB unreachable when the server started (commonly: Full Disk Access missing). It is not final ([#537](https://github.com/PsychQuant/che-apple-mail-mcp/issues/537)): until the index opens, read tools use AppleScript; a read tool that runs at least 30 s after the last attempt tries to open it again, and `check_fda` retries at once.
+- `EnvelopeIndexReader retry failed: ...` — a retry did not open it. A retry that fails exactly as before is not logged again, so a setup without Mail (for example Exchange only) logs this once, not every 30 s. `... (requested by check_fda)` marks a retry you asked for; those are always logged.
+- `EnvelopeIndexReader retry recovered ...` — the index opened after an earlier failure; read tools use the SQLite fast path again from the next call.
 - `SQLite get_email fast path failed for rowId=N: ...` — per-message failure (e.g., `.partial.emlx` only, malformed MIME, file not yet synced)
+
+The first three lines end with `FDA probe: <result> (errno N)`. It is the plain `fopen` check `check_fda` uses, recorded at the moment of the SQLite failure, so the two can be compared: `denied` or `no-mail-data` means the file itself was refused or missing; `granted` next to a failed open means the probe and the SQLite open disagree (please report it with the log line). Note that retrying cannot fix an open that keeps failing for a reason outside the server, such as a grant that is still missing.
 
 Both cases transparently fall through to AppleScript with `... falling through to AppleScript` in the log line, so behavior is preserved while observability is restored.
 
