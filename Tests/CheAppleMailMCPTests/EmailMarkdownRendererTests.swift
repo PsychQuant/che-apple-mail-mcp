@@ -6,11 +6,11 @@ final class EmailMarkdownRendererTests: XCTestCase {
 
     private func makeEmail(
         subject: String = "Re: 4 papers using MB3.5",
-        sender: String = "Joanne Peng <peng.cyj@gmail.com>",
-        to: [String] = ["Li-Ting Chen <litingc@unr.edu>"],
+        sender: String = "Alice Example <alice@example.com>",
+        to: [String] = ["Bob Example <bob@example.com>"],
         cc: [String] = [],
         date: String = "Sat, 13 Jun 2026 16:01:14 +0800",
-        messageId: String = "<CAKM2gv@mail.gmail.com>",
+        messageId: String = "<CAKM2gv@mail.example.com>",
         inReplyTo: String = "",
         textBody: String? = "Body line one.\n\n> quoted reply\n--JP"
     ) -> EmailContent {
@@ -25,11 +25,11 @@ final class EmailMarkdownRendererTests: XCTestCase {
         let md = EmailMarkdownRenderer.render(makeEmail(), direction: "received", inReplyTo: "")
         let lines = md.components(separatedBy: "\n")
         XCTAssertEqual(lines[0], "---")
-        XCTAssertEqual(lines[1], "message_id: \"<CAKM2gv@mail.gmail.com>\"")
+        XCTAssertEqual(lines[1], "message_id: \"<CAKM2gv@mail.example.com>\"")
         XCTAssertEqual(lines[2], "thread_key: \"4 papers using MB3.5\"")
         XCTAssertEqual(lines[3], "in_reply_to: \"\"")
         XCTAssertEqual(lines[4], "date: 2026-06-13T16:01:14+08:00")
-        XCTAssertEqual(lines[5], "sender: peng.cyj@gmail.com")
+        XCTAssertEqual(lines[5], "sender: alice@example.com")
         XCTAssertEqual(lines[6], "direction: received")
         XCTAssertEqual(lines[7], "---")
     }
@@ -51,7 +51,7 @@ final class EmailMarkdownRendererTests: XCTestCase {
     }
 
     func testBareEmail() {
-        XCTAssertEqual(EmailMarkdownRenderer.bareEmail("Joanne Peng <peng.cyj@gmail.com>"), "peng.cyj@gmail.com")
+        XCTAssertEqual(EmailMarkdownRenderer.bareEmail("Alice Example <alice@example.com>"), "alice@example.com")
         XCTAssertEqual(EmailMarkdownRenderer.bareEmail("plain@addr.com"), "plain@addr.com")
         XCTAssertEqual(EmailMarkdownRenderer.bareEmail("  Spaced <X@Y.COM> "), "x@y.com")
     }

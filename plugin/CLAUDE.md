@@ -9,7 +9,7 @@ Apple Mail MCP server for macOS,加上 Foresay-derived confirmation protocol + I
 學自 IDD plugin 的 enforcement pattern。為什麼:
 
 - v2.7.0 加 confirmation-protocol skill,v2.8.0 加 namespace migration,但 spec-level 的「應該 confirm / 應該掃 false positive」依賴 Claude 讀 markdown 後自願執行
-- 歷史 incident:2026-05-01 archive 陳老師信件,265250 false positive 漏網 → spec 有寫但被跳過
+- 歷史 incident(v2.9.0 前,改寫成虛構示意案例,見 `rules/false-positive-detection.md`):archive 某位老師的信件時有一封 false positive 漏網 → spec 有寫但被跳過
 - TaskCreate 把每個 phase 變成 UI 可見的 binary state,跳過會留下 incomplete task 顯眼
 
 兩處強制 bootstrap:
@@ -55,9 +55,9 @@ Apple Mail MCP server for macOS,加上 Foresay-derived confirmation protocol + I
 3. **Destructive**:delete_email、empty Trash → operation confirmation
 4. **Compose 寄出**:compose_email、reply_email → 信件 preview
 
-### 為什麼這個 protocol 重要(real case)
+### 為什麼這個 protocol 重要(示意案例)
 
-2026-05-01 archive 陳老師信件時,直接 search → fetch 19 封 → 寫 markdown,事後發現 265250 是 false positive(寄給 scchen 不是 cchen),又走一輪 rm + index 修復。
+archive 方老師的信件時,直接 search → fetch 19 封 → 寫 markdown,事後發現其中一封是 false positive(寄給 hr 不是 fang),又走一輪 rm + index 修復。(案例為虛構改寫,見 `rules/false-positive-detection.md`)
 
 如果有 confirmation skill,Phase 2 (search preview) 會 flag 這封並讓 user 排除,完全 prevent false-positive round trip。從 v2.7.0 開始,archive-mail 預設套用這個 protocol。
 
@@ -105,10 +105,10 @@ Phase 4: Execute or Iterate
 ### Case 1: 完整流程(filter 模糊 + bulk + read-only)
 
 ```
-user: 把陳老師有關的信都歸檔
+user: 把方老師有關的信都歸檔
 
-AI [Phase 1]: 「陳老師」可能對應到 cchen / scchen / 其他?
-user: cchen
+AI [Phase 1]: 「方老師」可能對應到 fang / sfang / 其他?
+user: fang
 AI [Phase 2]: 找到 19 封,7 個 threads。⚠ 1 個是 sibling activity 不該歸入。要排除嗎?
 user: 排除
 AI [Phase 3]: 我將寫 18 個 markdown + 下載 1 個附件 + 寫 2 個 index。確認?
@@ -119,7 +119,7 @@ AI [Phase 4]: [執行]
 ### Case 2: 明確 filter(skip Phase 1)
 
 ```
-user: archive cchen@stat.sinica.edu.tw 過去一週
+user: archive fang@dept.example.invalid 過去一週
 
 AI [skip Phase 1]: filter 明確,跳過 disambiguation
 AI [Phase 2]: 找到 3 封,沒 false positive。

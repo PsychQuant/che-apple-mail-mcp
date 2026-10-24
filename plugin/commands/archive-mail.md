@@ -248,7 +248,7 @@ TaskCreate(subject="reconcile_index",
 
 中途若發現要分更多 sub-tasks(例如 Phase 2 preview 需要分批,或 attachment 下載失敗需要 retry),用 `TaskCreate` 補加。
 
-**為什麼**:沒有 Stage TaskList 時,Claude 看 markdown spec 容易跳步驟(例如 false-positive scan 漏跑、Phase 2 preview 用「應該不需要」rationalize 掉)。Stage TaskList 把「跳過」變成顯眼的 incomplete task,user 在 UI 看得到。歷史上 2026-05-01 archive 陳老師信件就是因為沒跑 false-positive scan,265250 false positive 漏網,事後又花一輪 rm + index 修復。
+**為什麼**:沒有 Stage TaskList 時,Claude 看 markdown spec 容易跳步驟(例如 false-positive scan 漏跑、Phase 2 preview 用「應該不需要」rationalize 掉)。Stage TaskList 把「跳過」變成顯眼的 incomplete task,user 在 UI 看得到。歷史上就發生過類似的疏漏(改寫成虛構示意案例,見 `rules/false-positive-detection.md`):archive 某位老師的信件時沒跑 false-positive scan,一封 false positive 漏網,事後又花一輪 rm + index 修復。
 
 ### Step 1: 解析參數
 
@@ -1101,14 +1101,14 @@ Subject → filename 轉換規則（依此順序執行）。**這是格式政策
 
 偵測後綴編號：用 `Glob` 列出 `YYYY-MM-DD_{subject}*.md`，取現有最大 `-N` +1（若無匹配則第 1 封無後綴；有 1 個匹配則 `-1`）。
 
-範例（來自 `tatsuma/communications/`）：
+範例：
 
 | Subject | 順序 | 檔名 |
 |---------|------|------|
-| `Re: sabbatical year` | 第 1 封 | `2023-08-28_Re--sabbatical-year.md` |
-| `翻訳のお願い` | 第 1 封 | `2024-03-26_翻訳のお願い.md` |
-| `NTU PSY seminar 2024 final PPT` | 第 1 封 | `2024-04-04_NTU-PSY-seminar-2024-final-PPT.md` |
-| `Re: Poster at 九州心理学会` | 第 4 封 | `2024-11-20_Re--Poster-at-九州心理学会-3.md` |
+| `Re: project kickoff` | 第 1 封 | `2023-08-28_Re--project-kickoff.md` |
+| `資料のお願い` | 第 1 封 | `2024-03-26_資料のお願い.md` |
+| `Workshop 2024 final slides` | 第 1 封 | `2024-04-04_Workshop-2024-final-slides.md` |
+| `Re: Poster at 春季学会` | 第 4 封 | `2024-11-20_Re--Poster-at-春季学会-3.md` |
 | `(空白 subject)` | 第 1 封 | `2026-04-08_no-subject.md` |
 
 > **歷史相容 note**：`communications/` 有少量 `-a` / `-b` 字母後綴（如 `2024-07-14_...-a.md`）。新規不遷移舊檔，但新檔**一律用 `-1` `-2` `-3` 數字後綴**。若混用造成困擾，另開 follow-up issue。
@@ -1127,11 +1127,11 @@ ENRICHMENT="${ENRICHMENT:-none}"  # default: simple template (v2.13.0+)
 
 ```markdown
 ---
-message_id: "<9c7a43db76e94a64a51f85d04c3bf01b@ntu.edu.tw>"
-thread_key: "SE manuscript 10xx-2025"
-in_reply_to: "<eddba65d53754587aeee5d86ff631d2c@ntu.edu.tw>"
+message_id: "<0123456789abcdef0123456789abcdef@example.invalid>"
+thread_key: "Aster manuscript 2025"
+in_reply_to: "<fedcba9876543210fedcba9876543210@example.invalid>"
 date: 2026-01-28T08:35:34Z
-sender: yfhsu@ntu.edu.tw
+sender: ada.quinn@example.invalid
 direction: received
 ---
 
@@ -1151,11 +1151,11 @@ Frontmatter 保留全部 6 欄位(thread index 重建仍依賴);header 改為 4 
 
 ```markdown
 ---
-message_id: "<9c7a43db76e94a64a51f85d04c3bf01b@ntu.edu.tw>"
-thread_key: "SE manuscript 10xx-2025"
-in_reply_to: "<eddba65d53754587aeee5d86ff631d2c@ntu.edu.tw>"
+message_id: "<0123456789abcdef0123456789abcdef@example.invalid>"
+thread_key: "Aster manuscript 2025"
+in_reply_to: "<fedcba9876543210fedcba9876543210@example.invalid>"
 date: 2026-01-28T08:35:34Z
-sender: yfhsu@ntu.edu.tw
+sender: ada.quinn@example.invalid
 direction: received
 ---
 
@@ -1329,7 +1329,7 @@ if __name__ == "__main__":
    **`original_filename` 來自 `Content-Disposition: filename=`，與 inline `alt` 是同一個信任
    等級的寄件人可控字串**——#395 之前這裡寫「保留原始 bytes」，那等於把 data 直接當路徑用。
 
-   其中 `email_md_stem` 是該封信的 Markdown 檔名去掉 `.md`（例如 `2026-04-08_Re--Taxometric-Analysis`）。
+   其中 `email_md_stem` 是該封信的 Markdown 檔名去掉 `.md`（例如 `2026-04-08_Re--Analysis-plan`）。
 
 4. **下載**：呼叫 `mcp__plugin_che-apple-mail-mcp_mail__save_attachment` 將附件存到目標路徑。
    - `attachment_name` 傳**原始檔名**（Mail 端查找鍵），`save_path` 用 `safe_filename`——同 5.5.0，兩者是不同變數
@@ -1370,10 +1370,10 @@ if __name__ == "__main__":
    範例:
    ```markdown
    Inline images:
-   - ![CleanShot 2026\-05\-07 at 15\.44\.58\@2x\.png](attachments/2026-05-07_Re--Solution---Iverson-similarity/inline/CleanShot%202026-05-07%20at%2015.44.58%402x.png)
+   - ![CleanShot 2026\-05\-07 at 15\.44\.58\@2x\.png](attachments/2026-05-07_Re--Model-question/inline/CleanShot%202026-05-07%20at%2015.44.58%402x.png)
 
    Attachments:
-   - [Figures \& Tables20260408\.docx](attachments/2026-04-08_Re--Taxometric-Analysis/Figures%20%26%20Tables20260408.docx) (93 KB)
+   - [Figures \& Tables20260408\.docx](attachments/2026-04-08_Re--Analysis-plan/Figures%20%26%20Tables20260408.docx) (93 KB)
    - [raw\_indicators\.csv](../../data/raw/raw_indicators.csv) (12 KB)
    ```
 
@@ -1416,17 +1416,17 @@ User 看到註記知道 inline 圖存在但需手動 export from Mail.app。File
   "version": "1.0",
   "last_updated": "2026-04-22T15:01:09Z",
   "threads": {
-    "SE manuscript 10xx-2025": {
+    "Aster manuscript 2025": {
       "messages": [
         {
-          "message_id": "<7F43E052-EA1B-432D-AF0C-64F0CDBD8B32@ntu.edu.tw>",
-          "file": "2026-01-28_Re--SE-manuscript-10xx-2025.md",
+          "message_id": "<00000000-0000-4000-8000-000000000001@example.invalid>",
+          "file": "2026-01-28_Re--Aster-manuscript-2025.md",
           "date": "2026-01-28T08:00:24Z",
-          "sender": "d06227105@ntu.edu.tw",
-          "in_reply_to": "<eddba65d53754587aeee5d86ff631d2c@ntu.edu.tw>"
+          "sender": "ben.okafor@example.invalid",
+          "in_reply_to": "<fedcba9876543210fedcba9876543210@example.invalid>"
         }
       ],
-      "participants": ["yfhsu@ntu.edu.tw", "d06227105@ntu.edu.tw", "d11227103@ntu.edu.tw"],
+      "participants": ["ada.quinn@example.invalid", "ben.okafor@example.invalid", "cleo.marsh@example.invalid"],
       "first_message": "2025-12-19T06:19:30Z",
       "last_message": "2026-01-28T08:00:24Z",
       "message_count": 1
@@ -1599,9 +1599,9 @@ Thread 覆蓋: 3 threads, 2 complete, 1 with gaps
 搜尋結果: 37 by sender + 14 by recipient/sent + 12 by subject + 9 by thread expansion = 58 unique
 
 Issues:
-  ⚠️ 2026-04-08_Re--Taxometric: 1 attachment missing
+  ⚠️ 2026-04-08_Re--Analysis: 1 attachment missing
   ⚠️ 2026-03-12_Re--Draft/manuscript.docx: 0-byte attachment (silent download failure)
-  ⚠️ 2026-05-07_Re--Solution: 1 inline image cross-referenced (binary unsupported)
+  ⚠️ 2026-05-07_Re--Model: 1 inline image cross-referenced (binary unsupported)
   ⚠️ Thread "indicator selection": 2 potential missing siblings
   ⚠️⚠️ 方向覆蓋: 55 封全部 received，但有 12 封是回覆串的一部分 — 對方的話在、自己的話不在
       補救: 對該對象重跑 Step 3 recipe (2)（Sent-scoped recipient 搜尋）
@@ -1962,16 +1962,16 @@ attachment_routing:                      # 只寫目錄：四個清單都沿用�
 
 Two-layer model — `filters` (search-time) vs `*_includes` (post-fetch restriction) 的具體用法:`filters` 把寬網撒到 Mail.app(Step 3 MCP query),refinement 在 fetch 完之後縮窄到只關心的 sender / recipient / subject(Step 4.0 thread-level)。
 
-**範例 1**:對中研院 email 設 OR-search(三個 email 任一命中即拉),但要排除誤命中的補習班信件(#84)和訂閱噪音:
+**範例 1**:對同一人的三個 email 別名設 OR-search(三個 email 任一命中即拉),但要排除誤命中的補習班信件(#84)和訂閱噪音:
 
 ```yaml
 filters:                              # Layer 1 search-time corpus 定義
-  - che830621@as.edu.tw
-  - che830621@gate.sinica.edu.tw
-  - che830621@stat.sinica.edu.tw
+  - me@example.invalid
+  - me@gate.example.invalid
+  - me@stat.example.invalid
 
 recipient_excludes:                   # Layer 2 post-fetch: drop 寄到補習班的信(整 thread)
-  - EDUCATION5361@yahoo.com.tw
+  - tutoring-center@example.invalid
 
 subject_excludes:                     # Layer 2 post-fetch: drop 訂閱確認 noise
   - 訂閱確認信
@@ -1982,20 +1982,20 @@ subject_excludes:                     # Layer 2 post-fetch: drop 訂閱確認 no
 
 ```yaml
 filters:
-  - yfhsu                             # 任何提到 yfhsu 的信都先拉進來
-sender_includes:                      # ...但 fetch 後只保留 sender 含 @gate.sinica 的
-  - "@gate.sinica.edu.tw"
+  - ada.quinn                             # 任何提到 ada.quinn 的信都先拉進來
+sender_includes:                      # ...但 fetch 後只保留 sender 含 @gate.example 的
+  - "@gate.example.invalid"
 ```
 
 **範例 3**:workspace 按 topic scoping(#76 use case),只歸檔 subject 命中關鍵字的 thread:
 
 ```yaml
 filters:
-  - yfhsu
+  - ada.quinn
 subject_includes:                     # whitelist: 只保留 bare subject 含這些字串的 thread
-  - affine
-  - Iverson
-  - similarity
+  - Aster
+  - pilot
+  - notation
 ```
 
 關鍵語意(完整契約見 spec `openspec/specs/archive-mail-corpus-refinement/spec.md`):

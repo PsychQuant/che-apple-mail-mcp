@@ -6,16 +6,16 @@ Search 結果可能含有不符合 user 真正意圖的 emails(false positives),
 
 False-positive scan **不是 optional best practice**,是 archive-mail Step 0 Bootstrap 必建的 task `filter_and_scan_false_positives`。任何 search 結果在進 Phase 2 preview 前都要跑這份 rule 的 `flag_thread()` 算法,並在 task description 裡記下「✓ N / ⚠ M / ⚠⚠ K / ❓ J」分布。沒跑就把這個 task 標 completed = 違規。
 
-實際後果(2026-05-01 incident):filter「陳老師 + 林助理 + subject 含『陳君厚』」搜尋出 19 封,265250 是 sibling activity (subject「應徵資料科學統計合作社…」,寄給 scchen 不是 cchen),false-positive scan 沒跑,事後才發現,又走一輪 rm + index 修復。如果 scan 是 enforced task,Phase 2 preview 會 ⚠⚠ flag 這封並讓 user 排除。
+典型後果(虛構示意案例,依 v2.9.0 加入此鐵律的原因改寫;人名、帳號、主旨皆為虛構):filter「方老師 + 葉助理 + subject 含『Fang』」搜尋出 19 封,其中一封是 sibling activity(subject「應徵 Fangshan 資料科學合作計畫研究員」,寄給 hr 不是 fang),false-positive scan 沒跑,事後才發現,又走一輪 rm + index 修復。如果 scan 是 enforced task,Phase 2 preview 會 ⚠⚠ flag 這封並讓 user 排除。
 
 ## 為什麼需要
 
 `mcp__plugin_che-apple-mail-mcp_mail__search_emails` 用 SQLite full-text 搜尋,query 可能 match 到:
-- Subject 含 query 但實際對象不同(例:filter「陳君厚」match 到 subject「應徵資料科學統計合作社博士後研究員(鄭澈,...)」中的「陳」)
+- Subject 含 query 但實際對象不同(例:subject 關鍵字「Fang」match 到 subject「應徵 Fangshan 資料科學合作計畫研究員」中的子字串「Fang」)
 - Recipient 是 list 之一但 thread 主軸不是該 contact
 - 歷史 thread 標題已改但 message 還是 match
 
-實際案例(2026-05-01 archive 陳老師):filter 是 cchen + 林助理 + 「陳君厚」subject,結果 265250 (寄給 scchen)被 match 到,因為 subject「應徵資料科學統計合作社博士後研究員(鄭澈,**臺灣大學心理學博士**)」沒有「陳君厚」也沒有 cchen,但 sender 是用戶自己,而 subject 含「陳」字導致 fuzzy match。
+示意案例(虛構):filter 是 fang + 葉助理 + 「Fang」subject 關鍵字,結果有一封寄給 hr 的信被 match 到,因為 subject「應徵 Fangshan 資料科學合作計畫研究員」沒有 fang 這個聯絡人,sender 是用戶自己、收件人 hr 也不在 filter,只是 subject 含「Fang」子字串(來自計畫名稱 Fangshan)而被 subject 關鍵字 match。
 
 ## 判斷規則
 
@@ -67,9 +67,9 @@ def flag_thread(thread, filter_emails, filter_keywords):
 User 同時做幾件事(例如同時應徵多個職位),subject 含類似關鍵字但對象不同。
 
 實際案例:
-- Filter: cchen / coco891017 / 「陳君厚」
-- False positive: 寄給 scchen 的「應徵資料科學統計合作社」
-- Why: subject 含「應徵」但 recipient 完全不在 filter
+- Filter: fang / asst.ye / 「Fang」
+- False positive: 寄給 hr 的「應徵 Fangshan 資料科學合作計畫研究員」
+- Why: subject 含關鍵字子字串「Fang」,但 recipient 完全不在 filter
 
 **Detection**: sender ∉ filter_emails AND principal recipient ∉ filter_emails
 
@@ -90,12 +90,12 @@ User 同時做幾件事(例如同時應徵多個職位),subject 含類似關鍵�
 在 `bulk-operation-preview` skill 的 thread breakdown 加 reason:
 
 ```
-⚠ [2026-03-15] 應徵資料科學統計合作社博士後研究員(鄭澈,...) (1 msg)
-    Participants: che830621, scchen
-    Reason: sender (scchen@stat.sinica.edu.tw) 不在 filter
-            recipient 也不在 filter
-            僅 subject 中的「陳」字 match filter「陳君厚」
-            高機率為 sibling 應徵活動,非陳君厚老師相關
+⚠ [2026-03-15] 應徵 Fangshan 資料科學合作計畫研究員 (1 msg)
+    Participants: me, hr
+    Reason: recipient (hr@fangshan.example.invalid) 不在 filter
+            sender 也不在 filter
+            僅 subject 中的子字串「Fang」match filter「Fang」
+            高機率為 sibling 應徵活動,非方老師相關
     建議:排除
 ```
 
@@ -111,16 +111,16 @@ User 看到 flag 後可以:
 長期看,false positive 多表示 filter 太寬。建議在 `.claude/emails.md` 加:
 
 ```yaml
-# 只把這些 email 視為 chchen 相關
+# 只把這些 email 視為方老師相關
 participants:
   primary:
-    - cchen@stat.sinica.edu.tw
-    - cchen@webmail.stat.sinica.edu.tw
+    - fang@dept.example.invalid
+    - fang@webmail.dept.example.invalid
   assistants:
-    - coco891017@webmail.stat.sinica.edu.tw
-    - coco891017@stat.sinica.edu.tw
-    - yijulee@webmail.stat.sinica.edu.tw
-    - yijulee@stat.sinica.edu.tw
+    - asst.ye@webmail.dept.example.invalid
+    - asst.ye@dept.example.invalid
+    - staff.hall@webmail.dept.example.invalid
+    - staff.hall@dept.example.invalid
 
 # Subject keywords 不可作為唯一 match 條件
 subject_keywords_strict: true  # 必須同時符合 sender/recipient 才算 match

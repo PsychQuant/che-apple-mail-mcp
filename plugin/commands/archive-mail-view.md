@@ -11,9 +11,9 @@ allowed-tools: Read, Write, Glob, Bash(mkdir:*)
 ## 使用方式
 
 ```
-/archive-mail-view "SE manuscript 10xx-2025"
-/archive-mail-view "SE manuscript" communications
-/archive-mail-view "SE" communications/emails
+/archive-mail-view "Aster manuscript 2025"
+/archive-mail-view "Aster manuscript" communications
+/archive-mail-view "Aster" communications/emails
 ```
 
 - 第一個參數：thread key（可以是 substring，會模糊匹配 `.threads.json` 裡的 key）
@@ -32,7 +32,7 @@ allowed-tools: Read, Write, Glob, Bash(mkdir:*)
 ```
 Usage: /archive-mail-view <thread-key> [archive-dir]
 
-Try: /archive-mail-view "SE manuscript 10xx-2025"
+Try: /archive-mail-view "Aster manuscript 2025"
 ```
 
 ### Step 2: 載入索引（v2.8.0+ 從 `.claude/.mail/state/archives/${SLUG}/`）
@@ -86,48 +86,48 @@ fi
 **視圖格式**：
 
 ```markdown
-# Thread: SE manuscript 10xx-2025
+# Thread: Aster manuscript 2025
 
 **Messages**: 17
-**Participants**: yfhsu@ntu.edu.tw, d06227105@ntu.edu.tw, d11227103@ntu.edu.tw
+**Participants**: ada.quinn@example.invalid, ben.okafor@example.invalid, cleo.marsh@example.invalid
 **Time span**: 2025-12-19 06:19 → 2026-01-28 08:00 (40 days)
 **Source**: `.threads.json` + 17 md files
 
 ---
 
-## 2025-12-19 14:19 — yfhsu@ntu.edu.tw (received)
+## 2025-12-19 14:19 — ada.quinn@example.invalid (received)
 
-**File**: `2025-12-19_SE-manuscript-10xx-2025.md`
-**Message-ID**: `<...@ntu.edu.tw>`
+**File**: `2025-12-19_Aster-manuscript-2025.md`
+**Message-ID**: `<...@example.invalid>`
 
 Dear All:
-我稍為把 10xx-2025 的版本順了一回，順便小改幾個地方。看來有模有樣，只需將 "Numerical Illustration: Asymptotic Behavior in Assessment Data" 章節未完成之處補齊即可投稿。Right?
-Best, Hsu
+我稍為把 Aster 的版本順了一回，順便小改幾個地方。看來有模有樣，只需將 "Illustration" 章節未完成之處補齊即可投稿。Right?
+Best, Ada
 
 ### Attachments
-- [main.pdf](../attachments/2025-12-19_SE-manuscript-10xx-2025/main.pdf) (234 KB)
+- [main.pdf](../attachments/2025-12-19_Aster-manuscript-2025/main.pdf) (234 KB)
 
 ---
 
-## 2025-12-21 21:50 — yfhsu@ntu.edu.tw (received)
+## 2025-12-21 21:50 — ada.quinn@example.invalid (received)
 
-**File**: `2025-12-21_RE--SE-manuscript-10xx-2025.md`
-**Message-ID**: `<...@ntu.edu.tw>`
+**File**: `2025-12-21_RE--Aster-manuscript-2025.md`
+**Message-ID**: `<...@example.invalid>`
 
 CC:
-我們先把 10xx-2025 這篇搞定，再處理 BJMSP review.
-Best, Hsu
+我們先把 Aster 這篇搞定，再處理審查意見.
+Best, Ada
 
 ---
 
-## 2025-12-22 15:36 — d06227105@ntu.edu.tw (sent)
+## 2025-12-22 15:36 — ben.okafor@example.invalid (sent)
 
-**File**: `2025-12-22_RE--SE-manuscript-10xx-2025.md`
-**Message-ID**: `<...@ntu.edu.tw>`
+**File**: `2025-12-22_RE--Aster-manuscript-2025.md`
+**Message-ID**: `<...@example.invalid>`
 
-To：徐老師與昊紘
+To：Ada 與 Cleo
 
-關於 Kolva 的文章...
+關於引用文獻的表格標記...
 [略]
 
 ---
@@ -138,11 +138,11 @@ To：徐老師與昊紘
 
 ## Summary
 
-本 thread 共 17 封信，涵蓋 SE paper 手稿從整理到投稿前的討論，主要議題：
-- Kolva et al. (2017) 表格標記問題
-- Empirical illustration 章節完成
+本 thread 共 17 封信，涵蓋手稿從整理到投稿前的討論，主要議題：
+- 表格標記問題
+- Illustration 章節完成
 - 是否拆成兩篇投稿
-- BJMSP review 的時序安排
+- 審查意見的時序安排
 
 **Attachments across thread**: 8 個檔案（列出）
 
@@ -164,9 +164,9 @@ To：徐老師與昊紘
 Thread View Generated
 ═══════════════════════════════════════════
 
-Thread key: SE manuscript 10xx-2025
+Thread key: Aster manuscript 2025
 Source: 17 messages across 40 days
-Output: communications/.threads/SE-manuscript-10xx-2025.md
+Output: communications/.threads/Aster-manuscript-2025.md
 
 ═══════════════════════════════════════════
 ```
