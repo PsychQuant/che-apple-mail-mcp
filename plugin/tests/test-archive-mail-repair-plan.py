@@ -15,6 +15,7 @@ import unittest
 
 COMMANDS = Path(__file__).resolve().parents[1] / "commands"
 SOP = COMMANDS / "archive-mail-repair-synthetic-ids.md"
+ARCHIVE = COMMANDS / "archive-mail.md"
 
 
 def recipe_code(document, marker):
@@ -176,6 +177,121 @@ class ResidueReportTests(unittest.TestCase):
                              [{"file": "untouched.md", "message_id": "<different@example.invalid>"}], ["other.md"])
         self.assertEqual(result["index_file_mismatches"], [])
         self.assertEqual(result["status"], "completed")
+
+
+class DateCoreTests(unittest.TestCase):
+    """parse_zone_argument and resolve_instant: the one place a user-given zone turns a naive date into an instant."""
+
+    @classmethod
+    def setUpClass(cls):
+        from zoneinfo import available_timezones
+        if not available_timezones():
+            raise AssertionError("no tz database on this machine: parse_zone_argument cannot be tested, "
+                                 "and the command would refuse every IANA zone name")
+        # Same order the SOP tells the agent to paste: the archive-mail date recipe first, then this block.
+        cls.recipe = load((ARCHIVE, "archive-mail-date-recipe"), (SOP, "archive-mail-repair-date-recipe"))
+        cls.zone = staticmethod(cls.recipe["parse_zone_argument"])
+        cls.parse = staticmethod(cls.recipe["parse_archive_date"])
+        cls.resolve = staticmethod(cls.recipe["resolve_instant"])
+
+    def resolve_text(self, value, zone_text=None):
+        zone = None if zone_text is None else self.zone(zone_text)
+        if zone_text is not None:
+            self.assertIsNotNone(zone, zone_text)
+        return self.resolve(self.parse(value), zone)
+
+    def test_zone_argument_accepts_iana_names_and_fixed_offsets(self):
+        for text in ["Asia/Taipei", "UTC", "+08:00", "-05:30", "America/New_York"]:
+            with self.subTest(text=text):
+                self.assertIsNotNone(self.zone(text))
+
+    def test_zone_argument_refuses_everything_else(self):
+        for text in ["CST", "JST", "Taipei", "asia/taipei", "", " Asia/Taipei", "Asia/Taipei ", "../etc/localtime",
+                     "+8", "+0800", "+25:00", "+08:60", "-00:00", "EST", "GMT", "+08:00:00", None, 8, ["+08:00"]]:
+            with self.subTest(text=text):
+                self.assertIsNone(self.zone(text))
+
+    def test_the_319_example_becomes_the_same_instant_as_its_utc_twin(self):
+        verdict, instant, basis = self.resolve_text("2026-05-29T20:24:53", "Asia/Taipei")
+        self.assertEqual((verdict, basis), ("ok", "zone-assumed"))
+        self.assertEqual(instant.isoformat(), "2026-05-29T12:24:53+00:00")
+        twin = self.resolve_text("2026-05-29T12:24:53Z")
+        self.assertEqual(twin[0], "ok")
+        self.assertEqual(instant, twin[1])
+
+    def test_a_fixed_offset_zone_converts_the_same_way(self):
+        verdict, instant, basis = self.resolve_text("2026-05-29T20:24:53", "+08:00")
+        self.assertEqual((verdict, instant.isoformat(), basis), ("ok", "2026-05-29T12:24:53+00:00", "zone-assumed"))
+
+    def test_an_explicit_offset_is_never_touched_by_the_zone(self):
+        for zone in [None, "Asia/Taipei", "-05:30"]:
+            with self.subTest(zone=zone):
+                verdict, instant, basis = self.resolve_text("2026-05-29T20:24:53+08:00", zone)
+                self.assertEqual((verdict, instant.isoformat(), basis), ("ok", "2026-05-29T12:24:53+00:00", "explicit"))
+        self.assertEqual(self.resolve_text("Fri, 29 May 2026 20:24:53 +0800", "-05:30")[2], "explicit")
+
+    def test_a_naive_date_without_a_zone_is_never_guessed(self):
+        for value in ["2026-05-29T20:24:53", "2026-05-29 20:24:53", "2026-05-29T20:24:53-00:00",
+                      "Fri, 29 May 2026 20:24:53 -0000"]:
+            with self.subTest(value=value):
+                self.assertEqual(self.resolve_text(value), ("date-offset-missing", None, None))
+
+    def test_the_unknown_offset_marker_is_treated_as_naive_when_a_zone_is_given(self):
+        verdict, instant, basis = self.resolve_text("Fri, 29 May 2026 20:24:53 -0000", "Asia/Taipei")
+        self.assertEqual((verdict, instant.isoformat(), basis), ("ok", "2026-05-29T12:24:53+00:00", "zone-assumed"))
+
+    def test_dates_without_a_usable_time_stay_unparseable_whatever_the_zone(self):
+        for value in ["2026-05-29", "Fri, 29 May 2026", "not a date", "", None, 20260529]:
+            with self.subTest(value=value):
+                self.assertEqual(self.resolve(self.parse(value), self.zone("Asia/Taipei")),
+                                 ("date-unparseable", None, None))
+
+    def test_a_local_time_that_does_not_exist_or_exists_twice_is_ambiguous(self):
+        for value in ["2026-03-08T02:30:00", "2026-11-01T01:30:00"]:   # spring-forward gap, fall-back overlap
+            with self.subTest(value=value):
+                self.assertEqual(self.resolve_text(value, "America/New_York"),
+                                 ("date-ambiguous-local-time", None, None))
+        self.assertEqual(self.resolve_text("2026-06-01T12:00:00", "America/New_York")[0], "ok")
+
+    def test_a_fixed_offset_never_reports_an_ambiguous_local_time(self):
+        for value in ["2026-03-08T02:30:00", "2026-11-01T01:30:00"]:
+            with self.subTest(value=value):
+                self.assertEqual(self.resolve_text(value, "-05:00")[0], "ok")
+
+    def test_the_json_adapters_report_the_same_results_as_plain_data(self):
+        check, resolve = self.recipe["check_zone_argument"], self.recipe["resolve_dates"]
+        self.assertEqual(check("Asia/Taipei"), {"ok": True, "zone": "Asia/Taipei"})
+        self.assertEqual(check("+08:00"), {"ok": True, "zone": "+08:00"})
+        self.assertEqual(check("CST"), {"ok": False, "zone": None})
+        rows = [{"file": "a.md", "date": "2026-05-29T20:24:53"}, {"file": "b.md", "date": "2026-05-29T12:24:53Z"},
+                {"file": "c.md", "date": "garbage"}]
+        result = resolve("Asia/Taipei", rows)
+        self.assertEqual(result["zone"], "Asia/Taipei")
+        self.assertEqual(result["rows"], [
+            {"file": "a.md", "verdict": "ok", "instant": "2026-05-29T12:24:53+00:00", "basis": "zone-assumed"},
+            {"file": "b.md", "verdict": "ok", "instant": "2026-05-29T12:24:53+00:00", "basis": "explicit"},
+            {"file": "c.md", "verdict": "date-unparseable", "instant": None, "basis": None}])
+        self.assertEqual(resolve(None, rows[:1])["rows"][0]["verdict"], "date-offset-missing")
+        with self.assertRaises(ValueError):   # an unusable zone is a usage error, not a quiet "no zone"
+            resolve("CST", rows)
+
+    def test_all_recipe_blocks_run_together_through_the_command_line(self):
+        with tempfile.TemporaryDirectory() as work, tempfile.TemporaryDirectory() as data:
+            script = Path(work) / "repair_recipe.py"
+            script.write_text("\n".join(
+                recipe_code(document, marker) for document, marker in [
+                    (ARCHIVE, "archive-mail-date-recipe"), (SOP, "archive-mail-repair-date-recipe"),
+                    (SOP, "archive-mail-repair-plan-recipe")]) + "\n")
+            def run(command, payload):
+                source, target = Path(data) / "in.json", Path(data) / "out.json"
+                source.write_text(json.dumps(payload))
+                done = subprocess.run([sys.executable, "-I", str(script), command, str(source), str(target)],
+                                      capture_output=True, text=True)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                return json.loads(target.read_text())
+            self.assertEqual(run("check-zone-argument", {"text": "Asia/Taipei"}), {"ok": True, "zone": "Asia/Taipei"})
+            result = run("resolve-dates", {"zone": "Asia/Taipei", "rows": [{"file": "a.md", "date": "2026-05-29T20:24:53"}]})
+            self.assertEqual(result["rows"][0]["instant"], "2026-05-29T12:24:53+00:00")
 
 
 class PlanRecipeCommandLineTests(unittest.TestCase):

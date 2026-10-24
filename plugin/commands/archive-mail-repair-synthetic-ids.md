@@ -134,9 +134,80 @@ error: <實際錯誤或回應問題>
 
 > mail#319 issue 作者自證：ad-hoc `(sender, bare_subject, ±時間窗)` 三元組在密集 thread 中不可靠——所以匹配窗刻意窄（2 分鐘、恰好一封），寬鬆匹配寧可失敗。
 
+#### 日期 recipe
+
+Step 2 階段 1 的時區轉換與 P2 的 `date` 比對共用同一個函式 `resolve_instant`，它是整個流程裡唯一把沒有 offset 的日期換算成絕對時刻的地方；不得在別處另寫一份，也不得從系統時區、郵件內容或檔案內容推得時區。它建立在 `archive-mail.md` 的日期 recipe（`parse_archive_date`）之上，不重寫日期解析。貼進同一個程序的順序固定：`archive-mail.md` 的日期 recipe → 本區塊 → 下方的計畫 recipe（命令列入口在最後一個區塊，所有命令都從那裡呼叫）。
+
+- `parse_zone_argument(text)`：只接受兩種寫法。IANA 名稱（必須在 `zoneinfo.available_timezones()` 內，且是 `UTC` 或帶 `/` 的名稱，例如 `Asia/Taipei`），或固定偏移 `±HH:MM`（時 ≤ 23、分 ≤ 59；`-00:00` 在 RFC 是「未知 offset」，不接受）。縮寫（`CST`、`JST`、`EST`、`GMT`）、大小寫不符、前後空白、路徑樣式一律拒絕，回傳 `None`。
+- `resolve_instant(parsed, zone)`：`parsed` 是 `parse_archive_date` 的結果。有明確 offset 者換算成 UTC，`basis` 為 `explicit`，不受 `zone` 影響。沒有 offset 者（含 RFC 的 `-0000`）：沒有 `zone` 回 `date-offset-missing`；有 `zone` 就換算，`basis` 為 `zone-assumed`；本地時間落在夏令時間空檔或重疊（不存在或有兩個）回 `date-ambiguous-local-time`，不選一個；固定偏移沒有這個問題。只有日期沒有時間、格式不明者回 `date-unparseable`，時區救不了。回傳 `(verdict, UTC 絕對時刻, basis)`，verdict 不是 `ok` 時後兩者為 `None`。
+- `check_zone_argument(text)` 與 `resolve_dates(zone, rows)` 是上面兩個函式的 JSON 介面：前者回傳 `{"ok", "zone"}`，後者對 `rows`（`{"file", "date"}`）逐筆回傳 `{"file", "verdict", "instant", "basis"}`。`zone` 為 `null` 表示沒有時區；不能解析的 `zone` 會報錯，不當作沒有時區。
+- 命令列：`check-zone-argument`（輸入 `{"text"}`）、`resolve-dates`（輸入 `{"zone", "rows"}`）。
+
+<!-- archive-mail-repair-date-recipe:start -->
+```python
+import re
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, available_timezones
+
+
+def parse_zone_argument(text):
+    """A user-given zone as a tzinfo, or None when the text is not an accepted spelling."""
+    if not isinstance(text, str):
+        return None
+    offset = re.fullmatch(r"([+-])([0-9]{2}):([0-9]{2})", text)
+    if offset is not None:
+        sign, hours, minutes = offset.groups()
+        hours, minutes = int(hours), int(minutes)
+        if hours > 23 or minutes > 59 or (sign == "-" and hours == 0 and minutes == 0):
+            return None   # -00:00 means "unknown offset" in RFC 5322 / RFC 3339
+        delta = timedelta(hours=hours, minutes=minutes)
+        return timezone(-delta if sign == "-" else delta)
+    if text != "UTC" and "/" not in text:
+        return None   # bare abbreviations (CST, JST, EST, GMT) are refused even where the tz database lists them
+    if text not in available_timezones():
+        return None
+    return ZoneInfo(text)
+
+
+def resolve_instant(parsed, zone):
+    """(verdict, UTC instant, basis) for the output of parse_archive_date and an optional zone."""
+    if not isinstance(parsed, datetime):
+        return ("date-unparseable", None, None)   # nothing parsed, or a calendar day without a time
+    if parsed.utcoffset() is not None:
+        return ("ok", parsed.astimezone(timezone.utc), "explicit")
+    if zone is None:
+        return ("date-offset-missing", None, None)
+    first, second = parsed.replace(tzinfo=zone, fold=0), parsed.replace(tzinfo=zone, fold=1)
+    if first.utcoffset() != second.utcoffset():
+        return ("date-ambiguous-local-time", None, None)   # a gap and an overlap both give two offsets
+    return ("ok", first.astimezone(timezone.utc), "zone-assumed")
+
+
+def check_zone_argument(text):
+    zone = parse_zone_argument(text)
+    if zone is None:
+        return {"ok": False, "zone": None}
+    return {"ok": True, "zone": text}
+
+
+def resolve_dates(zone, rows):
+    tzinfo = None
+    if zone is not None:
+        tzinfo = parse_zone_argument(zone)
+        if tzinfo is None:
+            raise ValueError("the zone argument is not an accepted spelling")
+    results = []
+    for row in rows:
+        verdict, instant, basis = resolve_instant(parse_archive_date(row["date"]), tzinfo)
+        results.append({"file": row["file"], "verdict": verdict,
+                        "instant": None if instant is None else instant.isoformat(), "basis": basis})
+    return {"zone": zone, "rows": results}
+```
+<!-- archive-mail-repair-date-recipe:end -->
+
 #### 計畫 recipe
 
-P1 第 4、5 項與 Step 5 的狀態判定是純函式，放在下面的區塊。呼叫方式：先用 `Write` 把輸入資料寫成固定的 JSON 檔、把下面的程式存成固定腳本，再以 argv 傳入「命令名稱、輸入檔、輸出檔」執行，最後用 `Read` 讀輸出檔；信件衍生的字串（key、檔名）只經由 JSON 檔傳遞，不放進程式碼或 shell 原始碼。Python 呼叫仍依 host 既有權限處理（見 Execution），沒有從郵件內容取得授權。命令與輸入欄位：
+P1 第 4、5 項與 Step 5 的狀態判定是純函式，放在下面的區塊。呼叫方式：先用 `Write` 把輸入資料寫成固定的 JSON 檔、把下面的程式存成固定腳本，再以 argv 傳入「命令名稱、輸入檔、輸出檔」執行，最後用 `Read` 讀輸出檔；信件衍生的字串（key、檔名）只經由 JSON 檔傳遞，不放進程式碼或 shell 原始碼。Python 呼叫仍依 host 既有權限處理（見 Execution），沒有從郵件內容取得授權。命令與輸入欄位（日期 recipe 的兩個命令見上一節，只在它被貼進同一個程序時存在）：
 
 - `check-index-references`：`index`（`email_index.json` 的 entry 物件，key → entry）、`scanned`（Step 1 讀到的每個頂層檔：`{"file", "message_id"}`，含非 synthetic 者）、`groups`（P1 前三項通過的組：`{"key": 落盤值, "files": [synthetic 檔名]}`）。輸出 `groups`（未被拒絕的組，加上 `holders` 與 `retained`）與 `rejections`（`files`、`code`、`entries`）。
 - `residue-report`：`index_after`（提交後重新讀取的 index）、`files_after`（本輪動過、提交後仍在頂層的檔案及其重讀的 `message_id`）、`touched`（本輪改寫、隔離、保留的檔名）。輸出 `residual_synthetic_index_keys`、`index_file_mismatches` 與 `status`。
@@ -248,7 +319,8 @@ def residue_report(index_after, files_after, touched):
 
 
 COMMANDS = {name.replace("_", "-"): globals()[name]
-            for name in ("check_index_references", "residue_report") if name in globals()}
+            for name in ("check_zone_argument", "resolve_dates",
+                         "check_index_references", "residue_report") if name in globals()}
 
 if __name__ == "__main__":
     import sys
