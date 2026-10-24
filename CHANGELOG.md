@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A text body whose charset label disagrees with its bytes is no longer
+  turned into mojibake or dropped**
+  ([#538](https://github.com/PsychQuant/che-apple-mail-mcp/issues/538)).
+  `get_email`, `export_emails_markdown` and `batch_export_emails_markdown` read
+  a body with its declared charset first. A Latin-1-family label
+  (`iso-8859-1`, `latin1`, `windows-1252`) never fails to decode, so UTF-8
+  bytes under it became one character per byte. Now, under `us-ascii`,
+  `iso-8859-1`, `latin1` or `windows-1252`, non-ASCII bytes that are strictly
+  valid UTF-8 are read as UTF-8; every other label (`big5`, `shift_jis`,
+  `euc-jp`, …) still wins as declared. A body that is neither valid UTF-8 nor
+  decodable as its label (for example a lone `0xE9` under `US-ASCII`) is read
+  as Latin-1 instead of coming back empty, which made the export silently write
+  the raw HTML in its place. One residual case: text that really is Latin-1 and
+  also happens to be valid UTF-8 is now read as UTF-8. The shape the report
+  describes (`US-ASCII` + `7bit` carrying quoted-printable UTF-8) decoded
+  correctly before this change and could not be reproduced; it is pinned by a
+  test. Files exported earlier are not rewritten.
+
 ## [3.3.1] - 2026-10-19
 
 ### Fixed
