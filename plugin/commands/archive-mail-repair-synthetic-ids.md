@@ -96,12 +96,12 @@ error: <保留實際工具錯誤；沒有有效 envelope 時說明實際回應�
 
 每檔必須依序完成下列 1–4 階段，不能在前面的查詢成功時提前接受；任何歧義都不進入寫入：
 
-先完成本批所有重新定位，再進入 Step 3 寫入。任一搜尋／headers 工具錯誤或無法辨識的回應 → 停止本批，報 `status: lookup-unavailable`、錯誤與受影響檔案／尚未評估清單，本批 `repaired: 0`；不得當成零候選繼續。來源欄位不足、成功查詢後的無匹配／歧義、候選資料不可解析、headers缺真Message-ID及寫入前碰撞，都屬於具名的 `still-unparseable`（原因碼只能用詞彙表內的）；工具／回應本身失效則是整批 `lookup-unavailable`，兩者不可混用。
+先完成本批所有重新定位，再進入 Step 3 寫入。任一搜尋／headers 工具錯誤、無法辨識的回應，或階段 4 的 Message-ID recipe 無法執行 → 停止本批，報 `status: lookup-unavailable`、錯誤與受影響檔案／尚未評估清單，本批 `repaired: 0`；不得當成零候選繼續。來源欄位不足、成功查詢後的無匹配／歧義、候選資料不可解析、headers缺真Message-ID及寫入前碰撞，都屬於具名的 `still-unparseable`（原因碼只能用詞彙表內的）；工具／回應本身失效則是整批 `lookup-unavailable`，兩者不可混用。
 
 1. **先固定比對語意**：bare subject來源為本文Subject行，不能用歷史thread_key直接替代；來源與候選subject兩邊均採archive-mail.md的thread_key／stripReplyPrefixes同一規則，反覆去除回覆／轉寄前綴，保留其餘大小寫與標點。缺少／空 bare subject 先記 `still-unparseable: subject-unavailable`，不發空查詢。兩邊 sender 都解析為單一裸 email 位址後不分大小寫比對，不能拿 display name 當位址或做 substring 比對；缺少可用位址記 `still-unparseable: sender-unavailable`。frontmatter date 以日期 recipe 的 `resolve_instant` 轉成絕對時刻再比較：有明確 offset 者直接換算；沒有 offset（含 RFC 的 `-0000`）者，沒有 `--naive-date-zone` 時記 `still-unparseable: date-offset-missing`，不得猜時區；有該參數時依使用者給的時區換算，該檔標記 `zone-assumed`，是否採用要等 P3-A 的使用者確認；本地時間落在夏令時間空檔或重疊（不存在或有兩個）記 `still-unparseable: date-ambiguous-local-time`，不選一個，固定偏移沒有這個問題；格式不明（含只有日期沒有時間）記 `still-unparseable: date-unparseable`，時區救不了。其餘判定順序與代碼不變。summary 的 date 是收信時間、frontmatter date 通常是 Date header 的寄出時間，傳遞延遲或歷史 offset 汙染可能造成保守漏配，不能因零候選自動放寬時間窗。
 2. **取得完整原始候選**：`search_emails(field: "subject", query: <bare subject>, projection: "summary", dedup: "none", limit: 200)`。不要用 logical 去重判定唯一，因為同 subject/sender/date_received 的不同 Message-ID 也可能被塌成一列。若 `truncated: true`，相同查詢最多再以 `limit: 1000` 讀一次；仍不完整就記 `still-unparseable: search-truncated`，不使用部分結果宣稱唯一。以 bare subject 精確相同、上述 sender 相同、絕對時間差 < 2 分鐘篩選。先排除能確定不符任一條件的列；對仍可能匹配的列，sender無法解析為單一位址或date無法解析為帶offset時間時，不得忽略該列來宣稱唯一，整組分別記 `still-unparseable: candidate-sender-unparseable`／`candidate-date-unparseable`；零候選記 `still-unparseable: no-match`；`zone-assumed` 的檔案在 `no-match` 旁註明「時區假設錯誤與原信已從 Mail 刪除無法區分」，另外 `date` 帶 `Z` 卻實為本地時間的檔案（mail#319 實測有 +08:00 被當 UTC）不在本參數範圍，結果同樣是 `no-match`，這是診斷提示，不做自動重解讀。
 3. **補齊每個候選的定位資訊**：summary 沒有 account_name；用同條件 `projection: "full", dedup: "none", limit: 1000` 補查，必須取得完整 envelope。full 的時間欄位為 `date_received`（對應 summary 的 `date`），不可改用寄出時間欄位。只對照原候選 id 的列，並核對相同 predicate 重新計算後的候選 id 集合；缺列、重複 id、集合變動或 `truncated: true` 都停止本批並報 `lookup-unavailable`，不改挑別封。完整回應還須符合目前SQLite full schema：每列有 `to` 陣列與ISO `date_received`；目前AppleScript fallback不提供 `to`，其本地化時間與best-effort截斷資訊不能替代這個契約。缺少此形狀即 `lookup-unavailable`，不僅依truncated:false放行。每列須有 id、mailbox、account_name；有 account_id 時必須一併傳給後續headers呼叫。必要欄位缺失即停止。此處在 summary 已完整後再次截斷，表示兩次讀取之間資料集合變動，故是整批 lookup-unavailable，而非使用部分資料繼續。
-4. **用真 Message-ID 分辨多匣副本與真碰撞**：對每個候選以該列完整定位呼叫 `get_email_headers`。Header欄位名稱不分大小寫，先依header folding規則展開，再解析單一Message-ID；不能自造缺少的值。工具失敗依 lookup-unavailable 停止整批；成功但任一候選缺可用的真 Message-ID，整組記 `still-unparseable: candidate-message-id-missing`，不能忽略未知列。每個候選同時保留「比對值」與「落盤值」：比對值可移除外圍空白／角括號、保留其餘大小寫；落盤值必須沿用目前 RFC822Parser 展開 header folding／修剪欄位外圍空白後的完整 header 值，保留原有角括號，不可把比對值當作落盤值。EmailContent.messageId 與 EmailMarkdownRenderer 使用此完整值，export 的 skipMessageIds 是精確字串比對。來源需為單一可解析的 RFC 5322 Message-ID；多值、格式歧義、控制字元或 synthetic 皆不可用。同一比對值若對應多種落盤拼法，整組記 `still-unparseable: message-id-format-collision`，不任選一種。所有候選的比對值恰好一種且落盤值一致時才可定位：同一 Message-ID 的 Gmail 多信箱副本可視為同一候選；兩種以上記 `still-unparseable: message-id-collision`，不修復。這仍是受限的歷史匹配方法，不是原信身分的密碼學證明。
+4. **用真 Message-ID 分辨多匣副本與真碰撞**：對每個候選以該列完整定位呼叫 `get_email_headers`；工具失敗依 lookup-unavailable 停止整批。不手動展開 header folding、不手動修剪空白、不手動決定落盤拼法：把每個候選的 `ref`（該列的 `id`）與回傳的原始字串用 Write 寫進固定的資料檔，以下方 Message-ID recipe 的 `classify-candidates` 計算，以它的輸出為準。recipe 對每個候選回 `ok`（`comparison` 比對值、`stored` 落盤值）或 `unusable`（候選層的封閉 `reason`，見該節）。比對值是去掉外圍角括號、保留其餘大小寫的 id；落盤值是展開 folding 並修剪外圍空白後的完整 header 值，保留原有角括號，不可把比對值當作落盤值。`EmailContent.messageId` 與 `EmailMarkdownRenderer` 使用此完整值，export 的 `skipMessageIds` 是精確字串比對。組級 `status` 對應詞彙表：`unique` 才可定位（同一 Message-ID 的 Gmail 多信箱副本視為同一候選，比對值與落盤值各只有一種）；任一候選 `unusable` → `candidate-message-id-missing`；比對值有兩種以上 → `message-id-collision`；同一比對值有兩種以上落盤拼法 → `message-id-format-collision`。多個條件同時成立時取前面的（缺少優先於碰撞、碰撞優先於拼法碰撞）；三者都不修改任何檔案。recipe 無法執行（沒有 Python、授權被拒、程式報錯、輸出不是預期形狀）時停止整批，報 `status: lookup-unavailable` 並附實際錯誤，不退回手動推導。這仍是受限的歷史匹配方法，不是原信身分的密碼學證明。
 
 中途工具／回應失效的固定報告：
 
@@ -172,7 +172,7 @@ frontmatter 只解析範本實際寫出的形狀（一行一個 `key: value`，�
 
 #### 日期 recipe
 
-Step 2 階段 1 的時區轉換與 P2 的 `date` 比對共用同一個函式 `resolve_instant`，它是整個流程裡唯一把沒有 offset 的日期換算成絕對時刻的地方；不得在別處另寫一份，也不得從系統時區、郵件內容或檔案內容推得時區。它建立在 `archive-mail.md` 的日期 recipe（`parse_archive_date`）之上，不重寫日期解析。貼進同一個程序的順序固定：`archive-mail.md` 的日期 recipe → 本區塊 → 下方的計畫 recipe（命令列入口在最後一個區塊，所有命令都從那裡呼叫）。
+Step 2 階段 1 的時區轉換與 P2 的 `date` 比對共用同一個函式 `resolve_instant`，它是整個流程裡唯一把沒有 offset 的日期換算成絕對時刻的地方；不得在別處另寫一份，也不得從系統時區、郵件內容或檔案內容推得時區。它建立在 `archive-mail.md` 的日期 recipe（`parse_archive_date`）之上，不重寫日期解析。貼進同一個程序的順序固定：`archive-mail.md` 的日期 recipe → 本區塊 → 下一節的 Message-ID recipe → 計畫 recipe（命令列入口在最後一個區塊，所有命令都從那裡呼叫）。
 
 - `parse_zone_argument(text)`：只接受兩種寫法。IANA 名稱（必須在 `zoneinfo.available_timezones()` 內，且是 `UTC` 或帶 `/` 的名稱，例如 `Asia/Taipei`），或固定偏移 `±HH:MM`（時 ≤ 23、分 ≤ 59；`-00:00` 在 RFC 是「未知 offset」，不接受）。縮寫（`CST`、`JST`、`EST`、`GMT`）、大小寫不符、前後空白、路徑樣式一律拒絕，回傳 `None`。
 - `resolve_instant(parsed, zone)`：`parsed` 是 `parse_archive_date` 的結果。有明確 offset 者換算成 UTC，`basis` 為 `explicit`，不受 `zone` 影響。沒有 offset 者（含 RFC 的 `-0000`）：沒有 `zone` 回 `date-offset-missing`；有 `zone` 就換算，`basis` 為 `zone-assumed`；本地時間落在夏令時間空檔或重疊（不存在或有兩個）回 `date-ambiguous-local-time`，不選一個；固定偏移沒有這個問題。只有日期沒有時間、格式不明者回 `date-unparseable`，時區救不了。回傳 `(verdict, UTC 絕對時刻, basis)`，verdict 不是 `ok` 時後兩者為 `None`。
@@ -290,9 +290,98 @@ def build_preview(zone, rows, no_match=0, k=10):
 ```
 <!-- archive-mail-repair-date-recipe:end -->
 
+#### Message-ID recipe
+
+Step 2 階段 4 把每個候選的 `get_email_headers` 回傳交給下面的區塊算出比對值與落盤值，不靠手動推導。它對照的是 `RFC822Parser`（batch export 存進 `message_id` 的那一個）：同一份案例清單 `plugin/tests/fixtures/repair-message-id-spelling.json` 同時驅動 Swift 端的真 parser 與這個 recipe，`ok` 的落盤值必須與 parser 存的逐字相同。貼進同一個程序的順序是：`archive-mail.md` 的日期 recipe → 上一節的日期 recipe → 本區塊 → 計畫 recipe。本區塊只有純函式；命令列入口在最後一個區塊（命令 `classify-candidates`，輸入 `{"candidates": [{"ref", "headers"}]}`，`ref` 用候選的 `id`，`headers` 是 `get_email_headers` 回傳的原始字串；信件字串只經由 JSON 檔傳遞，不放進程式碼或 shell 原始碼）。
+
+`parse_message_id(headers_text)` 依 parser 的順序處理一個候選：
+
+1. 在第一個 `\r\n\r\n`（沒有才用第一個 `\n\n`）截斷；其後的文字不是 header。
+2. 區塊內出現 VT、FF、U+0085、U+2028、U+2029 任何一個，整塊 `unusable`（`ambiguous-line-boundary`），不論出現在哪個標頭。parser 把它們當行界、RFC 5322 不當；寄件人控制的 `Subject` 可藉此塞進偽造的 `Message-ID` 行（#555），所以不復刻 parser 的切法。
+3. 依序展開四種 folding（CRLF 加空白、CRLF 加 tab、LF 加空白、LF 加 tab），再以 CR 或 LF 切行；單獨的 CR 加空白不是 folding。
+4. 標頭名稱（小寫比對）與值的外圍只修剪 `TRIMMED_CHARACTERS`。這是 Foundation 的 `.whitespaces`，與 Python 的 `str.strip()` 預設值不同（後者多剪 U+001C 到 U+001F、U+0085），與 Unicode 的 Zs 也不同（Foundation 另含 U+200B）；Swift 端的測試逐一核對這份字元表。
+5. 恰一個 Message-ID 標頭。沒有、或值為空是 `absent`；兩個以上是 `duplicate-header`（parser 取最後一個，recipe 不取）；值含 `=?` 是 `encoded-word`（parser 會解碼，落盤值會變）；以 `synthetic:` 開頭是 `synthetic`；其餘必須是 `<id-left@id-right>` 或沒有角括號的 `id-left@id-right`，兩側都是 RFC 5322 的 dot-atom（不接受引號、空白與控制字元、domain literal、非 ASCII、連續句點、多個 `@`），否則是 `malformed`。這些 `unusable` 一律保守：寧可留給人工，也不產生與 export 不同的 key。
+
+`ok` 回傳 `comparison`（去掉一對外圍角括號、保留大小寫）與 `stored`（修剪後的完整值，保留角括號）。`unusable` 的 `reason` 是候選層的清單，只有這 6 類，不得依性質相似類推：`ambiguous-line-boundary`、`absent`、`duplicate-header`、`encoded-word`、`synthetic`、`malformed`。它們不是報告用的原因碼；報告對這些候選只用詞彙表內的 `candidate-message-id-missing`，也不把 header 的值寫進報告。
+
+`classify_candidates(candidates)` 對同一個檔案的全部候選給組級 `status`：`unique`（另附 `comparison`、`stored`、`refs`）、`candidate-message-id-missing`、`message-id-collision`、`message-id-format-collision`；優先序與處置見階段 4。候選清單為空、`ref` 重複或形狀不對時報錯停止，不當作 `unique`。
+
+<!-- archive-mail-repair-message-id-recipe:start -->
+```python
+import re
+
+# Foundation's CharacterSet.whitespaces, written out: tab, the Zs characters and U+200B.
+TRIMMED_CHARACTERS = "\t \u00a0\u1680" + "".join(chr(code) for code in range(0x2000, 0x200C)) + "\u202f\u205f\u3000"
+# Foundation's CharacterSet.newlines minus CR and LF: RFC822Parser splits lines on these, RFC 5322 does not.
+AMBIGUOUS_LINE_BOUNDARIES = "\x0b\x0c\x85\u2028\u2029"
+_FOLDS = ("\r\n ", "\r\n\t", "\n ", "\n\t")   # the order RFC822Parser replaces them in
+_ATEXT = r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]"
+_DOT_ATOM = _ATEXT + r"+(?:\." + _ATEXT + r"+)*"
+_MESSAGE_ID = re.compile("(?:<(" + _DOT_ATOM + "@" + _DOT_ATOM + ")>|(" + _DOT_ATOM + "@" + _DOT_ATOM + "))")
+
+
+def _unusable(reason):
+    return {"status": "unusable", "reason": reason}
+
+
+def parse_message_id(headers_text):
+    """The Message-ID of one candidate as RFC822Parser would store it, or the reason this recipe will not say."""
+    if not isinstance(headers_text, str):
+        raise ValueError("the header text must be a string")
+    end = headers_text.find("\r\n\r\n")
+    if end < 0:
+        end = headers_text.find("\n\n")
+    block = headers_text if end < 0 else headers_text[:end]
+    if any(character in block for character in AMBIGUOUS_LINE_BOUNDARIES):
+        return _unusable("ambiguous-line-boundary")
+    for fold in _FOLDS:
+        block = block.replace(fold, " ")
+    values = []
+    for line in re.split(r"[\r\n]", block):
+        name, colon, value = line.partition(":")
+        if colon and name.lower().strip(TRIMMED_CHARACTERS) == "message-id":
+            values.append(value.strip(TRIMMED_CHARACTERS))
+    if len(values) > 1:
+        return _unusable("duplicate-header")
+    value = values[0] if values else ""
+    if value == "":
+        return _unusable("absent")
+    if "=?" in value:
+        return _unusable("encoded-word")
+    if value.startswith(("synthetic:", "<synthetic:")):
+        return _unusable("synthetic")
+    match = _MESSAGE_ID.fullmatch(value)
+    if match is None:
+        return _unusable("malformed")
+    return {"status": "ok", "comparison": match.group(1) or match.group(2), "stored": value}
+
+
+def classify_candidates(candidates):
+    """Stage 4 for one file: each candidate's answer and the group status (missing > collision > format collision)."""
+    if not isinstance(candidates, list) or not candidates:
+        raise ValueError("candidates must be a non-empty list")
+    answers = []
+    for item in candidates:
+        if not isinstance(item, dict) or not isinstance(item.get("ref"), str) or not isinstance(item.get("headers"), str):
+            raise ValueError("each candidate needs a string `ref` and a string `headers`")
+        answers.append({"ref": item["ref"], **parse_message_id(item["headers"])})
+    refs = [answer["ref"] for answer in answers]
+    if len(set(refs)) != len(refs):
+        raise ValueError("a ref names one candidate only")
+    if any(answer["status"] != "ok" for answer in answers):
+        return {"status": "candidate-message-id-missing", "candidates": answers}
+    if len({answer["comparison"] for answer in answers}) > 1:
+        return {"status": "message-id-collision", "candidates": answers}
+    if len({answer["stored"] for answer in answers}) > 1:
+        return {"status": "message-id-format-collision", "candidates": answers}
+    return {"status": "unique", "comparison": answers[0]["comparison"], "stored": answers[0]["stored"],
+            "refs": refs, "candidates": answers}
+```
+<!-- archive-mail-repair-message-id-recipe:end -->
+
 #### 計畫 recipe
 
-P1 第 4、5 項與 Step 5 的狀態判定是純函式，放在下面的區塊。呼叫方式：先用 `Write` 把輸入資料寫成固定的 JSON 檔、把下面的程式存成固定腳本，再以 argv 傳入「命令名稱、輸入檔、輸出檔」執行，最後用 `Read` 讀輸出檔；信件衍生的字串（key、檔名）只經由 JSON 檔傳遞，不放進程式碼或 shell 原始碼。Python 呼叫仍依 host 既有權限處理（見 Execution），沒有從郵件內容取得授權。命令與輸入欄位（日期 recipe 的三個命令見上一節，只在它被貼進同一個程序時存在）：
+P1 第 4、5 項與 Step 5 的狀態判定是純函式，放在下面的區塊。呼叫方式：先用 `Write` 把輸入資料寫成固定的 JSON 檔、把下面的程式存成固定腳本，再以 argv 傳入「命令名稱、輸入檔、輸出檔」執行，最後用 `Read` 讀輸出檔；信件衍生的字串（key、檔名）只經由 JSON 檔傳遞，不放進程式碼或 shell 原始碼。Python 呼叫仍依 host 既有權限處理（見 Execution），沒有從郵件內容取得授權。命令與輸入欄位（日期 recipe 的三個命令與 Message-ID recipe 的 `classify-candidates` 見前兩節，只在它們被貼進同一個程序時存在）：
 
 - `check-index-references`：`index`（`email_index.json` 的 entry 物件，key → entry）、`scanned`（Step 1 讀到的每個頂層檔：`{"file", "message_id"}`，含非 synthetic 者）、`groups`（P1 前三項通過的組：`{"key": 落盤值, "files": [synthetic 檔名]}`）。輸出 `groups`（未被拒絕的組，加上 `holders` 與 `retained`）與 `rejections`（`files`、`code`、`entries`）。
 - `classify-pair`：`a_path`、`b_path`（P2 要比對的兩個檔案）、`target`（歸檔目標目錄）、`zone`（IANA 名稱或 `±HH:MM`，沒有就是 `null`）。程式自己讀入兩個檔案：每個都必須是 `target` 內的非 symlink regular file，否則回 `unverifiable`。輸出 `verdict`（`identical`／`drift`／`unverifiable`）、`fields`（不同的欄位名；本文差異記為 `body`）、`ignored`（用到的可忽略項編號）；本文有差異時另有 `body_diff`（各檔行數、字元數、第一個不同的行號，沒有任何內容）。這個命令需要日期 recipe 一起貼進同一個程序。
@@ -605,7 +694,7 @@ def classify_pair_files(a_path, b_path, target, zone=None):
 COMMANDS = {command: globals()[name] for command, name in (
     ("check-zone-argument", "check_zone_argument"), ("resolve-dates", "resolve_dates"),
     ("build-preview", "build_preview"), ("classify-pair", "classify_pair_files"), ("check-index-references", "check_index_references"),
-    ("residue-report", "residue_report")) if name in globals()}
+    ("residue-report", "residue_report"), ("classify-candidates", "classify_candidates")) if name in globals()}
 
 if __name__ == "__main__":
     import sys
@@ -674,7 +763,7 @@ error: <實際失敗>
 | `completed` | Step 5 | 計畫內的操作全部完成，且 `residual_synthetic_index_keys` 與 `index_file_mismatches` 都是 0；`still-unparseable` 與 `pending` 的檔案保持原狀 | 依報告處理 `still-unparseable`；可接 `/archive-mail-rebuild-threads` |
 | `completed-with-residue` | Step 5 | 計畫內的操作全部完成，但 `residual_synthetic_index_keys` 或 `index_file_mismatches` 不是空的（含 `apply-incomplete` 之後重跑：frontmatter 已是真 ID、index 仍是舊 key） | 先逐一處理報告列出的殘留，再接 `/archive-mail-rebuild-threads` |
 | `environment-unavailable` | Step 0.5 | SQLite 能力 preflight 失敗；沒有掃描任何檔案 | 依報告中的實際錯誤補救（授權、連線、版本）後重跑 |
-| `lookup-unavailable` | Step 2 | 搜尋或 headers 工具中途失效，或回應無法辨識；`repaired: 0` | 恢復工具後重跑 |
+| `lookup-unavailable` | Step 2 | 搜尋或 headers 工具中途失效、回應無法辨識，或階段 4 的 Message-ID recipe 無法執行；`repaired: 0` | 恢復工具或 Python 後重跑 |
 | `apply-unavailable` | Step 1、Step 2.5 | 缺少檔案檢查或套用所需的能力／授權，或 index 缺少／身分不明；沒有修改任何東西 | 補齊能力或授權、確認 index 位置後重跑 |
 | `apply-incomplete` | Step 2.5、Step 3、Step 4 | 套用中途停止，部分操作可能已完成；`automatic_rerun_recovery: false` | 依報告的 `completed_operations`、`pending_operations`、`residual_index_keys` 人工核對；重跑不會自動收斂 |
 
@@ -691,9 +780,9 @@ error: <實際失敗>
 | `candidate-sender-unparseable` | Step 2 階段 2 | 仍可能匹配的候選，其 sender 不能解析為單一位址 | 人工確認該候選 |
 | `candidate-date-unparseable` | Step 2 階段 2 | 仍可能匹配的候選，其日期不能解析為帶 offset 的時間 | 人工確認該候選 |
 | `no-match` | Step 2 階段 2 | 沒有符合的候選；`zone-assumed` 的檔案無法區分「時區假設錯誤」與「原信已從 Mail 刪除」 | 原信已從 Mail 刪除者修不了（鐵律）；否則人工核對該檔的 date、sender、subject |
-| `candidate-message-id-missing` | Step 2 階段 4 | 某個候選的 headers 沒有可用的真 Message-ID | 人工確認 |
+| `candidate-message-id-missing` | Step 2 階段 4 | 某個候選的 headers 沒有可用的真 Message-ID（Message-ID recipe 對它回 `unusable`） | 人工確認 |
 | `message-id-format-collision` | Step 2 階段 4、P1 | 同一比對值對應多種落盤拼法 | 人工決定採哪一種拼法 |
-| `message-id-collision` | Step 2 階段 4 | 候選對應兩種以上不同的 Message-ID | 人工確認 |
+| `message-id-collision` | Step 2 階段 4 | 候選的比對值有兩種以上（大小寫不同也算不同） | 人工確認 |
 | `old-key-entry-conflict` | P1 | 共用的舊 synthetic key，其既有 index entry 無法安全分割 | 人工整理該 entry 後重跑 |
 | `existing-key-spelling-mismatch` | P1 | index 既有的非 synthetic key 與將寫入的落盤值拼法不同 | 人工決定採哪一種拼法 |
 | `duplicate-unverifiable` | P2 | 重複件比對的資料不全、檔案在 target 外或無法確認 | 補齊資料或確認檔案位置後重跑 |
