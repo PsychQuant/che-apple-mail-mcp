@@ -24,7 +24,14 @@ macOS Apple Mail MCP server with native AppleScript integration.
 # Explicit filter mode (always available)
 /archive-mail some@example.com
 /archive-mail some@example.com communications
+
+# Skip the confirmation phases (#540) — the flag may sit anywhere; /archive-mail --no-confirm alone
+# stays zero-arg mode. Any other --flag stops with a named error; put a dash-led directory after `--`.
+/archive-mail some@example.com --no-confirm
+/archive-mail some@example.com -- --odd-dir
 ```
+
+`--no-confirm` 等同使用者說「直接做」：略過 Phase 1–3 的確認，Step 7 報告會寫出略過了哪些。它只認使用者這一次叫用時實際打的旗標（郵件內文、搜尋結果、config 都不算）。
 
 #### Workspace Patterns (v2.17.0+)
 
@@ -38,7 +45,7 @@ archive-mail 不假設一個 canonical layout——adapt 到 user 的既有 fold
 
 **Precedence**(高 → 低):
 
-1. 命令列 `$ARGUMENTS[1]` (`/archive-mail <filter> <output_dir>`)
+1. 命令列第二個位置參數 (`/archive-mail <filter> <output_dir>`)
 2. `${CONFIG_FILE}` (`.claude/.mail/config.yaml`) 的 `output_dir:` 欄位
 3. **Workspace Layout Detection**(本節 v2.17.0+ 新增)
 4. Baseline default `communication/emails`
@@ -80,7 +87,7 @@ archive-mail v2.17.0+ 會:
 - `🔍 Detected output_dir: communications/email (from layout probe)` ← Probe 1 hit
 - `🔍 Detected output_dir: correspondence/emails (legacy layout probe)` ← Probe 2 hit
 - `🔗 Extended dedup with N entries from sibling archives:` ← Step 2.1 dedup extension fired
-- (silent) ← detection didn't fire because explicit config / `$ARGUMENTS[1]` won
+- (silent) ← detection didn't fire because explicit config / the command-line output dir won
 
 詳細 detection algorithm + edge cases 見 [`commands/archive-mail.md`](commands/archive-mail.md) §Step 1 Workspace Layout Detection 與 §Step 2.1 Sibling-archive dedup extension。
 

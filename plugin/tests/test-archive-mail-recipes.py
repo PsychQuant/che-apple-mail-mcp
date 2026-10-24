@@ -735,5 +735,33 @@ class ArchiveNoConfirmAuthorityTests(unittest.TestCase):
                 self.assertIn("Provenance", text)
 
 
+class ArchiveNoConfirmDocsTests(unittest.TestCase):
+    """#540: the rule, README and changelog say what the command now does."""
+
+    def test_confirmation_triggers_names_the_command_instead_of_if_it_supports(self):
+        rules = (PLUGIN / "rules/confirmation-triggers.md").read_text()
+        self.assertNotIn("if command supports", rules.lower())
+        self.assertNotIn("該 command 支援的", rules)
+        provenance = between(rules, "2. **使用者實際叫用命令時指定的 flag**", "3. **使用者已明確採用的 workspace 設定**")
+        self.assertIn("`/archive-mail` 的 `--no-confirm`", provenance)
+        override = between(rules, "User 可以用以下說法 skip confirmation:", "但即使 user 說 skip")
+        self.assertIn("`/archive-mail` 的 `--no-confirm`", override)
+
+    def test_readme_shows_the_flag_and_no_longer_repeats_the_indexed_placeholder(self):
+        readme = (PLUGIN / "README.md").read_text()
+        usage = between(readme, "### `/archive-mail` — 歸檔郵件到 Markdown", "archive-mail 不假設一個 canonical layout")
+        self.assertIn("/archive-mail some@example.com --no-confirm", usage)
+        self.assertEqual(re.findall(r"\$ARGUMENTS", readme), [])
+        self.assertIn("命令列第二個位置參數", readme)
+
+    def test_changelog_records_the_fix_and_both_behaviour_changes_under_unreleased(self):
+        changelog = (PLUGIN / "CHANGELOG.md").read_text()
+        unreleased = between(changelog, "## [Unreleased]", "\n## [2.")
+        changed, fixed = between(unreleased, "### Changed", "### Fixed"), unreleased.split("### Fixed", 1)[1]
+        self.assertRegex(fixed, r"--no-confirm.*Step 1.*#540")
+        self.assertRegex(changed, r"--no-confirm.*Phase 1.{0,6}3.*#540")
+        self.assertRegex(changed, r"未知.*--.*#540|unknown.*--.*#540")
+
+
 if __name__ == "__main__":
     unittest.main()
