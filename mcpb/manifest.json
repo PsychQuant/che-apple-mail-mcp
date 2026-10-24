@@ -59,7 +59,7 @@
       "name" : "check_automation"
     },
     {
-      "description" : "Check whether Full Disk Access is granted (functionally probes the Apple Mail Envelope Index). Returns status plus the exact steps to grant it if not. Use when SQLite-only features (search_emails projection=ids/count, export_emails_markdown) fail with an 'unavailable' error.",
+      "description" : "Check whether Full Disk Access is granted (functionally probes the Apple Mail Envelope Index) and retry opening this server's own index reader now, then report the server's actual state: reader open, just recovered, or still unavailable (with the error and the reconnect step). Returns the exact steps to grant access if not. Use when SQLite-only features (search_emails projection=ids/count, export_emails_markdown) fail with an 'unavailable' error.",
       "name" : "check_fda"
     },
     {

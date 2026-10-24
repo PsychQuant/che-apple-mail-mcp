@@ -9,7 +9,13 @@ class CheAppleMailMCPServer {
     private let transport: ShutdownOnWriteFailureTransport
     private let mailController = MailController.shared
     private let tools: [Tool]
-    private let indexReader: EnvelopeIndexReader?
+    /// Owns the Envelope Index reader and retries the open when it failed (#537).
+    private let indexProvider: IndexReaderProvider
+    /// The reader, or `nil` while it cannot be opened. Asked on every use, so a
+    /// read tool that runs after the index becomes available takes the SQLite
+    /// fast path without a restart; the retry itself is rate-limited by the
+    /// provider (30 s) and logged to stderr.
+    private var indexReader: EnvelopeIndexReader? { indexProvider.current() }
 
     init() async throws {
         self.tools = Self.defineTools()
@@ -23,25 +29,20 @@ class CheAppleMailMCPServer {
         self.transport = ShutdownOnWriteFailureTransport(
             wrapping: StdioTransport(), logger: Logger(label: "che-apple-mail-mcp"))
 
-        // Initialize SQLite reader (optional — falls back to AppleScript if unavailable)
-        // Only open the DB connection here; account mapping is built lazily on first search
-        // to avoid blocking server startup with AppleScript calls.
+        // SQLite reader (optional — read tools fall back to AppleScript while it
+        // is unavailable). The provider makes the first attempt right here, so a
+        // startup failure is logged as before (now with the FDA probe result
+        // added); it keeps retrying after that (#537). The account mapping is read from AccountsMap.plist inside
+        // `EnvelopeIndexReader.init`, not via AppleScript, so startup is not
+        // blocked on Mail.
         //
-        // Init failure surfaces to stderr so users can diagnose silent perf
+        // Every failure surfaces to stderr so users can diagnose silent perf
         // degradation (#69 — without this log, every read tool silently
         // bypasses the SQLite + .emlx fast path with no observable cause).
-        do {
-            self.indexReader = try EnvelopeIndexReader(databasePath: EnvelopeIndexReader.defaultDatabasePath)
-        } catch {
-            let message = "EnvelopeIndexReader init failed: "
-                + "\(error.localizedDescription)\n"
-                + "All read tools will use the AppleScript fallback path "
-                + "(slower; expected for EWS-only accounts, see README). "
-                + "For local IMAP/POP accounts this usually means Full Disk Access "
-                + "is missing — see the actionable steps above.\n"
-            Diagnostics.emit(message)
-            self.indexReader = nil
-        }
+        self.indexProvider = IndexReaderProvider(
+            open: { try EnvelopeIndexReader(databasePath: EnvelopeIndexReader.defaultDatabasePath) },
+            log: { Diagnostics.emit($0) })
+        _ = indexProvider.current()
 
         await registerHandlers()
 
@@ -69,7 +70,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "check_fda",
-                description: "Check whether Full Disk Access is granted (functionally probes the Apple Mail Envelope Index). Returns status plus the exact steps to grant it if not. Use when SQLite-only features (search_emails projection=ids/count, export_emails_markdown) fail with an 'unavailable' error.",
+                description: "Check whether Full Disk Access is granted (functionally probes the Apple Mail Envelope Index) and retry opening this server's own index reader now, then report the server's actual state: reader open, just recovered, or still unavailable (with the error and the reconnect step). Returns the exact steps to grant access if not. Use when SQLite-only features (search_emails projection=ids/count, export_emails_markdown) fail with an 'unavailable' error.",
                 inputSchema: .object(["type": .string("object"), "properties": .object([:])])
             ),
             Tool(
@@ -840,31 +841,12 @@ class CheAppleMailMCPServer {
         switch name {
         // Setup / diagnostics
         case "check_fda":
+            // #537: the fopen probe says whether the file can be read; only the
+            // server's own reader says whether THIS process can use it. Ask the
+            // reader to retry now (ignoring the 30 s interval) and report both.
             let probe = FDAStatus.probe()
-            switch probe {
-            case .granted:
-                // The probe reads the file; the SQLite open is a proxy, so phrase as
-                // "should work" rather than asserting availability (#213 verify, DA #7).
-                return "✅ " + FDAStatus.summary(probe)
-                    + "\nThe SQLite fast path (search_emails projection, batch_export_emails_markdown) should now work."
-            case .denied:
-                return "⚠️ " + FDAStatus.summary(probe) + "\n\n"
-                    + FullDiskAccessHelp.guidance(reason: "Full Disk Access is required for the SQLite fast path.")
-            case .noMailData:
-                // ENOENT is ambiguous (no Mail vs FDA-denied hiding the dir) — present
-                // BOTH possibilities so an FDA-denied user isn't told the opposite of the fix.
-                return "ℹ️ " + FDAStatus.summary(probe)
-                    + "\nIf Apple Mail IS configured, this most likely means Full Disk Access is denied"
-                    + " (a denial can hide ~/Library/Mail). Grant it:\n\n"
-                    + FullDiskAccessHelp.guidance(reason: "If Full Disk Access is the cause:")
-                    + "\n\nIf Mail genuinely isn't set up, add an account first, then re-check."
-            case .undetermined:
-                // An unexpected errno, not a clear TCC denial — offer the FDA steps conditionally.
-                return "⚠️ " + FDAStatus.summary(probe)
-                    + "\nThis is not a clear permission denial; retry first. If it persists and Full Disk"
-                    + " Access might be the cause:\n\n"
-                    + FullDiskAccessHelp.guidance(reason: "If Full Disk Access is the cause:")
-            }
+            let outcome = indexProvider.forceRetry()
+            return FDACheckReport.text(probe: probe, index: outcome)
 
         case "check_accessibility":
             // #175: Accessibility is what lets compose_email / create_draft use
