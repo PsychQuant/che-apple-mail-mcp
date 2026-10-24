@@ -241,12 +241,13 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
         }
     }
 
-    func testShippedArchiveRecipes() throws {
+    /// Runs one plugin Python suite the way `scripts/test-plugin.sh` does, with a 30 second alarm.
+    private func runPluginPythonSuite(at path: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["python3", "-c",
             "import runpy, signal, sys; p=sys.argv[1]; sys.argv=[p]; signal.signal(signal.SIGALRM, signal.SIG_DFL); signal.alarm(30); runpy.run_path(p, run_name='__main__')",
-            Self.repoRoot.appendingPathComponent("plugin/tests/test-archive-mail-recipes.py").path]
+            path]
         let output = Pipe()
         process.standardOutput = output
         process.standardError = output
@@ -254,6 +255,27 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0,
-                       String(data: data, encoding: .utf8) ?? "recipe runner produced non-UTF8 output")
+                       "\(path)\n" + (String(data: data, encoding: .utf8) ?? "suite produced non-UTF8 output"))
+    }
+
+    func testShippedArchiveRecipes() throws {
+        try runPluginPythonSuite(at: Self.repoRoot.appendingPathComponent("plugin/tests/test-archive-mail-recipes.py").path)
+    }
+
+    /// The repair command's Python suites (#529). A bare `swift test` used to run only the one file named above, so the
+    /// repair suites ran under `make test` but not under a single-target `swift test`. The glob is deliberate (a new
+    /// `test-archive-mail-repair-*.py` is picked up without editing this file); the three names are asserted so the glob
+    /// cannot quietly match nothing.
+    func testShippedRepairSuites() throws {
+        let tests = Self.repoRoot.appendingPathComponent("plugin/tests")
+        let found = try FileManager.default.contentsOfDirectory(atPath: tests.path)
+            .filter { $0.hasPrefix("test-archive-mail-repair-") && $0.hasSuffix(".py") }
+            .sorted()
+        for required in ["test-archive-mail-repair-plan.py", "test-archive-mail-repair-recipes.py", "test-archive-mail-repair-sop.py"] {
+            XCTAssertTrue(found.contains(required), "\(required) is missing from plugin/tests")
+        }
+        for name in found {
+            try runPluginPythonSuite(at: tests.appendingPathComponent(name).path)
+        }
     }
 }
