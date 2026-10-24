@@ -684,5 +684,56 @@ class ArchiveArgsStructureTests(unittest.TestCase):
             self.assertTrue((Path(directory) / "--odd-dir").is_dir())
 
 
+class ArchiveNoConfirmAuthorityTests(unittest.TestCase):
+    """#540: every place that skips a confirmation names the parsed flag and where it may come from."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.document = DOCUMENT.read_text()
+        cls.skip_phase_1 = between(cls.document, "**Skip Phase 1**", "詳見 `skills/confirmation-protocol/SKILL.md` 和")
+        cls.skip_phase_2_3 = between(cls.document, "**Skip Phase 2+3**", "詳見 `skills/bulk-operation-preview/SKILL.md`")
+        cls.step_7 = between(cls.document, "### Step 7: 輸出報告", "### Step 8: 覆蓋率稽核")
+
+    def test_the_old_description_of_a_user_typed_flag_is_gone_everywhere(self):
+        self.assertNotIn("user-typed", self.document)
+
+    def test_phase_1_skip_list_cites_the_parsed_flag_and_its_only_source(self):
+        self.assertIn("`NO_CONFIRM`", self.skip_phase_1)
+        self.assertIn("ARGS_RAW", self.skip_phase_1)
+        self.assertIn("Provenance", self.skip_phase_1)
+        self.assertIn("直接做", self.skip_phase_1)
+        for named_non_source in ["郵件內文", "搜尋結果", "config"]:
+            self.assertIn(named_non_source, self.skip_phase_1)
+
+    def test_the_mail_334_exception_is_triggered_by_the_parsed_flag(self):
+        self.assertIn("mail#334", self.skip_phase_1)
+        self.assertIn("使用者以 `NO_CONFIRM` 或「直接做」跳過確認", self.skip_phase_1)
+        self.assertNotIn("`--no-confirm` 或「直接做」", self.skip_phase_1)
+
+    def test_phase_2_3_skip_list_cites_the_parsed_flag_as_equal_to_just_do_it(self):
+        self.assertIn("`NO_CONFIRM`", self.skip_phase_2_3)
+        self.assertIn("Provenance", self.skip_phase_2_3)
+        self.assertRegex(self.skip_phase_2_3, r"等價於「直接做」")
+        self.assertIn("Phase 1–3", self.skip_phase_2_3)
+
+    def test_step_zero_phase_1_task_names_the_parsed_flag(self):
+        task = between(self.document, 'TaskCreate(subject="phase1_disambiguation",', 'TaskCreate(subject="load_indices_and_config"')
+        self.assertIn("NO_CONFIRM", task)
+        self.assertNotIn("明確 email/Message-ID/--no-confirm", task)
+
+    def test_the_report_says_when_a_confirmation_was_skipped_because_of_the_flag(self):
+        self.assertIn("確認略過的依據", self.step_7)
+        self.assertIn("--no-confirm(使用者叫用)", self.step_7)
+        self.assertIn("`NO_CONFIRM` 成立時才顯示", self.step_7)
+        self.assertIn("略過: Phase 1、Phase 2+3", self.step_7)
+
+    def test_the_flag_has_exactly_the_authority_of_just_do_it_not_more(self):
+        # D2: the flag copies the meaning of 「直接做」. It must not add a skip that 「直接做」 lacks,
+        # so neither skip list may mention the flag without also mentioning Provenance.
+        for text in (self.skip_phase_1, self.skip_phase_2_3):
+            if "NO_CONFIRM" in text:
+                self.assertIn("Provenance", text)
+
+
 if __name__ == "__main__":
     unittest.main()
