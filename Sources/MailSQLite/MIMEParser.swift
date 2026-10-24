@@ -722,14 +722,7 @@ public enum MIMEParser {
         if mimeType.hasPrefix("text/") {
             decoded = salvageMislabelledQuotedPrintable(decoded, declaredEncoding: encoding)
         }
-        let charset = params["charset"] ?? "utf-8"
-        let textEncoding = RFC822Parser.stringEncoding(for: charset)
-        // UTF-8 is tried BEFORE the declared charset when the salvage fired,
-        // because a part that lies about its encoding generally lies about its
-        // charset too (the reported one said `US-ASCII` and carried UTF-8).
-        let text = String(data: decoded, encoding: textEncoding)
-            ?? String(data: decoded, encoding: .utf8)
-            ?? String(data: decoded, encoding: .ascii)
+        let text = decodeBodyText(decoded, declaredCharset: params["charset"] ?? "utf-8")
 
         if mimeType == "text/html" {
             return ParsedEmailContent(textBody: nil, htmlBody: text)
@@ -738,6 +731,52 @@ public enum MIMEParser {
         }
         // Non-text parts (attachments, images) — skip
         return ParsedEmailContent(textBody: nil, htmlBody: nil)
+    }
+
+    // MARK: - Body text decoding (#538)
+
+    /// Charset labels that say nothing reliable about the bytes: the ASCII
+    /// labels cannot name a non-ASCII byte at all, and the Latin-1 family
+    /// (`iso-8859-1`, `windows-1252`) is what senders and mail software write
+    /// when they did not think about the charset. UTF-8 bytes under any of
+    /// these labels are common in real mail.
+    private static let weakCharsetLabels: Set<String> = [
+        "us-ascii", "ascii", "iso-8859-1", "latin1", "windows-1252", "cp1252"
+    ]
+
+    /// Decode a text body's bytes to a `String`. Total: a body is never dropped.
+    ///
+    /// 1. Under a weak label (`weakCharsetLabels`), non-ASCII bytes that are
+    ///    **strictly valid UTF-8** are UTF-8. Latin-1 text almost never forms a
+    ///    valid UTF-8 sequence (an accented letter followed by exactly the
+    ///    right continuation byte), so validity is a safe discriminator; a body
+    ///    that really is Latin-1 and also happens to be valid UTF-8 is the one
+    ///    case this reads wrongly.
+    ///    This step must come BEFORE the declared charset: a Latin-1-family
+    ///    decode never fails, so tried first it turns UTF-8 bytes into one
+    ///    scalar per byte (the mojibake of #538). The ASCII labels used to be
+    ///    rescued only because `String(data:encoding: .ascii)` happens to
+    ///    return `nil` on non-ASCII bytes, which nothing pinned.
+    /// 2. Otherwise the declared charset, so a real `big5` / `shift_jis` /
+    ///    `euc-jp` / … body is never second-guessed.
+    /// 3. If that fails, UTF-8 (strict).
+    /// 4. Last resort: Latin-1, which maps every byte to a scalar. A body that
+    ///    is neither valid UTF-8 nor decodable as its label (a lone `0xE9` under
+    ///    `US-ASCII`) used to come back `nil`, and the renderer then silently
+    ///    wrote the raw HTML in its place.
+    ///
+    /// `RFC822Parser.stringEncoding(for:)` stays untouched: header and filename
+    /// decoding share it, and they have different rules.
+    static func decodeBodyText(_ data: Data, declaredCharset: String) -> String {
+        let label = declaredCharset.trimmingCharacters(in: .whitespaces).lowercased()
+        if weakCharsetLabels.contains(label),
+           data.contains(where: { $0 >= 0x80 }),
+           let utf8 = String(data: data, encoding: .utf8) {
+            return utf8
+        }
+        return String(data: data, encoding: RFC822Parser.stringEncoding(for: label))
+            ?? String(data: data, encoding: .utf8)
+            ?? String(String.UnicodeScalarView(data.map { Unicode.Scalar($0) }))
     }
 
     // MARK: - Multipart
