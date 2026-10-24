@@ -63,6 +63,7 @@ stage: capability-preflight
 repaired: 0
 still-unparseable: not evaluated
 pending: entire requested target (not scanned)
+duplicates: not evaluated
 error: <保留實際工具錯誤；沒有有效 envelope 時說明實際回應問題>
 ```
 
@@ -70,19 +71,19 @@ error: <保留實際工具錯誤；沒有有效 envelope 時說明實際回應�
 
 ### Step 1: 掃描
 
-僅頂層 `*.md`（同 Step 8.5 紀律，不深入子目錄），也不追 symlink。Glob 只收集路徑，不證明 regular file；在讀取候選內容前，必須有可用且已授權的實體路徑／檔案型別檢查能力。僅有一般 Glob/Read 不算完成此檢查；不能先 Read 內容，再以讀後附帶的 metadata 倒填前置驗證。只有工具本身明確保證先驗證型別／實體範圍才交付內容的 guarded read，才可合併兩步。先依 Execution 使用或取得唯讀檢查能力；仍缺少能力、檢查失敗或任何候選的檔案型別／實體歸屬不能判定時，停止本批並報 `status: apply-unavailable`、`stage: file-inspection`、`repaired: 0`、`still-unparseable: not evaluated`、`pending: entire target (unexamined paths listed)` 與實際原因；不能排除全部候選後宣稱 completed，也不能把工具失效算成內容解析失敗。若 Glob 確認沒有頂層候選，則無需為空集合要求檔案型別檢查。可確認的 symlink／非 regular file／target 外路徑不讀取、不改寫，以 `excluded-path` 另列路徑與原因，不計入 scanned regular files 或 synthetic 數量。
+僅頂層 `*.md`（同 Step 8.5 紀律，不深入子目錄），也不追 symlink。Glob 只收集路徑，不證明 regular file；在讀取候選內容前，必須有可用且已授權的實體路徑／檔案型別檢查能力。僅有一般 Glob/Read 不算完成此檢查；不能先 Read 內容，再以讀後附帶的 metadata 倒填前置驗證。只有工具本身明確保證先驗證型別／實體範圍才交付內容的 guarded read，才可合併兩步。先依 Execution 使用或取得唯讀檢查能力；仍缺少能力、檢查失敗或任何候選的檔案型別／實體歸屬不能判定時，停止本批並報 `status: apply-unavailable`、`stage: file-inspection`、`repaired: 0`、`still-unparseable: not evaluated`、`pending: entire target (unexamined paths listed)`、`duplicates: not evaluated` 與實際原因；不能排除全部候選後宣稱 completed，也不能把工具失效算成內容解析失敗。若 Glob 確認沒有頂層候選，則無需為空集合要求檔案型別檢查。可確認的 symlink／非 regular file／target 外路徑不讀取、不改寫，以 `excluded-path` 另列路徑與原因，不計入 scanned regular files 或 synthetic 數量。
 
 即使沒有 synthetic 候選，仍須檢查並讀取 index 以盤點殘留 synthetic keys，不能未讀便假報 0。同樣在讀取 index 前核對其 regular-file／非 symlink 身分及已解析的索引位置；索引位置可由可信 target 設定指定，不擅自改成 output_dir 下的替代檔案。現存 index 若是 symlink／非 regular file，或無法確認身分，整批 apply-unavailable，不把它當成空 index 繼續。檢查通過後才讀取 regular files，抓 frontmatter `message_id` 匹配 `^synthetic:` 者，連同其 `date`、`thread_key`、`sender`、body `Subject:` 行入清單。
 
-另外唯讀盤點本 target 的 `duplicates/**/*.md`（不追 symlink；不得跨到其他 target），記錄開始時數量與檔名；不將這些隔離檔混入修復候選或主 index。若可用工具無法確認列舉結果均在本 target 的實體路徑下，也視為盤點不可用，不猜成 0。無法列舉／讀取時在duplicates盤點欄位報原因 `quarantine-inventory-unavailable`（不是頂層status）及原因，數量標 `unknown`，不得假報 0。
+另外唯讀盤點本 target 的 `duplicates/**/*.md`（不追 symlink；不得跨到其他 target），記錄開始時數量與檔名；不將這些隔離檔混入修復候選或主 index。若可用工具無法確認列舉結果均在本 target 的實體路徑下，也視為盤點不可用，不猜成 0。無法列舉／讀取時在duplicates盤點欄位報原因 `quarantine-inventory-unavailable`（不是頂層status）及原因，數量標 `unknown`，不得假報 0；停止報告的 `duplicates` 欄位怎麼填見「停止報告的 duplicates 欄位」。
 
-若已解析的 index 不存在，同樣停止為 `apply-unavailable`、`stage: file-inspection`，明列 `index-missing`；本修復不把缺少的 index 當作空物件重建。先由使用者確認正確索引位置或另行完成索引重建，再重跑本流程。
+若已解析的 index 不存在，同樣停止為 `apply-unavailable`、`stage: file-inspection`，明列 `index-missing`（`duplicates` 欄位依上述盤點結果填）；本修復不把缺少的 index 當作空物件重建。先由使用者確認正確索引位置或另行完成索引重建，再重跑本流程。
 
 ### Step 2: 重新定位真 Message-ID（完整候選流程）
 
 每檔必須依序完成下列 1–4 階段，不能在前面的查詢成功時提前接受；任何歧義都不進入寫入：
 
-先完成本批所有重新定位，再進入 Step 3 寫入。任一搜尋／headers 工具錯誤或無法辨識的回應 → 停止本批，報 `status: lookup-unavailable`、錯誤與受影響檔案／尚未評估清單，本批 `repaired: 0`；不得當成零候選繼續。來源欄位不足、成功查詢後的無匹配／歧義、候選資料不可解析、headers缺真Message-ID及寫入前碰撞，都屬於具名的 `still-unparseable`；工具／回應本身失效則是整批 `lookup-unavailable`，兩者不可混用。
+先完成本批所有重新定位，再進入 Step 3 寫入。任一搜尋／headers 工具錯誤或無法辨識的回應 → 停止本批，報 `status: lookup-unavailable`、錯誤與受影響檔案／尚未評估清單，本批 `repaired: 0`；不得當成零候選繼續。來源欄位不足、成功查詢後的無匹配／歧義、候選資料不可解析、headers缺真Message-ID及寫入前碰撞，都屬於具名的 `still-unparseable`（原因碼只能用詞彙表內的）；工具／回應本身失效則是整批 `lookup-unavailable`，兩者不可混用。
 
 1. **先固定比對語意**：bare subject來源為本文Subject行，不能用歷史thread_key直接替代；來源與候選subject兩邊均採archive-mail.md的thread_key／stripReplyPrefixes同一規則，反覆去除回覆／轉寄前綴，保留其餘大小寫與標點。缺少／空 bare subject 先記 `still-unparseable: subject-unavailable`，不發空查詢。兩邊 sender 都解析為單一裸 email 位址後不分大小寫比對，不能拿 display name 當位址或做 substring 比對；缺少可用位址記 `still-unparseable: sender-unavailable`。frontmatter date 必須能解析為具明確 offset 的完整 timestamp，再以絕對時刻比較；缺 offset 記 `still-unparseable: date-offset-missing`，格式不明記 `still-unparseable: date-unparseable`，不得猜時區。summary 的 date 是收信時間、frontmatter date 通常是 Date header 的寄出時間，傳遞延遲或歷史 offset 汙染可能造成保守漏配，不能因零候選自動放寬時間窗。
 2. **取得完整原始候選**：`search_emails(field: "subject", query: <bare subject>, projection: "summary", dedup: "none", limit: 200)`。不要用 logical 去重判定唯一，因為同 subject/sender/date_received 的不同 Message-ID 也可能被塌成一列。若 `truncated: true`，相同查詢最多再以 `limit: 1000` 讀一次；仍不完整就記 `still-unparseable: search-truncated`，不使用部分結果宣稱唯一。以 bare subject 精確相同、上述 sender 相同、絕對時間差 < 2 分鐘篩選。先排除能確定不符任一條件的列；對仍可能匹配的列，sender無法解析為單一位址或date無法解析為帶offset時間時，不得忽略該列來宣稱唯一，整組分別記 `still-unparseable: candidate-sender-unparseable`／`candidate-date-unparseable`；零候選記 `still-unparseable: no-match`。
@@ -99,14 +100,33 @@ repaired: 0
 failed_file: <本次失敗的檔案>
 still-unparseable: <停止前已具名判定的檔案／原因；未評估者不列入此欄>
 pending: <全部尚未套用的檔案，包含已定位但尚未寫入者>
+duplicates: before <N> / after <N>
 error: <實際錯誤或回應問題>
 ```
 
-全部定位完成後，先建立「舊 synthetic key → 所有來源檔及既有 index entry」對照。舊 key 若仍被未納入成功修復計畫的檔案使用，其既有 entry 不得刪除／改寫。此時「安全分割」只允許：舊 key 原本沒有 entry 且維持不存在，或既有 entry 的 file 已經可確認指向 target 內仍保留該 synthetic key 的未修復 regular file，並完整保留該 entry。若既有 entry 指向即將改寫／隔離的檔案、在 target 外、缺 file 或無法確認，就不能分割；所有相關待修復組記 `still-unparseable: rekey-collision` 並保持原狀。不能保留 synthetic key→A 卻把 A 改成真 ID，也不能為了放行而改指或重建未修復檔的 entry。接著依比對值對整批成功定位計畫分組；每組所有待修檔必須只有一種精確落盤值，不限於單檔候選集合。跨待修檔出現不同落盤拼法時，整組記 `still-unparseable: message-id-format-collision`，所有相關檔案／index 保持原狀，不分成兩個精確 key 或任選一種拼法。通過後才檢查 index 既有非 synthetic keys 的相同比對值。若既有 key 與將寫入的落盤值拼法不同（例如 `x@example.invalid` 與 `<x@example.invalid>`），整組記 `still-unparseable: rekey-collision`；不能新增第二種拼法，也不能在本次 synthetic 修復中改寫既有非 synthetic 檔案。其餘依精確落盤 key 檢查既有 entry。不能先逐檔換 key 再用事後去重修補覆蓋。多檔／既有 entry 同 key 時，須讀取本 target 內相關檔案，除 message_id 欄位與換行表示法外，完整 frontmatter 與正文均相同才可確認為重複；前 500 字相同不足以放行。資料不全、內容不同、檔案在 target 外或無法確認，整組記 `still-unparseable: rekey-collision`，保留原檔／index。以上完整性與實體路徑檢查必須先通過，才可採用下方的保留檔規則。
+全部定位完成後，依 P1 → P5 建立並檢查寫入計畫。這五節只會縮小計畫：被拒絕的組保持原狀，不改指、不重建既有 entry，也不把已拒絕的組重新加入。
+
+#### P1: 分組與碰撞
+
+1. **舊 synthetic key 的安全分割**：先建立「舊 synthetic key → 所有來源檔及既有 index entry」對照。舊 key 若仍被未納入成功修復計畫的檔案使用，其既有 entry 不得刪除／改寫。此時「安全分割」只允許：舊 key 原本沒有 entry 且維持不存在，或既有 entry 的 file 已經可確認指向 target 內仍保留該 synthetic key 的未修復 regular file，並完整保留該 entry。若既有 entry 指向即將改寫／隔離的檔案、在 target 外、缺 file 或無法確認，就不能分割；所有相關待修復組記 `still-unparseable: old-key-entry-conflict` 並保持原狀。不能保留 synthetic key→A 卻把 A 改成真 ID，也不能為了放行而改指或重建未修復檔的 entry。
+2. **依比對值分組與落盤拼法**：接著依比對值對整批成功定位計畫分組；每組所有待修檔必須只有一種精確落盤值，不限於單檔候選集合。跨待修檔出現不同落盤拼法時，整組記 `still-unparseable: message-id-format-collision`，所有相關檔案／index 保持原狀，不分成兩個精確 key 或任選一種拼法。
+3. **index 既有的非 synthetic key**：通過後才檢查 index 既有非 synthetic keys 的相同比對值。若既有 key 與將寫入的落盤值拼法不同（例如 `x@example.invalid` 與 `<x@example.invalid>`），整組記 `still-unparseable: existing-key-spelling-mismatch`；不能新增第二種拼法，也不能在本次 synthetic 修復中改寫既有非 synthetic 檔案。其餘依精確落盤 key 檢查既有 entry。不能先逐檔換 key 再用事後去重修補覆蓋。
+
+#### P2: 重複件比對
+
+多檔／既有 entry 同 key 時，須讀取本 target 內相關檔案，除 message_id 欄位與換行表示法外，完整 frontmatter 與正文均相同才可確認為重複；前 500 字相同不足以放行。資料不全、檔案在 target 外或無法確認，整組記 `still-unparseable: duplicate-unverifiable`；內容不同，整組記 `still-unparseable: duplicate-content-drift`；兩者都保留原檔／index。以上完整性與實體路徑檢查必須先通過，才可採用 P4 的保留檔規則。
+
+#### P3: 使用者確認閘
+
+只在有需要使用者判斷的項目時出現；沒有這類項目時本節不出現、不詢問。目前 Step 2 沒有任何一項需要使用者回答，全部判定都由上面的規則完成。
+
+#### P4: 保留檔與隔離計畫
 
 確認重複者先產生唯一保留檔與隔離對應計畫：已有合法 index entry 時保留其原檔；否則保留檔名日期最早者，同日以檔名排序固定選擇。計畫階段先核對 `duplicates/` 目錄本身：存在時須以不跟隨 symlink 的檢查確認為 directory，且 realpath 在 target 實體範圍內；symlink、非目錄、範圍外或無法判定都使相關組成為 `still-unparseable: quarantine-destination-conflict`。空的列舉結果不能取代目錄身分證明。目錄不存在時，把安全建立／重驗列入套用計畫，不能假設 Move 會安全建立父目錄。再確認每個隔離目的檔均不存在（包括symlink等既有項目），使用Step 1盤點與必要的實際路徑核對；已有目的檔或無法確認者記 `still-unparseable: quarantine-destination-conflict`，整個相關組不進入寫入。套用時仍需不可覆寫primitive防止其後競爭。後續每個真 key 只寫一次，明確指向保留檔。這是寫入前檢查，不宣稱跨多個檔案已有交易／鎖定保證。
 
-所有真 ID／內容／隔離目的地檢查完成後，必須以**最終可套用集合**重新檢查每個共享舊 synthetic key 的安全分割條件，不能沿用剔除組別之前的判定。若某組後來遭拒，其檔案就是未修復參照；既有舊 entry 必須仍指向保留 synthetic key 的未修復檔，否則剔除所有會使該 entry 失真的相關修復組，記 `still-unparseable: rekey-collision`。每次剔除後重新計算相依組，直到集合不再變動，才可進入 Step 2.5；過程只縮小計畫，不改指／重建舊 entry，也不把已拒絕組重新加入。例：A、B 共用舊 key，entry 指 A，兩者先定位成功但 B 後因真 key 碰撞遭拒，則 A 也不可改寫；若 entry 原已指向仍未修復的 B，A 才可能安全分割。
+#### P5: 最終集合重算
+
+所有真 ID／內容／隔離目的地檢查完成後，必須以**最終可套用集合**重新檢查每個共享舊 synthetic key 的安全分割條件，不能沿用剔除組別之前的判定。若某組後來遭拒，其檔案就是未修復參照；既有舊 entry 必須仍指向保留 synthetic key 的未修復檔，否則剔除所有會使該 entry 失真的相關修復組，記 `still-unparseable: dependent-group-rejected`。每次剔除後重新計算相依組，直到集合不再變動，才可進入 Step 2.5；過程只縮小計畫，不改指／重建舊 entry，也不把已拒絕組重新加入。例：A、B 共用舊 key，entry 指 A，兩者先定位成功但 B 後因真 key 碰撞遭拒，則 A 也不可改寫；若 entry 原已指向仍未修復的 B，A 才可能安全分割。
 
 > mail#319 issue 作者自證：ad-hoc `(sender, bare_subject, ±時間窗)` 三元組在密集 thread 中不可靠——所以匹配窗刻意窄（2 分鐘、恰好一封），寬鬆匹配寧可失敗。
 
@@ -120,6 +140,7 @@ stage: apply-preflight
 repaired: 0
 still-unparseable: <已具名判定的檔案與原因>
 pending: <全部未套用計畫>
+duplicates: before <N> / after <N>
 error: <缺少的能力或授權>
 ```
 
@@ -149,9 +170,59 @@ repaired: <實際已改寫frontmatter的數量>
 completed_operations: <逐檔已完成內容>
 pending_operations: <逐檔待辦>
 residual_index_keys: <舊key與目前指向檔案>
+duplicates: before <N> / after <M>（已搬移：<逐檔>）
 automatic_rerun_recovery: false
 error: <實際失敗>
 ```
+
+### 詞彙表（封閉）
+
+下面兩張表是本指令唯一的 `status` 與 `still-unparseable` 原因碼定義。報告、停止範本與本文任何位置都只能使用表內的詞；表內沒有的詞不得使用，也不得依性質相似自行新增。新增或改名要在同一個變更裡改這兩張表與使用它的步驟。「出現在哪一步」指判定該碼的步驟，「使用者能做什麼」是報告該碼時給使用者的建議。`stage` 的值不在這兩張表內。
+
+<!-- archive-mail-repair-codes:start -->
+#### status 碼（只有這 5 類，不得依性質相似類推）
+
+| 碼 | 出現在哪一步 | 意義 | 使用者能做什麼 |
+|---|---|---|---|
+| `completed` | Step 5 | 計畫內的操作全部完成；`still-unparseable` 與 `pending` 的檔案保持原狀 | 依報告處理 `still-unparseable`；`residual_synthetic_index_keys` 為 0 時可接 `/archive-mail-rebuild-threads` |
+| `environment-unavailable` | Step 0.5 | SQLite 能力 preflight 失敗；沒有掃描任何檔案 | 依報告中的實際錯誤補救（授權、連線、版本）後重跑 |
+| `lookup-unavailable` | Step 2 | 搜尋或 headers 工具中途失效，或回應無法辨識；`repaired: 0` | 恢復工具後重跑 |
+| `apply-unavailable` | Step 1、Step 2.5 | 缺少檔案檢查或套用所需的能力／授權，或 index 缺少／身分不明；沒有修改任何東西 | 補齊能力或授權、確認 index 位置後重跑 |
+| `apply-incomplete` | Step 2.5、Step 3、Step 4 | 套用中途停止，部分操作可能已完成；`automatic_rerun_recovery: false` | 依報告的 `completed_operations`、`pending_operations`、`residual_index_keys` 人工核對；重跑不會自動收斂 |
+
+#### still-unparseable 原因碼（只有這 17 類，不得依性質相似類推）
+
+| 碼 | 出現在哪一步 | 意義 | 使用者能做什麼 |
+|---|---|---|---|
+| `subject-unavailable` | Step 2 階段 1 | 本文沒有可用的 `Subject:` 行 | 補上 Subject 行後重跑 |
+| `sender-unavailable` | Step 2 階段 1 | frontmatter 的 sender 不能解析為單一裸 email 位址 | 補上可解析的 sender 後重跑 |
+| `date-offset-missing` | Step 2 階段 1 | `date` 沒有明確 offset（含 RFC 的 `-0000`）；本流程不猜時區 | 另行確認可信日期後重跑 |
+| `date-unparseable` | Step 2 階段 1 | `date` 格式不明 | 人工修正 `date` 後重跑 |
+| `search-truncated` | Step 2 階段 2 | 以 `limit: 1000` 重讀仍被截斷，候選不完整 | 本流程無法處理，人工確認 |
+| `candidate-sender-unparseable` | Step 2 階段 2 | 仍可能匹配的候選，其 sender 不能解析為單一位址 | 人工確認該候選 |
+| `candidate-date-unparseable` | Step 2 階段 2 | 仍可能匹配的候選，其日期不能解析為帶 offset 的時間 | 人工確認該候選 |
+| `no-match` | Step 2 階段 2 | 沒有符合的候選 | 原信已從 Mail 刪除者修不了（鐵律）；否則人工核對該檔的 date、sender、subject |
+| `candidate-message-id-missing` | Step 2 階段 4 | 某個候選的 headers 沒有可用的真 Message-ID | 人工確認 |
+| `message-id-format-collision` | Step 2 階段 4、P1 | 同一比對值對應多種落盤拼法 | 人工決定採哪一種拼法 |
+| `message-id-collision` | Step 2 階段 4 | 候選對應兩種以上不同的 Message-ID | 人工確認 |
+| `old-key-entry-conflict` | P1 | 共用的舊 synthetic key，其既有 index entry 無法安全分割 | 人工整理該 entry 後重跑 |
+| `existing-key-spelling-mismatch` | P1 | index 既有的非 synthetic key 與將寫入的落盤值拼法不同 | 人工決定採哪一種拼法 |
+| `duplicate-unverifiable` | P2 | 重複件比對的資料不全、檔案在 target 外或無法確認 | 補齊資料或確認檔案位置後重跑 |
+| `duplicate-content-drift` | P2 | 兩個檔案除 `message_id` 與換行表示法外仍有內容差異 | 人工比對兩個檔案；報告只列出不同的欄位名 |
+| `dependent-group-rejected` | P5 | 因與另一個被拒絕的組共用舊 key，本組跟著被剔除 | 先處理被拒絕的那一組 |
+| `quarantine-destination-conflict` | P4 | `duplicates/` 目錄或隔離目的檔有衝突 | 清掉衝突項目後重跑 |
+<!-- archive-mail-repair-codes:end -->
+
+### 停止報告的 duplicates 欄位
+
+四份停止報告（`environment-unavailable`、`lookup-unavailable`、`apply-unavailable`、`apply-incomplete`）都有 `duplicates` 欄位，值只有下列四種：
+
+| 值 | 何時 | 可出現在 |
+|---|---|---|
+| `not evaluated` | Step 1 的 `duplicates/` 盤點還沒做 | `environment-unavailable`；Step 1 `file-inspection` 的 `apply-unavailable` |
+| `before N / after N` | 盤點已做完，本輪沒有搬移任何檔案，N 為盤點數 | `lookup-unavailable`、`apply-unavailable`（`apply-preflight`）、尚未搬移就停止的 `apply-incomplete` |
+| `before N / after M（已搬移：…）` | 本輪已搬移，停止當下重新盤點得到 M，括號列出已搬移的檔案 | 只有 `apply-incomplete` |
+| `unknown (quarantine-inventory-unavailable)` | 盤點失敗 | 任何已到 Step 1 盤點的停止報告 |
 
 ### Step 5: 報告
 
@@ -162,7 +233,7 @@ status: completed
 scanned: 120 md — 20 synthetic
 excluded-path: <排除路徑與原因；無則明寫 0>
 repaired: 16（frontmatter re-keyed；index 每個真 key 僅保留一筆）
-still-unparseable: 4 ⚠（逐檔列出 Step 2 的具名原因碼與說明，不把此範例當成封閉原因清單）
+still-unparseable: 4 ⚠（逐檔列出詞彙表的原因碼與說明；原因碼以詞彙表為準，不在表內的不得使用）
 pending: 0
 residual_synthetic_index_keys: <逐一列出仍存在的 synthetic key 與其 file；無則明寫 0>
 duplicates quarantined this run: 3 → duplicates/（列出原檔與隔離檔對應）
