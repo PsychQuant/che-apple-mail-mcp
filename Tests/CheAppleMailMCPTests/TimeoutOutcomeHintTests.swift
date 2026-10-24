@@ -55,6 +55,8 @@ final class TimeoutOutcomeHintTests: XCTestCase {
         XCTAssertTrue(hint.contains("Full Disk Access"), hint)
         XCTAssertTrue(hint.contains("date_received"), hint)
         XCTAssertTrue(hint.contains("Do not resend automatically"), hint)
+        XCTAssertFalse(hint.lowercased().contains("nothing was sent"),
+                       "ComposeRefusalTests forbids the phrase in a post-dispatch message, negated or not")
         XCTAssertFalse(hint.contains("date_from"),
                        "date_from filters on date_received, whose reliability for drafts and Sent copies is unmeasured")
     }

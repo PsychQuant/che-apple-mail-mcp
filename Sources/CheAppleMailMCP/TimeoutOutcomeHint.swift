@@ -10,6 +10,10 @@ import Foundation
 /// can come back empty (#549, #536). There is no correlation marker on a message
 /// the GUI flow creates, so a matching subject may be an earlier message, too.
 ///
+/// The send-flow text avoids the phrase "nothing was sent": `ComposeRefusalTests`
+/// forbids it anywhere in a post-dispatch message, because a bare "nothing was
+/// sent" reads as a no-op claim even when it is negated.
+///
 /// The hint is a pure function of the kind: it never receives or echoes the
 /// caller's subject (the generic "the subject you sent" is deliberate), so it
 /// adds nothing the caller did not already hold.
@@ -33,7 +37,7 @@ func timeoutVerificationHint(_ kind: TimeoutOutcomeKind) -> String {
             + "field=\"subject\" and query set to the subject you sent, and read each result's "
             + "mailbox and date_received. A matching row is evidence that a message with that "
             + "subject exists in that mailbox; it may also be an earlier message with the same "
-            + "subject. No matching row is NOT evidence that nothing was sent: the index is "
+            + "subject. No matching row is NOT evidence that no message went out: the index is "
             + "written asynchronously, and some accounts keep no Sent copy. (search_emails reads "
             + "the Envelope Index and needs Full Disk Access; without it, it asks Mail through "
             + "AppleScript and may time out again.) Do not resend automatically in either case; "
