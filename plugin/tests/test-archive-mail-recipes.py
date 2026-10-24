@@ -413,5 +413,27 @@ class ArchiveRecipesTests(unittest.TestCase):
             self.assertFalse((root / "PWNED").exists())
 
 
+class Step85RepairPointerTests(unittest.TestCase):
+    """Step 8.5 points users at the repair command; the pointer must carry its prerequisite (#527)."""
+
+    REPAIR = "/archive-mail-repair-synthetic-ids"
+
+    @classmethod
+    def setUpClass(cls):
+        text = DOCUMENT.read_text()
+        section = text.split("### Step 8.5:", 1)[1]
+        cls.pointer_lines = [line for line in section.split("\n## ", 1)[0].splitlines()
+                             if cls.REPAIR in line]
+
+    def test_step_8_5_still_points_at_the_repair_command(self):
+        self.assertTrue(self.pointer_lines,
+                        "Step 8.5 no longer mentions the repair command; update this guard with it")
+
+    def test_every_pointer_names_the_sqlite_and_full_disk_access_prerequisite(self):
+        for line in self.pointer_lines:
+            self.assertIn("SQLite", line, line[:80])
+            self.assertIn("Full Disk Access", line, line[:80])
+
+
 if __name__ == "__main__":
     unittest.main()
