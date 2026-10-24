@@ -53,7 +53,7 @@ TaskCreate(name="scan_synthetic", description="glob 頂層 *.md，抓 frontmatte
 TaskCreate(name="rekey_attempts", description="完整執行候選查詢／真ID分組及新舊key碰撞計畫；未解決者不進入寫入")
 TaskCreate(name="confirm_plan", description="P3：有需要使用者判斷的項目（時區、內容有差異的重複件）才逐項呈現並等回答；沒有項目不詢問，沒有回答視為沒有授權")
 TaskCreate(name="apply_repairs", description="先確認套用所需能力／授權，再依核准計畫改 frontmatter、隔離、最後一次更新各真key的index")
-TaskCreate(name="dedupe_pass", description="只套用寫入前確認的重複計畫；優先保留既有合法index原檔，否則最早檔名；隔離不得覆寫")
+TaskCreate(name="dedupe_pass", description="只套用寫入前確認的重複計畫（P2 判為 identical，或 P3-B 經使用者確認）；保留檔依 P4：非 synthetic 持有者優先，其次既有合法index原檔，否則最早檔名；隔離不得覆寫")
 TaskCreate(name="report", description="修復報告：status、repaired、still-unparseable、pending、duplicates 新增及現存待人工確認清單")
 ```
 
@@ -643,7 +643,7 @@ error: <缺少的能力或授權>
 
 ### Step 4: 套用已確認的隔離計畫
 
-每次搬移前重新核對已驗證的 duplicates 目錄身分／範圍及目的檔不存在；有變動就 apply-incomplete。只執行 Step 2 已確認的完整內容重複計畫，該組非保留檔**移入 `duplicates/` 子目錄**（不刪除——人工確認後自行清理），隔離目的檔必須不存在，若同名已存在即停止為 `apply-incomplete`，不得覆寫隔離證據；再提交指向保留檔的 index entry。若套用期間發現來源變動或寫入／搬移失敗，停止並報 `apply-incomplete`，列出已完成操作與待辦，不得沿用 lookup 階段的 `repaired: 0` 或假報 completed；報告須明列每個殘留舊 index key、對應檔案與已改寫的 frontmatter。特別是 frontmatter 已改成真 ID、index 還是 synthetic 的狀態，重跑本命令不會重新掃到它，既有 append-only reconcile 也不會移除舊 key；需依操作紀錄人工核對修復，不宣稱自動收斂。
+每次搬移前重新核對已驗證的 duplicates 目錄身分／範圍及目的檔不存在；有變動就 apply-incomplete。只執行 Step 2 已確認的重複計畫（P2 判為 identical，或 P3-B 經使用者確認隔離），該組非保留檔**移入 `duplicates/` 子目錄**（不刪除——人工確認後自行清理），隔離目的檔必須不存在，若同名已存在即停止為 `apply-incomplete`，不得覆寫隔離證據；再提交指向保留檔的 index entry。若套用期間發現來源變動或寫入／搬移失敗，停止並報 `apply-incomplete`，列出已完成操作與待辦，不得沿用 lookup 階段的 `repaired: 0` 或假報 completed；報告須明列每個殘留舊 index key、對應檔案與已改寫的 frontmatter。特別是 frontmatter 已改成真 ID、index 還是 synthetic 的狀態，重跑本命令不會重新掃到它，既有 append-only reconcile 也不會移除舊 key；需依操作紀錄人工核對修復，不宣稱自動收斂。
 
 每次搬移後、提交 index 前，必須重新核對來源已不存在，目的檔是 target 內的非 symlink regular file，且完整內容與該檔已驗證的改寫結果一致，才可計入隔離成功。不能只看命令退出碼：例如 `mv -n` 遇到既有目的檔可能回傳 0 卻沒有搬移。來源仍在、目的檔缺少／型別不符、內容不符或無法確認時，一律停止為 `apply-incomplete`，保留現況並列出差異，不提交 index、不覆寫目的檔、不再刪來源來補作。
 
