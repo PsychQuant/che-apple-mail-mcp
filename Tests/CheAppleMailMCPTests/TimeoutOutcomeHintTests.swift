@@ -132,6 +132,12 @@ final class TimeoutOutcomeHintTests: XCTestCase {
         XCTAssertTrue(text.contains("already dispatched"), text)
         let hint = timeoutVerificationHint(.sendFlow)
         XCTAssertTrue(text.contains(hint), text)
+        if let hintRange = text.range(of: hint), let echoRange = text.range(of: "Original error: ") {
+            XCTAssertLessThan(hintRange.upperBound, echoRange.lowerBound,
+                              "the hint must come BEFORE the clamped echo")
+        } else {
+            XCTFail("hint or echo marker missing: \(text)")
+        }
         let echo = text.components(separatedBy: "Original error: ").last ?? ""
         XCTAssertLessThanOrEqual(echo.count, 200)
         // The reply is a new scriptFailed whose text does not start with the sentinel,
@@ -158,6 +164,36 @@ final class TimeoutOutcomeHintTests: XCTestCase {
             XCTAssertTrue(text.contains("search_emails"), text)
             XCTAssertFalse(text.contains("GUI"), text)
             XCTAssertFalse(text.contains("read-only"), text)
+        }
+    }
+
+    // MARK: - T8 documentation
+
+    private static func repoFile(_ relative: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+    }
+
+    func testReadme_hasTimeoutSection_namingTheTools() throws {
+        let readme = try Self.repoFile("README.md")
+        let heading = "### After a timeout: what can and cannot be known"
+        let start = try XCTUnwrap(readme.range(of: heading), "README must keep the #522 section")
+        let rest = readme[start.upperBound...]
+        let end = rest.range(of: "\n---\n")?.lowerBound ?? rest.endIndex
+        let section = String(rest[..<end])
+        for needle in ["search_emails", "list_drafts", "UNKNOWN", "field=\"subject\"", "date_received"] {
+            XCTAssertTrue(section.contains(needle), "README timeout section must mention \(needle)")
+        }
+        XCTAssertTrue(readme.contains("(#after-a-timeout-what-can-and-cannot-be-known)"),
+                      "the Troubleshooting row must link to the section")
+        XCTAssertFalse(section.localizedCaseInsensitiveContains("safe to retry"))
+    }
+
+    func testRepoRule_keepsTheBoundaryAndTheMeasurementProtocol() throws {
+        let rule = try Self.repoFile(".claude/rules/timeout-outcome-boundary.md")
+        for needle in ["S1", "S2", "S3", "UNKNOWN", "NOT retrying", "isTimeoutError", "isPostDispatchError"] {
+            XCTAssertTrue(rule.contains(needle), "the rule file must keep \(needle)")
         }
     }
 }
