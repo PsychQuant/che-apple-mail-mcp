@@ -58,6 +58,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   seconds. The reader also runs `SELECT 1 FROM sqlite_master LIMIT 1` before it
   counts as open, so a file that opens but cannot be read is refused at open
   time.
+### Changed
+
+- **Timeout messages say how to look for evidence**
+  ([#522](https://github.com/PsychQuant/che-apple-mail-mcp/issues/522)).
+  After a GUI flow or the draft-deletion step times out, its outcome in Mail is
+  unknown; the messages used to say only "check Sent / Outbox / the drafts
+  mailbox". They now name the read-only query to run (`search_emails` with
+  `field="subject"`, and `list_drafts` for drafts), say what a matching row is
+  evidence of, and say that a missing row is not evidence that nothing
+  happened. Applies to `compose_email`, `reply_email` and `forward_email`
+  (unknown send state), to `create_draft` and `reply_email` with
+  `save_as_draft` (timeout text), and to the old-draft deletion inside
+  `update_draft`. The README gains an "After a timeout" section, and the
+  measurement protocol that would justify an automatic observation step is
+  recorded in `.claude/rules/timeout-outcome-boundary.md`. Messages and
+  documentation only: the UNKNOWN / NOT retrying send gate, the
+  `isTimeoutError` / `isPostDispatchError` classification, the timeout seconds
+  and the error cases are unchanged. The reply/forward message is now built in
+  one place; its existing wording (including the "already dispatched" claim on
+  a timeout, tracked in #550) is unchanged.
 
 ## [3.3.1] - 2026-10-19
 

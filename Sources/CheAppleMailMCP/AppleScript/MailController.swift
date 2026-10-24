@@ -297,6 +297,7 @@ actor MailController {
             throw MailError.operationFailed(
                 "The draft deletion did not return within \(seconds)s. osascript termination "
                 + "was requested; the deletion outcome is unknown. Check the drafts mailbox before retrying. "
+                + timeoutVerificationHint(.draftDelete) + " "
                 + (granted ? "Automation permission was verified GRANTED. Mail may be busy or unresponsive."
                    : "Automation permission was not verified granted.\n" + AutomationHelp.guidance))
         }
@@ -1890,14 +1891,7 @@ actor MailController {
                 guard isPostDispatchError(error) || (sendFlow && isTimeoutError(error)) else {
                     return error
                 }
-                return MailError.scriptFailed(
-                    message: "the send keystroke was already dispatched but a GUI step failed "
-                        + "afterwards — the send state is UNKNOWN and the reply/forward may already "
-                        + "be on the wire. Check Mail's Sent mailbox / Outbox and the original thread "
-                        + "before re-sending. The compose window (if still open) was left untouched "
-                        + "for inspection. Original error: "
-                        + clampedErrorEcho(error.localizedDescription),
-                    code: -1)
+                return unknownReplyForwardSendStateError(noun: "reply/forward", error: error)
             })
     }
 
@@ -1930,14 +1924,7 @@ actor MailController {
             // other runtime failure propagates verbatim.
             mapRuntimeError: { error in
                 guard isPostDispatchError(error) || isTimeoutError(error) else { return error }
-                return MailError.scriptFailed(
-                    message: "the send keystroke was already dispatched but a GUI step failed "
-                        + "afterwards — the send state is UNKNOWN and the forward may already "
-                        + "be on the wire. Check Mail's Sent mailbox / Outbox and the original thread "
-                        + "before re-sending. The compose window (if still open) was left untouched "
-                        + "for inspection. Original error: "
-                        + clampedErrorEcho(error.localizedDescription),
-                    code: -1)
+                return unknownReplyForwardSendStateError(noun: "forward", error: error)
             })
     }
 
@@ -3146,6 +3133,7 @@ enum MailError: LocalizedError {
                        : "The interpreter's exit was not confirmed during timeout cleanup; it may still be running. ")
                     + "Terminating the interpreter does not undo Apple Events already sent to Mail: "
                     + "saving or sending may already have occurred. Check Mail and any leftover compose window before retrying. "
+                    + timeoutVerificationHint(.draftSave) + " "
                     + (automationGranted
                        ? "Automation permission was verified GRANTED. A long GUI flow may have exceeded its deadline, "
                          + "or Mail may be busy or unresponsive."

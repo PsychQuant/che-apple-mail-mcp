@@ -576,9 +576,22 @@ Both cases transparently fall through to AppleScript with `... falling through t
 | Server disconnected | Rebuild with `swift build -c release` |
 | Not allowed to send Apple events | Add permissions in System Settings > Automation |
 | Mail.app not responding | Ensure Mail.app is running with configured accounts |
-| Commands timing out | Large mailboxes take longer; try specific searches |
+| Commands timing out | Large mailboxes take longer; try specific searches. If a call that sends, saves a draft or changes a message timed out, its outcome in Mail is unknown: see [After a timeout](#after-a-timeout-what-can-and-cannot-be-known) before retrying |
 | Bulk fetch slower than expected | Watch stderr for `... falling through to AppleScript` lines. EWS/Exchange accounts always fall back (see [Performance & Storage](#performance--storage)); other accounts logging fallback indicate a fixable .emlx issue |
 | `save_attachment` fails with `-1728 "Can't get account"` or `-1719 "Invalid mailbox index"` | Since [#173](https://github.com/PsychQuant/che-apple-mail-mcp/issues/173) both errors come back with an actionable hint naming the failing reference (account / mailbox / message). Common causes: two Mail.app accounts share the same `display_name`, or an email-form `account_name` maps to several accounts — see [Account Disambiguation](#account-disambiguation) below. |
+
+### After a timeout: what can and cannot be known
+
+When a call times out, the tool does not know whether Mail went on to finish the operation. Ending the `osascript` child (or abandoning an in-process call) does not undo Apple Events Mail has already accepted, so saving or sending may already have happened. The error says so. This section lists what you can look at afterwards and what each check does not prove. Nothing here lets a tool report "sent" or "not sent": only a positive observation counts as evidence, and a missing row is never read as "nothing happened".
+
+| Operation | What the tool reports | What you can look at | What that does not tell you |
+|-----------|-----------------------|----------------------|-----------------------------|
+| Sends: `compose_email`, `reply_email`, `forward_email` | `send state is UNKNOWN`, `NOT retrying` (the tool never re-sends on its own) | `search_emails` with `field="subject"` and the subject you used; read each row's `mailbox` and `date_received`. A matching row is evidence that a message with that subject exists in that mailbox | A missing row does not show that no message went out: the index is written asynchronously, some accounts keep no Sent copy, and `search_emails` can come back empty without cause ([#549](https://github.com/PsychQuant/che-apple-mail-mcp/issues/549), [#536](https://github.com/PsychQuant/che-apple-mail-mcp/issues/536)). A matching row may also be an earlier message with the same subject. Do not resend automatically; let the user decide |
+| Saving a draft: `create_draft`, `reply_email` with `save_as_draft` | A timeout error saying that saving or sending may already have occurred | `search_emails` as above, or `list_drafts` (asks Mail, so it can time out again) | A missing row does not prove the draft was not saved. Saving again may leave two drafts; delete the extra one |
+| Deleting the old draft inside `update_draft` | `deleted_old: false` and a `note` saying the deletion outcome is unknown | `list_drafts`, or `search_emails` with the draft's subject | A row for the old id that is still listed means the index still lists it; a missing row is the index's view, not a confirmation from Mail. Do not retry the update or the deletion until you have looked |
+| Setting a value: `mark_read`, `flag_email`, `set_flag_color`, `set_background_color`, `mark_as_junk` | A timeout error | Repeating the same call sets the same value (each one sets an absolute value, not a toggle). `get_email_metadata` reports `read` and `flagged` | The timed-out call may still complete later; if you meant a different value, check the state afterwards |
+
+`search_emails` reads the Envelope Index and needs Full Disk Access; without it, it asks Mail through AppleScript and can time out again. The other write tools (`move_email`, `copy_email`, `delete_email`, mailbox and rule management, and so on) are not classified here: check the state before retrying them.
 
 ---
 
