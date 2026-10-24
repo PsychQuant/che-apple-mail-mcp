@@ -15,7 +15,7 @@ STOP_STATUSES = ("environment-unavailable", "lookup-unavailable", "apply-unavail
 
 # Expected vocabulary at this point of the cluster. Each later commit that adds a word edits these two sets.
 EXPECTED_STATUS = {
-    "completed", "environment-unavailable", "lookup-unavailable", "apply-unavailable", "apply-incomplete",
+    "completed", "completed-with-residue", "environment-unavailable", "lookup-unavailable", "apply-unavailable", "apply-incomplete",
 }
 EXPECTED_REASONS = {
     "subject-unavailable", "sender-unavailable", "date-offset-missing", "date-unparseable",
@@ -23,7 +23,7 @@ EXPECTED_REASONS = {
     "candidate-message-id-missing", "message-id-format-collision", "message-id-collision",
     "quarantine-destination-conflict",
     "old-key-entry-conflict", "existing-key-spelling-mismatch", "duplicate-unverifiable",
-    "duplicate-content-drift", "dependent-group-rejected",
+    "duplicate-content-drift", "dependent-group-rejected", "index-reference-conflict",
 }
 
 DUPLICATES_FORMS = (

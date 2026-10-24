@@ -73,7 +73,7 @@ error: <保留實際工具錯誤；沒有有效 envelope 時說明實際回應�
 
 僅頂層 `*.md`（同 Step 8.5 紀律，不深入子目錄），也不追 symlink。Glob 只收集路徑，不證明 regular file；在讀取候選內容前，必須有可用且已授權的實體路徑／檔案型別檢查能力。僅有一般 Glob/Read 不算完成此檢查；不能先 Read 內容，再以讀後附帶的 metadata 倒填前置驗證。只有工具本身明確保證先驗證型別／實體範圍才交付內容的 guarded read，才可合併兩步。先依 Execution 使用或取得唯讀檢查能力；仍缺少能力、檢查失敗或任何候選的檔案型別／實體歸屬不能判定時，停止本批並報 `status: apply-unavailable`、`stage: file-inspection`、`repaired: 0`、`still-unparseable: not evaluated`、`pending: entire target (unexamined paths listed)`、`duplicates: not evaluated` 與實際原因；不能排除全部候選後宣稱 completed，也不能把工具失效算成內容解析失敗。若 Glob 確認沒有頂層候選，則無需為空集合要求檔案型別檢查。可確認的 symlink／非 regular file／target 外路徑不讀取、不改寫，以 `excluded-path` 另列路徑與原因，不計入 scanned regular files 或 synthetic 數量。
 
-即使沒有 synthetic 候選，仍須檢查並讀取 index 以盤點殘留 synthetic keys，不能未讀便假報 0。同樣在讀取 index 前核對其 regular-file／非 symlink 身分及已解析的索引位置；索引位置可由可信 target 設定指定，不擅自改成 output_dir 下的替代檔案。現存 index 若是 symlink／非 regular file，或無法確認身分，整批 apply-unavailable，不把它當成空 index 繼續。檢查通過後才讀取 regular files，抓 frontmatter `message_id` 匹配 `^synthetic:` 者，連同其 `date`、`thread_key`、`sender`、body `Subject:` 行入清單。
+即使沒有 synthetic 候選，仍須檢查並讀取 index 以盤點殘留 synthetic keys，不能未讀便假報 0。同樣在讀取 index 前核對其 regular-file／非 symlink 身分及已解析的索引位置；索引位置可由可信 target 設定指定，不擅自改成 output_dir 下的替代檔案。現存 index 若是 symlink／非 regular file，或無法確認身分，整批 apply-unavailable，不把它當成空 index 繼續。檢查通過後才讀取 regular files，抓 frontmatter `message_id` 匹配 `^synthetic:` 者，連同其 `date`、`thread_key`、`sender`、body `Subject:` 行入清單。非 synthetic 的 regular file 也記下 frontmatter `message_id` 的落盤值（沒有 `message_id` 者不記），形成 P1 要用的「既有身分集」（檔名 → message_id）；這不增加任何讀取，因為上一句本來就要讀每個頂層檔。
 
 另外唯讀盤點本 target 的 `duplicates/**/*.md`（不追 symlink；不得跨到其他 target），記錄開始時數量與檔名；不將這些隔離檔混入修復候選或主 index。若可用工具無法確認列舉結果均在本 target 的實體路徑下，也視為盤點不可用，不猜成 0。無法列舉／讀取時在duplicates盤點欄位報原因 `quarantine-inventory-unavailable`（不是頂層status）及原因，數量標 `unknown`，不得假報 0；停止報告的 `duplicates` 欄位怎麼填見「停止報告的 duplicates 欄位」。
 
@@ -111,10 +111,14 @@ error: <實際錯誤或回應問題>
 1. **舊 synthetic key 的安全分割**：先建立「舊 synthetic key → 所有來源檔及既有 index entry」對照。舊 key 若仍被未納入成功修復計畫的檔案使用，其既有 entry 不得刪除／改寫。此時「安全分割」只允許：舊 key 原本沒有 entry 且維持不存在，或既有 entry 的 file 已經可確認指向 target 內仍保留該 synthetic key 的未修復 regular file，並完整保留該 entry。若既有 entry 指向即將改寫／隔離的檔案、在 target 外、缺 file 或無法確認，就不能分割；所有相關待修復組記 `still-unparseable: old-key-entry-conflict` 並保持原狀。不能保留 synthetic key→A 卻把 A 改成真 ID，也不能為了放行而改指或重建未修復檔的 entry。
 2. **依比對值分組與落盤拼法**：接著依比對值對整批成功定位計畫分組；每組所有待修檔必須只有一種精確落盤值，不限於單檔候選集合。跨待修檔出現不同落盤拼法時，整組記 `still-unparseable: message-id-format-collision`，所有相關檔案／index 保持原狀，不分成兩個精確 key 或任選一種拼法。
 3. **index 既有的非 synthetic key**：通過後才檢查 index 既有非 synthetic keys 的相同比對值。若既有 key 與將寫入的落盤值拼法不同（例如 `x@example.invalid` 與 `<x@example.invalid>`），整組記 `still-unparseable: existing-key-spelling-mismatch`；不能新增第二種拼法，也不能在本次 synthetic 修復中改寫既有非 synthetic 檔案。其餘依精確落盤 key 檢查既有 entry。不能先逐檔換 key 再用事後去重修補覆蓋。
+4. **依檔案反查 index**：從 index 建 `entries_by_file`（檔名 → 指向它的 key 清單）。對每個將被改寫、隔離或保留的檔案 F（本組的 synthetic 檔與非 synthetic 持有者），指向 F 的 entry 只允許兩種：(a) F 自己的舊 synthetic key；(b) F 所屬組的新真 key。其餘整組記 `still-unparseable: index-reference-conflict`，相關檔案與 index 保持原狀，由 P5 照常往相依組傳播。這涵蓋兩種形狀：沒有任何被掃描檔帶著的孤兒 synthetic entry（例如 `K3 → B`，B 被隔離），以及非 synthetic 的 `Z → A`（A 將被改寫成另一個真 ID）。孤兒 entry 一律整組拒絕，本修復不移除它；報告列出造成衝突的 entry 的 key 與 file（沿用 `residual_synthetic_index_keys` 的呈現），使用者清掉那個 entry 即可重跑。
+5. **以身分集檢查新真 key**：新真 key 的落盤值若已是某個非 synthetic 頂層檔的 `message_id`（Step 1 的既有身分集；不論 index 有沒有那個檔），該檔併入同組，成為「持有者」，走 P2 的重複件規則，不當作無碰撞。持有者的 `message_id` 若與落盤值是同一比對值但拼法不同，整組記 `still-unparseable: existing-key-spelling-mismatch`（理由同第 3 項：不能新增第二種拼法，也不改寫非 synthetic 檔）。同一真 ID 有兩個以上非 synthetic 持有者時，整組記 `still-unparseable: duplicate-unverifiable`；本修復從不搬移非 synthetic 檔，也就無從確認該留哪一個。
+
+第 4、5 項由下方計畫 recipe 的 `check_index_references` 執行，不靠逐項心算。
 
 #### P2: 重複件比對
 
-多檔／既有 entry 同 key 時，須讀取本 target 內相關檔案，除 message_id 欄位與換行表示法外，完整 frontmatter 與正文均相同才可確認為重複；前 500 字相同不足以放行。資料不全、檔案在 target 外或無法確認，整組記 `still-unparseable: duplicate-unverifiable`；內容不同，整組記 `still-unparseable: duplicate-content-drift`；兩者都保留原檔／index。以上完整性與實體路徑檢查必須先通過，才可採用 P4 的保留檔規則。
+多檔、既有 entry 或非 synthetic 持有者同 key 時，須讀取本 target 內相關檔案，除 message_id 欄位與換行表示法外，完整 frontmatter 與正文均相同才可確認為重複；前 500 字相同不足以放行。資料不全、檔案在 target 外或無法確認，整組記 `still-unparseable: duplicate-unverifiable`；內容不同，整組記 `still-unparseable: duplicate-content-drift`；兩者都保留原檔／index。以上完整性與實體路徑檢查必須先通過，才可採用 P4 的保留檔規則。
 
 #### P3: 使用者確認閘
 
@@ -122,13 +126,139 @@ error: <實際錯誤或回應問題>
 
 #### P4: 保留檔與隔離計畫
 
-確認重複者先產生唯一保留檔與隔離對應計畫：已有合法 index entry 時保留其原檔；否則保留檔名日期最早者，同日以檔名排序固定選擇。計畫階段先核對 `duplicates/` 目錄本身：存在時須以不跟隨 symlink 的檢查確認為 directory，且 realpath 在 target 實體範圍內；symlink、非目錄、範圍外或無法判定都使相關組成為 `still-unparseable: quarantine-destination-conflict`。空的列舉結果不能取代目錄身分證明。目錄不存在時，把安全建立／重驗列入套用計畫，不能假設 Move 會安全建立父目錄。再確認每個隔離目的檔均不存在（包括symlink等既有項目），使用Step 1盤點與必要的實際路徑核對；已有目的檔或無法確認者記 `still-unparseable: quarantine-destination-conflict`，整個相關組不進入寫入。套用時仍需不可覆寫primitive防止其後競爭。後續每個真 key 只寫一次，明確指向保留檔。這是寫入前檢查，不宣稱跨多個檔案已有交易／鎖定保證。
+確認重複者先產生唯一保留檔與隔離對應計畫：組內有非 synthetic 持有者（P1 第 5 項）時，持有者恆為保留檔，只隔離 synthetic 那一份（本修復從不搬移非 synthetic 檔）；否則已有合法 index entry 時保留其原檔，再否則保留檔名日期最早者，同日以檔名排序固定選擇。計畫階段先核對 `duplicates/` 目錄本身：存在時須以不跟隨 symlink 的檢查確認為 directory，且 realpath 在 target 實體範圍內；symlink、非目錄、範圍外或無法判定都使相關組成為 `still-unparseable: quarantine-destination-conflict`。空的列舉結果不能取代目錄身分證明。目錄不存在時，把安全建立／重驗列入套用計畫，不能假設 Move 會安全建立父目錄。再確認每個隔離目的檔均不存在（包括symlink等既有項目），使用Step 1盤點與必要的實際路徑核對；已有目的檔或無法確認者記 `still-unparseable: quarantine-destination-conflict`，整個相關組不進入寫入。套用時仍需不可覆寫primitive防止其後競爭。後續每個真 key 只寫一次，明確指向保留檔。這是寫入前檢查，不宣稱跨多個檔案已有交易／鎖定保證。
 
 #### P5: 最終集合重算
 
 所有真 ID／內容／隔離目的地檢查完成後，必須以**最終可套用集合**重新檢查每個共享舊 synthetic key 的安全分割條件，不能沿用剔除組別之前的判定。若某組後來遭拒，其檔案就是未修復參照；既有舊 entry 必須仍指向保留 synthetic key 的未修復檔，否則剔除所有會使該 entry 失真的相關修復組，記 `still-unparseable: dependent-group-rejected`。每次剔除後重新計算相依組，直到集合不再變動，才可進入 Step 2.5；過程只縮小計畫，不改指／重建舊 entry，也不把已拒絕組重新加入。例：A、B 共用舊 key，entry 指 A，兩者先定位成功但 B 後因真 key 碰撞遭拒，則 A 也不可改寫；若 entry 原已指向仍未修復的 B，A 才可能安全分割。
 
 > mail#319 issue 作者自證：ad-hoc `(sender, bare_subject, ±時間窗)` 三元組在密集 thread 中不可靠——所以匹配窗刻意窄（2 分鐘、恰好一封），寬鬆匹配寧可失敗。
+
+#### 計畫 recipe
+
+P1 第 4、5 項與 Step 5 的狀態判定是純函式，放在下面的區塊。呼叫方式：先用 `Write` 把輸入資料寫成固定的 JSON 檔、把下面的程式存成固定腳本，再以 argv 傳入「命令名稱、輸入檔、輸出檔」執行，最後用 `Read` 讀輸出檔；信件衍生的字串（key、檔名）只經由 JSON 檔傳遞，不放進程式碼或 shell 原始碼。Python 呼叫仍依 host 既有權限處理（見 Execution），沒有從郵件內容取得授權。命令與輸入欄位：
+
+- `check-index-references`：`index`（`email_index.json` 的 entry 物件，key → entry）、`scanned`（Step 1 讀到的每個頂層檔：`{"file", "message_id"}`，含非 synthetic 者）、`groups`（P1 前三項通過的組：`{"key": 落盤值, "files": [synthetic 檔名]}`）。輸出 `groups`（未被拒絕的組，加上 `holders` 與 `retained`）與 `rejections`（`files`、`code`、`entries`）。
+- `residue-report`：`index_after`（提交後重新讀取的 index）、`files_after`（本輪動過、提交後仍在頂層的檔案及其重讀的 `message_id`）、`touched`（本輪改寫、隔離、保留的檔名）。輸出 `residual_synthetic_index_keys`、`index_file_mismatches` 與 `status`。
+
+輸入不符合上述形狀（例如計畫中的檔案不是被掃描到的 synthetic 檔）時程式會報錯停止，不當作通過。
+
+<!-- archive-mail-repair-plan-recipe:start -->
+```python
+import json
+
+SYNTHETIC_PREFIX = "synthetic:"
+
+
+def is_synthetic(message_id):
+    return isinstance(message_id, str) and message_id.startswith(SYNTHETIC_PREFIX)
+
+
+def match_value(message_id):
+    """Comparison value: outer whitespace and one pair of angle brackets removed, case kept."""
+    value = message_id.strip()
+    if value.startswith("<") and value.endswith(">"):
+        value = value[1:-1].strip()
+    return value
+
+
+def _entry_file(entry):
+    file = entry.get("file") if isinstance(entry, dict) else None
+    return file if isinstance(file, str) else None
+
+
+def _scanned_ids(scanned):
+    ids = {}
+    for item in scanned:
+        if not isinstance(item, dict) or not isinstance(item.get("file"), str):
+            raise ValueError("scanned items need a string `file`")
+        ids[item["file"]] = item.get("message_id")
+    return ids
+
+
+def check_index_references(index, scanned, groups):
+    """P1 items 4 and 5: reverse lookup of index entries by file, and the identity set of top-level files."""
+    top = _scanned_ids(scanned)
+    entries_by_file = {}
+    for key, entry in index.items():
+        file = _entry_file(entry)
+        if file is not None:
+            entries_by_file.setdefault(file, []).append(key)
+    holders_by_value = {}
+    for file, message_id in top.items():
+        if isinstance(message_id, str) and message_id.strip() and not is_synthetic(message_id):
+            holders_by_value.setdefault(match_value(message_id), []).append(file)
+    planned, accepted, rejections = set(), [], []
+    for group in groups:
+        key, files = group["key"], list(group["files"])
+        if not isinstance(key, str) or not key.strip() or is_synthetic(key):
+            raise ValueError("a group key must be a non-synthetic Message-ID string")
+        for file in files:
+            if not is_synthetic(top.get(file)):
+                raise ValueError("a planned file must be a scanned synthetic file")
+            if file in planned:
+                raise ValueError("a file may belong to one group only")
+            planned.add(file)
+        same_value = holders_by_value.get(match_value(key), [])
+        holders = [file for file in same_value if top[file] == key]
+        misspelled = [file for file in same_value if top[file] != key]
+        affected = files + holders
+        if misspelled:
+            rejections.append({"files": affected + misspelled, "code": "existing-key-spelling-mismatch",
+                               "entries": []})
+            continue
+        if len(holders) >= 2:
+            rejections.append({"files": affected, "code": "duplicate-unverifiable", "entries": []})
+            continue
+        conflicts = []
+        for file in affected:
+            allowed = {key}
+            if is_synthetic(top.get(file)):
+                allowed.add(top[file])
+            conflicts.extend({"key": other, "file": file}
+                             for other in entries_by_file.get(file, []) if other not in allowed)
+        if conflicts:
+            rejections.append({"files": affected, "code": "index-reference-conflict",
+                               "entries": sorted(conflicts, key=lambda c: (c["file"], c["key"]))})
+            continue
+        accepted.append({"key": key, "files": files, "holders": holders,
+                         "retained": holders[0] if holders else None})
+    return {"groups": accepted, "rejections": rejections}
+
+
+def residue_report(index_after, files_after, touched):
+    """Step 5: residual synthetic keys, key/file drift on files touched this run, and the status word."""
+    top = _scanned_ids(files_after)
+    touched = set(touched)
+    residual, mismatches = [], []
+    for key, entry in index_after.items():
+        file = _entry_file(entry)
+        if is_synthetic(key):
+            residual.append({"key": key, "file": file})
+        if file not in touched:
+            continue
+        if file not in top:
+            mismatches.append({"file": file, "kind": "file-not-in-target-top-level"})
+        elif top[file] != key:
+            mismatches.append({"file": file, "kind": "key-differs-from-file-message-id"})
+    residual.sort(key=lambda r: (str(r["file"]), r["key"]))
+    mismatches.sort(key=lambda m: (m["file"], m["kind"]))
+    status = "completed-with-residue" if residual or mismatches else "completed"
+    return {"residual_synthetic_index_keys": residual, "index_file_mismatches": mismatches, "status": status}
+
+
+COMMANDS = {name.replace("_", "-"): globals()[name]
+            for name in ("check_index_references", "residue_report") if name in globals()}
+
+if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+    if len(sys.argv) != 4 or sys.argv[1] not in COMMANDS:
+        raise SystemExit("usage: repair_recipe.py <" + "|".join(sorted(COMMANDS)) + "> input.json output.json")
+    data = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+    Path(sys.argv[3]).write_text(json.dumps(COMMANDS[sys.argv[1]](**data), ensure_ascii=True), encoding="utf-8")
+```
+<!-- archive-mail-repair-plan-recipe:end -->
 
 ### Step 2.5: 套用能力檢查（寫入前）
 
@@ -180,17 +310,18 @@ error: <實際失敗>
 下面兩張表是本指令唯一的 `status` 與 `still-unparseable` 原因碼定義。報告、停止範本與本文任何位置都只能使用表內的詞；表內沒有的詞不得使用，也不得依性質相似自行新增。新增或改名要在同一個變更裡改這兩張表與使用它的步驟。「出現在哪一步」指判定該碼的步驟，「使用者能做什麼」是報告該碼時給使用者的建議。`stage` 的值不在這兩張表內。
 
 <!-- archive-mail-repair-codes:start -->
-#### status 碼（只有這 5 類，不得依性質相似類推）
+#### status 碼（只有這 6 類，不得依性質相似類推）
 
 | 碼 | 出現在哪一步 | 意義 | 使用者能做什麼 |
 |---|---|---|---|
-| `completed` | Step 5 | 計畫內的操作全部完成；`still-unparseable` 與 `pending` 的檔案保持原狀 | 依報告處理 `still-unparseable`；`residual_synthetic_index_keys` 為 0 時可接 `/archive-mail-rebuild-threads` |
+| `completed` | Step 5 | 計畫內的操作全部完成，且 `residual_synthetic_index_keys` 與 `index_file_mismatches` 都是 0；`still-unparseable` 與 `pending` 的檔案保持原狀 | 依報告處理 `still-unparseable`；可接 `/archive-mail-rebuild-threads` |
+| `completed-with-residue` | Step 5 | 計畫內的操作全部完成，但 `residual_synthetic_index_keys` 或 `index_file_mismatches` 不是空的（含 `apply-incomplete` 之後重跑：frontmatter 已是真 ID、index 仍是舊 key） | 先逐一處理報告列出的殘留，再接 `/archive-mail-rebuild-threads` |
 | `environment-unavailable` | Step 0.5 | SQLite 能力 preflight 失敗；沒有掃描任何檔案 | 依報告中的實際錯誤補救（授權、連線、版本）後重跑 |
 | `lookup-unavailable` | Step 2 | 搜尋或 headers 工具中途失效，或回應無法辨識；`repaired: 0` | 恢復工具後重跑 |
 | `apply-unavailable` | Step 1、Step 2.5 | 缺少檔案檢查或套用所需的能力／授權，或 index 缺少／身分不明；沒有修改任何東西 | 補齊能力或授權、確認 index 位置後重跑 |
 | `apply-incomplete` | Step 2.5、Step 3、Step 4 | 套用中途停止，部分操作可能已完成；`automatic_rerun_recovery: false` | 依報告的 `completed_operations`、`pending_operations`、`residual_index_keys` 人工核對；重跑不會自動收斂 |
 
-#### still-unparseable 原因碼（只有這 17 類，不得依性質相似類推）
+#### still-unparseable 原因碼（只有這 18 類，不得依性質相似類推）
 
 | 碼 | 出現在哪一步 | 意義 | 使用者能做什麼 |
 |---|---|---|---|
@@ -209,6 +340,7 @@ error: <實際失敗>
 | `existing-key-spelling-mismatch` | P1 | index 既有的非 synthetic key 與將寫入的落盤值拼法不同 | 人工決定採哪一種拼法 |
 | `duplicate-unverifiable` | P2 | 重複件比對的資料不全、檔案在 target 外或無法確認 | 補齊資料或確認檔案位置後重跑 |
 | `duplicate-content-drift` | P2 | 兩個檔案除 `message_id` 與換行表示法外仍有內容差異 | 人工比對兩個檔案；報告只列出不同的欄位名 |
+| `index-reference-conflict` | P1 | 有 index entry 指向即將改寫、隔離或保留的檔案，但它既不是該檔自己的舊 synthetic key，也不是本組的新真 key（含沒有任何被掃描檔帶著的孤兒 synthetic entry） | 人工清掉或修正報告列出的那個 entry 後重跑 |
 | `dependent-group-rejected` | P5 | 因與另一個被拒絕的組共用舊 key，本組跟著被剔除 | 先處理被拒絕的那一組 |
 | `quarantine-destination-conflict` | P4 | `duplicates/` 目錄或隔離目的檔有衝突 | 清掉衝突項目後重跑 |
 <!-- archive-mail-repair-codes:end -->
@@ -229,20 +361,23 @@ error: <實際失敗>
 ```
 Synthetic-ID Repair Report
 ═══════════════════════════════
-status: completed
+status: completed（有殘留時為 completed-with-residue，見下）
 scanned: 120 md — 20 synthetic
 excluded-path: <排除路徑與原因；無則明寫 0>
 repaired: 16（frontmatter re-keyed；index 每個真 key 僅保留一筆）
 still-unparseable: 4 ⚠（逐檔列出詞彙表的原因碼與說明；原因碼以詞彙表為準，不在表內的不得使用）
 pending: 0
 residual_synthetic_index_keys: <逐一列出仍存在的 synthetic key 與其 file；無則明寫 0>
+index_file_mismatches: <本輪動過的檔案，逐筆列 basename 與種類（key-differs-from-file-message-id／file-not-in-target-top-level）；無則明寫 0>
 duplicates quarantined this run: 3 → duplicates/（列出原檔與隔離檔對應）
 duplicates awaiting manual review: before 5 / after 8（列出目前隔離檔）
 ```
 
 在 `apply-incomplete` 中，`repaired` 僅表示frontmatter已改寫的數量，絕不表示index或隔離已提交，必須連同completed/pending/residual欄位閱讀。`repaired` 計算成功改寫 frontmatter 的 synthetic 檔案數（包括其後隔離者），不是最終 index key 數。上例的 repaired 與 still-unparseable 合計等於 synthetic 數量；本輪隔離是 repaired 的子集合，不能再當成額外修復數。結尾重新唯讀盤點 `duplicates/`，分開報告本輪新增與現存待人工確認總數，即使本輪新增為 0 也不能省略；盤點失敗則數量為 `unknown` 並列原因。這不授權清理隔離檔，也不變更全域 archive registry／階層語意（mail#363）。
 
-只有 `status: completed` 且 `residual_synthetic_index_keys` 為 0 時，才建議接 `/archive-mail-rebuild-threads`（index key 大量變動，threads.json 需全量重算）。若報告列出殘留的 synthetic index key（例如 `apply-incomplete` 之後重跑：frontmatter 已改成真 ID、索引仍是舊 key，Step 1 不會再看到那個檔），先逐一處理殘留，再重算 threads。
+狀態詞由 `residue-report` 計算，不由執行者自行判斷：全部提交後，重新讀取 index，並對本輪動過的檔案（改寫、隔離、保留）重讀 frontmatter 取得 `files_after`（仍在頂層者），連同 `touched` 呼叫該命令。`residual_synthetic_index_keys` 掃全部 entry（既有行為）；`index_file_mismatches` 只看本輪動過的檔案：提交後的 index 中，`file` 指向它們、而 key 不等於該檔最後的 `message_id`，或該檔已不在頂層的 entry。計畫檢查通過時 `index_file_mismatches` 應恆為空，它是縱深防禦，不是第二道規則。與本輪無關的既有 key／檔案不一致不算在內。兩個欄位都空才是 `completed`，否則是 `completed-with-residue`；目錄裡有與本輪無關的孤兒 synthetic entry 時，每次執行都會是 `completed-with-residue`，這是狀態說實話的代價。
+
+只有 `status: completed` 時才建議接 `/archive-mail-rebuild-threads`（index key 大量變動，threads.json 需全量重算）；`completed-with-residue` 時不建議，明寫「先處理殘留，再重算 threads」。`apply-incomplete` 之後重跑（frontmatter 已改成真 ID、索引仍是舊 key，Step 1 不會再看到那個檔）的結果是 `completed-with-residue`，殘留的 K→A 列在 `residual_synthetic_index_keys`，不是 `completed`；`automatic_rerun_recovery` 仍是 `false`，重跑不會自動修好它。
 
 ## 鐵律
 
