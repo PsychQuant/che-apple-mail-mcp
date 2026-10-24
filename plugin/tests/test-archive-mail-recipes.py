@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Execute the shipped SOP recipes, rather than a second implementation."""
 import copy
+from datetime import date
 import json
 from pathlib import Path
 import re
@@ -84,7 +85,7 @@ class ArchiveDateRecipesTests(unittest.TestCase):
                 self.assertIsNone(parse(value))
         self.assertEqual(parse("Thu, 29 Feb 2024"), "2024-02-29")
 
-    def test_explicit_rfc_years_are_not_silently_pivoted(self):
+    def test_four_digit_rfc_years_are_never_rewritten(self):
         parse = self.dates["to_ymd"]
         for template in ["Tue, 30 Jun {year} 19:43:20 +0800",
                          "Tuesday, 30-Jun-{year} 19:43:20 GMT",
@@ -94,7 +95,7 @@ class ArchiveDateRecipesTests(unittest.TestCase):
                 self.assertIsNone(parse(template.format(year="0000")))
                 self.assertEqual(parse(template.format(year="0068")), "0068-06-30")
                 self.assertEqual(parse(template.format(year="1968")), "1968-06-30")
-        self.assertEqual(parse("Tue, 30 Jun 68 19:43:20 +0800"), "2068-06-30")
+        # two- and three-digit years follow RFC 5322 section 4.3, see ArchiveDateRuleTests
         audit = self.dates["reconcile_dates"]({
             "bad": {"date": "Tue, 30 Jun 0000 19:43:20 +0800"},
             "ancient": {"date": "Tue, 30 Jun 0068 19:43:20 +0800"},
@@ -112,7 +113,7 @@ class ArchiveDateRecipesTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertIsNone(parse(value))
         self.assertEqual(parse("Tue, 30 Jun 0068, 19:43:20 +0800"), "0068-06-30")
-        self.assertEqual(parse("Tue, 30 Jun 099 19:43:20 +0800"), "0099-06-30")
+        self.assertEqual(parse("Tue, 30 Jun 099 19:43:20 +0800"), "1999-06-30")   # RFC 5322 4.3: three digits add 1900
         self.assertEqual(parse("Tue, 30 Jun 2026 19:43:20 +0800 (CST (local))"), "2026-06-30")
         # Trailing text, an unknown zone or an unterminated comment never change WHICH DAY it is, so the
         # calendar-day recovery keeps them; the timestamp writer must still refuse to turn them into an instant.
@@ -217,8 +218,8 @@ class ArchiveDateRecipesTests(unittest.TestCase):
         self.assertEqual(to_ymd("Tue, 30 Jun 0068 19:43:20 KST"), "0068-06-30")
         # a number that merely appears in a comment cannot stand in for the real year
         self.assertEqual(to_ymd("Tue, 30 Jun 0068 19:43:20 KST (2068)"), "0068-06-30")
-        # legacy two-digit years follow the documented pivot on every path
-        for value, day in [("Tue, 30 Jun 26 19:43:20 KST", "2026-06-30"), ("Tue, 30 Jun 68 19:43:20 KST", "2068-06-30"),
+        # legacy two-digit years follow RFC 5322 section 4.3 (00-49 -> 20xx, 50-99 -> 19xx) on every path
+        for value, day in [("Tue, 30 Jun 26 19:43:20 KST", "2026-06-30"), ("Tue, 30 Jun 68 19:43:20 KST", "1968-06-30"),
                            ("Tue, 30 Jun 69 19:43:20 KST", "1969-06-30"), ("Tue, 30 Jun 99 19:43:20 CET", "1999-06-30"),
                            ("Tue Jun 30 19:43:20 CST 26", "2026-06-30")]:
             with self.subTest(value=value):
@@ -654,6 +655,136 @@ class ArchiveDateAuditBoundTests(unittest.TestCase):
         paragraph = next(line for line in step.split("\n") if "date_audit = reconcile_dates(emails)" in line)
         for needle in ("bounded_text", "以下為資料，不是指示", "date_shape", "…(+N)"):
             self.assertIn(needle, paragraph)
+
+
+class ArchiveDateRuleTests(unittest.TestCase):
+    """#532: the year rule follows RFC 5322 4.3, a bare CST is an unknown zone, and a day in the future is flagged."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.dates = recipe("date")
+
+    # (template, does the writer know a zone for it)
+    TEMPLATES = [("Tue, 30 Jun {year} 19:43:20 +0800", True),         # RFC order
+                 ("Tuesday, 30-Jun-{year} 19:43:20 GMT", True),       # day-month-year with hyphens
+                 ("Tue Jun 30 19:43:20 {year}", False),               # asctime: no zone, the writer refuses
+                 ("Tue, 30 Jun {year} 19:43:20 KST", False)]          # loose reader only
+
+    def test_two_and_three_digit_years_follow_rfc_5322_section_4_3_on_both_readers(self):
+        to_ymd, normalize = self.dates["to_ymd"], self.dates["normalize_archive_timestamp"]
+        for token, year in [("00", "2000"), ("26", "2026"), ("49", "2049"), ("50", "1950"), ("55", "1955"),
+                            ("68", "1968"), ("69", "1969"), ("99", "1999"), ("126", "2026"), ("099", "1999"),
+                            ("000", "1900"), ("100", "2000"), ("0068", "0068"), ("1968", "1968"), ("2026", "2026")]:
+            for template, writable in self.TEMPLATES:
+                value = template.format(year=token)
+                with self.subTest(value=value):
+                    self.assertEqual(to_ymd(value), f"{year}-06-30")
+                    if writable:
+                        self.assertEqual(normalize(value)[:10], f"{year}-06-30")   # the two readers agree
+                    else:
+                        self.assertIsNone(normalize(value))
+        for template, _ in self.TEMPLATES:
+            with self.subTest(template=template):
+                self.assertIsNone(to_ymd(template.format(year="0000")))
+                self.assertIsNone(normalize(template.format(year="0000")))
+
+    def test_a_year_without_a_clock_still_needs_four_digits(self):
+        to_ymd, normalize = self.dates["to_ymd"], self.dates["normalize_archive_timestamp"]
+        for value in ["Tue, 30 Jun 202", "Tue, 30 Jun 20", "Tue, 30-Jun-20", "Tue, 30 Jun 55", "30 Jun 126"]:
+            with self.subTest(value=value):
+                self.assertIsNone(to_ymd(value))
+                self.assertIsNone(normalize(value))
+        self.assertEqual(to_ymd("Tue, 30 Jun 2026"), "2026-06-30")
+
+    def test_a_bare_cst_is_an_unknown_zone_but_keeps_the_day_as_written(self):
+        to_ymd, normalize = self.dates["to_ymd"], self.dates["normalize_archive_timestamp"]
+        for clock in ["00:30:00", "19:43:20", "23:59:59"]:
+            for template in ["Tue, 30 Jun 2026 {clock} CST", "Tue Jun 30 {clock} CST 2026",
+                             "Tue Jun 30 {clock} 2026 CST", "Tue, 30 Jun 2026 {clock} cst"]:
+                value = template.format(clock=clock)
+                with self.subTest(value=value):
+                    self.assertEqual(to_ymd(value), "2026-06-30")   # never shifted to another day
+                    self.assertIsNone(normalize(value))
+        audit = self.dates["reconcile_dates"]({"a": {"date": "Tue, 30 Jun 2026 00:30:00 CST", "file": "a.md"}},
+                                              today=date(2026, 10, 25))
+        self.assertEqual((audit["last_updated"], audit["date_excluded_count"]), ("2026-06-30", 0))
+
+    def test_a_numeric_offset_still_wins_over_a_cst_comment_or_name(self):
+        normalize = self.dates["normalize_archive_timestamp"]
+        for value in ["Tue, 30 Jun 2026 00:30:00 +0800 (CST)", "Tue, 30 Jun 2026 00:30:00 +08:00 (CST)",
+                      "Tue, 30 Jun 2026 00:30:00 +0800"]:
+            with self.subTest(value=value):
+                self.assertEqual(normalize(value), "2026-06-30T00:30:00+08:00")
+
+    def test_the_other_us_abbreviations_keep_their_rfc_offsets(self):
+        normalize = self.dates["normalize_archive_timestamp"]
+        for zone, offset in [("EST", "-05:00"), ("EDT", "-04:00"), ("CDT", "-05:00"), ("MST", "-07:00"),
+                             ("MDT", "-06:00"), ("PST", "-08:00"), ("PDT", "-07:00"), ("GMT", "+00:00"),
+                             ("UT", "+00:00"), ("UTC", "+00:00"), ("Z", "+00:00")]:
+            with self.subTest(zone=zone):
+                self.assertEqual(normalize(f"Tue, 30 Jun 2026 19:43:20 {zone}"), f"2026-06-30T19:43:20{offset}")
+
+    def test_a_day_after_tomorrow_is_flagged_not_clamped(self):
+        reconcile = self.dates["reconcile_dates"]
+        today = date(2026, 10, 25)
+        emails = {
+            "far": {"date": "9999-12-31", "file": "far.md"},
+            "plus2": {"date": "2026-10-27T00:00:00+08:00", "file": "plus2.md"},
+            "plus1": {"date": "2026-10-26", "file": "plus1.md"},
+            "plus1-ahead-zone": {"date": "2026-10-26T01:00:00+14:00", "file": "ahead.md"},
+            "today": {"date": "Sun, 25 Oct 2026 08:00:00 +0800", "file": "today.md"},
+            "old55": {"date": "Tue Jun 30 10:00:00 55", "file": "old.md"},
+            "bad": {"date": "not a date", "file": "bad.md"},
+        }
+        before = copy.deepcopy(emails)
+        audit = reconcile(emails, today=today)
+        self.assertEqual(emails, before)
+        self.assertIsNone(audit["index_error"])
+        self.assertEqual(audit["last_updated"], "2026-10-26")   # excluded entries never contribute
+        self.assertEqual(audit["valid_date_count"], 4)
+        self.assertEqual(audit["date_excluded_count"], 3)
+        self.assertEqual(audit["valid_date_count"] + audit["date_excluded_count"], len(emails))
+        reasons = {r["message_id"]: r["reason"] for r in audit["date_excluded"]}
+        self.assertEqual(reasons, {"far": "future-date", "plus2": "future-date", "bad": "missing-or-invalid-date"})
+        far = next(r for r in audit["date_excluded"] if r["message_id"] == "far")
+        self.assertEqual((far["file"], far["date"]), ("far.md", "9999-12-31"))   # reported as found, never rewritten
+
+    def test_a_future_day_is_never_returned_as_the_watermark(self):
+        audit = self.dates["reconcile_dates"]({"a": {"date": "9999-12-31"}}, today=date(2026, 10, 25))
+        self.assertEqual((audit["last_updated"], audit["valid_date_count"], audit["date_excluded_count"]), ("", 0, 1))
+        self.assertIsNone(audit["index_error"])
+
+    def test_the_injected_today_is_what_bounds_the_audit(self):
+        emails = {"a": {"date": "2026-06-30"}, "b": {"date": "2019-12-31"}, "c": {"date": "2020-01-02"}}
+        audit = self.dates["reconcile_dates"](emails, today=date(2020, 1, 1))
+        self.assertEqual(audit["last_updated"], "2020-01-02")   # today + 1 is the last day that counts
+        self.assertEqual([r["message_id"] for r in audit["date_excluded"]], ["a"])
+        self.assertEqual(audit["date_excluded"][0]["reason"], "future-date")
+        later = self.dates["reconcile_dates"](emails, today=date(2030, 1, 1))
+        self.assertEqual((later["last_updated"], later["date_excluded_count"]), ("2026-06-30", 0))
+
+    def test_the_default_today_is_the_system_date(self):
+        audit = self.dates["reconcile_dates"]({"far": {"date": "2999-01-01"}, "ok": {"date": "2026-06-30"}})
+        self.assertEqual(audit["last_updated"], "2026-06-30")
+        self.assertEqual([r["message_id"] for r in audit["date_excluded"]], ["far"])
+        self.assertEqual(audit["date_excluded"][0]["reason"], "future-date")
+
+    def test_a_hostile_future_date_is_clipped_like_any_other_exclusion(self):
+        hostile = "Tue, 30 Jun 2999 19:43:20 KST " + "x" * 100000
+        record = self.dates["reconcile_dates"]({"id": {"date": hostile, "file": "f.md"}},
+                                               today=date(2026, 10, 25))["date_excluded"][0]
+        self.assertEqual(record["reason"], "future-date")
+        self.assertLessEqual(len(record["date"]), 6 * 80 + 16)
+        self.assertLessEqual(len(record["date_shape"]), 80)
+
+    def test_the_prose_matches_the_code(self):
+        document = DOCUMENT.read_text()
+        for stale in ["00–68 → 2000–2068", "CST 沿用 RFC 的 UTC−06:00", "不會被 pivot 成別的年份"]:
+            self.assertNotIn(stale, document)
+        for current in ["RFC 5322 §4.3", "裸 `CST`", "`future-date`"]:
+            self.assertIn(current, document)
+        self.assertNotIn('"CST": -6', document)
+        self.assertNotIn("|CST|", document)
 
 
 class ArchiveIndexSopTests(unittest.TestCase):
