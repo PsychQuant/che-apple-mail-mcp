@@ -11,7 +11,7 @@ class CheAppleMailMCPServer {
     private let tools: [Tool]
     private let indexReader: EnvelopeIndexReader?
 
-    init() async throws {
+    init(databasePath: String = EnvelopeIndexReader.defaultDatabasePath) async throws {
         self.tools = Self.defineTools()
         self.server = Server(
             name: "che-apple-mail-mcp",
@@ -31,7 +31,7 @@ class CheAppleMailMCPServer {
         // degradation (#69 — without this log, every read tool silently
         // bypasses the SQLite + .emlx fast path with no observable cause).
         do {
-            self.indexReader = try EnvelopeIndexReader(databasePath: EnvelopeIndexReader.defaultDatabasePath)
+            self.indexReader = try EnvelopeIndexReader(databasePath: databasePath)
         } catch {
             let message = "EnvelopeIndexReader init failed: "
                 + "\(error.localizedDescription)\n"
