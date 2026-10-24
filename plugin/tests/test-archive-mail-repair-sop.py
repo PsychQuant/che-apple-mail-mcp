@@ -437,7 +437,7 @@ class SopPinsCatchNamedChanges(unittest.TestCase):
     def setUpClass(cls):
         cls.text = sop_text()
         cls.mutations = [
-            ("code tables", "a status word follows still-unparseable:", lambda t: replaced(t, "still-unparseable: <停止前已具名判定的檔案／原因；未評估者不列入此欄>", "still-unparseable: environment-unavailable"), "environment-unavailable"),
+            ("code tables", "a status word follows still-unparseable:", lambda t: replaced(t, "still-unparseable: <停止前已具名判定的檔案 basename 與原因碼；未評估者不列入此欄>", "still-unparseable: environment-unavailable"), "environment-unavailable"),
             ("code tables", "a reason code outside the table", lambda t: replaced(t, "記 `still-unparseable: subject-unavailable`，不發空查詢", "記 `still-unparseable: other-failure`，不發空查詢"), "other-failure"),
             ("code tables", "the closed count disagrees with the rows", lambda t: replaced(t, "只有這 19 類", "只有這 20 類"), "closed count"),
             ("code tables", "the closing phrase is removed from a heading", lambda t: replaced(t, "（只有這 6 類，不得依性質相似類推）", "（只有這 6 類）"), "closed count"),
@@ -445,11 +445,11 @@ class SopPinsCatchNamedChanges(unittest.TestCase):
             ("code tables", "a word sits in both tables", lambda t: replaced(t, "| `subject-unavailable` | Step 2 階段 1 |", "| `completed` | Step 2 階段 1 |\n| `subject-unavailable` | Step 2 階段 1 |"), "both tables"),
             ("code tables", "the table markers are removed", lambda t: replaced(t, "<!-- archive-mail-repair-codes:start -->", ""), "exactly one"),
             ("report templates", "duplicates is dropped from the apply-incomplete report", lambda t: drop_line(t, "duplicates: before <N> / after <M>（已搬移"), "apply-incomplete lacks the field duplicates"),
-            ("report templates", "failed_file is renamed in the lookup report", lambda t: replaced(t, "failed_file: <本次失敗的檔案>", "failed: <本次失敗的檔案>"), "failed_file"),
+            ("report templates", "failed_file is renamed in the lookup report", lambda t: replaced(t, "failed_file: <本次失敗的檔案 basename>", "failed: <本次失敗的檔案 basename>"), "failed_file"),
             ("report templates", "index_file_mismatches is dropped from the final report", lambda t: drop_line(t, "index_file_mismatches:"), "index_file_mismatches"),
             ("report templates", "automatic_rerun_recovery is dropped from the apply-incomplete report", lambda t: drop_line(t, "automatic_rerun_recovery:"), "automatic_rerun_recovery"),
             ("report templates", "the lookup report loses its status line", lambda t: replaced(t, "\nstatus: lookup-unavailable\nstage: rekey-lookup", "\nstate: lookup-unavailable\nstage: rekey-lookup"), "lookup-unavailable"),
-            ("report templates", "the preflight report loses its error field", lambda t: drop_line(t, "error: <保留實際工具錯誤"), "environment-unavailable lacks the field error"),
+            ("report templates", "the preflight report loses its error field", lambda t: drop_line(t, "error: <錯誤類別與說明；沒有有效 envelope"), "environment-unavailable lacks the field error"),
             ("report templates", "a sixth template appears", lambda t: replaced(t, "### 停止報告的 duplicates 欄位", "```text\nstatus: surprise-state\nrepaired: 0\n```\n\n### 停止報告的 duplicates 欄位"), "surprise-state"),
             ("preflight", "the probe call is deleted", lambda t: replaced(t, PROBE, ""), "probe call must appear exactly once"),
             ("preflight", "another search_emails( call comes first", lambda t: replaced(t, "## 用法", "先呼叫 search_emails(field: \"sender\") 看看。\n\n## 用法"), "first search_emails"),
