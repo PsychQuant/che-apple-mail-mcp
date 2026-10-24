@@ -297,6 +297,7 @@ actor MailController {
             throw MailError.operationFailed(
                 "The draft deletion did not return within \(seconds)s. osascript termination "
                 + "was requested; the deletion outcome is unknown. Check the drafts mailbox before retrying. "
+                + timeoutVerificationHint(.draftDelete) + " "
                 + (granted ? "Automation permission was verified GRANTED. Mail may be busy or unresponsive."
                    : "Automation permission was not verified granted.\n" + AutomationHelp.guidance))
         }
@@ -3132,6 +3133,7 @@ enum MailError: LocalizedError {
                        : "The interpreter's exit was not confirmed during timeout cleanup; it may still be running. ")
                     + "Terminating the interpreter does not undo Apple Events already sent to Mail: "
                     + "saving or sending may already have occurred. Check Mail and any leftover compose window before retrying. "
+                    + timeoutVerificationHint(.draftSave) + " "
                     + (automationGranted
                        ? "Automation permission was verified GRANTED. A long GUI flow may have exceeded its deadline, "
                          + "or Mail may be busy or unresponsive."

@@ -583,6 +583,13 @@ func isTimeoutError(_ error: Error) -> Bool {
 /// #301: a send-flow TIMEOUT gets its own wording — the send keystroke may or
 /// may not have fired (the deadline left no conclusive script result), which
 /// is a different honest statement than "was already dispatched".
+///
+/// #522: both branches carry `timeoutVerificationHint(.sendFlow)` — which
+/// read-only query can produce evidence, and that a missing row proves nothing.
+/// It goes BEFORE the clamped echo (the echo is cut at 200 characters). The UNKNOWN /
+/// NOT retrying sentences are unchanged, and so is the classification of the
+/// returned error (a new `.scriptFailed` that is neither a timeout nor
+/// POSTDISPATCH-prefixed).
 func unknownSendStateError(_ error: Error) -> MailError {
     if isTimeoutError(error) {
         return MailError.scriptFailed(
@@ -590,7 +597,9 @@ func unknownSendStateError(_ error: Error) -> MailError {
                 + "the send keystroke may or may not have fired, so the send state is "
                 + "UNKNOWN. NOT retrying (that could send a "
                 + "duplicate). Check Mail's Sent mailbox / Outbox and any leftover "
-                + "compose window before re-sending. Original error: "
+                + "compose window before re-sending. "
+                + timeoutVerificationHint(.sendFlow)
+                + " Original error: "
                 + clampedErrorEcho(error.localizedDescription),
             code: -1)
     }
@@ -599,7 +608,9 @@ func unknownSendStateError(_ error: Error) -> MailError {
             + "afterwards — the send state is UNKNOWN and the mail may already be on "
             + "the wire. NOT retrying (that could send a duplicate). "
             + "Check Mail's Sent mailbox / Outbox before re-sending. The compose window "
-            + "(if still open) was left untouched for inspection. Original error: "
+            + "(if still open) was left untouched for inspection. "
+            + timeoutVerificationHint(.sendFlow)
+            + " Original error: "
             + clampedErrorEcho(error.localizedDescription),
         code: -1)
 }
