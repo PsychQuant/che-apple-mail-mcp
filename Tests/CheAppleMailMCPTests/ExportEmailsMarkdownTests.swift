@@ -37,7 +37,7 @@ final class ExportEmailsMarkdownTests: XCTestCase {
 
     private func makeEmail(
         subject: String = "Topic",
-        sender: String = "Joanne Peng <peng.cyj@gmail.com>",
+        sender: String = "Alice Example <alice@example.com>",
         date: String = "Sat, 13 Jun 2026 16:01:14 +0800",
         messageId: String = "<m@x>",
         inReplyTo: String = "",
