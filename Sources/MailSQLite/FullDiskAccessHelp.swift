@@ -102,6 +102,7 @@ public enum FullDiskAccessHelp {
         "Grant Full Disk Access to the app running this server — your terminal "
             + "(Ghostty / Terminal / iTerm) for Claude Code, or \(binaryPath()) "
             + "for Claude Desktop / direct launch — via \(settingsDeepLink), then "
-            + "fully quit and reopen it."
+            + "fully quit and reopen it. If access is already granted, run check_fda "
+            + "(it retries opening the index) or reconnect the server."
     }
 }

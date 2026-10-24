@@ -123,19 +123,19 @@ E1-E5 是 confirmation-protocol 的 **Phase 1**(Disambiguation)。
 ## 範例 dialogue
 
 ```
-user: 把 jonathan 寄給我的信都歸檔
+user: 把 alex 寄給我的信都歸檔
 
 AI [E1 trigger]:
-「jonathan」可能對應到:
-1. jonathan_tong@ntu.edu.tw (Jonathan Tong,合作研究者)
-2. jonathan@some-other-domain.com (其他)
+「alex」可能對應到:
+1. alex.rowan@example.invalid (Alex Rowan,合作研究者)
+2. alex@other.example.invalid (其他)
 
 你要哪一個?
 
 user: 1
 
 AI [E4 trigger - direction is "寄給我的" so direction is implicitly received, but let me double check via E3]:
-「jonathan_tong@ntu.edu.tw 寄給我的信」我理解是:
+「alex.rowan@example.invalid 寄給我的信」我理解是:
 - Direction: received only (不含我寄出去的)
 - Mailbox: 預設 INBOX(若要包含其他 mailbox 例如 archived 請說)
 - Time range: 全部歷史

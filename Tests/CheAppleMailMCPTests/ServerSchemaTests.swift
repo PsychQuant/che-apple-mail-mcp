@@ -517,14 +517,14 @@ final class ServerSchemaTests: XCTestCase {
         // localCopyConfirmedMissing=false → Tier 1 did not independently prove
         // the cause, so the message is hedged ("usually").
         let msg = saveAttachmentAppleEventHint(
-            code: -10000, accountName: "d06227105@ntu.edu.tw",
+            code: -10000, accountName: "owner@example.invalid",
             rawMessage: "Mail got an error: AppleEvent handler failed.",
             localCopyConfirmedMissing: false) ?? ""
         XCTAssertTrue(msg.contains("save_attachment failed"), "got: \(msg)")
         XCTAssertTrue(msg.contains("-10000"))
         XCTAssertTrue(msg.contains("Mail got an error: AppleEvent handler failed."),
                       "must echo the raw AppleScript message")
-        XCTAssertTrue(msg.contains("d06227105@ntu.edu.tw"), "recovery step must name the account")
+        XCTAssertTrue(msg.contains("owner@example.invalid"), "recovery step must name the account")
         XCTAssertTrue(msg.contains("synchronize_account"), "must cross-reference the MCP tool")
         XCTAssertTrue(msg.contains("Rebuild"))
         XCTAssertTrue(msg.contains("usually"), "unconfirmed cause must stay hedged")
@@ -534,7 +534,7 @@ final class ServerSchemaTests: XCTestCase {
         // localCopyConfirmedMissing=true → Tier 1 already threw attachmentNotFound,
         // so the MCP states the cause definitively, not "usually".
         let msg = saveAttachmentAppleEventHint(
-            code: -10000, accountName: "d06227105@ntu.edu.tw",
+            code: -10000, accountName: "owner@example.invalid",
             rawMessage: "AppleEvent handler failed.",
             localCopyConfirmedMissing: true) ?? ""
         XCTAssertTrue(msg.contains("already confirmed"), "got: \(msg)")

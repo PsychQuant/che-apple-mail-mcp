@@ -314,7 +314,7 @@ reply_email(
 
 | Tool | Description |
 |------|-------------|
-| `check_fda` | Check Full Disk Access status (SQLite fast-path availability) |
+| `check_fda` | Check Full Disk Access status and retry opening this server's index reader now; reports the server's actual SQLite fast-path state (open / just recovered / still unavailable) |
 | `check_accessibility` | Check Accessibility permission (the compose/reply GUI paths; without it those tools refuse — except the opt-in direct-write `create_draft` path, which needs Full Disk Access instead) |
 | `check_automation` | Check Automation permission (Apple Events to Mail) — non-prompting probe, four states with remediation ([#293](https://github.com/PsychQuant/che-apple-mail-mcp/issues/293)); the binary holds its OWN grant, osascript working ≠ binary authorized ([#288](https://github.com/PsychQuant/che-apple-mail-mcp/issues/288)) |
 | `get_mail_log_events` | Read Mail's own unified log to find where an event chain stops (e.g. draft saved → queued → engine notified → IMAP `APPENDUID` receipt) — read-only ([#465](https://github.com/PsychQuant/che-apple-mail-mcp/issues/465)). `detail=brief` (default) returns only the static event template, integer arguments and an account letter for `[account - mailbox]` lines — no account names, subjects or Message-IDs, as long as the template is a compile-time string (Mail's own are); `detail=detailed` adds the raw message, which **contains account identifiers and received-mail content: do not paste it into public issues**. Window ≤ 60 min, times must carry a UTC offset; page with `since=next_start`, `offset=next_offset` and the same `until`. No event-name filter yet ([#466](https://github.com/PsychQuant/che-apple-mail-mcp/issues/466)). An empty result never means the action did not happen. Verified on macOS 27.2 / Mail 16.0 only; needs an admin-group user |
@@ -437,7 +437,7 @@ macOS grants Full Disk Access to the **responsible process** — the app that *l
 
 - **`CheAppleMailMCP --setup`** opens a small window with **live** Full Disk Access status (re-checked on a timer, flips to "Ready ✅" the moment you grant) plus an **on-demand** Automation check, and "Open Full Disk Access settings" / "Copy binary path" buttons.
 - **`CheAppleMailMCP --check-fda`** prints the status headlessly (and opens the pane when access is **denied**) — handy from a terminal or script.
-- The **`check_fda` MCP tool** reports the same status to Claude on demand (call it when a SQLite-only feature errors).
+- The **`check_fda` MCP tool** reports the same status to Claude on demand (call it when a SQLite-only feature errors). It also makes the running server retry opening its own index reader and reports the result ([#537](https://github.com/PsychQuant/che-apple-mail-mcp/issues/537)): a granted probe is no longer taken to mean the server can use the index. If the reader was unavailable and the retry opens it, the answer says it recovered; if the probe can read the file but the server's open still fails, it shows that error and says to reconnect the server (`/mcp` in Claude Code).
 
 None of these can remove the single manual toggle (Apple puts FDA in the manual-only bucket alongside Accessibility / Screen Recording), but they make "what do I do?" obvious and give live feedback the instant you flip it on.
 
@@ -558,8 +558,12 @@ Exchange (EWS) accounts in Apple Mail **do not materialize `.emlx` files** — m
 
 When the fast path fails for a non-EWS account, the failure is logged to stderr (since [#69](https://github.com/PsychQuant/che-apple-mail-mcp/issues/69)). Run the binary in a terminal and watch stderr to distinguish:
 
-- `EnvelopeIndexReader init failed: ...` — DB unreachable (commonly: Full Disk Access missing)
+- `EnvelopeIndexReader init failed: ...` — DB unreachable when the server started (commonly: Full Disk Access missing). It is not final ([#537](https://github.com/PsychQuant/che-apple-mail-mcp/issues/537)): until the index opens, read tools use AppleScript; a read tool that runs at least 30 s after the last attempt tries to open it again, and `check_fda` retries at once.
+- `EnvelopeIndexReader retry failed: ...` — a retry did not open it. A retry that fails exactly as before is not logged again, so a setup without Mail (for example Exchange only) logs this once, not every 30 s. `... (requested by check_fda)` marks a retry you asked for; those are always logged.
+- `EnvelopeIndexReader retry recovered ...` — the index opened after an earlier failure; read tools use the SQLite fast path again from the next call.
 - `SQLite get_email fast path failed for rowId=N: ...` — per-message failure (e.g., `.partial.emlx` only, malformed MIME, file not yet synced)
+
+The first three lines end with `FDA probe: <result> (errno N)`. It is the plain `fopen` check `check_fda` uses, recorded at the moment of the SQLite failure, so the two can be compared: `denied` or `no-mail-data` means the file itself was refused or missing; `granted` next to a failed open means the probe and the SQLite open disagree (please report it with the log line). Note that retrying cannot fix an open that keeps failing for a reason outside the server, such as a grant that is still missing.
 
 Both cases transparently fall through to AppleScript with `... falling through to AppleScript` in the log line, so behavior is preserved while observability is restored.
 
@@ -572,9 +576,22 @@ Both cases transparently fall through to AppleScript with `... falling through t
 | Server disconnected | Rebuild with `swift build -c release` |
 | Not allowed to send Apple events | Add permissions in System Settings > Automation |
 | Mail.app not responding | Ensure Mail.app is running with configured accounts |
-| Commands timing out | Large mailboxes take longer; try specific searches |
+| Commands timing out | Large mailboxes take longer; try specific searches. If a call that sends, saves a draft or changes a message timed out, its outcome in Mail is unknown: see [After a timeout](#after-a-timeout-what-can-and-cannot-be-known) before retrying |
 | Bulk fetch slower than expected | Watch stderr for `... falling through to AppleScript` lines. EWS/Exchange accounts always fall back (see [Performance & Storage](#performance--storage)); other accounts logging fallback indicate a fixable .emlx issue |
 | `save_attachment` fails with `-1728 "Can't get account"` or `-1719 "Invalid mailbox index"` | Since [#173](https://github.com/PsychQuant/che-apple-mail-mcp/issues/173) both errors come back with an actionable hint naming the failing reference (account / mailbox / message). Common causes: two Mail.app accounts share the same `display_name`, or an email-form `account_name` maps to several accounts — see [Account Disambiguation](#account-disambiguation) below. |
+
+### After a timeout: what can and cannot be known
+
+When a call times out, the tool does not know whether Mail went on to finish the operation. Ending the `osascript` child (or abandoning an in-process call) does not undo Apple Events Mail has already accepted, so saving or sending may already have happened. The error says so. This section lists what you can look at afterwards and what each check does not prove. Nothing here lets a tool report "sent" or "not sent": only a positive observation counts as evidence, and a missing row is never read as "nothing happened".
+
+| Operation | What the tool reports | What you can look at | What that does not tell you |
+|-----------|-----------------------|----------------------|-----------------------------|
+| Sends: `compose_email`, `reply_email`, `forward_email` | `send state is UNKNOWN`, `NOT retrying` (the tool never re-sends on its own) | `search_emails` with `field="subject"` and the subject you used; read each row's `mailbox` and `date_received`. A matching row is evidence that a message with that subject exists in that mailbox | A missing row does not show that no message went out: the index is written asynchronously, some accounts keep no Sent copy, and `search_emails` can come back empty without cause ([#549](https://github.com/PsychQuant/che-apple-mail-mcp/issues/549), [#536](https://github.com/PsychQuant/che-apple-mail-mcp/issues/536)). A matching row may also be an earlier message with the same subject. Do not resend automatically; let the user decide |
+| Saving a draft: `create_draft`, `reply_email` with `save_as_draft` | A timeout error saying that saving or sending may already have occurred | `search_emails` as above, or `list_drafts` (asks Mail, so it can time out again) | A missing row does not prove the draft was not saved. Saving again may leave two drafts; delete the extra one |
+| Deleting the old draft inside `update_draft` | `deleted_old: false` and a `note` saying the deletion outcome is unknown | `list_drafts`, or `search_emails` with the draft's subject | A row for the old id that is still listed means the index still lists it; a missing row is the index's view, not a confirmation from Mail. Do not retry the update or the deletion until you have looked |
+| Setting a value: `mark_read`, `flag_email`, `set_flag_color`, `set_background_color`, `mark_as_junk` | A timeout error | Repeating the same call sets the same value (each one sets an absolute value, not a toggle). `get_email_metadata` reports `read` and `flagged` | The timed-out call may still complete later; if you meant a different value, check the state afterwards |
+
+`search_emails` reads the Envelope Index and needs Full Disk Access; without it, it asks Mail through AppleScript and can time out again. The other write tools (`move_email`, `copy_email`, `delete_email`, mailbox and rule management, and so on) are not classified here: check the state before retrying them.
 
 ---
 

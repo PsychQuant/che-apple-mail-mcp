@@ -10,15 +10,39 @@ TBD - created by archiving change 'sqlite-search-engine'. Update Purpose after a
 
 The system SHALL open `~/Library/Mail/V10/MailData/Envelope Index` in read-only mode using `SQLITE_OPEN_READONLY`. The system SHALL verify the database file exists and is accessible before attempting to open it. If the file is not accessible, the system SHALL return an error message stating that Full Disk Access permission is required.
 
+The system SHALL keep ONE read-only connection that concurrent request handlers share. That connection SHALL be opened in serialized threading mode (`SQLITE_OPEN_FULLMUTEX`) and SHALL carry a busy timeout (`sqlite3_busy_timeout`, 5000 ms), so that overlapping read tools queue on the connection instead of using it at the same time. Each reader method SHALL prepare, step and finalize its statements within its own call.
+
+A failure to open the Envelope Index SHALL NOT be final for the process. The system SHALL treat the index reader as unavailable until an open succeeds, retry the open when a read tool needs the reader and at least 30 seconds have passed since the last attempt, and log every retry outcome to stderr together with the result and `errno` of a plain read probe of the index file. A failure that repeats unchanged SHALL NOT be logged again. A connection counts as open only after a first query (`SELECT 1 FROM sqlite_master LIMIT 1`) has run on it.
+
 #### Scenario: Successful database connection
 
 - **WHEN** the MCP server initializes and the Envelope Index database is accessible
-- **THEN** the system opens a read-only SQLite connection and prepares reusable statements for search queries
+- **THEN** the system opens a read-only SQLite connection in serialized mode with a busy timeout, ready to serve queries from concurrent request handlers
+
+#### Scenario: Concurrent read tools share the connection safely
+
+- **WHEN** two or more read tools (for example `get_special_mailboxes`, `search_emails`, `list_mailboxes`) run at the same time against the same server process
+- **THEN** every call completes with the same result it would have produced alone, no call crashes the process or spins without making progress, and the calls queue on the shared connection instead of overlapping on it
 
 #### Scenario: Database file not accessible
 
 - **WHEN** the MCP server attempts to open the Envelope Index and the file does not exist or access is denied
 - **THEN** the system returns an error indicating Full Disk Access permission is required for the terminal application
+
+#### Scenario: Index unavailable at startup becomes available later
+
+- **WHEN** the Envelope Index cannot be opened when the MCP server starts, and can be opened 30 or more seconds later
+- **THEN** the first read tool that runs after that moment opens the reader, takes the SQLite fast path, and logs that the reader recovered; read tools before that moment used the AppleScript fallback
+
+#### Scenario: A repeated identical failure is logged once
+
+- **WHEN** the Envelope Index cannot be opened, and every retry fails with the same error and the same probe result
+- **THEN** the failure is logged at startup and not again on later retries; a changed error or probe result, or an explicit `check_fda`, is logged
+
+#### Scenario: check_fda reports the server's actual state
+
+- **WHEN** `check_fda` runs while the server's index reader is unavailable
+- **THEN** the system retries the open at once, ignoring the retry interval, and the report states whether the reader is open, has just recovered, or is still unavailable (with the open error and the instruction to reconnect the server), instead of reporting only whether the file can be read
 
 #### Scenario: Database file path with V10
 

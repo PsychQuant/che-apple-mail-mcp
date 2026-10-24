@@ -45,6 +45,44 @@ final class FDAStatusTests: XCTestCase {
     }
     #endif
 
+    // MARK: - probeDetail (#537): the same probe, plus the errno behind it
+
+    #if canImport(Darwin)
+    func testProbeDetailReadableFileHasNoErrno() throws {
+        let tmp = NSTemporaryDirectory() + "fda-detail-\(ProcessInfo.processInfo.globallyUniqueString).bin"
+        try Data([0x01]).write(to: URL(fileURLWithPath: tmp))
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+        XCTAssertEqual(FDAStatus.probeDetail(path: tmp), FDAStatus.Detail(probe: .granted, errnoValue: 0))
+    }
+
+    func testProbeDetailMissingFileCarriesENOENT() {
+        let missing = NSTemporaryDirectory() + "fda-detail-missing-\(ProcessInfo.processInfo.globallyUniqueString)"
+        XCTAssertEqual(FDAStatus.probeDetail(path: missing), FDAStatus.Detail(probe: .noMailData, errnoValue: ENOENT))
+    }
+
+    func testProbeDetailUnreadableFileCarriesAPermissionErrno() throws {
+        try XCTSkipIf(geteuid() == 0, "running as root bypasses file permissions")
+        let tmp = NSTemporaryDirectory() + "fda-detail-noperm-\(ProcessInfo.processInfo.globallyUniqueString).bin"
+        try Data([0x01]).write(to: URL(fileURLWithPath: tmp))
+        XCTAssertEqual(chmod(tmp, 0), 0)
+        defer { _ = chmod(tmp, 0o644); try? FileManager.default.removeItem(atPath: tmp) }
+        let detail = FDAStatus.probeDetail(path: tmp)
+        XCTAssertEqual(detail.probe, .denied)
+        XCTAssertTrue(detail.errnoValue == EACCES || detail.errnoValue == EPERM,
+                      "expected EACCES or EPERM, got \(detail.errnoValue)")
+    }
+
+    func testProbeAgreesWithProbeDetail() {
+        let missing = NSTemporaryDirectory() + "fda-agree-\(ProcessInfo.processInfo.globallyUniqueString)"
+        XCTAssertEqual(FDAStatus.probe(path: missing), FDAStatus.probeDetail(path: missing).probe)
+    }
+    #endif
+
+    func testDetailLogTextHasTheDocumentedShape() {
+        XCTAssertEqual(FDAStatus.Detail(probe: .denied, errnoValue: 13).logText, "FDA probe: denied (errno 13)")
+        XCTAssertEqual(FDAStatus.Detail(probe: .granted, errnoValue: 0).logText, "FDA probe: granted (errno 0)")
+    }
+
     func testSummaryDistinguishesAllFourStates() {
         XCTAssertTrue(FDAStatus.summary(.granted).contains("GRANTED"))
         XCTAssertTrue(FDAStatus.summary(.denied).contains("DENIED"))
