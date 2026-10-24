@@ -28,7 +28,7 @@
 
 ## 4. 迴歸與 BREAKING 影響確認
 
-- [~] 4.1 掃過本機已知 workspace 的 `.claude/.mail/config.yaml`，逐一判定其 `attachment_routing` 寫法在新語意下行為是否改變，把結果記入實作 PR 的 description。已知：目前唯一使用該欄位的 config 採完整六 sub-key 寫法，不受影響 —— 需實際確認而非沿用此假設。 — 2026-10-23 擴大到家目錄與雲端同步資料夾：17 份 config，可讀的 10 份都不受影響（5 份沒寫 `attachment_routing`、5 份四個清單都寫出），2 份有 `participant_aliases` 也照原樣保留；另 7 份是雲端佔位檔，讀不到內容，未判定（evidence/config-inventory-summary.json）。
+- [x] 4.1 掃過本機已知 workspace 的 `.claude/.mail/config.yaml`，逐一判定其 `attachment_routing` 寫法在新語意下行為是否改變，把結果記入實作 PR 的 description。已知：目前唯一使用該欄位的 config 採完整六 sub-key 寫法，不受影響 —— 需實際確認而非沿用此假設。 — 2026-10-23 擴大到家目錄與雲端同步資料夾，2026-10-24 補完：17 份 config 都不受影響（12 份沒寫 `attachment_routing`、5 份四個清單都寫出），6 份有 `participant_aliases` 也照原樣保留；唯一會影響它們的是比對改為不分大小寫（evidence/config-inventory-summary.json）。
 
 - [x] 4.2 跑一次真實歸檔（既有 workspace、既有 config，不改設定），確認 identity 檔缺席時的行為與本 change 之前**逐項相同**：新歸檔封數、附件分類去向、coverage audit 結果三者一致。這是 backward-compat 的驗收依據。
 

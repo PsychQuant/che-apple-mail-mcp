@@ -16,7 +16,7 @@
 
 ### 盤點（task 4.1）
 
-掃描家目錄與雲端同步資料夾：17 份 config，可讀的 10 份都不受 routing 改動影響，2 份有 alias 也照原樣保留；7 份雲端佔位檔讀不到內容，未判定（`evidence/config-inventory-summary.json`）。2026-09-14 的盤點只掃了 `~/Developer`，漏掉 proposal 引用的 workspace。
+掃描家目錄與雲端同步資料夾：17 份 config 都不受 routing 改動影響（12 份沒寫 `attachment_routing`、5 份四個清單都寫出），6 份有 alias 也照原樣保留（`evidence/config-inventory-summary.json`）。其中 7 份在 2026-10-22 是雲端佔位檔、讀取逾時，2026-10-24 下載完成後補判。2026-09-14 的盤點只掃了 `~/Developer`，漏掉 proposal 引用的 workspace。
 
 ### 審查後的取捨
 
