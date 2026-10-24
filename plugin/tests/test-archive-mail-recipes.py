@@ -2,6 +2,7 @@
 """Execute the shipped SOP recipes, rather than a second implementation."""
 import copy
 from datetime import date
+import itertools
 import json
 from pathlib import Path
 import re
@@ -19,10 +20,16 @@ DOCUMENT = Path(__file__).resolve().parents[1] / "commands/archive-mail.md"
 
 def recipe_code(name):
     text = DOCUMENT.read_text()
-    block = text.split(f"<!-- archive-mail-{name}-recipe:start -->", 1)[1]
-    block = block.split(f"<!-- archive-mail-{name}-recipe:end -->", 1)[0]
-    code = re.fullmatch(r"\s*```python\n(.*?)\n```\s*", block, re.S).group(1)
-    return code
+    start = f"<!-- archive-mail-{name}-recipe:start -->"
+    end = f"<!-- archive-mail-{name}-recipe:end -->"
+    for marker in (start, end):
+        if marker not in text:
+            raise AssertionError(f"{DOCUMENT.name} is missing the marker {marker}")
+    block = text.split(start, 1)[1].split(end, 1)[0]
+    match = re.fullmatch(r"\s*```python\n(.*?)\n```\s*", block, re.S)
+    if match is None:
+        raise AssertionError(f"the {name} recipe is not exactly one ```python block between its markers")
+    return match.group(1)
 
 
 def recipe(name):
@@ -904,6 +911,349 @@ class ArchiveIndexSopTests(unittest.TestCase):
                 self.assertIn("${INDEX_FILE}.tmp", text)
                 self.assertIn("Archive Mail 完成", text)
                 self.assertIn("TaskUpdate reconcile_index", text)
+
+
+class ArchiveArgsRecipeTests(unittest.TestCase):
+    """#540: how an invocation's text becomes positional arguments plus the --no-confirm flag."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.args = recipe("args")
+        cls.parse = staticmethod(cls.args["parse_invocation"])
+
+    # raw invocation text -> (positional, no_confirm). Every row is one rule of the closed list in Step 1.
+    ACCEPTED = [
+        ("filter then flag", "example.invalid --no-confirm", ["example.invalid"], True),
+        ("flag only", "--no-confirm", [], True),
+        ("two positionals then flag", "a b --no-confirm", ["a", "b"], True),
+        ("flag first", "--no-confirm a b", ["a", "b"], True),
+        ("flag between positionals", "a --no-confirm b", ["a", "b"], True),
+        ("double-quoted name with a space", '"Name With Space" --no-confirm', ["Name With Space"], True),
+        ("single-quoted name with a space", "'Name With Space' --no-confirm", ["Name With Space"], True),
+        ("backslash-escaped space", r"Name\ With\ Space --no-confirm", ["Name With Space"], True),
+        ("CJK name", "陳老師 --no-confirm", ["陳老師"], True),
+        ("duplicate flag is the same flag", "--no-confirm a --no-confirm", ["a"], True),
+        ("no flag", "a b", ["a", "b"], False),
+        ("single positional", "example.invalid", ["example.invalid"], False),
+        ("empty", "", [], False),
+        ("only whitespace", " \t\n ", [], False),
+        ("terminator makes the flag a positional", "-- --no-confirm", ["--no-confirm"], False),
+        ("terminator keeps a dash-led directory", "a -- --odd-dir", ["a", "--odd-dir"], False),
+        ("flag before the terminator still counts", "a --no-confirm -- --odd-dir", ["a", "--odd-dir"], True),
+        ("flag after the terminator is positional", "a -- b --no-confirm", ["a", "b", "--no-confirm"], False),
+        ("a second terminator is positional", "a -- b -- c", ["a", "b", "--", "c"], False),
+        ("nothing after the terminator", "a --no-confirm --", ["a"], True),
+        ("single dash stays positional", "a -x", ["a", "-x"], False),
+        ("a quoted flag is still the flag (quotes do not protect it; use --)", '"--no-confirm" a', ["a"], True),
+        ("a quoted flag after the terminator is positional", '-- "--no-confirm"', ["--no-confirm"], False),
+        ("third positional is returned, not dropped", "a b c", ["a", "b", "c"], False),
+        ("no-break and ideographic spaces do not split", "a b　--no-confirm", ["a b　--no-confirm"], False),
+    ]
+
+    # raw invocation text -> (error code, offending token)
+    REFUSED = [
+        ("unknown flag", "--nope", "unknown-flag", "--nope"),
+        ("unknown flag after a name", "example.invalid --nope", "unknown-flag", "--nope"),
+        ("misspelled flag", "a --no-confrim", "unknown-flag", "--no-confrim"),
+        ("flag with a value", "a --no-confirm=1", "unknown-flag", "--no-confirm=1"),
+        ("flag in another case", "a --No-Confirm", "unknown-flag", "--No-Confirm"),
+        ("em dash from smart punctuation", "a —no-confirm", "unknown-flag", "—no-confirm"),
+        ("en dash from smart punctuation", "a –no-confirm", "unknown-flag", "–no-confirm"),
+        ("smart double dash", "a ——no-confirm", "unknown-flag", "——no-confirm"),
+        ("an unknown flag wins over a known one", "--no-confirm --nope", "unknown-flag", "--nope"),
+        ("a quoted unknown flag is still refused", '"--nope" a', "unknown-flag", "--nope"),
+        ("unbalanced double quote", '"abc --no-confirm', "unbalanced-quote", None),
+        ("apostrophe", "Owner's --no-confirm", "unbalanced-quote", None),
+        ("dangling backslash", "a\\", "unbalanced-quote", None),
+    ]
+
+    def test_accepted_invocations(self):
+        for label, raw, positional, no_confirm in self.ACCEPTED:
+            with self.subTest(label):
+                result = self.parse(raw)
+                self.assertIsNone(result["error"])
+                self.assertEqual(result["positional"], positional)
+                self.assertIs(result["no_confirm"], no_confirm)
+
+    def test_refused_invocations_name_the_token_and_carry_nothing_to_act_on(self):
+        for label, raw, code, token in self.REFUSED:
+            with self.subTest(label):
+                result = self.parse(raw)
+                self.assertEqual(result["error"], {"code": code, "token": token})
+                self.assertEqual(result["positional"], [])
+                self.assertIs(result["no_confirm"], False)
+
+    def test_error_codes_are_the_two_the_sop_names(self):
+        codes = {code for _, _, code, _ in self.REFUSED}
+        self.assertEqual(codes, {"unknown-flag", "unbalanced-quote"})
+
+    def test_only_the_exact_flag_sets_it(self):
+        for raw in ["a --no-confirmx", "a --no-confirm=", "a --NO-CONFIRM", "a -no-confirm",
+                    "a no-confirm", "a --no_confirm", "a ---no-confirm"]:
+            with self.subTest(raw):
+                result = self.parse(raw)
+                self.assertIs(result["no_confirm"], False)
+
+    def test_third_positional_is_never_reassigned_to_the_output_dir(self):
+        result = self.parse("a b c --no-confirm")
+        self.assertEqual(result["positional"][:2], ["a", "b"])
+        self.assertEqual(result["positional"][2:], ["c"])
+        self.assertIs(result["no_confirm"], True)
+
+    def test_input_that_is_not_text_is_not_guessed_at(self):
+        for value in [None, 5, ["a"]]:
+            with self.subTest(value):
+                with self.assertRaises(TypeError):
+                    self.parse(value)
+
+    def test_positive_control_naive_splitters_answer_the_table_wrong(self):
+        # If the table could not tell a real parser from a naive one, passing it would prove nothing.
+        def whitespace_only(raw):
+            return {"positional": raw.split(), "no_confirm": False, "error": None}
+
+        def flag_aware_whitespace(raw):
+            tokens = raw.split()
+            return {"positional": [t for t in tokens if t != "--no-confirm"],
+                    "no_confirm": "--no-confirm" in tokens, "error": None}
+
+        rows = [(raw, {"positional": positional, "no_confirm": no_confirm, "error": None})
+                for _, raw, positional, no_confirm in self.ACCEPTED]
+        rows += [(raw, {"positional": [], "no_confirm": False, "error": {"code": code, "token": token}})
+                 for _, raw, code, token in self.REFUSED]
+        # Every row that carries the flag is answered wrong by a splitter that does not know the flag...
+        flagged = [(raw, want) for raw, want in rows if want["no_confirm"]]
+        self.assertGreaterEqual(len(flagged), 8)
+        for raw, want in flagged:
+            with self.subTest("unaware: " + raw):
+                self.assertNotEqual(whitespace_only(raw), want)
+        # ...and a splitter that knows the flag but not shell quoting, the terminator or the refusals is
+        # still answered wrong by a good part of the table: the rows exercise those rules, not just the flag.
+        wrong = [raw for raw, want in rows if flag_aware_whitespace(raw) != want]
+        self.assertGreaterEqual(len(wrong), 15, wrong)
+        for must_differ in ['"Name With Space" --no-confirm', "-- --no-confirm", "a --no-confrim", '"abc --no-confirm']:
+            self.assertIn(must_differ, wrong)
+
+    def test_without_quotes_or_backslashes_a_plain_ascii_whitespace_split_gives_the_same_answer(self):
+        # The SOP lets the agent skip running the recipe when the text has no quote or backslash.
+        # That shortcut is only sound if it is the same function; this pins it, separators included.
+        words = ["a", "b", "--", "--no-confirm", "--nope", "-x", "陳老師", "\u2014no-confirm",
+                 "a\u3000b", "a\x0bb", "#c"]
+        separators = [" ", "  ", "\t", "\n", " \t ", "\r\n"]
+        checked = 0
+        for count in range(0, 4):
+            for combo in itertools.product(words, repeat=count):
+                for separator in separators:
+                    for padding in ["", " ", "\n"]:
+                        raw = padding + separator.join(combo) + padding
+                        tokens = [t for t in re.split(r"[ \t\r\n]+", raw) if t]
+                        if self.parse(raw) != self.args["apply_rules"](tokens):
+                            self.fail("shortcut and recipe disagree on " + repr(raw))
+                        checked += 1
+        self.assertGreater(checked, 10000)
+
+    def test_the_shortcut_boundary_is_exactly_the_characters_that_change_tokenising(self):
+        # The SOP sends text containing " ' or a backslash to the recipe. Each of those really changes
+        # how shlex tokenises; every other ASCII punctuation character is an ordinary word character.
+        for char in "\"'\\":
+            with self.subTest(char=char):
+                try:
+                    tokens = shlex.split("a" + char + "b c")
+                except ValueError:
+                    continue
+                self.assertNotEqual(tokens, ["a" + char + "b", "c"])
+        for char in string.punctuation.replace('"', "").replace("'", "").replace("\\", ""):
+            with self.subTest(char=char):
+                self.assertEqual(self.parse("a" + char + "b c")["positional"], ["a" + char + "b", "c"])
+
+    def test_cli_reads_the_text_from_a_file_and_treats_it_as_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script, source, result = root / "args_recipe.py", root / "input.txt", root / "output.json"
+            script.write_text(recipe_code("args"))
+            source.write_text('"$(touch PWNED)" "`touch PWNED`" --no-confirm\n', encoding="utf-8")
+            subprocess.run([sys.executable, "-I", str(script), str(source), str(result)],
+                           check=True, timeout=5, cwd=root)
+            self.assertEqual(json.loads(result.read_text()), {
+                "positional": ["$(touch PWNED)", "`touch PWNED`"], "no_confirm": True, "error": None})
+            self.assertFalse((root / "PWNED").exists())
+            source.write_text("a --nope\n", encoding="utf-8")
+            subprocess.run([sys.executable, "-I", str(script), str(source), str(result)],
+                           check=True, timeout=5, cwd=root)
+            self.assertEqual(json.loads(result.read_text()), {
+                "positional": [], "no_confirm": False, "error": {"code": "unknown-flag", "token": "--nope"}})
+
+    def test_cli_rejects_a_wrong_argument_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "args_recipe.py"
+            script.write_text(recipe_code("args"))
+            done = subprocess.run([sys.executable, "-I", str(script)], capture_output=True, timeout=5)
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn(b"usage", done.stderr)
+
+
+PLUGIN = DOCUMENT.parents[1]
+
+
+def between(text, start, end):
+    """The text from `start` up to the next `end`; fails by naming the missing anchor."""
+    for anchor in (start, end):
+        if anchor not in text:
+            raise AssertionError(f"anchor not found: {anchor!r}")
+    return text.split(start, 1)[1].split(end, 1)[0]
+
+
+class ArchiveArgsStructureTests(unittest.TestCase):
+    """#540: the command file may read the typed arguments in exactly one place."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.document = DOCUMENT.read_text()
+
+    def test_the_only_argument_placeholder_is_the_ARGS_RAW_line(self):
+        # Claude Code replaces every unescaped placeholder with the typed text before the agent reads
+        # the file, so each extra one re-creates the failure this fixes: the flag showing up as a positional.
+        hits = list(re.finditer(r"(?<!\\)\$ARGUMENTS", self.document))
+        self.assertEqual(len(hits), 1, [self.document.count("\n", 0, h.start()) + 1 for h in hits])
+        start = self.document.rfind("\n", 0, hits[0].start()) + 1
+        self.assertEqual(self.document[start:self.document.find("\n", start)], "ARGS_RAW: $ARGUMENTS")
+
+    def test_no_indexed_argument_placeholder_survives_even_escaped(self):
+        self.assertEqual(re.findall(r"\\?\$ARGUMENTS\[", self.document), [])
+
+    def test_argument_hint_lists_the_flag_as_one_json_string_line(self):
+        lines = [l for l in self.document.split("---", 2)[1].splitlines() if l.startswith("argument-hint:")]
+        self.assertEqual(len(lines), 1)
+        hint = json.loads(lines[0].split(":", 1)[1].strip())
+        self.assertIn("[--no-confirm]", hint)
+        self.assertIn("[email-filter] [output-dir]", hint)
+
+    def test_usage_block_shows_the_flag_the_terminator_and_the_unknown_flag_error(self):
+        usage = between(self.document, "## 使用方式", "#### 零參數模式")
+        self.assertIn("/archive-mail user@example.com --no-confirm", usage)
+        self.assertIn("/archive-mail --no-confirm", usage)
+        self.assertRegex(usage, r"/archive-mail \S+ -- --")
+        self.assertIn("不認得的旗標", usage)
+
+    def test_step_zero_task_text_names_the_parse_step_not_the_placeholder(self):
+        task = between(self.document, 'TaskCreate(subject="resolve_filter_and_paths",', "TaskCreate(subject=\"load_participant_identity\"")
+        self.assertIn("Step 1 引數解析", task)
+        self.assertIn("ARGS_RAW", task)
+
+    def test_flag_only_invocation_takes_the_zero_arg_path(self):
+        zero = between(self.document, "#### Zero-arg 模式", "#### 命令列覆寫")
+        self.assertIn('if [ "${#POSITIONAL[@]}" -eq 0 ]; then', zero)
+        self.assertIn("只給 `--no-confirm`", zero)
+        override = between(self.document, "#### 命令列覆寫", "#### Workspace Layout Detection")
+        self.assertIn("`POSITIONAL` 非空", override)
+        self.assertIn("`POSITIONAL[0]`", override)
+        self.assertIn("`OUTPUT_DIR_ARG`", override)
+
+    def test_config_parsing_and_output_dir_precedence_read_the_parsed_variables(self):
+        step1 = between(self.document, "#### Config parsing", "#### Zero-arg 模式")
+        self.assertIn("`POSITIONAL`", step1)
+        self.assertIn("independent of POSITIONAL state", step1)
+        self.assertIn("1. OUTPUT_DIR_ARG (cmdline second positional)", step1)
+        detection = between(self.document, "#### Workspace Layout Detection", "**Probe 順序**")
+        self.assertIn("`OUTPUT_DIR_ARG`", detection)
+        self.assertIn("after OUTPUT_DIR_ARG + ${CONFIG_FILE} resolution", self.document)
+        precedence = between(self.document, "**Detection 與 explicit config 的關係**", "#### 模糊 filter")
+        self.assertIn("1. `OUTPUT_DIR_ARG`", precedence)
+
+    def test_directories_are_created_with_the_terminator(self):
+        # "--" lets a directory whose name starts with "-" be an ordinary, valid output_dir.
+        self.assertIn('mkdir -p -- "${INDEX_DIR}"', self.document)
+        self.assertIn('mkdir -p -- "${output_dir}"', self.document)
+        self.assertEqual(re.findall(r'mkdir -p "\$\{(?:INDEX_DIR|output_dir)\}"', self.document), [])
+
+    def test_a_dash_led_output_dir_survives_slug_and_mkdir(self):
+        with tempfile.TemporaryDirectory() as directory:
+            slug = subprocess.run(
+                ["/bin/bash", "-c", r"""printf '%s' "$1" | tr '/' '-' | sed 's/^[-.]*//;s/[-.]*$//'""", "_", "--odd-dir"],
+                capture_output=True, text=True, check=True, timeout=5).stdout
+            self.assertEqual(slug, "odd-dir")
+            made = subprocess.run(["/bin/bash", "-c", 'mkdir -p -- "$1"', "_", "--odd-dir"],
+                                  cwd=directory, capture_output=True, text=True, timeout=5)
+            self.assertEqual(made.returncode, 0, made.stderr)
+            self.assertTrue((Path(directory) / "--odd-dir").is_dir())
+
+
+class ArchiveNoConfirmAuthorityTests(unittest.TestCase):
+    """#540: every place that skips a confirmation names the parsed flag and where it may come from."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.document = DOCUMENT.read_text()
+        cls.skip_phase_1 = between(cls.document, "**Skip Phase 1**", "詳見 `skills/confirmation-protocol/SKILL.md` 和")
+        cls.skip_phase_2_3 = between(cls.document, "**Skip Phase 2+3**", "詳見 `skills/bulk-operation-preview/SKILL.md`")
+        cls.step_7 = between(cls.document, "### Step 7: 輸出報告", "### Step 8: 覆蓋率稽核")
+
+    def test_the_old_description_of_a_user_typed_flag_is_gone_everywhere(self):
+        self.assertNotIn("user-typed", self.document)
+
+    def test_phase_1_skip_list_cites_the_parsed_flag_and_its_only_source(self):
+        self.assertIn("`NO_CONFIRM`", self.skip_phase_1)
+        self.assertIn("ARGS_RAW", self.skip_phase_1)
+        self.assertIn("Provenance", self.skip_phase_1)
+        self.assertIn("直接做", self.skip_phase_1)
+        for named_non_source in ["郵件內文", "搜尋結果", "config"]:
+            self.assertIn(named_non_source, self.skip_phase_1)
+
+    def test_the_mail_334_exception_is_triggered_by_the_parsed_flag(self):
+        self.assertIn("mail#334", self.skip_phase_1)
+        self.assertIn("使用者以 `NO_CONFIRM` 或「直接做」跳過確認", self.skip_phase_1)
+        self.assertNotIn("`--no-confirm` 或「直接做」", self.skip_phase_1)
+
+    def test_phase_2_3_skip_list_cites_the_parsed_flag_as_equal_to_just_do_it(self):
+        self.assertIn("`NO_CONFIRM`", self.skip_phase_2_3)
+        self.assertIn("Provenance", self.skip_phase_2_3)
+        self.assertRegex(self.skip_phase_2_3, r"等價於「直接做」")
+        self.assertIn("Phase 1–3", self.skip_phase_2_3)
+
+    def test_step_zero_phase_1_task_names_the_parsed_flag(self):
+        task = between(self.document, 'TaskCreate(subject="phase1_disambiguation",', 'TaskCreate(subject="load_indices_and_config"')
+        self.assertIn("NO_CONFIRM", task)
+        self.assertNotIn("明確 email/Message-ID/--no-confirm", task)
+
+    def test_the_report_says_when_a_confirmation_was_skipped_because_of_the_flag(self):
+        self.assertIn("確認略過的依據", self.step_7)
+        self.assertIn("--no-confirm(使用者叫用)", self.step_7)
+        self.assertIn("`NO_CONFIRM` 成立時才顯示", self.step_7)
+        self.assertIn("略過: Phase 1、Phase 2+3", self.step_7)
+
+    def test_the_flag_has_exactly_the_authority_of_just_do_it_not_more(self):
+        # D2: the flag copies the meaning of 「直接做」. It must not add a skip that 「直接做」 lacks,
+        # so neither skip list may mention the flag without also mentioning Provenance.
+        for text in (self.skip_phase_1, self.skip_phase_2_3):
+            if "NO_CONFIRM" in text:
+                self.assertIn("Provenance", text)
+
+
+class ArchiveNoConfirmDocsTests(unittest.TestCase):
+    """#540: the rule, README and changelog say what the command now does."""
+
+    def test_confirmation_triggers_names_the_command_instead_of_if_it_supports(self):
+        rules = (PLUGIN / "rules/confirmation-triggers.md").read_text()
+        self.assertNotIn("if command supports", rules.lower())
+        self.assertNotIn("該 command 支援的", rules)
+        provenance = between(rules, "2. **使用者實際叫用命令時指定的 flag**", "3. **使用者已明確採用的 workspace 設定**")
+        self.assertIn("`/archive-mail` 的 `--no-confirm`", provenance)
+        override = between(rules, "User 可以用以下說法 skip confirmation:", "但即使 user 說 skip")
+        self.assertIn("`/archive-mail` 的 `--no-confirm`", override)
+
+    def test_readme_shows_the_flag_and_no_longer_repeats_the_indexed_placeholder(self):
+        readme = (PLUGIN / "README.md").read_text()
+        usage = between(readme, "### `/archive-mail` — 歸檔郵件到 Markdown", "archive-mail 不假設一個 canonical layout")
+        self.assertIn("/archive-mail some@example.com --no-confirm", usage)
+        self.assertEqual(re.findall(r"\$ARGUMENTS", readme), [])
+        self.assertIn("命令列第二個位置參數", readme)
+
+    def test_changelog_records_the_fix_and_both_behaviour_changes_under_unreleased(self):
+        changelog = (PLUGIN / "CHANGELOG.md").read_text()
+        unreleased = between(changelog, "## [Unreleased]", "\n## [2.")
+        changed, fixed = between(unreleased, "### Changed", "### Fixed"), unreleased.split("### Fixed", 1)[1]
+        self.assertRegex(fixed, r"--no-confirm.*Step 1.*#540")
+        self.assertRegex(changed, r"--no-confirm.*Phase 1.{0,6}3.*#540")
+        self.assertRegex(changed, r"未知.*--.*#540|unknown.*--.*#540")
 
 
 if __name__ == "__main__":
