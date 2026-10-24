@@ -10,10 +10,17 @@ TBD - created by archiving change 'sqlite-search-engine'. Update Purpose after a
 
 The system SHALL open `~/Library/Mail/V10/MailData/Envelope Index` in read-only mode using `SQLITE_OPEN_READONLY`. The system SHALL verify the database file exists and is accessible before attempting to open it. If the file is not accessible, the system SHALL return an error message stating that Full Disk Access permission is required.
 
+The system SHALL keep ONE read-only connection that concurrent request handlers share. That connection SHALL be opened in serialized threading mode (`SQLITE_OPEN_FULLMUTEX`) and SHALL carry a busy timeout (`sqlite3_busy_timeout`, 5000 ms), so that overlapping read tools queue on the connection instead of using it at the same time. Each reader method SHALL prepare, step and finalize its statements within its own call.
+
 #### Scenario: Successful database connection
 
 - **WHEN** the MCP server initializes and the Envelope Index database is accessible
-- **THEN** the system opens a read-only SQLite connection and prepares reusable statements for search queries
+- **THEN** the system opens a read-only SQLite connection in serialized mode with a busy timeout, ready to serve queries from concurrent request handlers
+
+#### Scenario: Concurrent read tools share the connection safely
+
+- **WHEN** two or more read tools (for example `get_special_mailboxes`, `search_emails`, `list_mailboxes`) run at the same time against the same server process
+- **THEN** every call completes with the same result it would have produced alone, no call crashes the process or spins without making progress, and the calls queue on the shared connection instead of overlapping on it
 
 #### Scenario: Database file not accessible
 

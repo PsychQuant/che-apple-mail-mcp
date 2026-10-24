@@ -5,13 +5,26 @@ import SQLite3
 /// Provides millisecond-level email search by directly querying the index
 /// instead of going through AppleScript.
 ///
-/// Thread safety: SQLite readonly connections in WAL mode support
-/// concurrent readers, so this class does not need actor serialization.
+/// Thread safety: a reader owns ONE `sqlite3*` and the server shares the reader
+/// between all concurrently running request handlers, so the connection is
+/// opened `SQLITE_OPEN_FULLMUTEX` (serialized mode: SQLite takes the connection
+/// mutex for every API call) and given a busy timeout (#536). "WAL readonly
+/// connections support concurrent readers" is true of several connections, not
+/// of one connection used by several threads at once: that is undefined
+/// behaviour under `NOMUTEX` (observed as crashes in synthetic runs and as a
+/// CPU-bound livelock in the field). Every method below prepares, steps and
+/// finalizes inside its own call, so serialized mode is sufficient and no
+/// actor or lock is needed on top of it.
 public final class EnvelopeIndexReader {
 
     // MARK: - Constants
 
     private static let mailDataVersion = "V10"
+
+    /// How long SQLite waits on a locked database before giving up. Matches
+    /// `DraftStoreWriter`'s value; with a serialized connection this is also
+    /// the longest one busy wait can hold up the other readers.
+    static let busyTimeoutMilliseconds: Int32 = 5000
 
     /// Default path to the Envelope Index database.
     public static var defaultDatabasePath: String {
@@ -93,7 +106,11 @@ public final class EnvelopeIndexReader {
             )
         }
 
-        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX
+        // FULLMUTEX, not NOMUTEX: this one connection is shared by concurrent
+        // request handlers (#536). Merely dropping NOMUTEX would not help: the
+        // library default is multi-thread (`sqlite3_threadsafe()` == 2), which
+        // also leaves the connection unguarded.
+        let flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
         let rc = sqlite3_open_v2(databasePath, &db, flags, nil)
         guard rc == SQLITE_OK else {
             let msg = db.flatMap { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
@@ -103,12 +120,38 @@ public final class EnvelopeIndexReader {
                 FullDiskAccessHelp.guidance(reason: "Failed to open database: \(msg).")
             )
         }
+        // Wait for a locked database instead of failing at once. With a
+        // serialized connection a busy wait also holds the connection mutex, so
+        // this value bounds how long one wait can delay the other readers.
+        sqlite3_busy_timeout(db, Self.busyTimeoutMilliseconds)
     }
 
     deinit {
         if let db = db {
             sqlite3_close(db)
         }
+    }
+
+    // MARK: - Connection introspection (tests only)
+
+    /// Whether SQLite guards this connection with its own mutex (serialized
+    /// mode). `@testable`-visible only; not part of the public interface.
+    var isSerialized: Bool {
+        guard let db = db else { return false }
+        return sqlite3_db_mutex(db) != nil
+    }
+
+    /// The busy timeout SQLite currently applies to this connection, in
+    /// milliseconds (`PRAGMA busy_timeout`). `@testable`-visible only.
+    var busyTimeoutMilliseconds: Int32 {
+        guard let db = db else { return -1 }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA busy_timeout", -1, &stmt, nil) == SQLITE_OK else {
+            return -1
+        }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return -1 }
+        return sqlite3_column_int(stmt, 0)
     }
 
     // MARK: - Account Mapping

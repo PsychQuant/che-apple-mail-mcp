@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Overlapping read tools no longer livelock the SQLite fast path**
+  ([#536](https://github.com/PsychQuant/che-apple-mail-mcp/issues/536)).
+  The server shares one Envelope Index connection between all concurrently
+  running tool calls, but opened it `SQLITE_OPEN_NOMUTEX`, which is only valid
+  when one thread uses a connection at a time. Two subagents sending several
+  `get_special_mailboxes` and `search_emails` calls at once could drive the
+  process to a CPU-bound standstill; synthetic runs of the same pattern crashed
+  the process. The connection is now opened `SQLITE_OPEN_FULLMUTEX` with a
+  5-second busy timeout, so overlapping reads queue instead. This removes the
+  confirmed cause; it does not add a per-call deadline (tracked separately,
+  [#552](https://github.com/PsychQuant/che-apple-mail-mcp/issues/552)), so a
+  genuinely slow query still holds up the reads queued behind it.
+
 ## [3.3.1] - 2026-10-19
 
 ### Fixed
