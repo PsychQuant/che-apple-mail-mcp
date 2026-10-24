@@ -5,6 +5,7 @@ The repair command reports a closed set of status words and `still-unparseable` 
 shipped SOP text, not a second copy of the lists: the table between the `archive-mail-repair-codes` markers is the
 only definition, and everything else in the document must agree with it in both directions.
 """
+import json
 from pathlib import Path
 import re
 import unittest
@@ -24,6 +25,7 @@ EXPECTED_REASONS = {
     "quarantine-destination-conflict",
     "old-key-entry-conflict", "existing-key-spelling-mismatch", "duplicate-unverifiable",
     "duplicate-content-drift", "dependent-group-rejected", "index-reference-conflict",
+    "date-ambiguous-local-time",
 }
 
 DUPLICATES_FORMS = (
@@ -127,6 +129,33 @@ class RepairVocabularyTests(unittest.TestCase):
         for phrase in ("not evaluated", "unknown (quarantine-inventory-unavailable)"):
             self.assertIn(phrase, self.outside)
         self.assertRegex(self.outside, r"before N / after M（已搬移")
+
+
+class RepairInvocationTests(unittest.TestCase):
+    """The --naive-date-zone flag must be declared where the host reads it and where the user reads it (#528)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = sop_text()
+
+    def test_the_argument_hint_is_one_json_line_naming_the_flag(self):
+        line = next(l for l in self.text.splitlines() if l.startswith("argument-hint:"))
+        value = json.loads(line.split(":", 1)[1].strip())
+        self.assertIn("--naive-date-zone", value)
+        self.assertIn("<archive_target 或 output_dir>", value)
+
+    def test_the_usage_section_states_the_four_rules(self):
+        usage = self.text.split("## 用法", 1)[1].split("## Execution", 1)[0]
+        for phrase in ("--naive-date-zone", "沒有預設值", "zoneinfo.available_timezones()", "±HH:MM",
+                       "不是 `archive_target`", "沒有明確 offset", "不改寫"):
+            with self.subTest(phrase=phrase):
+                self.assertIn(phrase, usage)
+
+    def test_the_flag_is_not_suggested_with_any_particular_zone_in_reports(self):
+        # A hint that names a zone would be a default in disguise.
+        hints = [l for l in self.text.splitlines() if "date-offset-missing" in l and "重跑" in l]
+        for line in hints:
+            self.assertNotRegex(line, r"Asia/|UTC|[+-]\d\d:\d\d")
 
 
 if __name__ == "__main__":

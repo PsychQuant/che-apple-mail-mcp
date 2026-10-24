@@ -301,6 +301,84 @@ class DateCoreTests(unittest.TestCase):
             self.assertEqual(run("classify-pair", {**pair, "zone": "Asia/Taipei"})["verdict"], "identical")
 
 
+class ZonePreviewTests(unittest.TestCase):
+    """What the user sees before a zone is applied (#528): residuals, neighbours, and the sample that is shown."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.recipe = load((ARCHIVE, "archive-mail-date-recipe"), (SOP, "archive-mail-repair-date-recipe"))
+        cls.parse = staticmethod(cls.recipe["parse_archive_date"])
+
+    def at(self, text):
+        return self.parse(text)
+
+    def test_residual_is_the_absolute_gap_in_whole_seconds(self):
+        residual = self.recipe["residual_seconds"]
+        assumed = self.at("2026-05-29T12:24:53Z")
+        self.assertEqual(residual(assumed, self.at("2026-05-29T12:24:58Z")), 5)
+        self.assertEqual(residual(assumed, self.at("2026-05-29T12:24:50Z")), 3)
+        self.assertEqual(residual(assumed, assumed), 0)
+
+    def test_neighbours_count_the_same_senders_same_subject_within_the_window_including_the_match(self):
+        count, window = self.recipe["neighbour_count"], __import__("datetime").timedelta(days=1)
+        assumed = self.at("2026-05-29T12:24:53Z")
+        hourly = [self.at(f"2026-05-{day:02d}T{hour:02d}:24:53Z") for day in (28, 29, 30) for hour in range(24)]
+        one_off = [self.at("2026-05-29T12:24:55Z")]
+        self.assertEqual(count(assumed, one_off, window), 1)
+        self.assertEqual(count(assumed, hourly, window), 49)   # +-24h inclusive: both edges and every hour between
+        self.assertEqual(count(assumed, [], window), 0)
+
+    def row(self, name, residual, neighbours):
+        return {"file": name, "residual_seconds": residual, "neighbours": neighbours}
+
+    def test_the_shown_sample_is_the_largest_residuals_plus_every_flagged_row(self):
+        rows = [self.row("e.md", 4, 1), self.row("a.md", 0, 1), self.row("c.md", 9, 1), self.row("b.md", 9, 1),
+                self.row("d.md", 1, 3)]
+        shown = self.recipe["preview_rows"](rows, 2)
+        # b.md and c.md tie at 9 (basename order); d.md has a small residual but is flagged, so it stays in.
+        self.assertEqual([r["file"] for r in shown], ["b.md", "c.md", "d.md"])
+        self.assertEqual([r["file"] for r in self.recipe["preview_rows"](rows, None)],
+                         ["b.md", "c.md", "e.md", "d.md", "a.md"])
+
+    def test_build_preview_reports_counts_statistics_and_flags(self):
+        build = self.recipe["build_preview"]
+        rows = [
+            {"file": "a.md", "date": "2026-05-29T20:24:53", "received": "2026-05-29T12:24:58Z",
+             "peers": ["2026-05-29T12:24:58Z"]},
+            {"file": "b.md", "date": "2026-05-29T21:00:00", "received": "2026-05-29T13:00:00Z",
+             "peers": ["2026-05-29T11:00:00Z", "2026-05-29T12:00:00Z", "2026-05-29T13:00:00Z"]},
+            {"file": "c.md", "date": "2026-05-30T08:00:00", "received": "2026-05-30T00:03:00Z", "peers": []},
+        ]
+        result = build("Asia/Taipei", rows, no_match=2, k=1)
+        self.assertEqual((result["zone"], result["applied"], result["no_match"], result["flagged"]),
+                         ("Asia/Taipei", 3, 2, 1))
+        self.assertEqual(result["residual_seconds"], {"min": 0, "median": 5, "max": 180})
+        self.assertEqual([r["file"] for r in result["shown"]], ["c.md", "b.md"])
+        self.assertEqual(result["shown"][0]["assumed"], "2026-05-30T00:00:00+00:00")
+        self.assertEqual([r["flag"] for r in result["shown"]], [False, True])
+        self.assertEqual(build("Asia/Taipei", [], no_match=0)["residual_seconds"], None)
+
+    def test_a_wrong_zone_can_still_find_exactly_one_candidate_and_only_the_flag_and_the_user_stand_in_the_way(self):
+        # Known limit (documented in the SOP): an hourly sender matches perfectly in the wrong zone, too.
+        hourly = [f"2026-05-29T{hour:02d}:24:53Z" for hour in range(24)]
+        row = {"file": "a.md", "date": "2026-05-29T12:24:53", "received": "2026-05-29T12:24:53Z", "peers": hourly}
+        result = self.recipe["build_preview"]("+00:00", [row], no_match=0)
+        self.assertEqual(result["shown"][0]["residual_seconds"], 0)   # looks perfect
+        self.assertTrue(result["shown"][0]["flag"])                   # and is flagged anyway
+        self.assertEqual(result["flagged"], 1)
+
+    def test_preview_input_that_is_not_a_zone_assumed_file_fails_loudly(self):
+        build = self.recipe["build_preview"]
+        explicit = {"file": "a.md", "date": "2026-05-29T12:24:53Z", "received": "2026-05-29T12:24:53Z", "peers": []}
+        with self.assertRaises(ValueError):
+            build("Asia/Taipei", [explicit])
+        naive = dict(explicit, date="2026-05-29T20:24:53")
+        with self.assertRaises(ValueError):
+            build("CST", [naive])
+        with self.assertRaises(ValueError):
+            build("Asia/Taipei", [dict(naive, received="2026-05-29T12:24:53")])   # a received time without offset
+
+
 def make_file(message_id="<same@example.invalid>", thread_key="Topic", in_reply_to='""', date="2026-01-28T08:35:34Z",
               sender="a@example.invalid", direction="received", extra=(), subject="Topic", cc=None,
               date_line="2026-01-28 08:35", body="Hello", newline="\n"):
