@@ -292,6 +292,189 @@ class DateCoreTests(unittest.TestCase):
             self.assertEqual(run("check-zone-argument", {"text": "Asia/Taipei"}), {"ok": True, "zone": "Asia/Taipei"})
             result = run("resolve-dates", {"zone": "Asia/Taipei", "rows": [{"file": "a.md", "date": "2026-05-29T20:24:53"}]})
             self.assertEqual(result["rows"][0]["instant"], "2026-05-29T12:24:53+00:00")
+            archive = Path(data) / "archive"
+            archive.mkdir()
+            (archive / "a.md").write_text(make_file(message_id="synthetic:one", date="2026-05-29T20:24:53"))
+            (archive / "b.md").write_text(make_file(date="2026-05-29T12:24:53Z"))
+            pair = {"a_path": str(archive / "a.md"), "b_path": str(archive / "b.md"), "target": str(archive)}
+            self.assertEqual(run("classify-pair", {**pair, "zone": None})["fields"], ["date"])
+            self.assertEqual(run("classify-pair", {**pair, "zone": "Asia/Taipei"})["verdict"], "identical")
+
+
+def make_file(message_id="<same@example.invalid>", thread_key="Topic", in_reply_to='""', date="2026-01-28T08:35:34Z",
+              sender="a@example.invalid", direction="received", extra=(), subject="Topic", cc=None,
+              date_line="2026-01-28 08:35", body="Hello", newline="\n"):
+    """A file in the simple template (frontmatter of the six core fields, then the Subject/From/To/Date header)."""
+    front = [f'message_id: "{message_id}"', f'thread_key: "{thread_key}"', f"in_reply_to: {in_reply_to}",
+             f"date: {date}", f"sender: {sender}", f"direction: {direction}", *extra]
+    header = [f"Subject: {subject}", "From: A <a@example.invalid>", "To: B <b@example.invalid>"]
+    if cc is not None:
+        header.append(f"Cc: {cc}")
+    header.append(f"Date: {date_line}")
+    lines = ["---", *front, "---", "", *header, "", body, ""]
+    return newline.join(lines)
+
+
+def make_enriched(summary="- one point", todo="- [ ] one task", archived="2026-02-01", body="Hello", **front):
+    simple = make_file(body=body, **front)
+    head = simple.split("\n\nSubject:", 1)[0]
+    return "\n".join([
+        head, "", "# Topic - 2026-01-28 08:35", "", "## 元數據", "", "| 項目 | 內容 |", "|------|------|",
+        "| **日期** | 2026-01-28 08:35 |", "", "---", "", "## 信件內容", "", body, "", "---", "", "## 重點摘要", "",
+        summary, "", "## 待辦事項", "", todo, "", "---", "", f"*歸檔日期：{archived}*", ""])
+
+
+SENTINEL = "LEAKCHECK-5f3a9"
+
+
+class PairClassificationTests(unittest.TestCase):
+    """classify_pair: the closed list of differences that still count as one and the same message (#525)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.recipe = load((ARCHIVE, "archive-mail-date-recipe"), (SOP, "archive-mail-repair-date-recipe"),
+                          (SOP, "archive-mail-repair-plan-recipe"))
+        cls.classify = staticmethod(cls.recipe["classify_pair"])
+        cls.zone = staticmethod(cls.recipe["parse_zone_argument"])
+
+    def verdict(self, a, b, zone=None):
+        return self.classify(a, b, zone)
+
+    def test_files_that_differ_only_in_message_id_are_identical_with_nothing_ignored(self):
+        result = self.verdict(make_file(message_id="synthetic:one"), make_file())
+        self.assertEqual(result, {"verdict": "identical", "fields": [], "ignored": []})
+
+    def test_newline_style_alone_is_ignored_as_i1(self):
+        result = self.verdict(make_file(newline="\r\n"), make_file())
+        self.assertEqual((result["verdict"], result["ignored"]), ("identical", ["I1"]))
+        result = self.verdict(make_file(newline="\r"), make_file(newline="\r\n"))
+        self.assertEqual((result["verdict"], result["ignored"]), ("identical", ["I1"]))
+
+    def test_the_documented_batch_versus_fallback_differences_are_all_ignored(self):
+        fallback = make_file(thread_key="回覆: Re: Topic", sender="A@Example.invalid", direction="sent")
+        batch = make_file(extra=("body_type: text",), cc="C <c@example.invalid>")
+        result = self.verdict(fallback, batch)
+        self.assertEqual(result["verdict"], "identical", result)
+        self.assertEqual(result["ignored"], ["I3", "I4", "I5", "I6", "I7"])
+
+    def test_a_date_naming_the_same_instant_in_another_offset_is_i2(self):
+        result = self.verdict(make_file(date="2026-01-28T16:35:34+08:00"), make_file(date="2026-01-28T08:35:34Z"))
+        self.assertEqual((result["verdict"], result["ignored"]), ("identical", ["I2"]))
+
+    def test_a_naive_date_against_its_utc_twin_needs_the_users_zone(self):
+        naive, twin = make_file(date="2026-05-29T20:24:53"), make_file(date="2026-05-29T12:24:53Z")
+        result = self.verdict(naive, twin)
+        self.assertEqual((result["verdict"], result["fields"]), ("drift", ["date"]))
+        result = self.verdict(naive, twin, self.zone("Asia/Taipei"))
+        self.assertEqual((result["verdict"], result["ignored"]), ("identical", ["I2"]))
+        result = self.verdict(naive, twin, self.zone("UTC"))   # a wrong zone does not make them equal
+        self.assertEqual((result["verdict"], result["fields"]), ("drift", ["date"]))
+
+    def test_two_enriched_files_ignore_summary_todos_and_archive_date_as_i8(self):
+        a = make_enriched(summary="- alpha", todo="- [ ] first", archived="2026-02-01")
+        b = make_enriched(summary="- beta\n- gamma", todo="- [ ] second", archived="2026-03-09")
+        result = self.verdict(a, b)
+        self.assertEqual((result["verdict"], result["ignored"]), ("identical", ["I8"]), result)
+
+    def test_enriched_files_with_different_mail_content_still_drift(self):
+        result = self.verdict(make_enriched(body="Hello"), make_enriched(body="Hullo"))
+        self.assertEqual((result["verdict"], result["fields"]), ("drift", ["body"]))
+
+    def test_a_simple_file_against_an_enriched_one_is_drift_in_the_body(self):
+        result = self.verdict(make_file(), make_enriched())
+        self.assertEqual((result["verdict"], result["fields"]), ("drift", ["body"]))
+
+    def test_an_enriched_tail_that_is_not_the_template_shape_is_not_ignored(self):
+        a = make_enriched()
+        b = make_enriched().replace("*歸檔日期：2026-02-01*", "*歸檔日期：2026-02-01*\n\n## 額外區段\n\nsomething")
+        self.assertEqual(self.verdict(a, b)["verdict"], "drift")
+
+    def test_fields_outside_the_table_are_never_ignored(self):
+        cases = [
+            (make_file(in_reply_to='"<x@example.invalid>"'), make_file(), ["in_reply_to"]),
+            (make_file(extra=("account: work",)), make_file(), ["account"]),
+            (make_file(sender="a@example.invalid"), make_file(sender="z@example.invalid"), ["sender"]),
+            (make_file(thread_key="Topic"), make_file(thread_key="Other"), ["thread_key"]),
+            (make_file(extra=("body_type: text",)), make_file(extra=("body_type: html",)), ["body_type"]),
+            (make_file(date="2026-01-28T08:35:34Z"), make_file(date="2026-01-28T08:35:35Z"), ["date"]),
+            (make_file(extra=("message_id_missing: true",)), make_file(), ["message_id_missing"]),
+        ]
+        for a, b, fields in cases:
+            with self.subTest(fields=fields):
+                result = self.verdict(a, b)
+                self.assertEqual((result["verdict"], result["fields"]), ("drift", fields))
+
+    def test_a_single_character_in_the_body_is_drift_and_only_counts_are_reported(self):
+        result = self.verdict(make_file(body="Hello world"), make_file(body="Hello worle"))
+        self.assertEqual((result["verdict"], result["fields"]), ("drift", ["body"]))
+        self.assertEqual(result["body_diff"], {"lines": [7, 7], "chars": [106, 106], "first_difference_line": 7})
+
+    def test_cc_lines_present_on_both_sides_must_agree(self):
+        result = self.verdict(make_file(cc="C <c@example.invalid>"), make_file(cc="D <d@example.invalid>"))
+        self.assertEqual((result["verdict"], result["fields"]), ("drift", ["body"]))
+
+    def test_other_header_lines_are_not_covered_by_the_cc_exception(self):
+        result = self.verdict(make_file(date_line="2026-01-28 08:35"), make_file(date_line="2026-01-28 16:35"))
+        self.assertEqual((result["verdict"], result["fields"]), ("drift", ["body"]))
+
+    def test_quote_style_of_a_scalar_is_not_a_difference_but_its_content_is(self):
+        quoted = make_file().replace("sender: a@example.invalid", 'sender: "a@example.invalid"')
+        self.assertEqual(self.verdict(quoted, make_file())["verdict"], "identical")
+
+    def test_frontmatter_outside_the_template_shape_is_unverifiable(self):
+        good = make_file()
+        broken = [
+            good.replace("---\n", "", 1),                                # no opening fence
+            good.replace('thread_key: "Topic"', "thread_key: [a, b]"),    # flow sequence
+            good.replace("sender: a@example.invalid", "sender: a@example.invalid\n  nested: x"),
+            good.replace("direction: received", "direction: received\ndirection: sent"),   # duplicate key
+            good.replace("direction: received", "bad key: received"),
+            good.replace('thread_key: "Topic"', "thread_key: 'Topic'"),    # single-quoted scalar
+            good.replace('thread_key: "Topic"', 'thread_key: "Topic" trailing'),
+            good.replace("direction: received", "direction: &anchor received"),
+            good.replace("\n---\n\nSubject", "\nSubject"),            # no closing fence
+        ]
+        for text in broken:
+            for a, b in ((text, good), (good, text)):
+                with self.subTest(text=text[:60]):
+                    self.assertEqual(self.verdict(a, b), {"verdict": "unverifiable", "fields": [], "ignored": []})
+
+    def test_unverifiable_wins_over_drift_and_nothing_is_echoed_back(self):
+        a = make_file(sender=f"{SENTINEL}@example.invalid", thread_key=f"{SENTINEL} one", body=f"{SENTINEL} body",
+                      extra=(f"{SENTINEL.replace('-', '_')}: {SENTINEL}",))
+        b = make_file(sender="z@example.invalid", thread_key=f"{SENTINEL} two", body="different")
+        for pair in ((a, b), (b, a), (a, a.replace("---\n", "", 1))):
+            text = json.dumps(self.verdict(*pair))
+            self.assertNotIn(SENTINEL, text)
+        self.assertNotIn(SENTINEL, json.dumps(self.verdict(a, b, self.zone("UTC"))))
+
+    def test_field_names_that_are_not_plain_identifiers_make_the_pair_unverifiable(self):
+        odd = make_file().replace("direction: received", f"{'k' * 65}: received")
+        self.assertEqual(self.verdict(odd, make_file())["verdict"], "unverifiable")
+
+    def test_reply_prefix_list_is_the_one_in_archive_mail_md(self):
+        text = ARCHIVE.read_text()
+        line = next(l for l in text.splitlines() if l.lstrip().startswith("1. 去掉前綴"))
+        documented = {item.lower().rstrip(":") for item in re.findall(r"`([^`]+:)`", line)}
+        self.assertEqual(documented, set(self.recipe["REPLY_PREFIXES"]))
+        strip = self.recipe["strip_reply_prefixes"]
+        self.assertEqual(strip("RE: re:  FWD: 回覆: 回复: 轉寄: 转发: fw: Topic "), "Topic")
+        self.assertEqual(strip("Re: Re:"), "no-subject")
+        self.assertEqual(strip("Reply about it"), "Reply about it")
+
+    def test_files_are_read_by_the_program_and_must_be_regular_files_inside_the_target(self):
+        files = self.recipe["classify_pair_files"]
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as elsewhere:
+            target = Path(root)
+            (target / "a.md").write_text(make_file(message_id="synthetic:one"))
+            (target / "b.md").write_text(make_file())
+            (Path(elsewhere) / "outside.md").write_text(make_file())
+            (target / "link.md").symlink_to(target / "b.md")
+            (target / "binary.md").write_bytes(b"\xff\xfe\x00")
+            self.assertEqual(files(str(target / "a.md"), str(target / "b.md"), str(target))["verdict"], "identical")
+            for other in (target / "link.md", Path(elsewhere) / "outside.md", target / "binary.md", target / "missing.md"):
+                with self.subTest(other=other.name):
+                    self.assertEqual(files(str(target / "a.md"), str(other), str(target))["verdict"], "unverifiable")
 
 
 class PlanRecipeCommandLineTests(unittest.TestCase):
