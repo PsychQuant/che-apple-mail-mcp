@@ -19,6 +19,33 @@ public enum FDAStatus {
         case denied        // EPERM/EACCES — the open was refused (TCC) — FDA not granted
         case noMailData    // ENOENT — no Envelope Index on disk (Mail not set up) — can't tell
         case undetermined  // any other errno (EMFILE, EIO, EISDIR, …) — an unexpected error, not a clear denial
+
+        /// Short stable name for log lines.
+        public var logName: String {
+            switch self {
+            case .granted: return "granted"
+            case .denied: return "denied"
+            case .noMailData: return "no-mail-data"
+            case .undetermined: return "undetermined"
+            }
+        }
+    }
+
+    /// A probe result together with the `errno` that produced it. Logged next to
+    /// every index-open failure so a later reader can tell whether the probe and
+    /// the SQLite open agreed (#537).
+    public struct Detail: Equatable {
+        public let probe: Probe
+        /// `errno` captured right after a failed `fopen`; 0 when the open worked.
+        public let errnoValue: Int32
+
+        public init(probe: Probe, errnoValue: Int32) {
+            self.probe = probe
+            self.errnoValue = errnoValue
+        }
+
+        /// `FDA probe: <result> (errno N)`, the form every index-open log line carries.
+        public var logText: String { "FDA probe: \(probe.logName) (errno \(errnoValue))" }
     }
 
     /// Probe FDA by attempting to open `path` for reading. `fopen` honors TCC.
@@ -30,23 +57,28 @@ public enum FDAStatus {
     ///   - anything else      → `.undetermined` (EMFILE under fd exhaustion, EIO, …)
     ///
     /// Default path is the real Envelope Index; tests pass a temp path.
-    public static func probe(path: String = EnvelopeIndexReader.defaultDatabasePath) -> Probe {
+    public static func probeDetail(path: String = EnvelopeIndexReader.defaultDatabasePath) -> Detail {
         #if canImport(Darwin)
         errno = 0
         if let fp = fopen(path, "rb") {
             fclose(fp)
-            return .granted
+            return Detail(probe: .granted, errnoValue: 0)
         }
         // Capture errno immediately — any later call could clobber it.
         let err = errno
         switch err {
-        case EPERM, EACCES: return .denied
-        case ENOENT:        return .noMailData
-        default:            return .undetermined
+        case EPERM, EACCES: return Detail(probe: .denied, errnoValue: err)
+        case ENOENT:        return Detail(probe: .noMailData, errnoValue: err)
+        default:            return Detail(probe: .undetermined, errnoValue: err)
         }
         #else
-        return .undetermined
+        return Detail(probe: .undetermined, errnoValue: 0)
         #endif
+    }
+
+    /// The probe result alone; see `probeDetail(path:)` for the errno behind it.
+    public static func probe(path: String = EnvelopeIndexReader.defaultDatabasePath) -> Probe {
+        probeDetail(path: path).probe
     }
 
     /// One-line human summary for CLI / `check_fda` tool output.
