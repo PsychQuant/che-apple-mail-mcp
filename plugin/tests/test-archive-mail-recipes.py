@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Execute the shipped SOP recipes, rather than a second implementation."""
+import itertools
 import json
 from pathlib import Path
 import re
@@ -17,10 +18,16 @@ DOCUMENT = Path(__file__).resolve().parents[1] / "commands/archive-mail.md"
 
 def recipe_code(name):
     text = DOCUMENT.read_text()
-    block = text.split(f"<!-- archive-mail-{name}-recipe:start -->", 1)[1]
-    block = block.split(f"<!-- archive-mail-{name}-recipe:end -->", 1)[0]
-    code = re.fullmatch(r"\s*```python\n(.*?)\n```\s*", block, re.S).group(1)
-    return code
+    start = f"<!-- archive-mail-{name}-recipe:start -->"
+    end = f"<!-- archive-mail-{name}-recipe:end -->"
+    for marker in (start, end):
+        if marker not in text:
+            raise AssertionError(f"{DOCUMENT.name} is missing the marker {marker}")
+    block = text.split(start, 1)[1].split(end, 1)[0]
+    match = re.fullmatch(r"\s*```python\n(.*?)\n```\s*", block, re.S)
+    if match is None:
+        raise AssertionError(f"the {name} recipe is not exactly one ```python block between its markers")
+    return match.group(1)
 
 
 def recipe(name):
@@ -411,6 +418,184 @@ class ArchiveRecipesTests(unittest.TestCase):
                                cwd=root, check=True, timeout=5)
                 self.assertTrue(path.is_dir())
             self.assertFalse((root / "PWNED").exists())
+
+
+class ArchiveArgsRecipeTests(unittest.TestCase):
+    """#540: how an invocation's text becomes positional arguments plus the --no-confirm flag."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.args = recipe("args")
+        cls.parse = staticmethod(cls.args["parse_invocation"])
+
+    # raw invocation text -> (positional, no_confirm). Every row is one rule of the closed list in Step 1.
+    ACCEPTED = [
+        ("filter then flag", "example.invalid --no-confirm", ["example.invalid"], True),
+        ("flag only", "--no-confirm", [], True),
+        ("two positionals then flag", "a b --no-confirm", ["a", "b"], True),
+        ("flag first", "--no-confirm a b", ["a", "b"], True),
+        ("flag between positionals", "a --no-confirm b", ["a", "b"], True),
+        ("double-quoted name with a space", '"Name With Space" --no-confirm', ["Name With Space"], True),
+        ("single-quoted name with a space", "'Name With Space' --no-confirm", ["Name With Space"], True),
+        ("backslash-escaped space", r"Name\ With\ Space --no-confirm", ["Name With Space"], True),
+        ("CJK name", "陳老師 --no-confirm", ["陳老師"], True),
+        ("duplicate flag is the same flag", "--no-confirm a --no-confirm", ["a"], True),
+        ("no flag", "a b", ["a", "b"], False),
+        ("single positional", "example.invalid", ["example.invalid"], False),
+        ("empty", "", [], False),
+        ("only whitespace", " \t\n ", [], False),
+        ("terminator makes the flag a positional", "-- --no-confirm", ["--no-confirm"], False),
+        ("terminator keeps a dash-led directory", "a -- --odd-dir", ["a", "--odd-dir"], False),
+        ("flag before the terminator still counts", "a --no-confirm -- --odd-dir", ["a", "--odd-dir"], True),
+        ("flag after the terminator is positional", "a -- b --no-confirm", ["a", "b", "--no-confirm"], False),
+        ("a second terminator is positional", "a -- b -- c", ["a", "b", "--", "c"], False),
+        ("nothing after the terminator", "a --no-confirm --", ["a"], True),
+        ("single dash stays positional", "a -x", ["a", "-x"], False),
+        ("a quoted flag is still the flag (quotes do not protect it; use --)", '"--no-confirm" a', ["a"], True),
+        ("a quoted flag after the terminator is positional", '-- "--no-confirm"', ["--no-confirm"], False),
+        ("third positional is returned, not dropped", "a b c", ["a", "b", "c"], False),
+        ("no-break and ideographic spaces do not split", "a b　--no-confirm", ["a b　--no-confirm"], False),
+    ]
+
+    # raw invocation text -> (error code, offending token)
+    REFUSED = [
+        ("unknown flag", "--nope", "unknown-flag", "--nope"),
+        ("unknown flag after a name", "example.invalid --nope", "unknown-flag", "--nope"),
+        ("misspelled flag", "a --no-confrim", "unknown-flag", "--no-confrim"),
+        ("flag with a value", "a --no-confirm=1", "unknown-flag", "--no-confirm=1"),
+        ("flag in another case", "a --No-Confirm", "unknown-flag", "--No-Confirm"),
+        ("em dash from smart punctuation", "a —no-confirm", "unknown-flag", "—no-confirm"),
+        ("en dash from smart punctuation", "a –no-confirm", "unknown-flag", "–no-confirm"),
+        ("smart double dash", "a ——no-confirm", "unknown-flag", "——no-confirm"),
+        ("an unknown flag wins over a known one", "--no-confirm --nope", "unknown-flag", "--nope"),
+        ("a quoted unknown flag is still refused", '"--nope" a', "unknown-flag", "--nope"),
+        ("unbalanced double quote", '"abc --no-confirm', "unbalanced-quote", None),
+        ("apostrophe", "Owner's --no-confirm", "unbalanced-quote", None),
+        ("dangling backslash", "a\\", "unbalanced-quote", None),
+    ]
+
+    def test_accepted_invocations(self):
+        for label, raw, positional, no_confirm in self.ACCEPTED:
+            with self.subTest(label):
+                result = self.parse(raw)
+                self.assertIsNone(result["error"])
+                self.assertEqual(result["positional"], positional)
+                self.assertIs(result["no_confirm"], no_confirm)
+
+    def test_refused_invocations_name_the_token_and_carry_nothing_to_act_on(self):
+        for label, raw, code, token in self.REFUSED:
+            with self.subTest(label):
+                result = self.parse(raw)
+                self.assertEqual(result["error"], {"code": code, "token": token})
+                self.assertEqual(result["positional"], [])
+                self.assertIs(result["no_confirm"], False)
+
+    def test_error_codes_are_the_two_the_sop_names(self):
+        codes = {code for _, _, code, _ in self.REFUSED}
+        self.assertEqual(codes, {"unknown-flag", "unbalanced-quote"})
+
+    def test_only_the_exact_flag_sets_it(self):
+        for raw in ["a --no-confirmx", "a --no-confirm=", "a --NO-CONFIRM", "a -no-confirm",
+                    "a no-confirm", "a --no_confirm", "a ---no-confirm"]:
+            with self.subTest(raw):
+                result = self.parse(raw)
+                self.assertIs(result["no_confirm"], False)
+
+    def test_third_positional_is_never_reassigned_to_the_output_dir(self):
+        result = self.parse("a b c --no-confirm")
+        self.assertEqual(result["positional"][:2], ["a", "b"])
+        self.assertEqual(result["positional"][2:], ["c"])
+        self.assertIs(result["no_confirm"], True)
+
+    def test_input_that_is_not_text_is_not_guessed_at(self):
+        for value in [None, 5, ["a"]]:
+            with self.subTest(value):
+                with self.assertRaises(TypeError):
+                    self.parse(value)
+
+    def test_positive_control_naive_splitters_answer_the_table_wrong(self):
+        # If the table could not tell a real parser from a naive one, passing it would prove nothing.
+        def whitespace_only(raw):
+            return {"positional": raw.split(), "no_confirm": False, "error": None}
+
+        def flag_aware_whitespace(raw):
+            tokens = raw.split()
+            return {"positional": [t for t in tokens if t != "--no-confirm"],
+                    "no_confirm": "--no-confirm" in tokens, "error": None}
+
+        rows = [(raw, {"positional": positional, "no_confirm": no_confirm, "error": None})
+                for _, raw, positional, no_confirm in self.ACCEPTED]
+        rows += [(raw, {"positional": [], "no_confirm": False, "error": {"code": code, "token": token}})
+                 for _, raw, code, token in self.REFUSED]
+        # Every row that carries the flag is answered wrong by a splitter that does not know the flag...
+        flagged = [(raw, want) for raw, want in rows if want["no_confirm"]]
+        self.assertGreaterEqual(len(flagged), 8)
+        for raw, want in flagged:
+            with self.subTest("unaware: " + raw):
+                self.assertNotEqual(whitespace_only(raw), want)
+        # ...and a splitter that knows the flag but not shell quoting, the terminator or the refusals is
+        # still answered wrong by a good part of the table: the rows exercise those rules, not just the flag.
+        wrong = [raw for raw, want in rows if flag_aware_whitespace(raw) != want]
+        self.assertGreaterEqual(len(wrong), 15, wrong)
+        for must_differ in ['"Name With Space" --no-confirm', "-- --no-confirm", "a --no-confrim", '"abc --no-confirm']:
+            self.assertIn(must_differ, wrong)
+
+    def test_without_quotes_or_backslashes_a_plain_ascii_whitespace_split_gives_the_same_answer(self):
+        # The SOP lets the agent skip running the recipe when the text has no quote or backslash.
+        # That shortcut is only sound if it is the same function; this pins it, separators included.
+        words = ["a", "b", "--", "--no-confirm", "--nope", "-x", "陳老師", "\u2014no-confirm",
+                 "a\u3000b", "a\x0bb", "#c"]
+        separators = [" ", "  ", "\t", "\n", " \t ", "\r\n"]
+        checked = 0
+        for count in range(0, 4):
+            for combo in itertools.product(words, repeat=count):
+                for separator in separators:
+                    for padding in ["", " ", "\n"]:
+                        raw = padding + separator.join(combo) + padding
+                        tokens = [t for t in re.split(r"[ \t\r\n]+", raw) if t]
+                        if self.parse(raw) != self.args["apply_rules"](tokens):
+                            self.fail("shortcut and recipe disagree on " + repr(raw))
+                        checked += 1
+        self.assertGreater(checked, 10000)
+
+    def test_the_shortcut_boundary_is_exactly_the_characters_that_change_tokenising(self):
+        # The SOP sends text containing " ' or a backslash to the recipe. Each of those really changes
+        # how shlex tokenises; every other ASCII punctuation character is an ordinary word character.
+        for char in "\"'\\":
+            with self.subTest(char=char):
+                try:
+                    tokens = shlex.split("a" + char + "b c")
+                except ValueError:
+                    continue
+                self.assertNotEqual(tokens, ["a" + char + "b", "c"])
+        for char in string.punctuation.replace('"', "").replace("'", "").replace("\\", ""):
+            with self.subTest(char=char):
+                self.assertEqual(self.parse("a" + char + "b c")["positional"], ["a" + char + "b", "c"])
+
+    def test_cli_reads_the_text_from_a_file_and_treats_it_as_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script, source, result = root / "args_recipe.py", root / "input.txt", root / "output.json"
+            script.write_text(recipe_code("args"))
+            source.write_text('"$(touch PWNED)" "`touch PWNED`" --no-confirm\n', encoding="utf-8")
+            subprocess.run([sys.executable, "-I", str(script), str(source), str(result)],
+                           check=True, timeout=5, cwd=root)
+            self.assertEqual(json.loads(result.read_text()), {
+                "positional": ["$(touch PWNED)", "`touch PWNED`"], "no_confirm": True, "error": None})
+            self.assertFalse((root / "PWNED").exists())
+            source.write_text("a --nope\n", encoding="utf-8")
+            subprocess.run([sys.executable, "-I", str(script), str(source), str(result)],
+                           check=True, timeout=5, cwd=root)
+            self.assertEqual(json.loads(result.read_text()), {
+                "positional": [], "no_confirm": False, "error": {"code": "unknown-flag", "token": "--nope"}})
+
+    def test_cli_rejects_a_wrong_argument_count(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "args_recipe.py"
+            script.write_text(recipe_code("args"))
+            done = subprocess.run([sys.executable, "-I", str(script)], capture_output=True, timeout=5)
+            self.assertNotEqual(done.returncode, 0)
+            self.assertIn(b"usage", done.stderr)
 
 
 if __name__ == "__main__":
