@@ -112,6 +112,16 @@ class IndexReferenceCheckTests(unittest.TestCase):
         self.assertEqual([r["code"] for r in result["rejections"]], ["existing-key-spelling-mismatch"])
         self.assertEqual(result["rejections"][0]["files"], ["c.md", "a.md"])
 
+    def test_an_id_that_differs_only_in_case_is_another_message_not_a_holder_or_a_spelling_variant(self):
+        # The comparison value keeps case (message-id-recipe: `<CaseSensitive@...>` is not `<casesensitive@...>`), so a
+        # top-level file holding the other casing must neither join the group nor be called a spelling mismatch.
+        scanned = [{"file": "a.md", "message_id": "<REAL@example.invalid>"},
+                   {"file": "c.md", "message_id": "synthetic:one"}]
+        result = self.check({"synthetic:one": file_entry("c.md")}, scanned,
+                            [{"key": TRUE_KEY, "files": ["c.md"]}])
+        self.assertEqual(result["rejections"], [])
+        self.assertEqual(result["groups"], [{"key": TRUE_KEY, "files": ["c.md"], "holders": [], "retained": None}])
+
     def test_one_rejected_group_does_not_reject_an_unrelated_group(self):
         scanned = [{"file": "a.md", "message_id": "synthetic:one"}, {"file": "b.md", "message_id": "synthetic:two"}]
         index = {"synthetic:one": file_entry("a.md"), "synthetic:two": file_entry("b.md"),
