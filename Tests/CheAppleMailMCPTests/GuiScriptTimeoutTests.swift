@@ -250,6 +250,12 @@ final class GuiScriptTimeoutTests: XCTestCase {
                 XCTAssertFalse(message.contains("cannot be cancelled"), message)
                 XCTAssertTrue(message.contains("does not undo Apple Events"), message)
                 XCTAssertTrue(message.contains("may already"), message)
+                // #522: the timeout text also says how to look for evidence, in the
+                // draft-save wording (a send flow never shows this text — see
+                // unknownSendStateError, which echoes it at 200 characters).
+                XCTAssertTrue(message.contains(timeoutVerificationHint(.draftSave)), message)
+                XCTAssertTrue(message.contains("search_emails"), message)
+                XCTAssertTrue(message.contains("list_drafts"), message)
                 XCTAssertEqual(message.contains("permission was verified GRANTED"), granted, message)
                 if !granted { XCTAssertTrue(message.contains("Automation permission was not verified"), message) }
             }

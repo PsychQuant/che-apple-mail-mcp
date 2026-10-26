@@ -59,9 +59,9 @@ TaskCreate(subject="confirm_phase4_execute_or_iterate",
 模糊 filter → 列出可能解讀,讓 user 選:
 
 ```
-「陳老師」可能對應到多個 contacts:
-1. cchen@stat.sinica.edu.tw (陳君厚老師,推薦)
-2. scchen@stat.sinica.edu.tw (統計所其他「陳」)
+「方老師」可能對應到多個 contacts:
+1. fang@dept.example.invalid (方老師,推薦)
+2. sfang@dept.example.invalid (系上其他姓方的老師)
 3. 其他同事(請補充)
 
 你要哪一個?
@@ -74,18 +74,18 @@ TaskCreate(subject="confirm_phase4_execute_or_iterate",
 Search 後 **不直接 fetch** 全部內容,先 list metadata 給 user 過目:
 
 ```
-搜尋結果:19 封 emails(by sender + 林助理 + subject 含「陳君厚」)
+搜尋結果:19 封 emails(by sender + 葉助理 + subject 含「Fang」)
 Threads 分布:
 
-  ✓ [04-29] 新聘博士後研究學者繳交資料 (2 msgs)
-  ✓ [04-19] 後續面試報告時間請教 (5 msgs)
-  ✓ [03-31] 面試提醒 (1 msg)
-  ✓ [03-27] 君厚老師面試時間與地點 (時間異動) (2 msgs)
-  ✓ [03-26] 君厚老師面試時間與地點 (2 msgs)
-  ✓ [03-18] 應徵博士後研究員(鄭澈) (6 msgs)
-  ⚠ [03-15] 應徵資料科學統計合作社... (1 msg, sender=scchen,可能 false positive)
+  ✓ [04-29] 新進人員繳交資料 (2 msgs)
+  ✓ [04-19] 報告時間請教 (5 msgs)
+  ✓ [03-31] 面談提醒 (1 msg)
+  ✓ [03-27] Fang 老師面談時間與地點 (時間異動) (2 msgs)
+  ✓ [03-26] Fang 老師面談時間與地點 (2 msgs)
+  ✓ [03-18] 應徵研究助理(申請人) (6 msgs)
+  ⚠ [03-15] 應徵 Fangshan 資料科學合作計畫研究員 (1 msg, 收件人=hr,可能 false positive)
 
-⚠ 1 個 thread 標示為 potential false positive(sender 不符合 cchen)
+⚠ 1 個 thread 標示為 potential false positive(收件人不符合 fang)
    要排除嗎?確認歸檔範圍?
 ```
 
@@ -109,7 +109,7 @@ False-positive detection 詳見 `false-positive-detection.md` rule。
 ### Phase 4 — Execute or Iterate
 
 - **User 確認** → 執行
-- **User 修正**(「不要 03-15 那封」、「也要把 scchen 那個歸入」) → 更新 plan,重新 Phase 3 confirm
+- **User 修正**(「不要 03-15 那封」、「也要把 hr 那個歸入」) → 更新 plan,重新 Phase 3 confirm
 - **User 拒絕** → 重新 Phase 1 理解
 
 ## Pipeline-style 表示法(default)
@@ -151,7 +151,7 @@ affecting 247 emails
 
 ## 為什麼這個 protocol 重要
 
-實際案例(2026-05-01 archive 陳老師信件):用戶說「幫我抓陳老師有關的信」,直接 search → fetch 19 封 → 寫 markdown,**事後**發現 265250 是 false positive(寄給 scchen 不是 cchen),又走一輪 rm + index 修復。
+示意案例(虛構,依 v2.9.0 加入此鐵律的原因改寫):用戶說「幫我抓方老師有關的信」,直接 search → fetch 19 封 → 寫 markdown,**事後**發現其中一封是 false positive(寄給 hr 不是 fang),又走一輪 rm + index 修復。
 
 如果有這個 confirmation skill,Phase 2 會 flag 這封並讓 user 排除,完全 prevent false positive round trip。
 

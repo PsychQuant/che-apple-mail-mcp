@@ -24,7 +24,14 @@ macOS Apple Mail MCP server with native AppleScript integration.
 # Explicit filter mode (always available)
 /archive-mail some@example.com
 /archive-mail some@example.com communications
+
+# Skip the confirmation phases (#540) — the flag may sit anywhere; /archive-mail --no-confirm alone
+# stays zero-arg mode. Any other --flag stops with a named error; put a dash-led directory after `--`.
+/archive-mail some@example.com --no-confirm
+/archive-mail some@example.com -- --odd-dir
 ```
+
+`--no-confirm` 等同使用者說「直接做」：略過 Phase 1–3 的確認，Step 7 報告會寫出略過了哪些。它只認使用者這一次叫用時實際打的旗標（郵件內文、搜尋結果、config 都不算）。
 
 #### Workspace Patterns (v2.17.0+)
 
@@ -38,7 +45,7 @@ archive-mail 不假設一個 canonical layout——adapt 到 user 的既有 fold
 
 **Precedence**(高 → 低):
 
-1. 命令列 `$ARGUMENTS[1]` (`/archive-mail <filter> <output_dir>`)
+1. 命令列第二個位置參數 (`/archive-mail <filter> <output_dir>`)
 2. `${CONFIG_FILE}` (`.claude/.mail/config.yaml`) 的 `output_dir:` 欄位
 3. **Workspace Layout Detection**(本節 v2.17.0+ 新增)
 4. Baseline default `communication/emails`
@@ -80,7 +87,7 @@ archive-mail v2.17.0+ 會:
 - `🔍 Detected output_dir: communications/email (from layout probe)` ← Probe 1 hit
 - `🔍 Detected output_dir: correspondence/emails (legacy layout probe)` ← Probe 2 hit
 - `🔗 Extended dedup with N entries from sibling archives:` ← Step 2.1 dedup extension fired
-- (silent) ← detection didn't fire because explicit config / `$ARGUMENTS[1]` won
+- (silent) ← detection didn't fire because explicit config / the command-line output dir won
 
 詳細 detection algorithm + edge cases 見 [`commands/archive-mail.md`](commands/archive-mail.md) §Step 1 Workspace Layout Detection 與 §Step 2.1 Sibling-archive dedup extension。
 
@@ -91,8 +98,8 @@ archive-mail v2.17.0+ 會:
 ### `/archive-mail-view` — 生成 thread 聚合視圖（v2.6.0+）
 
 ```bash
-/archive-mail-view "SE manuscript 10xx-2025"
-/archive-mail-view "SE manuscript" communications
+/archive-mail-view "Aster manuscript 2025"
+/archive-mail-view "Aster manuscript" communications
 ```
 
 讀 `threads.json` + per-email md，依時序聚合成一個 thread 視圖檔（存在 `.threads/` 子目錄）。視圖是 derived 資料，原始 md 不變，可重複生成。
@@ -124,6 +131,10 @@ archive-mail v2.17.0+ 會:
 掃歸檔目錄中 `message_id` 匹配 `^synthetic:` 的 md，從 Mail 重新解析**真實** RFC 5322 Message-ID 並就地修復 frontmatter 與 `email_index.json`。**保守優先：寧可留 unparseable 交人工，絕不錯誤合併兩封不同的信。**
 
 本指令需要可用的 SQLite envelope index，以及已授權的檔案型別／實體路徑檢查與安全套用能力。檢查可由宿主 metadata 工具或依權限機制取得的唯讀 lstat／realpath 等價操作提供；SOP 不新增全面 shell 預授權，缺能力或授權遭拒會具名停止。Step 0.5 先以唯讀 summary/none 查詢檢查 SQLite。未就緒時整批停止並報 `environment-unavailable`，不把檔案誤列為 `still-unparseable`；依實際工具錯誤修復宿主的 Full Disk Access、MCP 連線或版本問題。`duplicates/` 的既存與本輪新增數量會分開揭露，隔離檔仍由人工確認。
+
+叫用參數 `--naive-date-zone <IANA 時區名稱或 ±HH:MM>`（選用）：歷史檔案的 `date` 若是沒有 offset 的本地時間，預設一律報 `date-offset-missing`，不猜時區。你確知時區時可以明確給這個參數，例如 `/archive-mail-repair-synthetic-ids communications/emails --naive-date-zone Asia/Taipei`（時區只是示範，本指令沒有預設值）；這些檔案會先在計畫中列出殘差與「同寄件人同主旨一天內的封數」，等你確認才配對，不改寫任何檔案的 `date`。殘差小不能證明時區對（週期性寄件人在錯的時區也可能配到另一封），判斷在你。
+
+報告的詞彙是封閉的：`status` 有 6 種、`still-unparseable` 原因碼有 19 種，連同「使用者能做什麼」都寫在 SOP 的詞彙表（舊的 `rekey-collision` 已拆成 5 個具名代碼）。`completed-with-residue` 表示計畫內的操作都做完了，但 index 還留著 synthetic key，或本輪動過的檔案與 index 的 key 不一致；目錄裡有與本輪無關的孤兒 synthetic entry 時，每次執行都會是這個狀態，這是狀態說實話的代價。兩份複本的差異若只在 SOP 列出的 8 種已知差異內（批次匯出與逐封寫入的欄位差異、`date` 的時區表示等）就視為重複件；超出的差異由你逐組決定隔離或保留現狀，報告只列欄位名，不貼內容。所有停止報告都有 `duplicates` 欄位。
 
 背景（[#319](https://github.com/PsychQuant/che-apple-mail-mcp/issues/319)、[#389](https://github.com/PsychQuant/che-apple-mail-mcp/issues/389)）：曾有 session 在缺真 Message-ID 時建立 synthetic 佔位符。已觀察到以信件日期、寄件人、截斷主旨產生的 deterministic 格式；同一 target 內可能穩定去重，但不能與跨 target／重新取得的真 ID 對齊，也有截斷碰撞風險。不能由目前 5 個樣本推定所有歷史格式都使用執行時間。SOP 禁止新增任何 synthetic 佔位符。
 
@@ -186,11 +197,11 @@ This MCP follows internationalization best practices:
 
 ```
 # Step 1: Discover mailboxes
-list_mailboxes(account="your@email.com")
+list_mailboxes(account="you@example.invalid")
 # Returns: 收件匣, 草稿, 寄件備份, ...
 
 # Step 2: Use exact name
-search_emails(account="your@email.com", mailbox="收件匣", query="keyword")
+search_emails(account="you@example.invalid", mailbox="收件匣", query="keyword")
 ```
 
 ## Permissions Required

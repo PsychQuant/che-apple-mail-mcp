@@ -139,9 +139,9 @@ Parsed: 65 with valid frontmatter
 Skipped: 2 (missing thread_key)
 
 Threads rebuilt: 12
-  - "SE manuscript 10xx-2025": 17 messages (2025-12-19 → 2026-01-28)
-  - "Biometrika submission BIOMTRKA-25-780": 13 messages (2025-12-19 → 2025-12-24)
-  - "JRSS series B Overleaf template": 11 messages (2025-12-24 → 2025-12-25)
+  - "Aster manuscript 2025": 17 messages (2025-12-19 → 2026-01-28)
+  - "Journal submission ABC-00-000": 13 messages (2025-12-19 → 2025-12-24)
+  - "Overleaf template for Project Aster": 11 messages (2025-12-24 → 2025-12-25)
   - ...
 
 Backup: .threads.json.bak.20260422_150109

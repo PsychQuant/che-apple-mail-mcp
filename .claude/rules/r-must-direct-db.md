@@ -64,7 +64,7 @@
    FileHandle.standardError.write(Data(message.utf8))
    ```
 3. **Fall through 到 `mailController.<tool>(...)`** AppleScript 實作
-4. **Init failure** (`Server.swift:25-37`) 也要 log stderr;`indexReader = nil` 不可 silent
+4. **Init failure** 也要 log stderr;`indexReader = nil` 不可 silent。**nil 不是終態**(#537):`Server.indexReader` 是向 `IndexReaderProvider` 取用的計算屬性,每次讀取在距上次嘗試超過 30 秒時重試開啟,`check_fda` 強制重試;每次重試的結果都要有 stderr 紀錄(經 `Diagnostics.emit`),且附 `FDA probe: <結果> (errno N)`。完全相同的失敗不重複印,所以沒設定 Mail 的使用者不會每 30 秒洗一行
 
 #### 正反例
 

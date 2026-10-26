@@ -64,6 +64,35 @@ final class EnvelopeIndexReaderTests: XCTestCase {
         }
     }
 
+    /// #537 — `sqlite3_open_v2` succeeds on any file, because SQLite reads the
+    /// file lazily. A reader that "opened" such a file would then be handed out
+    /// as available while every query fails. Init must run a cheap query so that
+    /// a non-database file is refused at open time, where the provider can retry.
+    func testInitRejectsAFileThatIsNotADatabase() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent(
+            "EnvelopeIndexReaderTests-notadb-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? fm.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("Envelope Index").path
+        // Long enough to contain a full 100-byte header's worth of non-SQLite bytes.
+        try Data((0..<4096).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 7) }).write(to: URL(fileURLWithPath: path))
+
+        XCTAssertThrowsError(try EnvelopeIndexReader(databasePath: path, accountMapping: [:])) { error in
+            guard case MailSQLiteError.databaseNotAccessible(let message)? = error as? MailSQLiteError else {
+                return XCTFail("expected .databaseNotAccessible, got \(error)")
+            }
+            XCTAssertTrue(message.contains("Failed to read database"),
+                          "the message should say the open worked but the first query did not; got: \(message)")
+        }
+    }
+
+    /// The validation query must not turn a legitimately empty database into a
+    /// failure (`SELECT 1 FROM sqlite_master` has no rows there, which is fine).
+    func testInitAcceptsAnEmptyDatabase() throws {
+        XCTAssertNoThrow(try EnvelopeIndexReader(databasePath: try makeEmptyTestDB(), accountMapping: [:]))
+    }
+
     func testDefaultDatabasePathUsesV10() {
         let path = EnvelopeIndexReader.defaultDatabasePath
         XCTAssertTrue(path.contains("/V10/"), "Path should contain V10 segment")
