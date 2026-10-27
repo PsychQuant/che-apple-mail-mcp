@@ -21,6 +21,11 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-10-27
+
+- `binary_version` 3.3.1 → 3.4.0 (no new tools or parameters). What the binary brings: a text body whose charset label disagrees with its bytes is read as UTF-8 when the bytes are valid UTF-8, so exported text no longer turns into mojibake ([#538](https://github.com/PsychQuant/che-apple-mail-mcp/issues/538)); overlapping read tools no longer livelock the SQLite fast path ([#536](https://github.com/PsychQuant/che-apple-mail-mcp/issues/536)); an index refused at startup is retried, and `check_fda` reports what the server actually has open ([#537](https://github.com/PsychQuant/che-apple-mail-mcp/issues/537)); timeout messages name the read-only queries that look for evidence, and the send gate is unchanged ([#522](https://github.com/PsychQuant/che-apple-mail-mcp/issues/522)).
+- Major version because of the **BREAKING** `attachment_routing` change under Changed ([#334](https://github.com/PsychQuant/che-apple-mail-mcp/issues/334)).
+
 ### Added
 
 - `archive-mail` 從 `~/.claude/.mail/identity.yaml` 讀取 `participant_aliases`，workspace 條目原樣補充新地址，衝突採全域值並具名揭露；沒有 identity 檔時，搜尋、filter 與 alias 解析不變；Phase 1 候選多了來源標籤與引號。缺檔靜默、解析失敗警告後沿用 workspace。消歧義候選與 audit 共用同一結果，候選標示來源，只來自全域檔的候選不標「推薦」，identity 與 workspace 以同一名稱指向不同地址時也不標；`--no-confirm` 時，若模糊人名經全域檔對到的地址不在本 workspace，仍列候選讓使用者選，其餘照舊。identity 檔不會改寫搜尋 filter。不新增 own_addresses 或 frontmatter 欄位。舊的 `.claude/emails.md` 與 `config.yaml` 並存時，前者的 alias 不再讀取，報告會提示。（#334）
