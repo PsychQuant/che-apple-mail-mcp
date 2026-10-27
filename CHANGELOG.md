@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-10-27
+
 ### Fixed
 
 - **A text body whose charset label disagrees with its bytes is no longer
