@@ -30,6 +30,7 @@ private extension MailController {
         let destination = try AttachmentDestination(savePath: target.path, allowedRoots: [root.path])
         try Data("old destination".utf8).write(to: target)
         var stages: [String] = []
+        let started = Date()
         let save: (String) throws -> String = { stage in
             stages.append(stage)
             let parent = URL(fileURLWithPath: stage).deletingLastPathComponent()
@@ -56,11 +57,17 @@ private extension MailController {
             XCTAssertFalse(script.contains(target.path))
             let result = try self.runScript(script, timeout: 15)
             XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: stage)), expected)
+            // Observe Mail's metadata without assuming it is present. This is
+            // native evidence only when the explicitly opted-in test runs.
+            try printAttachmentXattrs(URL(fileURLWithPath: stage), label: "Native Mail stage")
             return result
         }
         let receipt = try destination.saveUsingScript(save, allowEmpty: false)
         XCTAssertTrue(receipt.hasSuffix("(\(expected.count) bytes)"))
         XCTAssertEqual(try Data(contentsOf: target), expected)
+        try assertFreshAttachmentQuarantine(target, since: started)
+        try printAttachmentXattrs(target, label: "Native Mail published copy")
+        let publishedQuarantine = try attachmentQuarantineValue(target)
         XCTAssertFalse(FileManager.default.fileExists(atPath: URL(fileURLWithPath: stages[0]).deletingLastPathComponent().path))
 
         // Mail really writes a second stage, then an upstream error interrupts
@@ -75,6 +82,7 @@ private extension MailController {
             XCTAssertEqual(reason, "synthetic failure after native stage write")
         }
         XCTAssertEqual(try Data(contentsOf: target), expected)
+        XCTAssertEqual(try attachmentQuarantineValue(target), publishedQuarantine)
         XCTAssertEqual(Set(stages).count, 2)
         for stage in stages {
             XCTAssertFalse(FileManager.default.fileExists(atPath: URL(fileURLWithPath: stage).deletingLastPathComponent().path))

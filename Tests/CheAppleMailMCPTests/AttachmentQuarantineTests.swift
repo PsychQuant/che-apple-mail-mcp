@@ -117,6 +117,76 @@ final class AttachmentQuarantineTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: target), Data("export".utf8))
         XCTAssertNil(try attachmentQuarantineValue(target))
     }
+
+    func testQuarantineSetterReportsRealSystemError() {
+        XCTAssertThrowsError(try RaceFreeFileWriter.quarantineAttachment(-1)) { error in
+            XCTAssertEqual(error as? RaceFreeWriteError, .quarantineFailed(errno: EBADF))
+        }
+    }
+
+    func testQuarantineFailurePreservesOldContentAndMetadataAndCleansTemp() throws {
+        for code in [ENOTSUP, EPERM, EIO] {
+            for replacing in [false, true] {
+                let root = try fixtureRoot(), target = root.appendingPathComponent("target")
+                if replacing {
+                    try Data([9]).write(to: target)
+                    try setFixtureQuarantine(target, value: "0081;12345678;Original;")
+                }
+                let original = replacing ? try attachmentQuarantineValue(target) : nil
+                let dirFd = try RaceFreeFileWriter.openValidatedRootDir(root.path)
+                defer { close(dirFd) }
+                var attempted = false
+                XCTAssertThrowsError(try RaceFreeFileWriter.withAtomicAttachmentFile(
+                    dirFd: dirFd, name: "target", quarantine: { _ in
+                        attempted = true
+                        throw RaceFreeWriteError.quarantineFailed(errno: code)
+                    }, body: { fd in
+                        let bytes: [UInt8] = [1, 2, 3]
+                        XCTAssertEqual(bytes.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }, 3)
+                    })) { error in
+                    XCTAssertEqual(error as? RaceFreeWriteError, .quarantineFailed(errno: code))
+                }
+                XCTAssertTrue(attempted)
+                if replacing {
+                    XCTAssertEqual(try Data(contentsOf: target), Data([9]))
+                    XCTAssertEqual(try attachmentQuarantineValue(target), original)
+                } else {
+                    XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
+                }
+                XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), replacing ? ["target"] : [])
+            }
+        }
+    }
+
+    func testQuarantineIsAppliedToWrittenInodeBeforeAtomicRename() throws {
+        let root = try fixtureRoot(), target = root.appendingPathComponent("target")
+        try Data([9]).write(to: target)
+        let dirFd = try RaceFreeFileWriter.openValidatedRootDir(root.path)
+        defer { close(dirFd) }
+        var stagedInfo = stat()
+        var marked = false
+        let started = Date()
+        try RaceFreeFileWriter.withAtomicAttachmentFile(dirFd: dirFd, name: "target", quarantine: { fd in
+            // The old complete file is still visible at the public name.
+            XCTAssertEqual(try Data(contentsOf: target), Data([9]))
+            XCTAssertEqual(fstat(fd, &stagedInfo), 0)
+            XCTAssertEqual(stagedInfo.st_size, 3)
+            try RaceFreeFileWriter.quarantineAttachment(fd)
+            XCTAssertGreaterThan(fgetxattr(fd, "com.apple.quarantine", nil, 0, 0, 0), 0)
+            marked = true
+        }, body: { fd in
+            let bytes: [UInt8] = [1, 2, 3]
+            XCTAssertEqual(bytes.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }, 3)
+        })
+        var finalInfo = stat()
+        XCTAssertEqual(fstatat(dirFd, "target", &finalInfo, AT_SYMLINK_NOFOLLOW), 0)
+        XCTAssertEqual(finalInfo.st_dev, stagedInfo.st_dev)
+        XCTAssertEqual(finalInfo.st_ino, stagedInfo.st_ino)
+        XCTAssertTrue(marked)
+        XCTAssertEqual(try Data(contentsOf: target), Data([1, 2, 3]))
+        try assertFreshAttachmentQuarantine(target, since: started)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), ["target"])
+    }
 }
 
 /// Shared by synthetic and explicitly opted-in native Mail tests.

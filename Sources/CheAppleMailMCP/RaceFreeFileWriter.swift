@@ -17,6 +17,8 @@ enum RaceFreeWriteError: Error, Equatable {
     /// symlinked target via `O_NOFOLLOW` / other).
     case createFailed(name: String, errno: Int32)
     case writeFailed(name: String, errno: Int32)
+    /// Attachments must not become visible at the destination without quarantine.
+    case quarantineFailed(errno: Int32)
     /// #342 — the exclusive leaf rename refused because the destination already
     /// existed. Only reachable when the caller opted into `failIfExists`, i.e.
     /// the in-memory collision guard predicted a free name and was wrong.
@@ -172,6 +174,7 @@ enum RaceFreeFileWriter {
     /// Attachment publishing uses a unique sibling temp: concurrent saves must
     /// never unlink or publish another call's temporary file (#402).
     static func withAtomicAttachmentFile(dirFd: Int32, name: String,
+                                         quarantine: (Int32) throws -> Void = quarantineAttachment,
                                          body: (Int32) throws -> Void) throws {
         let temporary = ".attachment-" + UUID().uuidString + ".tmp"
         let fd = openat(dirFd, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
@@ -183,8 +186,35 @@ enum RaceFreeFileWriter {
             _ = unlinkat(dirFd, temporary, 0)
         }
         try body(fd)
+        // Both acquisition tiers must mark this exact inode before publication.
+        // A path/URL setter after rename would reopen the symlink race and leave
+        // an unquarantined public file on failure. The internal closure is a
+        // fault-injection seam; production write/copy callers use this default.
+        try quarantine(fd)
         guard renameat(dirFd, temporary, dirFd, name) == 0 else {
             throw RaceFreeWriteError.writeFailed(name: name, errno: errno)
+        }
+    }
+
+    /// Fresh download quarantine, independent of source or prior destination
+    /// attributes (#573). Do not inherit an earlier user's approval, impersonate
+    /// Mail, or invent a QuarantineEvents database UUID. The raw 0081 format is
+    /// checked against macOS xattrs and Foundation in AttachmentQuarantineTests;
+    /// it does not promise that every possible launch path invokes Gatekeeper.
+    static func quarantineAttachment(_ fd: Int32) throws {
+        let timestamp = String(UInt64(Date().timeIntervalSince1970), radix: 16)
+        let value = Data("0081;\(timestamp);CheAppleMailMCP;".utf8)
+        let failure: Int32 = value.withUnsafeBytes { bytes in
+            while fsetxattr(fd, "com.apple.quarantine", bytes.baseAddress, bytes.count, 0, 0) != 0 {
+                let code = errno
+                if code == EINTR { continue }
+                return code
+            }
+            return 0
+        }
+        guard failure == 0 else {
+            // Includes ENOTSUP: never silently publish an unmarked attachment.
+            throw RaceFreeWriteError.quarantineFailed(errno: failure)
         }
     }
 
