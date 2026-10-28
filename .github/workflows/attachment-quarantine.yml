@@ -1,0 +1,35 @@
+name: Attachment quarantine (macOS)
+
+on:
+  pull_request:
+    paths:
+      - 'Sources/**'
+      - 'Tests/**'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - '.github/workflows/attachment-quarantine.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quarantine:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Record native environment
+        run: |
+          sw_vers
+          uname -m
+          swift --version
+          git rev-parse HEAD
+      - name: Regression tests and native xattr observations
+        run: swift test --filter AttachmentQuarantineTests
+      - name: Existing containment and writer tests
+        run: swift test --skip-build --filter 'AttachmentDestinationTests|AttachmentContainmentIntegrationTests|RaceFreeFileWriterTests|SaveAttachment'
+      - name: Full Swift suite (live Mail remains opt-in)
+        run: swift test --skip-build
