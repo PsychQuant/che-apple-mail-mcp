@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **附件發布前統一設定 macOS quarantine**
+  ([#573](https://github.com/PsychQuant/che-apple-mail-mcp/issues/573))。
+  Tier 1 與 Tier 2 透過既有暫存檔描述元設定隔離標記，成功後才原子替換目的地；
+  標記失敗（含磁碟不支援 xattrs）會中止儲存並保留舊檔。保留 #402 的路徑限制、
+  symlink 防護與串流複製，一般 Markdown export 不變。
+  原生 Mail 屬性比較與 Gatekeeper 啟動檢查的狀態見 `docs/testing/attachment-quarantine.md`。
+
 - **Exited osascript children no longer leave a false unreaped count**
   ([#417](https://github.com/PsychQuant/che-apple-mail-mcp/issues/417)).
   Registration and exit now update each child's lifecycle and the total under
