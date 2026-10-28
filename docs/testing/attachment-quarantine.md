@@ -48,6 +48,12 @@ swift test --skip-build
 不操作真實信箱。第一次 macOS 14／Swift 5.10 執行停在依賴解析，不能算行為 RED。
 修正前與修正後的執行紀錄見本 change 的 verification.md。
 
+2026-10-28：macOS 15.7.9／Swift 6.1.2 上，9 項新增測試、64 項相關測試通過，
+兩條發布路徑的 xattr -l 均顯示新的 quarantine。完整套件 1,261 項中 65 項略過、
+1 項失敗：既有 pure-list 測試在 Automation preflight 要求 Mail.app 執行。
+該失敗已在未修改的 #436 基準上單獨重現，未被略過或改成成功；完整證據見
+[驗證紀錄](../../openspec/changes/attachment-publication-quarantine/verification.md)。
+
 ## 原生 Mail 實測：獨立關卡
 
 使用 [既有合成本機信箱流程](attachment-staging.md) 產生並匯入唯一測試信，
