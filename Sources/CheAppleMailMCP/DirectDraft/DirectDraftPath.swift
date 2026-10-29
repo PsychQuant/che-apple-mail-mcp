@@ -115,7 +115,7 @@ struct DirectDraftPath {
             case .account(let n): return "from_address maps to \(n) accounts, not exactly one"
             case .index: return "the Envelope Index is not readable"
             case .draftsUnidentified(let why): return "could not identify the Drafts mailbox: \(why)"
-            case .draftsUnmatched: return "the Drafts mailbox could not be matched to the index"
+            case .draftsUnmatched: return "Mail did not confirm a Drafts mailbox path in the index"
             case .writerOpen(let why): return "the store could not be opened for writing: \(why)"
             case .schemaDrift(let drift): return "store schema differs from the verified one (\(drift.joined(separator: "; ")))"
             case .mailbox: return "the Drafts mailbox is not a single IMAP mailbox row"
@@ -201,7 +201,7 @@ struct DirectDraftPath {
         guard let reader else { return .notAttempted(.index) }
 
         // Drafts mailbox: the sanctioned identification (r-must-direct-db #186),
-        // then the #345 corroborated join to a path, then exactly one row.
+        // then a native-confirmed path (#376), then exactly one row.
         let special: [String: Any]
         do { special = try await controller.getSpecialMailboxes(accountId: account) }
         catch { return .notAttempted(.draftsUnidentified(error.localizedDescription)) }
@@ -211,9 +211,24 @@ struct DirectDraftPath {
                 return (name, (row["path_components"] as? [String]) ?? [name])
             }
         let leaves = perAccountSpecialMailboxes.compactMap { s in (special[s.key] as? String).map { (key: s.key, leaf: $0) } }
-        guard let draftsPath = joinSpecialMailboxPaths(leaves: leaves, mailboxes: entries)["drafts"],
-              let components = entries.first(where: { $0.path == draftsPath })?.components else {
-            return .notAttempted(.draftsUnmatched)
+        // #376: a path counts only when Mail's own mailbox and container objects
+        // confirm it (the same proof get_special_mailboxes uses), never from a
+        // leaf-name join. The proof runs before any write; if it cannot run,
+        // the call takes the GUI path.
+        // Only the Drafts role is proved: the write needs nothing else (#376 verify).
+        let candidates = specialMailboxPathCandidates(leaves: leaves.filter { $0.key == "drafts" }, mailboxes: entries)
+        let proof: Result<SpecialMailboxPathProof, Error>
+        if candidates.isEmpty {
+            proof = .success(SpecialMailboxPathProof(version: 1, count: 0, results: []))
+        } else {
+            do { proof = .success(try await controller.confirmSpecialMailboxPaths(accountId: account, candidates: candidates)) }
+            catch { proof = .failure(error) }
+        }
+        let components: [String]
+        switch directDraftsTarget(candidates: candidates, proof: proof) {
+        case .components(let confirmed): components = confirmed
+        case .unidentified(let why): return .notAttempted(.draftsUnidentified(why))
+        case .unmatched: return .notAttempted(.draftsUnmatched)
         }
         timer.mark("drafts_resolved")
 

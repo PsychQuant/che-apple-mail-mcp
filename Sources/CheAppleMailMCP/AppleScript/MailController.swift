@@ -318,7 +318,8 @@ actor MailController {
     }
 
     /// Shared process transport; caller policy controls deadline and GUI cleanup.
-    private func runSubprocessScript(_ source: String, timeout: TimeInterval, guiFlow: Bool, requireExistingGrant: Bool = false) throws -> String {
+    private func runSubprocessScript(_ source: String, timeout: TimeInterval, guiFlow: Bool, requireExistingGrant: Bool = false,
+                                     grantPurpose: String = "Account identity refresh") throws -> String {
         if let override = scriptRunnerOverride {
             // Same seam as runScript. Each caller passes its production
             // deadline (90s GUI / 45s scan); the test seam still takes priority.
@@ -327,7 +328,7 @@ actor MailController {
         }
         let granted = try preflightAutomation()
         guard !requireExistingGrant || granted else {
-            throw MailError.operationFailed("Account identity refresh requires an existing Mail Automation grant; use check_automation and the explicit account-access setup flow first.")
+            throw MailError.operationFailed("\(grantPurpose) requires an existing Mail Automation grant; use check_automation and the explicit account-access setup flow first.")
         }
         // #301 verify (Lens B P1): a child SIGKILL cannot reach (uninterruptible
         // kernel wait against a wedged Mail/WindowServer) leaves a permanently
@@ -2870,6 +2871,26 @@ actor MailController {
 
     // MARK: - Special Mailboxes
 
+    /// Confirm exact account-scoped index candidates against native role objects.
+    func confirmSpecialMailboxPaths(accountId: String, candidates: [SpecialMailboxPathCandidate]) throws -> SpecialMailboxPathProof {
+        guard !candidates.isEmpty else { return SpecialMailboxPathProof(version: 1, count: 0, results: []) }
+        let script = try buildSpecialMailboxPathProofScript(accountId: accountId, candidates: candidates)
+        let raw: String
+        do {
+            raw = try runSubprocessScript(script, timeout: Self.defaultScriptTimeout, guiFlow: false,
+                                          requireExistingGrant: true, grantPurpose: "Special mailbox path confirmation")
+        } catch MailError.scriptTimedOut(let seconds, let granted, _) {
+            // A read-only lookup: the generic subprocess message would claim a
+            // save or send may have happened (#376 verify; same as #406's scan).
+            throw MailError.operationFailed(
+                "The read-only special-mailbox path check did not return within \(seconds)s; "
+                + "no path was confirmed. "
+                + (granted ? "Mail may be busy or unresponsive; retry when it responds."
+                           : "Automation permission was not verified granted.\n" + AutomationHelp.guidance))
+        }
+        return try SpecialMailboxPathProof.parse(raw, candidateCount: candidates.count)
+    }
+
     /// Get special mailboxes (inbox, drafts, sent, trash, junk, outbox)
     /// Special mailbox names.
     ///
@@ -2882,6 +2903,10 @@ actor MailController {
         // Per-account mode (#179): an account selector is supplied.
         let hasAccount = !(accountId ?? "").isEmpty || !(accountName ?? "").isEmpty
         if hasAccount {
+            // In process, as on main: the first-call hang that once moved this
+            // lookup to a subprocess was fixed by the #471 primer, and keeping it
+            // separate from the proof's transport keeps the leaf names when the
+            // proof cannot run (#376 verify).
             let script = buildSpecialMailboxNamesScript(accountId: accountId, accountName: accountName ?? "")
             let raw = try runScriptAsList(script)  // [matchedId, matchedName, matchCount, n0…n4 (leaf)] for drafts/sent/trash/junk/inbox (#249 lifted the inbox deferral; #315 removed the vacuous path walk)
             // Pure parse + pure throw-translation (both unit-tested without the actor):
@@ -2893,8 +2918,8 @@ actor MailController {
             // AppleScript container walk succeeded vacuously (references from
             // the unified container have a non-mailbox `container` on first
             // probe) and returned leaf-for-nested — 4/5 wrong on every live
-            // account. Paths are joined from the Envelope Index at the Server
-            // layer (`joinSpecialMailboxPath`), where `indexReader` lives.
+            // account. Index paths are candidates only; the Server layer separately
+            // confirms them against native role objects before returning paths.
             return obj.reduce(into: [String: Any]()) { $0[$1.key] = $1.value }
         }
 
