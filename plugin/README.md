@@ -101,6 +101,10 @@ archive-mail v2.17.0+ 會:
 
 `/archive-mail-tree <target-id>` 預覽 corpus 與目的地，先捕捉到上層 intake，再分派；未知或歧義留 intake。分派有 journal 可 resume，完整流程還包含各目標的 threads/date/index reconcile。原 archive-mail 會辨識已登錄目標並保留原 filter 限制；未登錄維持舊行為。詳見 [registry](commands/archive-mail-registry.md) 與 [階層歸檔](commands/archive-mail-tree.md)。
 
+### `/classify-mail` — 依個人判準分類與清理
+
+支援自訂類別及本機保存的 sender／subject／List-ID 判準。明確批准的規則可以自動移至垃圾桶，其餘先預覽；不永久刪除、不儲存郵件本文。處置使用短效計畫與明確 ids，先寫稽核、重驗信件，未知結果不盲目重試。詳見 [分類命令](commands/classify-mail.md)。
+
 ### `/archive-mail-view` — 生成 thread 聚合視圖（v2.6.0+）
 
 ```bash

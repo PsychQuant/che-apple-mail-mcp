@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**The most comprehensive Apple Mail MCP server** - 54 tools with SQLite-powered millisecond search across 250K+ emails.
+**The most comprehensive Apple Mail MCP server** - 58 tools with SQLite-powered millisecond search across 250K+ emails.
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +15,7 @@
 
 | Feature | Other MCPs | che-apple-mail-mcp |
 |---------|------------|-------------------|
-| Total Tools | ~20 | **54** |
+| Total Tools | ~20 | **58** |
 | Language | Python | **Swift (Native)** |
 | Search Speed | Seconds (AppleScript) | **Milliseconds (SQLite)** |
 | Search Fields | Subject/Sender | **Subject/Sender/Recipient/Date** |
@@ -61,7 +61,7 @@ you these are missing (#353):
 
 | Shipped by the plugin | Present with MCP-only |
 |---|---|
-| All 54 MCP tools | ✅ yes |
+| All 58 MCP tools | ✅ yes |
 | `/archive-mail` + `-migrate` / `-rebuild-threads` / `-repair-synthetic-ids` / `-view` | ❌ the archiving SOP does not exist |
 | `rules/compose-wrapper-free.md` — what the cite-block was, and what a refused compose call means | ⚠️ background: since [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304) the wrapper is structurally impossible, so this rule now explains the six refusal reasons and their recipes rather than guarding against a silent fallback |
 | `rules/confirmation-triggers.md`, `rules/false-positive-detection.md` | ❌ no confirmation discipline on destructive operations |
@@ -129,7 +129,19 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## All 54 Tools
+## All 58 Tools
+
+<details>
+<summary><b>Email Classification (4)</b></summary>
+
+| Tool | Description |
+|------|-------------|
+| `get_email_classification_policy` | Read local policy and approvals |
+| `configure_email_classification` | Configure criteria and explicitly approve/revoke rules |
+| `classify_emails` | Read-only classification and expiring explicit-id plan |
+| `apply_email_classification` | Guarded move to native Trash with audit; no permanent deletion |
+
+</details>
 
 <details>
 <summary><b>Accounts (2)</b></summary>
@@ -536,6 +548,8 @@ Most read tools prefer Apple Mail's local Envelope Index (SQLite) and on-disk `.
 | `list_attachments` | ✓ | ✓ on any error |
 | `save_attachment` | ✓ | ✓ on extraction errors; destination errors are terminal ([#402](https://github.com/PsychQuant/che-apple-mail-mcp/issues/402)) |
 | `get_email_metadata` | ✓ | ✓ on any error (since [#71](https://github.com/PsychQuant/che-apple-mail-mcp/issues/71)) |
+
+`classify_emails` uses the Envelope Index to locate each message but reads its source through AppleScript on purpose: the preview, the refresh before a move and the final native comparison must use the same representation as Mail's own `source` (a sanctioned exception in `.claude/rules/r-must-direct-db.md`, #356). A batch of up to 200 such reads has not been measured; use smaller batches for slow sources.
 
 `get_mail_log_events` is outside this table on purpose: it reads Mail's **unified log** (events: what happened and when) through `/usr/bin/log`, not the Envelope Index (state). It needs no Full Disk Access but does need a user in the admin group, and it is never a source of truth for whether a message exists — see `.claude/rules/r-must-direct-db.md`.
 

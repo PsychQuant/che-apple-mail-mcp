@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counted in `drafts_skipped`, and an unknown status is a per-item
   `draft_status_unknown` error; neither fetches content.
 
+- **Local email classification with an audited, guarded Trash move**
+  ([#356](https://github.com/PsychQuant/che-apple-mail-mcp/issues/356)).
+  Four tools: `get_email_classification_policy`, `configure_email_classification`,
+  `classify_emails` (read-only; a 300-second plan for 1–200 explicit ids) and
+  `apply_email_classification` (writes the audit first, then moves the plan's
+  selected ids to the account's native Trash; never deletes permanently). Only an
+  explicitly approved trash rule, on a known non-draft, unflagged message with a
+  checkable identity, applies without a preview. A failure before the script
+  reaches `osascript` is a refusal (`not_dispatched`), not an unknown outcome.
+  The shared `osascript` runner now delivers the script under its deadline and,
+  when delivery fails, stops the child before it can read a partial script.
+  `/classify-mail` does not pre-authorize the tools that approve rules or move
+  mail. Only the native move has been run against real Mail.
+
 ### Changed
 
 - **BREAKING: `save_attachment` only writes where Markdown export may write**

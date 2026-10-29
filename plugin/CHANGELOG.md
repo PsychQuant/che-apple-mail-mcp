@@ -24,6 +24,7 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 ### Added
 
 - 全域 archive registry、index tombstone 去重、目的地規劃與可恢復的分派 executor；新增 registry／tree 命令，原 archive-mail 對已登錄目標導入樹狀流程並保留本次 filter 範圍。分派 complete 後仍須完成各目標 reconcile。（#363）
+- 四個郵件分類 MCP 工具與 `/classify-mail`：本機自訂判準、規則內容指紋批准、read-only plan、guarded Trash move 與最小化 audit／政策歷史。只有明確批准規則的適用 subset 可自動處置；其餘先預覽，不清空垃圾桶。`/classify-mail` 不預先授權批准規則與移動郵件的兩個工具，它們的權限提示是人工關卡。（#356）
 
 ### Changed
 
