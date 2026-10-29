@@ -1,7 +1,7 @@
 BINARY_NAME := CheAppleMailMCP
 ENTITLEMENTS := Sources/CheAppleMailMCP/Entitlements.plist
 
-.PHONY: build test test-plugin clean verify-developer-id install install-signed release-signed
+.PHONY: build test test-plugin check-install clean verify-developer-id install install-signed release-signed
 
 build:
 	swift build
@@ -12,6 +12,10 @@ test:
 
 test-plugin:
 	/bin/bash scripts/test-plugin.sh
+
+# Read-only remote membership check; separate from offline test execution (#386).
+check-install:
+	python3 scripts/check-install-instructions.py
 
 clean:
 	swift package clean
