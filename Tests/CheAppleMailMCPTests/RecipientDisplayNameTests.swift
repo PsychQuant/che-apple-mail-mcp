@@ -1,12 +1,83 @@
 import XCTest
 @testable import CheAppleMailMCP
 
-/// #251 — `to`/`cc`/`bcc` accept RFC 5322 mailbox form `Name <email>`.
-/// Names are honored natively on the legacy AppleScript path ({name, address}
-/// recipient properties); the mailto URL carries addr-spec only (RFC 6068),
-/// so display-name recipients are a named mailto-ineligibility → legacy +
-/// disclosure — exactly the custom-from_address trade-off, symmetric.
+/// #251/#411 — reading extracts mailbox forms; writer validation rejects
+/// malformed display names before GUI work. Draft name lists use the existing
+/// clipboard/AX fill path; send eligibility remains a separate decision.
 final class RecipientDisplayNameTests: XCTestCase {
+
+    func testUnquotedDisplayNameCommaRejectedWithRecipe() async throws {
+        let inputs = ["Doe, Jane <jane@example.test>",
+                      "\"Team\" Doe, Jane <jane@example.test>",
+                      "Doe,\u{FE0F} Jane <jane@example.test>",
+                      "\"A\"\u{FE0F}, \"\u{FE0F}B\" <a@example.test>",
+                      "\"A\\\u{FE0F}\", \"B\" <a@example.test>"]
+        for field in ["to", "cc", "bcc", "cc_additional", "from_address"] {
+            for raw in inputs {
+                do {
+                    try await MailController.shared.validateEmailAddresses([raw], field: field)
+                    XCTFail("must reject unquoted display-name comma: \(field)")
+                } catch MailError.invalidParameter(let text) {
+                    XCTAssertTrue(text.contains("unquoted comma"), text)
+                    XCTAssertTrue(text.contains("quote"), text)
+                    XCTAssertTrue(text.contains("bare address"), text)
+                    XCTAssertTrue(text.contains(field), text)
+                }
+            }
+        }
+    }
+
+    func testQuotedCommasAndAddressLocalPartsRemainAccepted() async throws {
+        let inputs = ["\"Doe, Jane\" <jane@example.test>",
+                      "\"Doe, \\\"Jane\\\"\" <jane@example.test>",
+                      "\"Team, West\" Jane <jane@example.test>",
+                      "Name <\"a,b\"@example.test>", "\"a,b\"@example.test",
+                      "王，明 <ming@example.test>", "<bare@example.test>"]
+        for raw in inputs {
+            try await MailController.shared.validateEmailAddresses([raw], field: "cc")
+        }
+        // Reading an existing header still extracts the mailbox; validation
+        // policy is separate from this deliberately permissive parser.
+        let parsed = parseRecipient("Doe, Jane <jane@example.test>")
+        XCTAssertEqual(parsed.name, "Doe, Jane")
+        XCTAssertEqual(parsed.address, "jane@example.test")
+    }
+
+    func testCreateRejectsUnquotedCommaBeforeEligibilityOrGUI() async throws {
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("no script may run"); return "" },
+            refusal: { XCTFail("format must reject before eligibility or clipboard capture"); return .accessibilityNotGranted })
+        for field in ["to", "cc", "bcc"] {
+            let bad = ["Doe, Jane <jane@example.test>"]
+            do {
+                _ = try await MailController.shared.createDraft(
+                    to: field == "to" ? bad : ["a@example.test"], subject: "s", body: "b",
+                    cc: field == "cc" ? bad : nil, bcc: field == "bcc" ? bad : nil)
+                XCTFail("must reject malformed name")
+            } catch MailError.invalidParameter(let text) {
+                XCTAssertTrue(text.contains("unquoted comma"), text)
+            }
+        }
+    }
+
+    func testUpdateRejectsUnquotedCommaBeforeMailboxReads() async throws {
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in XCTFail("invalid input must not start a mailbox scan"); return "" },
+            refusal: { .accessibilityNotGranted })
+        do {
+            _ = try await MailController.shared.updateDraft(
+                draftId: "101", subjectMatch: nil, accountName: "Test", accountId: nil,
+                to: ["a@example.test"], subject: "s", body: "b", cc: nil,
+                bcc: ["Doe, Jane <jane@example.test>"], attachments: nil, format: .plain, fromAddress: nil)
+            XCTFail("must reject malformed name")
+        } catch MailError.invalidParameter(let text) {
+            XCTAssertTrue(text.contains("unquoted comma"), text)
+        } catch {
+            XCTFail("expected input-format error, got \(error)")
+        }
+    }
 
     // MARK: parser
 
