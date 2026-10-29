@@ -6,7 +6,9 @@ import XCTest
 /// (AXIdentifier `Mail.sendMessageAlert`) and the window stays behind it — the
 /// orphan-window chain #333 describes. The on-error cleanup must dismiss that
 /// sheet through its discard button and confirm the window is gone; if the
-/// window survives, the failure message says so and names the title.
+/// window survives, the failure message says so (WINDOWLEFTOPEN). It names the
+/// title when the window still carries it; when native ownership is unknown or
+/// the title changed, it says that instead and the window is preserved.
 final class ComposeCleanupSheetTests: XCTestCase {
 
     private func draftScript() -> String {
@@ -124,6 +126,122 @@ final class ComposeCleanupSheetTests: XCTestCase {
         }
     }
 
+    private func prelaunchFixture(_ script: String) throws -> String {
+        let lines = script.components(separatedBy: "\n")
+        let snapshot = try XCTUnwrap(lines.firstIndex { codeLine($0) == "set _beforeIds to (id of every window)" })
+        let begin = try XCTUnwrap(lines.indices.last { $0 < snapshot && codeLine(lines[$0]) == "tell application \"Mail\"" })
+        let end = try XCTUnwrap(lines.indices.first { $0 > begin && codeLine(lines[$0]) == "end tell" })
+        let fragment = lines[(begin + 1)..<end].map { line -> String in
+            let code = codeLine(line)
+            if code == "activate" { return "set _activated to true" }
+            if code.hasPrefix("mailto ") { return "set _launchCount to _launchCount + 1" }
+            return line.replacingOccurrences(of: "id of every window", with: "{1}")
+                .replacingOccurrences(of: "name of every window", with: "{\"S\"}")
+        }.joined(separator: "\n")
+        guard !fragment.contains("tell application") else { throw BoundaryViolation.malformed("unexpected application call") }
+        return fragment
+    }
+
+    private func prelaunchCount(_ fragment: String) throws -> String {
+        let source = "set _launchCount to 0\nrepeat 3 times\ntry\n" + fragment
+            + "\non error _fixtureError number _fixtureNumber\n"
+            + "if _fixtureError does not contain \"already existed before this compose\" then error _fixtureError number _fixtureNumber\n"
+            + "end try\nend repeat\nreturn _launchCount"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", source]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .newlines)
+        XCTAssertEqual(process.terminationStatus, 0, text)
+        return text
+    }
+
+    func testRepeatedExistingTitleRefusalNeverLaunches() throws {
+        let fragment = try prelaunchFixture(draftScript())
+        XCTAssertTrue(fragment.contains("if _beforeTitles contains "))
+        XCTAssertTrue(fragment.contains("set _launchCount to _launchCount + 1"))
+        XCTAssertEqual(try prelaunchCount(fragment), "0", "repeated collision refusals must issue no compose launches")
+    }
+
+    func testPrelaunchFixtureDetectsRemovalOfCollisionRefusal() throws {
+        let mutant = draftScript().components(separatedBy: "\n")
+            .filter { !codeLine($0).hasPrefix("if _beforeTitles contains ") }.joined(separator: "\n")
+        XCTAssertEqual(try prelaunchCount(prelaunchFixture(mutant)), "3",
+                       "removing the production refusal must reach all three launch attempts")
+    }
+
+    func testExistingTitleIsRejectedBeforeLaunchingAnotherWindow() throws {
+        for send in [false, true] {
+            let script = buildMailtoComposeScript(url: "mailto:a@example.test?subject=S", subject: "S", attachments: [], send: send)
+            let boundary = try cleanupBoundary(script)
+            let launch = try XCTUnwrap(boundary.lines.firstIndex { $0.hasPrefix("mailto ") })
+            XCTAssertLessThan(boundary.guards[0], launch, "same-title retries must refuse before opening another window")
+        }
+    }
+
+    /// Run the actual post-launch identification control flow — the #464 poll
+    /// and the checks after it — replacing only window-property access with
+    /// fixed lists, and dropping the Mail tell wrappers and the poll's delays.
+    /// Never execute a Mail tell block.
+    private func identifyFixture(_ windows: String) throws -> (Int32, String) {
+        let lines = draftScript().components(separatedBy: "\n")
+        let begin = try XCTUnwrap(lines.firstIndex { codeLine($0) == "set _winWaited to 0" })
+        let lastCheck = try XCTUnwrap(lines.indices.first {
+            $0 > begin && codeLine(lines[$0]).hasPrefix("if _ourMatches > 1 then error ")
+        })
+        let end = try XCTUnwrap(lines.indices.first { $0 > lastCheck && codeLine(lines[$0]).hasPrefix("end tell") })
+        let fragment = lines[begin..<end]
+            .filter { line in
+                let code = codeLine(line)
+                return code != "tell application \"Mail\"" && code != "end tell" && !code.hasPrefix("delay ")
+            }
+            .joined(separator: "\n")
+            .replacingOccurrences(of: "count of windows", with: "count of _testWindows")
+            .replacingOccurrences(of: "repeat with _cw in windows", with: "repeat with _cw in _testWindows")
+            .replacingOccurrences(of: "id of _cw", with: "item 1 of _cw")
+            .replacingOccurrences(of: "name of _cw", with: "item 2 of _cw")
+        guard !fragment.contains("tell application") else {
+            throw BoundaryViolation.malformed("unexpected application call in fixture fragment")
+        }
+        let source = "set _beforeIds to {1}\nset _beforeTitles to {\"Other\"}\nset _testWindows to "
+            + windows + "\n" + fragment + "\nreturn _ourId as text"
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", source]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: data, as: UTF8.self).trimmingCharacters(in: .newlines))
+    }
+
+    func testIdentificationDoesNotRequireNetWindowCountGrowth() throws {
+        let (status, text) = try identifyFixture("{{2, \"S\"}}")
+        XCTAssertEqual(status, 0, text)
+        XCTAssertEqual(text, "2", "another window closing must not hide our new window")
+    }
+
+    func testIdentificationStillRejectsMissingOrAmbiguousOwnership() throws {
+        // A new window that does not carry our subject is not ours.
+        let missing = try identifyFixture("{{2, \"Other\"}}")
+        XCTAssertNotEqual(missing.0, 0)
+        XCTAssertTrue(missing.1.contains("could not identify"), missing.1)
+        // No unseen id at all keeps #464's distinct message.
+        let noWindow = try identifyFixture("{{1, \"Other\"}}")
+        XCTAssertNotEqual(noWindow.0, 0)
+        XCTAssertTrue(noWindow.1.contains("mailto did not open a compose window"), noWindow.1)
+        let ambiguous = try identifyFixture("{{2, \"S\"}, {3, \"S\"}}")
+        XCTAssertNotEqual(ambiguous.0, 0)
+        XCTAssertTrue(ambiguous.1.contains("more than one new window"), ambiguous.1)
+    }
+
     func testCleanupFailureHasItsOwnHandler() {
         for send in [false, true] {
             let s = buildMailtoComposeScript(url: "mailto:a@example.test?subject=S", subject: "S", attachments: [], send: send)
@@ -177,7 +295,7 @@ final class ComposeCleanupSheetTests: XCTestCase {
         for send in [false, true] {
             let result = try executeHandler(send: send,
                 cleanup: "set _cleanupRan to true\nerror \"cleanup denied\" number -1743")
-            XCTAssertEqual(result, "FILLFIELD: original reason — CLEANUPFAILED: cleanup denied||true")
+            XCTAssertEqual(result, "FILLFIELD: original reason — CLEANUPFAILED: cleanup denied (compose window state unknown; inspect Mail before retrying)||true")
         }
     }
 
@@ -205,15 +323,19 @@ final class ComposeCleanupSheetTests: XCTestCase {
     func testCleanup_everyButtonClickIsGuardedByTheDiscardCondition() {
         // R1 #12: the old "never clicks save" assertion could not fail (the
         // generator always puts a newline between `then` and `click`). This
-        // one reads the generated script line by line: every `click _b` must
-        // sit directly under the exact discard-title condition.
-        let lines = draftScript().components(separatedBy: "\n")
+        // Every click must remain inside the discard-title block. A one-line
+        // ownership refusal may occur between that condition and the action.
+        let lines = draftScript().components(separatedBy: "\n").map(codeLine)
         var clicks = 0
-        for (i, line) in lines.enumerated() where line.trimmingCharacters(in: .whitespaces) == "click _b" {
-            clicks += 1
-            let guardLine = lines[i - 1].trimmingCharacters(in: .whitespaces)
-            XCTAssertEqual(guardLine, "if _bt is \"不儲存\" or _bt is \"Don't Save\" or _bt is \"Don’t Save\" then",
-                           "click _b at line \(i + 1) is not guarded by the discard condition")
+        var conditions: [String] = []
+        for (i, line) in lines.enumerated() {
+            if line.hasPrefix("if ") && line.hasSuffix(" then") { conditions.append(line) }
+            if line == "end if" { _ = conditions.popLast() }
+            if line == "click _b" {
+                clicks += 1
+                XCTAssertEqual(conditions.last, "if _bt is \"不儲存\" or _bt is \"Don't Save\" or _bt is \"Don’t Save\" then",
+                               "click _b at line \(i + 1) escaped the discard condition")
+            }
         }
         XCTAssertEqual(clicks, 1, "exactly one sheet-button click exists in cleanup")
     }

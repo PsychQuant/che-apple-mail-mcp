@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A failed clean compose no longer leads the retry to open a second window,
+  and cleanup touches only a window it can show is its own**
+  ([#333](https://github.com/PsychQuant/che-apple-mail-mcp/issues/333), partial).
+  A window already titled with the subject now stops the call before mailto
+  (nothing sent), instead of opening another compose window and failing on the
+  collision afterwards; that window may be a draft saved earlier, which
+  [#470](https://github.com/PsychQuant/che-apple-mail-mcp/issues/470) tracks.
+  Identification no longer depends on the window count growing, since another
+  window can close while ours opens. After identification, cleanup closes the
+  window and dismisses its discard sheet only while Mail still reports the
+  window id captured at identification with the same title, and no other window
+  shares that title; a window whose title changed, that shares the subject with
+  another, or whose state cannot be read is left open and reported
+  (`WINDOWLEFTOPEN`), and a failed read is reported as `CLEANUPFAILED` with the
+  check that failed. This is stricter than the sheet dismissal shipped for #404:
+  an unreadable window title now stops cleanup instead of being skipped, and it
+  has not yet been run against real Mail. Failures before identification still
+  leave the new window open; their messages now say to inspect Mail before
+  retrying.
+
 ## [3.4.0] - 2026-10-27
 
 ### Fixed

@@ -26,8 +26,10 @@ final class ComposeReadinessPollTests: XCTestCase {
 
     func testWindowIsPolledWithTheOldDelayAsTheCap() throws {
         let s = script()
+        // #333 replaced the net window-count check with a count of unseen ids,
+        // which starts right after the poll.
         let wait = try XCTUnwrap(between(s, "mailto \"mailto:a@x?subject=S\"",
-                                         "if (count of windows) <= _wc then error"))
+                                         "set _newWindows to 0"))
         XCTAssertFalse(wait.contains("\n    delay 1.8\n"), "the fixed 1.8 s wait must be gone")
         XCTAssertTrue(wait.contains("delay 0.1"), "poll in 0.1 s steps")
         XCTAssertTrue(wait.contains("_winWaited ≥ 1.8"), "the old window delay is the cap")
@@ -35,12 +37,15 @@ final class ComposeReadinessPollTests: XCTestCase {
                       "stop as soon as our new, subject-titled window exists")
     }
 
-    func testWindowChecksAndMessagesAreUnchangedAfterThePoll() {
+    func testWindowCheckMessagesSurviveThePoll() {
+        // #333 changed what the checks after the poll test (an unseen window id
+        // instead of the net window count), so only the messages are pinned here;
+        // ComposeCleanupSheetTests runs the checks themselves.
         let s = script()
         for message in ["mailto did not open a compose window",
                         "could not identify our new compose window by subject after mailto (nothing sent)",
                         "more than one new window is titled the subject"] {
-            XCTAssertTrue(s.contains(message), "failure semantics must stay: \(message)")
+            XCTAssertTrue(s.contains(message), "failure message must stay: \(message)")
         }
     }
 

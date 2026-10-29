@@ -140,7 +140,7 @@ func buildComposeErrorHandler(cleanupBody: String, send: Bool) -> String {
         try
     \(cleanupBody)
         on error _cleanupErr
-            set _mErr to (_mErr as text) & " — CLEANUPFAILED: " & (_cleanupErr as text)
+            set _mErr to (_mErr as text) & " — CLEANUPFAILED: " & (_cleanupErr as text) & " (compose window state unknown; inspect Mail before retrying)"
         end try
     """
     return send
@@ -289,6 +289,9 @@ func buildMailtoComposeScript(
     // The later System Events discard click only has a title, not a Mail id;
     // entering cleanup before ownership is established could discard a user's
     // pre-existing same-title compose window. Structural tests pin this boundary.
+    // #333: refuse known title collisions before mailto can create another
+    // window. Net window-count growth is not evidence of creation: another
+    // window can close concurrently. Use the existing id/subject checks below.
     // 1. Capture Mail window ids BEFORE the mailto, hand it off, then identify
     // OUR compose window as the NEW window (id unseen before) whose title is our
     // subject — captured as `_ourId`. On-error cleanup closes ONLY `_ourId`, by
@@ -305,9 +308,10 @@ func buildMailtoComposeScript(
     // path if our subject already titled a window BEFORE the mailto (below), and
     // (ii) raiseOnly asserts EXACTLY ONE window carries our title before each
     // keystroke phase — a same-title window opening concurrently (after the
-    // snapshot) makes raiseOnly error pre-dispatch → cleanup closes only `_ourId`
-    // → the call fails (no fallback, #304), so a race can neither keystroke/dispatch the wrong
-    // window nor lose the user's window. The `my senderMatches` handler is
+    // snapshot) makes raiseOnly error pre-dispatch → the call fails (no
+    // fallback, #304). Cleanup then sees two native windows with our title
+    // ("ambiguous"), closes neither and reports WINDOWLEFTOPEN (#333), so a race
+    // can neither keystroke/dispatch the wrong window nor lose the user's window. The `my senderMatches` handler is
     // prepended only when a sender popup is driven — see below. It matches the
     // requested addr against a popup label by (a) exact bare addr, (b) the
     // literal `<addr>` angle-addr suffix, or (c) the LAST space-delimited token
@@ -338,32 +342,33 @@ func buildMailtoComposeScript(
 
     """ : ""
     let timingHead = timing ? ComposeTiming.prelude + ComposeTiming.markStatement("script_start") + "\n" : ""
-    var s = timingHead + fillHandlers + senderMatchHandler + """
+    var s = timingHead + composeCleanupIdentityHandlers + fillHandlers + senderMatchHandler + """
     tell application "Mail"
-        set _wc to (count of windows)
         set _beforeIds to (id of every window)
         set _beforeTitles to (name of every window)
+        if _beforeTitles contains "\(subjEsc)" then error "a window titled \\"\(subjEsc)\\" already existed before this compose — refusing before mailto (nothing sent); inspect that window in Mail, which may hold a draft saved earlier, before retrying"
         activate
         mailto "\(appleScriptEscape(url))"
     end tell\(tm("mailto_sent"))
     -- #464: poll for OUR new window instead of a fixed \(windowDelay) s wait. The
-    -- old delay is the cap, and the checks below run unchanged after the loop,
-    -- so a call that succeeded before still succeeds — only sooner.
+    -- old delay is the cap. #333 changed the checks after the loop (no net-count
+    -- gate; the same-title check moved before mailto), but a call that succeeded
+    -- before still succeeds — only sooner.
     set _winWaited to 0
     repeat
         tell application "Mail"
             set _ourId to missing value
             set _ourMatches to 0
-            if (count of windows) > _wc then
-                repeat with _cw in windows
-                    try
-                        if (_beforeIds does not contain (id of _cw)) and ((name of _cw) is "\(subjEsc)") then
-                            set _ourId to (id of _cw)
-                            set _ourMatches to _ourMatches + 1
-                        end if
-                    end try
-                end repeat
-            end if
+            -- #333: no net-count gate — another window can close while ours
+            -- opens, so only an unseen id carrying our subject counts.
+            repeat with _cw in windows
+                try
+                    if (_beforeIds does not contain (id of _cw)) and ((name of _cw) is "\(subjEsc)") then
+                        set _ourId to (id of _cw)
+                        set _ourMatches to _ourMatches + 1
+                    end if
+                end try
+            end repeat
         end tell
         if _ourMatches > 0 then exit repeat
         if _winWaited ≥ \(windowDelay) then exit repeat
@@ -371,10 +376,17 @@ func buildMailtoComposeScript(
         set _winWaited to _winWaited + 0.1
     end repeat
     tell application "Mail"
-        if (count of windows) <= _wc then error "mailto did not open a compose window"
-        if _beforeTitles contains "\(subjEsc)" then error "a window titled \\"\(subjEsc)\\" already existed before this compose — cannot safely disambiguate the new window (nothing sent)"
-        if _ourMatches is 0 then error "could not identify our new compose window by subject after mailto (nothing sent)"
-        if _ourMatches > 1 then error "more than one new window is titled the subject — cannot safely identify our compose window (nothing sent)"
+        set _newWindows to 0
+        if _ourMatches is 0 then
+            repeat with _cw in windows
+                try
+                    if _beforeIds does not contain (id of _cw) then set _newWindows to _newWindows + 1
+                end try
+            end repeat
+        end if
+        if _ourMatches is 0 and _newWindows is 0 then error "mailto did not open a compose window within the wait (nothing sent) — inspect Mail before retrying"
+        if _ourMatches is 0 then error "could not identify our new compose window by subject after mailto (nothing sent) — ownership is unconfirmed; inspect Mail before retrying"
+        if _ourMatches > 1 then error "more than one new window is titled the subject — cannot safely identify our compose window (nothing sent) — ownership is unconfirmed; inspect Mail before retrying"
     end tell\(tm("window_found"))
     \(flagInit)\(bccFlagInit)try
         tell application "System Events"
@@ -757,14 +769,27 @@ func buildMailtoComposeScript(
     // re-checks that our window is gone, and otherwise appends a
     // WINDOWLEFTOPEN note to the error so the caller knows to close it.
     let cleanupBody = """
+            set _titleMatches to 0
+            set _cleanupState to my composeCleanupOwnerState(_ourId, "\(subjEsc)", false)
+            if _cleanupState is "owned" then
             tell application "Mail"
                 repeat with _cw in windows
                     try
-                        if (id of _cw) is _ourId then close _cw saving no
+                        considering case
+                            if (id of _cw) is _ourId then
+                                set _closeTitle to name of _cw
+                                if class of _closeTitle is text and _closeTitle is "\(subjEsc)" then close _cw saving no
+                            end if
+                        end considering
                     end try
                 end repeat
             end tell
             delay 0.4
+            set _cleanupState to my composeCleanupOwnerState(_ourId, "\(subjEsc)", false)
+            end if
+            -- A successful close (or prior disappearance) ends cleanup. A
+            -- remaining same-title AX window is not evidence of ownership.
+            if _cleanupState is "owned" then
             tell application "System Events"
                 tell process "Mail"
                     -- PR #407 R1 #11: System Events cannot see Mail's window
@@ -772,16 +797,35 @@ func buildMailtoComposeScript(
                     -- more than one window carries our subject the click could
                     -- discard someone else's unsaved message — refuse, and let
                     -- the WINDOWLEFTOPEN note below report it.
-                    set _titleMatches to 0
+                    set _cleanupTarget to missing value
                     repeat with _cw2 in windows
                         try
-                            if (title of _cw2) is "\(subjEsc)" then set _titleMatches to _titleMatches + 1
+                            set _axTitle to title of _cw2
+                            if class of _axTitle is not text then error "CLEANUPIDENTITY: AX window title unavailable"
+                            considering case
+                                if _axTitle is "\(subjEsc)" then
+                                    set _titleMatches to _titleMatches + 1
+                                    set _cleanupTarget to contents of _cw2
+                                end if
+                            end considering
+                        on error _axMsg number _axNumber
+                            if (_axMsg as text) starts with "CLEANUPIDENTITY: " then error _axMsg number _axNumber
+                            error "CLEANUPIDENTITY: AX window enumeration incomplete: " & _axMsg number _axNumber
                         end try
                     end repeat
                     if _titleMatches is 1 then
-                    repeat with _cw2 in windows
+                        set _cw2 to _cleanupTarget
                         try
-                            if (title of _cw2) is "\(subjEsc)" and (count of sheets of _cw2) > 0 then
+                            set _axTitle to title of _cw2
+                            if class of _axTitle is not text then error "CLEANUPIDENTITY: AX target title unavailable"
+                            considering case
+                                if _axTitle is not "\(subjEsc)" then error "CLEANUPIDENTITY: AX target title changed"
+                            end considering
+                            if (count of sheets of _cw2) > 0 then
+                                if (my composeCleanupOwnerState(_ourId, "\(subjEsc)", false)) is not "owned" then error "CLEANUPIDENTITY: native owner changed before AX raise"
+                                perform action "AXRaise" of _cw2
+                                delay 0.1
+                                if (my composeCleanupOwnerState(_ourId, "\(subjEsc)", true)) is not "owned" then error "CLEANUPIDENTITY: raised AX window is not the native owner"
                                 set _sh to sheet 1 of _cw2
                                 if (value of attribute "AXIdentifier" of _sh) is "Mail.sendMessageAlert" then
                                     repeat with _b in buttons of _sh
@@ -790,30 +834,38 @@ func buildMailtoComposeScript(
                                             set _bt to (title of _b as text)
                                         end try
                                         if _bt is "不儲存" or _bt is "Don't Save" or _bt is "Don’t Save" then
+                                            -- Recheck immediately before the
+                                            -- destructive action; still not an
+                                            -- atomic cross-API transaction.
+                                            if (my composeCleanupOwnerState(_ourId, "\(subjEsc)", true)) is not "owned" then error "CLEANUPIDENTITY: native owner changed before discard"
                                             click _b
                                             exit repeat
                                         end if
                                     end repeat
                                 end if
                             end if
+                        on error _axMsg number _axNumber
+                            if (_axMsg as text) starts with "CLEANUPIDENTITY: " then error _axMsg number _axNumber
+                            error "CLEANUPIDENTITY: guarded AX cleanup unavailable: " & _axMsg number _axNumber
                         end try
-                    end repeat
                     end if
                 end tell
             end tell
             delay 0.4
-            set _stillOpen to false
-            tell application "Mail"
-                repeat with _cw in windows
-                    try
-                        if (id of _cw) is _ourId then set _stillOpen to true
-                    end try
-                end repeat
-            end tell
+            set _cleanupState to my composeCleanupOwnerState(_ourId, "\(subjEsc)", false)
+            end if
+            set _stillOpen to _cleanupState is not "absent"
             set _leftOpenReason to "its discard sheet could not be dismissed"
             if _titleMatches is greater than 1 then set _leftOpenReason to "cleanup refused to dismiss its discard sheet because " & _titleMatches & " windows carry this subject and only one can be ours"
             if _titleMatches is 0 then set _leftOpenReason to "no window carrying this subject was visible to System Events, so nothing was clicked"
-            if _stillOpen then set _mErr to (_mErr as text) & " — WINDOWLEFTOPEN: the compose window titled \\"\(subjEsc)\\" was left open (" & _leftOpenReason & "); close it in Mail before retrying"
+            if _cleanupState is not "owned" and _cleanupState is not "absent" then set _leftOpenReason to "native ownership is " & _cleanupState & "; no title-only discard is allowed"
+            if _cleanupState is "unknown" then
+                set _mErr to (_mErr as text) & " — WINDOWLEFTOPEN: the original compose window state could not be verified; inspect Mail before retrying"
+            else if _cleanupState is "changed" then
+                set _mErr to (_mErr as text) & " — WINDOWLEFTOPEN: the original compose window changed title and was preserved; inspect Mail before retrying"
+            else if _stillOpen then
+                set _mErr to (_mErr as text) & " — WINDOWLEFTOPEN: the compose window titled \\"\(subjEsc)\\" was left open (" & _leftOpenReason & "); close it in Mail before retrying"
+            end if
     """
     // send:true handler: three branches, all rethrow — sentinel-marked errors
     // (keystroke) pass through untouched; unmarked errors with the flag set
@@ -1143,4 +1195,3 @@ func buildForwardEmailPasteScript(
         notOpenedError: "forward did not open a compose window"
     )
 }
-
