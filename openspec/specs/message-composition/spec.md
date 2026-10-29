@@ -146,7 +146,7 @@ No other body source is permitted.
 
 When a composing tool cannot use its non-injecting path, it SHALL fail with an error that names the reason and states an actionable alternative, and SHALL NOT create a draft, send mail, or delete an existing draft.
 
-The set of ineligibility reasons SHALL be exactly the following six, and SHALL NOT be extended by analogy. They govern the GUI path; when `create_draft` creates the draft through Requirement: Direct-write draft path, reason 3 does not apply, because that path sends no keystrokes. When the direct write does not create the draft, the GUI path's reasons apply in full.
+The set of ineligibility reasons SHALL be exactly the following seven, and SHALL NOT be extended by analogy. They govern the GUI path; when `create_draft` creates the draft through Requirement: Direct-write draft path, reason 3 does not apply, because that path sends no keystrokes. When the direct write does not create the draft, the GUI path's reasons apply in full.
 
 1. `format` is `markdown` or `html`
 2. the subject is empty (the clean path identifies its compose window by title)
@@ -154,6 +154,7 @@ The set of ineligibility reasons SHALL be exactly the following six, and SHALL N
 4. a supplied `from_address` is not a simple addr-spec
 5. an attachment path contains non-ASCII characters
 6. a `to`, `cc`, or `bcc` recipient carries a display name on a send (`compose_email`); on a draft, display-name recipients are filled through the GUI and are not a refusal reason
+7. `signature` has mode `named` and the name is missing or not unique among Mail's signatures, refused before the mailto hand-off (#322)
 
 #### Scenario: Missing Accessibility fails and names the zero-TCC alternative
 
@@ -354,8 +355,9 @@ Before writing anything, the system SHALL check eligibility. The call is ineligi
 7. `subject` is empty.
 8. `from_address` is absent or empty.
 9. `from_address` is not a bare addr-spec.
+10. `signature` has mode `named`. The direct write inserts no signature yet (#587), so a named one is applied on the GUI path. Mode `none` is what the direct write produces; mode `mail_default` is checked by gate (3).
 
-After eligibility passes and before writing, the system SHALL also require all of the following, checked in this order, and SHALL take the GUI path at the first that fails: (1) Mail's version is 16.x and the macOS major version is 27; (2) `from_address` maps to exactly one Mail account; (3) the Envelope Index is readable; (4) the account's Drafts mailbox is identified and matched to a mailbox path in the index; (5) the store opens for writing; (6) the store's `messages` columns equal the verified set and every other table it writes has its required columns; (7) that Drafts path corresponds to exactly one mailbox row and its URL is an IMAP URL; (8) a sender address row already exists for `from_address` in that account.
+After eligibility passes and before writing, the system SHALL also require all of the following, checked in this order, and SHALL take the GUI path at the first that fails: (1) Mail's version is 16.x and the macOS major version is 27; (2) `from_address` maps to exactly one Mail account; (3) when `signature` is `mail_default`, Mail's `AccountsMap.plist` lists no signature for that account (an unreadable list fails this gate), because a signature Mail would insert is not written directly; (4) the Envelope Index is readable; (5) the account's Drafts mailbox is identified and matched to a mailbox path in the index; (6) the store opens for writing; (7) the store's `messages` columns equal the verified set and every other table it writes has its required columns; (8) that Drafts path corresponds to exactly one mailbox row and its URL is an IMAP URL; (9) a sender address row already exists for `from_address` in that account. A draft created by the direct write SHALL carry a disclosure that no signature was inserted.
 
 The write SHALL happen inside a single `BEGIN IMMEDIATE` transaction, with the `.emlx` file renamed into place inside that transaction. A failure during the write SHALL roll the transaction back and remove the file, and the call SHALL take the GUI path.
 

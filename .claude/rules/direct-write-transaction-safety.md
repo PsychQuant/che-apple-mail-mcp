@@ -11,7 +11,7 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 2. **觸發前精確還原**：上傳請求（切換草稿已讀狀態）成功完成之前的任何失敗，都必須先精確還原寫入，
    才可以改走 GUI 路徑。
 3. **觸發後不退回**：上傳請求成功之後，絕不改走 GUI 路徑（會產生第二份草稿）。
-4. **寫入前閘門每次照跑**：spec〈Direct-write draft path〉的 9 項適用條件與 8 項寫入前閘門，
+4. **寫入前閘門每次照跑**：spec〈Direct-write draft path〉的 10 項適用條件與 9 項寫入前閘門，
    每次呼叫都依序以**當下**的 Mail 版本與資料庫狀態檢查。cache 或任何先前結果只能提供候選值，
    不能取代閘門的檢查；候選值對不上當下資料庫時，視為沒有 cache。
 5. **不碰 Mail 自己維護的欄位**：不寫 `alleged_change_identifier`，計數交給 Mail 的 trigger。
@@ -101,7 +101,7 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 
 | 提案 | 結論 | 依據 |
 |---|---|---|
-| cache 草稿匣辨識結果（省約 470 ms） | **可做** | 只要第 4 項成立：cache 只給候選路徑，8 道閘門照跑、用當下資料庫驗證，對不上就重新辨識 |
+| cache 草稿匣辨識結果（省約 470 ms） | **可做** | 只要第 4 項成立：cache 只給候選路徑，9 道閘門照跑、用當下資料庫驗證，對不上就重新辨識 |
 | 觸發後不等上傳確認（省約 1 秒） | **不做** | 違反第 6、7 項：無法發現沒上傳的草稿，也不再補設已讀 |
 | 縮短兩次已讀切換的間隔 | **不做（實驗後維持 0.5 秒）** | 第 8 項：#488 已做 live 實驗（5 種間隔各 10 封全部成功，但 0/10 的單側 95% 上限約 26%），使用者決定維持 0.5 秒；要再縮短，須先有更大的樣本 |
 | 觸發改成 in-process（省下啟動 osascript 的時間，#496） | **不做** | 第 2、3 項：in-process 沒有終止機制，逾時只能放棄 thread，script 仍可能在還原之後才切換已讀。以單行 script 推算每次約可省 65–140 ms（觸發 script 本身沒有量過；#406 記錄過草稿掃描 script 在背景 NSAppleScript 反而超過 50 秒）。#489 的 198 ms 裡，計時本身推估約佔 45–120 ms（跨負載相減，`scripts/experiments/496-trigger-transport/`） |
@@ -119,7 +119,7 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 ## 相關
 
 - `r-must-direct-db.md` 〈C/U/D 的唯一例外〉——直接寫入的適用界線與「觸發」的定義
-- `openspec/specs/message-composition/spec.md` 〈Direct-write draft path〉——9 項條件與 8 項閘門（以 spec 為準）
+- `openspec/specs/message-composition/spec.md` 〈Direct-write draft path〉——10 項條件與 9 項閘門（以 spec 為準）
 - #463 / #472（實驗與原型）、#475（spec 化）、#482（本機副本未讀）、#481（是否設為預設）
 - #488（切換間隔的 live 實驗）、#489（觸發步驟的分解計時）、#490（本規則的出處修正與守門測試）
 

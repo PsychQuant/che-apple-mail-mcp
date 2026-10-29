@@ -93,7 +93,7 @@ The `outcome` of every direct-write row SHALL be one of the following values. Th
 - `created` — the draft was written and Mail has it: the upload was confirmed, or the upload request failed but reversing the write showed that Mail had already uploaded the draft.
 - `created:upload_pending` — the draft was written and is in Mail's Drafts, but its upload was not confirmed: the request succeeded and the wait ran out, or the request failed and the write could not be reversed.
 - `fell_back:trigger` — the upload request failed and the write was reversed.
-- `not_attempted:<code>` — the attempt ended without the draft reaching Mail and with nothing it wrote left behind (for `insert`, the write was begun and rolled back), where `<code>` is one of `format`, `attachments`, `ccOrBcc`, `noRecipient`, `displayName`, `unsupportedAddress`, `emptySubject`, `missingFromAddress`, `fromNotBare`, `version`, `account`, `index`, `drafts_unidentified`, `drafts_unmatched`, `writer_open`, `schema_drift`, `mailbox`, `sender`, `insert`.
+- `not_attempted:<code>` — the attempt ended without the draft reaching Mail and with nothing it wrote left behind (for `insert`, the write was begun and rolled back), where `<code>` is one of `format`, `attachments`, `ccOrBcc`, `noRecipient`, `displayName`, `unsupportedAddress`, `emptySubject`, `missingFromAddress`, `fromNotBare`, `signature`, `version`, `account`, `account_signature`, `index`, `drafts_unidentified`, `drafts_unmatched`, `writer_open`, `schema_drift`, `mailbox`, `sender`, `insert`.
 
 When `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT` is not `1`, the system SHALL record no `direct` rows.
 

@@ -43,6 +43,56 @@ final class DirectDraftPathTests: XCTestCase {
         XCTAssertEqual(outcome.timingCode, "not_attempted:ccOrBcc")
     }
 
+    func testANamedSignatureTakesTheGuiPathBeforeTouchingAnything() async {
+        // #322 × #472: the direct write cannot apply a named signature (#587),
+        // so it must not be silently dropped on that path.
+        let named = await DirectDraftPath(controller: MailController.shared, reader: nil, enabled: true)
+            .attempt(to: ["a@example.org"], subject: "S", body: "B", cc: nil, bcc: nil,
+                     attachments: nil, format: .plain, fromAddress: "me@example.org",
+                     signature: ComposeSignatureSelection(mode: .named, name: "Work"))
+        XCTAssertEqual(named, .notAttempted(.ineligible(.signature)))
+        XCTAssertEqual(named.timingCode, "not_attempted:signature")
+        // none is what the direct write produces: it passes eligibility (checked
+        // without reaching any gate that reads the host's Mail, #322 verify).
+        XCTAssertNil(DirectDraft.eligibility(enabled: true, format: .plain, to: ["a@example.org"], cc: [], bcc: [],
+                                             attachments: [], subject: "S", fromAddress: "me@example.org",
+                                             signature: ComposeSignatureSelection(mode: .none)))
+    }
+
+    /// mail_default is written directly only when Mail lists no signature for
+    /// the account; an unreadable list is not "no signature" (#322 verify).
+    func testMailDefaultNeedsAnAccountWithoutSignatures() {
+        let mailDefault = ComposeSignatureSelection.mailDefault
+        XCTAssertTrue(DirectDraft.signatureAllowsDirectWrite(mailDefault, accountSignatureIDs: []))
+        XCTAssertFalse(DirectDraft.signatureAllowsDirectWrite(mailDefault, accountSignatureIDs: ["SIG-1"]))
+        XCTAssertFalse(DirectDraft.signatureAllowsDirectWrite(mailDefault, accountSignatureIDs: nil))
+        XCTAssertTrue(DirectDraft.signatureAllowsDirectWrite(.init(mode: .none), accountSignatureIDs: ["SIG-1"]))
+        XCTAssertFalse(DirectDraft.signatureAllowsDirectWrite(.init(mode: .named, name: "Work"), accountSignatureIDs: []))
+        XCTAssertEqual(ComposeSignatureReceipt.directWriteDisclosure(mailDefault),
+                       " [signature_mode: mail_default; signature_selection: \"\"; selection_verified: true; "
+                       + "body_insertion_verified: true; direct write inserted no signature and did not use Mail's signature menu]")
+    }
+
+    func testAccountSignatureListsAreReadFromAccountsMap() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("accountsmap-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("AccountsMap.plist").path
+        let plist: [String: Any] = [
+            "A": ["AccountURL": "imap://a%40example.invalid/", "Signatures": [String]()],
+            "B": ["AccountURL": "imap://b%40example.invalid/", "Signatures": ["SIG-1", "SIG-2"]],
+            "C": ["AccountURL": "imap://c%40example.invalid/"],
+            "D": ["AccountURL": "imap://d%40example.invalid/", "Signatures": "not a list"],
+        ]
+        try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0).write(to: URL(fileURLWithPath: path))
+        XCTAssertEqual(AccountMapper.signatureIDs(forAccount: "A", path: path), [])
+        XCTAssertEqual(AccountMapper.signatureIDs(forAccount: "B", path: path), ["SIG-1", "SIG-2"])
+        XCTAssertNil(AccountMapper.signatureIDs(forAccount: "C", path: path))
+        XCTAssertNil(AccountMapper.signatureIDs(forAccount: "D", path: path))
+        XCTAssertNil(AccountMapper.signatureIDs(forAccount: "E", path: path))
+        XCTAssertNil(AccountMapper.signatureIDs(forAccount: "A", path: root.appendingPathComponent("missing.plist").path))
+    }
+
     // MARK: - #475 outcome codes (closed list in specs/compose-timing)
 
     func testIneligibleCodesMatchTheSpecList() {
@@ -51,6 +101,7 @@ final class DirectDraftPathTests: XCTestCase {
             (.noRecipient, "noRecipient"), (.displayName, "displayName"),
             (.unsupportedAddress, "unsupportedAddress"), (.emptySubject, "emptySubject"),
             (.missingFromAddress, "missingFromAddress"), (.fromNotBare, "fromNotBare"),
+            (.signature, "signature"),
         ]
         for (ineligible, code) in cases {
             let gate = DirectDraftPath.Gate.ineligible(ineligible)
@@ -61,7 +112,7 @@ final class DirectDraftPathTests: XCTestCase {
 
     func testGateCodesMatchTheSpecListAndCarryNoComma() {
         let gates: [(DirectDraftPath.Gate, String)] = [
-            (.version, "version"), (.account(count: 2), "account"), (.index, "index"),
+            (.version, "version"), (.account(count: 2), "account"), (.accountSignature, "account_signature"), (.index, "index"),
             (.draftsUnidentified("x, y"), "drafts_unidentified"), (.draftsUnmatched, "drafts_unmatched"),
             (.writerOpen("a, b"), "writer_open"), (.schemaDrift(["p", "q"]), "schema_drift"),
             (.mailbox, "mailbox"), (.sender, "sender"), (.insert("e, f"), "insert"),
@@ -248,5 +299,49 @@ final class DirectDraftPathTests: XCTestCase {
     func testUploadPollIntervalStaysBetween50And250Milliseconds() {
         XCTAssertGreaterThanOrEqual(DirectDraftPath.uploadPollNanoseconds, 50_000_000)
         XCTAssertLessThanOrEqual(DirectDraftPath.uploadPollNanoseconds, 250_000_000)
+    }
+
+    /// The account-signature gate runs right after the account gate, and a
+    /// direct result carries the no-signature disclosure (#322 verify). The
+    /// path needs a real account to reach either, so this checks the source.
+    func testAccountSignatureGateAndDisclosureAreWiredIn() throws {
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/CheAppleMailMCP/DirectDraft/DirectDraftPath.swift"), encoding: .utf8)
+        let account = try XCTUnwrap(source.range(of: "return .notAttempted(.account(count: uuids.count))"))
+        let gate = try XCTUnwrap(source.range(of: "guard DirectDraft.signatureAllowsDirectWrite(signature, accountSignatureIDs: AccountMapper.localSignatureIDs(forAccount: account)) else {\n            return .notAttempted(.accountSignature)"))
+        let reader = try XCTUnwrap(source.range(of: "guard let reader else { return .notAttempted(.index) }"))
+        XCTAssertLessThan(account.upperBound, gate.lowerBound)
+        XCTAssertLessThan(gate.upperBound, reader.lowerBound)
+        let attempt = try XCTUnwrap(source.range(of: "func attempt(to:"))
+        let attemptBody = source[attempt.lowerBound...].prefix(1200)
+        XCTAssertTrue(attemptBody.contains("return .created(Self.withSignatureDisclosure(text, signature), pending: pending)"))
+    }
+
+    /// The result must still end with the read-status note (#322 verify).
+    func testTheSignatureDisclosureGoesBeforeTheReadNote() {
+        let base = "Draft created successfully (experimental direct-write path)"
+        let disclosure = ComposeSignatureReceipt.directWriteDisclosure(.init(mode: .none))
+        XCTAssertEqual(DirectDraftPath.withSignatureDisclosure(base, .init(mode: .none)), base + disclosure)
+        for note in [DirectDraftPath.ReadOutcome.stillUnread.note, DirectDraftPath.ReadOutcome.unknown.note] {
+            let result = DirectDraftPath.withSignatureDisclosure(base + note, .init(mode: .none))
+            XCTAssertTrue(result.hasSuffix(note), result)
+            XCTAssertEqual(result, base + disclosure + note)
+        }
+    }
+
+    /// With iCloud-synced signatures present, the local list may be stale, so
+    /// the account's signatures are unknown (#322 verify).
+    func testICloudSignaturesMakeTheLocalListUnknown() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("ubiq-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let path = root.appendingPathComponent("AccountsMap.plist").path
+        try PropertyListSerialization.data(fromPropertyList: ["A": ["AccountURL": "imap://a%40example.invalid/", "Signatures": [String]()]],
+                                           format: .xml, options: 0).write(to: URL(fileURLWithPath: path))
+        let ubiquitous = root.appendingPathComponent("Signatures").path
+        XCTAssertEqual(AccountMapper.localSignatureIDs(forAccount: "A", path: path, ubiquitousPath: ubiquitous), [])
+        try FileManager.default.createDirectory(atPath: ubiquitous, withIntermediateDirectories: true)
+        XCTAssertNil(AccountMapper.localSignatureIDs(forAccount: "A", path: path, ubiquitousPath: ubiquitous))
     }
 }

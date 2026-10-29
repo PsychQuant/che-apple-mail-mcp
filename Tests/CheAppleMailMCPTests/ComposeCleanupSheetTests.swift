@@ -366,6 +366,22 @@ final class ComposeCleanupSheetTests: XCTestCase {
         XCTAssertTrue(s.contains("its discard sheet could not be dismissed"), s)
     }
 
+    func testCleanup_revalidates_native_identity_for_every_error_path() throws {
+        for send in [false, true] {
+            let source = buildMailtoComposeScript(url: "mailto:a@x?subject=S", subject: "S", attachments: [], send: send)
+            let dismissal = try XCTUnwrap(source.range(of: "if not (my dismissSignatureTracking())"))
+            let initial = try XCTUnwrap(source.range(of: "set _cleanupState to my composeCleanupOwnerState", range: dismissal.upperBound..<source.endIndex))
+            let close = try XCTUnwrap(source.range(of: "then close _cw saving no"))
+            XCTAssertLessThan(initial.lowerBound, close.lowerBound)
+            let afterClose = source[close.upperBound...]
+            let guardAfter = try XCTUnwrap(afterClose.range(of: "set _cleanupState to my composeCleanupOwnerState"))
+            let axLookup = try XCTUnwrap(afterClose.range(of: "tell application \"System Events\""))
+            XCTAssertLessThan(guardAfter.lowerBound, axLookup.lowerBound)
+            XCTAssertTrue(afterClose[guardAfter.upperBound..<axLookup.lowerBound].contains("if _cleanupState is \"owned\" then"))
+            XCTAssertTrue(source.contains("no title-only discard is allowed"))
+        }
+    }
+
     func testCleanup_sendPath_keepsPostDispatchBranchUntouched() {
         // #242: after ⇧⌘D the window is the user's only evidence — the
         // POSTDISPATCH branch must not gain a sheet-dismissal that closes it.

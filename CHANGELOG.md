@@ -35,6 +35,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/classify-mail` does not pre-authorize the tools that approve rules or move
   mail. Only the native move has been run against real Mail.
 
+- **Choose Mail's signature when composing**
+  ([#322](https://github.com/PsychQuant/che-apple-mail-mcp/issues/322)).
+  `compose_email`, `create_draft` and `update_draft` take `signature`:
+  `mail_default` (omitted or null; Mail's own choice), `none`, or `named` with an
+  exact Mail signature name, so callers no longer write a signature into the body
+  and guess whether Mail adds another. Each call returns a selection receipt; it
+  reports the selection, not proof that the text was inserted. A named signature
+  that is missing or not unique in Mail is refused before any window opens. The
+  opt-in direct write inserts no signature yet (#587): it is used for `none`, and
+  for `mail_default` only when Mail has no signature for the account, and its
+  result says so; other calls take the GUI path, where Mail applies the signature.
+  Typed missing labels/marks remain distinct from literal signature names;
+  incomplete accessibility reads cannot establish a unique control. Signature
+  menus use a captured AX window identity while open, avoiding Mail scripting
+  calls that block during native menu tracking. Cleanup cancels only an owned
+  menu and confirms closure before querying Mail; uncertain ownership leaves
+  the window intact. Final named/none native replay remains a verification gate.
+
 ### Changed
 
 - **BREAKING: `save_attachment` only writes where Markdown export may write**
@@ -81,6 +99,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `skip_drafts` outside `opts`, or an `opts` that is neither an object nor null,
   instead of ignoring it
   ([#374](https://github.com/PsychQuant/che-apple-mail-mcp/issues/374)).
+
+- **With the opt-in direct write enabled, `create_draft` takes the GUI path
+  for a named signature, and for `mail_default` on an account that has a
+  signature** (gate `account_signature`), so Mail applies the signature instead
+  of the direct write silently leaving it out
+  ([#322](https://github.com/PsychQuant/che-apple-mail-mcp/issues/322); direct
+  insertion is [#587](https://github.com/PsychQuant/che-apple-mail-mcp/issues/587)).
 
 ### Fixed
 

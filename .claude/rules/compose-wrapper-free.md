@@ -24,12 +24,12 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 `sanitize_links`（只服務 markdown 渲染）、`format` 的 `markdown` / `html`、
 以及兩個 env hatch（`CHE_MAIL_DISABLE_MAILTO_COMPOSE` / `CHE_MAIL_DISABLE_PASTE_REPLY`）。
 
-## 呼叫失敗時怎麼辦（封閉六類，不得依性質相似類推第七類）
+## 呼叫失敗時怎麼辦（封閉七類，不得依性質相似類推第八類）
 
-以下六類屬 GUI 路徑。`create_draft` 的 opt-in 直接寫入（#472／#475）建立草稿時，第 3 類（Accessibility）不適用；直接寫入沒有建立草稿時，六類照常適用。
+以下七類屬 GUI 路徑。`create_draft` 的 opt-in 直接寫入（#472／#475）建立草稿時，第 3 類（Accessibility）不適用；直接寫入沒有建立草稿時，七類照常適用。
 
 前提不滿足時工具**直接失敗、零副作用**（不建草稿、不寄出、不刪既有草稿），
-訊息會具名原因與替代做法。六類與各自的處置：
+訊息會具名原因與替代做法。七類與各自的處置：
 
 | # | 原因 | 處置 |
 |---|---|---|
@@ -39,6 +39,7 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 | 4 | `from_address` 非 bare addr-spec | 給純位址；或省略後在 Mail 手動切寄件人 |
 | 5 | 附件路徑含非 ASCII | 建**不帶 `attachments`** 的草稿 + 請使用者手動拖曳。**不要改成 ASCII 檔名**——收件人看到的就是那個檔名 |
 | 6 | 寄出（`compose_email`）時任一收件人帶顯示名（`Name <addr>`） | 改用純位址寄出；或改建草稿（`create_draft`，**to/cc/bcc 顯示名皆支援**，#404）確認收件人後手動寄出 |
+| 7 | `signature` 為 `named`，但名稱在 Mail 裡不存在或不只一個（`SIGNATURE: name is missing or ambiguous in Mail`，#322） | 用 `list_signatures` 找出確切名稱；或改用 `mode: none`，自己在正文寫署名 |
 
 > 第 5、6 類的配方與 #304 之前的規則一致——差別是現在**工具自己會說**，不必靠人記得。
 

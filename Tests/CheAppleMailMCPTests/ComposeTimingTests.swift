@@ -19,7 +19,12 @@ final class ComposeTimingTests: XCTestCase {
     func testDisabledTimingLeavesTheScriptUntouched() {
         let off = script(timing: false)
         XCTAssertFalse(off.contains("_cheMailMark"), "no mark calls without the opt-in")
-        XCTAssertFalse(off.contains("use framework"), "no ASObjC prelude without the opt-in")
+        // #322's signature receipt needs ASObjC on every call, so the script now
+        // always opens with the `use` lines; what timing must not add is its own
+        // prelude (the mark handler) or a second copy of those lines.
+        XCTAssertFalse(off.contains("on _cheMailMark"), "no timing prelude without the opt-in")
+        XCTAssertEqual(off.components(separatedBy: "use framework \"Foundation\"").count - 1, 1,
+                       "exactly one `use framework` line, the script's own")
         XCTAssertFalse(off.contains(ComposeTiming.logPrefix))
     }
 
@@ -36,6 +41,8 @@ final class ComposeTimingTests: XCTestCase {
         let on = script(timing: true)
         XCTAssertTrue(on.hasPrefix("use framework \"Foundation\"\nuse scripting additions\n"),
             "`use` clauses must be the first statements of the script")
+        XCTAssertEqual(on.components(separatedBy: "use framework \"Foundation\"").count - 1, 1,
+            "the timing prelude replaces the script's own `use` lines instead of repeating them")
         XCTAssertTrue(on.contains("on _cheMailMark(_label)"))
         XCTAssertTrue(on.contains("log \"\(ComposeTiming.logPrefix)\""),
             "marks go to stderr through AppleScript's log, so the transport needs no new channel")

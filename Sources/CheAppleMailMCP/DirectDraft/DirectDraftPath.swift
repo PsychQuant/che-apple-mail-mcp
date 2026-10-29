@@ -81,6 +81,8 @@ struct DirectDraftPath {
     /// (#475) — a closed list, kept free of commas because the CSV is unquoted.
     enum Gate: Equatable {
         case ineligible(DirectDraft.Ineligible)
+        /// mail_default for an account Mail has a signature for (#322 verify, #587).
+        case accountSignature
         case version
         case account(count: Int)
         case index
@@ -97,6 +99,7 @@ struct DirectDraftPath {
             case .ineligible(let i): return String(describing: i)
             case .version: return "version"
             case .account: return "account"
+            case .accountSignature: return "account_signature"
             case .index: return "index"
             case .draftsUnidentified: return "drafts_unidentified"
             case .draftsUnmatched: return "drafts_unmatched"
@@ -113,6 +116,7 @@ struct DirectDraftPath {
             case .ineligible(let i): return i.reason
             case .version: return "Mail/macOS version outside the verified range (Mail 16, macOS 27)"
             case .account(let n): return "from_address maps to \(n) accounts, not exactly one"
+            case .accountSignature: return "Mail lists a signature for this account, or the list could not be read, and the direct write does not insert signatures yet (#587)"
             case .index: return "the Envelope Index is not readable"
             case .draftsUnidentified(let why): return "could not identify the Drafts mailbox: \(why)"
             case .draftsUnmatched: return "Mail did not confirm a Drafts mailbox path in the index"
@@ -170,21 +174,28 @@ struct DirectDraftPath {
     }
 
     func attempt(to: [String], subject: String, body: String, cc: [String]?, bcc: [String]?,
-                 attachments: [String]?, format: BodyFormat, fromAddress: String?) async -> Outcome {
+                 attachments: [String]?, format: BodyFormat, fromAddress: String?,
+                 signature: ComposeSignatureSelection = .mailDefault) async -> Outcome {
         let timer = DirectDraftTimer(fromAddressSet: !(fromAddress ?? "").isEmpty)
         timer.mark("enter")
         let outcome = await attemptSteps(to: to, subject: subject, body: body, cc: cc, bcc: bcc,
                                          attachments: attachments, format: format, fromAddress: fromAddress,
-                                         timer: timer)
+                                         signature: signature, timer: timer)
         timer.finish(outcome)
+        // The direct write inserted no signature; say so, as the GUI path's
+        // receipt does (#322 verify).
+        if case .created(let text, let pending) = outcome {
+            return .created(Self.withSignatureDisclosure(text, signature), pending: pending)
+        }
         return outcome
     }
 
     private func attemptSteps(to: [String], subject: String, body: String, cc: [String]?, bcc: [String]?,
                               attachments: [String]?, format: BodyFormat, fromAddress: String?,
-                              timer: DirectDraftTimer) async -> Outcome {
+                              signature: ComposeSignatureSelection, timer: DirectDraftTimer) async -> Outcome {
         if let no = DirectDraft.eligibility(enabled: enabled, format: format, to: to, cc: cc ?? [], bcc: bcc ?? [],
-                                            attachments: attachments ?? [], subject: subject, fromAddress: fromAddress) {
+                                            attachments: attachments ?? [], subject: subject, fromAddress: fromAddress,
+                                            signature: signature) {
             return .notAttempted(no == .disabled ? nil : .ineligible(no))
         }
         timer.mark("eligibility")
@@ -197,6 +208,9 @@ struct DirectDraftPath {
         let uuids = AccountMapper.uuids(forEmail: from)
         guard uuids.count == 1, let account = uuids.first else {
             return .notAttempted(.account(count: uuids.count))
+        }
+        guard DirectDraft.signatureAllowsDirectWrite(signature, accountSignatureIDs: AccountMapper.localSignatureIDs(forAccount: account)) else {
+            return .notAttempted(.accountSignature)
         }
         guard let reader else { return .notAttempted(.index) }
 
@@ -323,6 +337,16 @@ struct DirectDraftPath {
             case .unknown: return " [note: the draft is uploaded but its local read status could not be read]"
             }
         }
+    }
+
+    /// The direct-write disclosure goes before a trailing read-status note,
+    /// which the spec requires to end the result (#322 verify).
+    static func withSignatureDisclosure(_ text: String, _ signature: ComposeSignatureSelection) -> String {
+        let disclosure = ComposeSignatureReceipt.directWriteDisclosure(signature)
+        for note in [ReadOutcome.stillUnread.note, ReadOutcome.unknown.note] where text.hasSuffix(note) {
+            return String(text.dropLast(note.count)) + disclosure + note
+        }
+        return text + disclosure
     }
 
     static func readOutcome(_ looks: [Bool?]) -> ReadOutcome {
