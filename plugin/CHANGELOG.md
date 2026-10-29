@@ -24,6 +24,7 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 ### Added
 
 - 全域 archive registry、index tombstone 去重、目的地規劃與可恢復的分派 executor；新增 registry／tree 命令，原 archive-mail 對已登錄目標導入樹狀流程並保留本次 filter 範圍。分派 complete 後仍須完成各目標 reconcile。（#363）
+- `check_compose_length` 精確 UTF-8 percent-encoding 預檢；compose/create/update 走 GUI 路徑時，超過 8000 以 MAILTO_URL_TOO_LONG 在 Mail 作業前拒絕，並給手動貼上／經確認拆信指引；create_draft 的直接寫入不受此限。（#388）
 - compose/create_draft/update_draft 新增 Mail 預設／None／指定名稱的 signature 選項與編碼選取收據；不手工拼接 body、不宣稱 popup 證明正文插入。explicit selection 於 From 後執行，dispatch 前再核對；live GUI 驗證仍待完成。compose-signature 規則：none 需要撰寫視窗有簽名選單；create_draft 的直接寫入不插入簽名檔（#587），只用於 none 與帳號沒有簽名檔的 mail_default，首次核對要用 GUI 路徑做的草稿。（#322）
 - 四個郵件分類 MCP 工具與 `/classify-mail`：本機自訂判準、規則內容指紋批准、read-only plan、guarded Trash move 與最小化 audit／政策歷史。只有明確批准規則的適用 subset 可自動處置；其餘先預覽，不清空垃圾桶。`/classify-mail` 不預先授權批准規則與移動郵件的兩個工具，它們的權限提示是人工關卡。（#356）
 

@@ -344,4 +344,70 @@ final class DirectDraftPathTests: XCTestCase {
         try FileManager.default.createDirectory(atPath: ubiquitous, withIntermediateDirectories: true)
         XCTAssertNil(AccountMapper.localSignatureIDs(forAccount: "A", path: path, ubiquitousPath: ubiquitous))
     }
+
+    /// create_draft's direct write has no mailto length limit: a body far over
+    /// the GUI path's 8000 encoded characters is eligible and written whole
+    /// (#388 verify).
+    func testAnOverLimitBodyIsEligibleAndWrittenWhole() throws {
+        let body = String(repeating: "中", count: 1000)
+        XCTAssertGreaterThan(composeLengthPreflight(to: ["a@example.org"], subject: "S", body: body, cc: nil, bcc: nil).bodyEncodedLength, 8000)
+        XCTAssertNil(DirectDraft.eligibility(enabled: true, format: .plain, to: ["a@example.org"], cc: [], bcc: [],
+                                             attachments: [], subject: "S", fromAddress: "me@example.org"))
+        let message = DirectDraft.buildMessage(fromName: nil, fromAddress: "me@example.org", to: ["a@example.org"],
+                                               subject: "S", body: body, date: Date(), documentUUID: UUID(),
+                                               messageIdLocalPart: UUID(), boundary: UUID(), mailVersion: "16.0 (0)")
+        XCTAssertGreaterThan(message.mime.count, body.utf8.count)
+    }
+
+    /// A refusal from the GUI path keeps the reason the direct write was not
+    /// used; other errors are passed on unchanged (#388 verify).
+    func testARefusalCarriesWhyTheDirectWriteWasNotUsed() async throws {
+        do {
+            _ = try await DirectDraftPath.createDraft(csvPath: nil, directEnabled: true,
+                direct: { .notAttempted(.ineligible(.missingFromAddress)) },
+                gui: { throw MailError.invalidParameter("MAILTO_URL_TOO_LONG: x") })
+            XCTFail("expected the refusal")
+        } catch MailError.invalidParameter(let message) {
+            XCTAssertTrue(message.hasPrefix("MAILTO_URL_TOO_LONG: x"))
+            XCTAssertTrue(message.contains("experimental direct-write not used: from_address is required"), message)
+        }
+        do {
+            _ = try await DirectDraftPath.createDraft(csvPath: nil, directEnabled: true,
+                direct: { .notAttempted(.version) },
+                gui: { throw MailError.operationFailed("other") })
+            XCTFail("expected the error")
+        } catch MailError.operationFailed(let message) {
+            XCTAssertEqual(message, "other")
+        }
+        do {
+            _ = try await DirectDraftPath.createDraft(csvPath: nil, directEnabled: false,
+                direct: { XCTFail("flag off"); return .notAttempted(nil) },
+                gui: { throw MailError.invalidParameter("MAILTO_URL_TOO_LONG: y") })
+            XCTFail("expected the refusal")
+        } catch MailError.invalidParameter(let message) {
+            XCTAssertEqual(message, "MAILTO_URL_TOO_LONG: y")
+        }
+    }
+
+    /// The length check must not move into the create_draft case ahead of the
+    /// direct write, which would refuse long bodies the direct write can take.
+    func testCreateDraftRunsTheDirectWriteBeforeAnyLengthCheck() throws {
+        let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/CheAppleMailMCP/Server.swift"), encoding: .utf8)
+        let start = try XCTUnwrap(source.range(of: "case \"create_draft\":"))
+        let gui = try XCTUnwrap(source.range(of: "gui: {", range: start.upperBound..<source.endIndex))
+        let throughDirect = source[start.upperBound..<gui.lowerBound]
+        let lengthTokens = ["composeLengthPreflight", "ComposeLength", "measureMailtoURL", "maxMailtoURLLength", "mailtoURLTooLong"]
+        for token in lengthTokens {
+            XCTAssertFalse(throughDirect.contains(token), "create_draft must not check the length before or inside the direct write: \(token)")
+        }
+        // Nor may the direct write itself apply the GUI path's limit.
+        for file in ["DirectDraft.swift", "DirectDraftPath.swift"] {
+            let text = try String(contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources/CheAppleMailMCP/DirectDraft/" + file), encoding: .utf8)
+            for token in lengthTokens { XCTAssertFalse(text.contains(token), "\(file) must not reference \(token)") }
+        }
+    }
 }

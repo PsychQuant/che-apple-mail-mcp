@@ -35,11 +35,11 @@ private let mailtoUnreserved: CharacterSet =
     CharacterSet(charactersIn:
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
-/// Upper bound on the encoded `mailto:` URL length. Beyond this, the native
-/// compose path risks silent body truncation (URL parsers / Mail), so the caller
-/// returns an error without dispatching the compose URL (#304 removed the injection path that
-/// had no length limit). 8000 is
-/// well under typical OS URL ceilings while comfortably fitting ordinary mail.
+/// Conservative upper bound on the encoded ASCII mailto URL, not a body
+/// character limit or a measured OS maximum. A typical 3-byte CJK scalar
+/// occupies 9 encoded characters; subject/recipient overhead reduces the body
+/// budget further. Over-limit inputs refuse before Mail work. No legacy
+/// injection fallback exists after #304.
 let maxMailtoURLLength = 8000
 
 /// Percent-encode a single mailto component (recipient / subject / body).
@@ -73,6 +73,67 @@ func buildMailtoURL(
     var url = "mailto:" + toPart
     if !query.isEmpty { url += "?" + query.joined(separator: "&") }
     return url
+}
+
+
+struct MailtoLengthReport: Codable, Equatable {
+    let encodedURLLength: Int
+    let bodyEncodedLength: Int
+    let limit: Int
+    var otherEncodedLength: Int { encodedURLLength - bodyEncodedLength }
+    var remaining: Int { limit - encodedURLLength }
+    var fits: Bool { encodedURLLength <= limit }
+    var otherRequirementsChecked: Bool { false }
+    var refusal: ComposeRefusal? {
+        fits ? nil : .mailtoURLTooLong(encodedLength: encodedURLLength, bodyEncodedLength: bodyEncodedLength, limit: limit)
+    }
+    enum CodingKeys: String, CodingKey {
+        case encodedURLLength = "encoded_url_length", bodyEncodedLength = "body_encoded_length"
+        case otherEncodedLength = "other_encoded_length", limit, remaining, fits
+        case otherRequirementsChecked = "other_requirements_checked"
+    }
+    init(encodedURLLength: Int, bodyEncodedLength: Int, limit: Int = maxMailtoURLLength) {
+        self.encodedURLLength = encodedURLLength; self.bodyEncodedLength = bodyEncodedLength; self.limit = limit
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(encodedURLLength: try c.decode(Int.self, forKey: .encodedURLLength),
+                  bodyEncodedLength: try c.decode(Int.self, forKey: .bodyEncodedLength),
+                  limit: try c.decode(Int.self, forKey: .limit))
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(encodedURLLength, forKey: .encodedURLLength)
+        try c.encode(bodyEncodedLength, forKey: .bodyEncodedLength)
+        try c.encode(otherEncodedLength, forKey: .otherEncodedLength)
+        try c.encode(limit, forKey: .limit); try c.encode(remaining, forKey: .remaining)
+        try c.encode(fits, forKey: .fits); try c.encode(false, forKey: .otherRequirementsChecked)
+    }
+}
+
+/// Exact count without allocating an encoded URL; shares the encoder's ASCII
+/// allowlist. Non-ASCII UTF-8 bytes each become three percent-encoded chars.
+private func mailtoEncodedLength(_ value: String) -> Int {
+    value.utf8.reduce(0) { $0 + (mailtoUnreserved.contains(UnicodeScalar($1)) ? 1 : 3) }
+}
+
+func measureMailtoURL(to: [String], subject: String, body: String,
+                      cc: [String]? = nil, bcc: [String]? = nil) -> MailtoLengthReport {
+    func addresses(_ values: [String]) -> Int {
+        values.reduce(0) { $0 + mailtoEncodedLength($1) } + max(0, values.count - 1)
+    }
+    let bodyLength = mailtoEncodedLength(body)
+    var total = 22 + addresses(to) + mailtoEncodedLength(subject) + bodyLength
+    if let cc, !cc.isEmpty { total += 4 + addresses(cc) }
+    if let bcc, !bcc.isEmpty { total += 5 + addresses(bcc) }
+    return .init(encodedURLLength: total, bodyEncodedLength: bodyLength)
+}
+
+func composeLengthPreflight(to: [String], subject: String, body: String,
+                            cc: [String]? = nil, bcc: [String]? = nil) -> MailtoLengthReport {
+    let partition = partitionRecipientsForMailto(to: to, cc: cc ?? [], bcc: bcc ?? [])
+    return measureMailtoURL(to: partition.urlTo, subject: subject, body: body,
+                            cc: partition.urlCc, bcc: partition.urlBcc)
 }
 
 
@@ -388,7 +449,7 @@ func isSimpleAddrSpec(_ addr: String) -> Bool {
 
 /// #304 — the pre-flight reasons a composing call cannot run.
 ///
-/// **This is a closed enumeration.** A seventh case must not be added by
+/// **This is a closed enumeration.** Further cases must not be added by
 /// analogy: every case here is decidable BEFORE the operation starts and
 /// therefore carries the guarantee that nothing happened. A failure that
 /// occurs mid-operation (a keystroke that does not land, a paste that does not
@@ -424,6 +485,22 @@ enum ComposeRefusal: Equatable {
     /// recipients. Drafts support display names in all three lists through
     /// GUI fill (#277/#404).
     case displayNameRecipient
+    /// 8 — exact encoded payload budget, decidable before any Mail operation.
+    /// (Rule row 7, a named signature missing or ambiguous in Mail, is checked
+    /// in Mail by `signatureDefinitionPreflight`, so it is not a case here.)
+    case mailtoURLTooLong(encodedLength: Int, bodyEncodedLength: Int, limit: Int)
+
+    /// What to do instead of an over-limit mailto URL. The direct write is
+    /// named only when the server runs with it, and only for calls that meet
+    /// its conditions (#388 verify; #486 wording).
+    static func lengthAlternative(headerOnly: Bool, directWriteEnabled: Bool) -> String {
+        if headerOnly {
+            return "Subject/recipients alone exceed the budget; use a shorter subject or an explicitly chosen smaller recipient list, or compose manually in Mail. Removing the body alone will not fit. "
+        }
+        let manual = "the draft with a short or empty body and manually paste the full body in Mail's editor, keeping it where the user chooses, or split into separate messages only with explicit user approval. "
+        guard directWriteEnabled else { return "Create " + manual }
+        return "Use create_draft on the opt-in direct write (CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1), which has no mailto length limit, only when the call meets its conditions (from_address, plain format, To recipients without display names, no cc/bcc or attachments); otherwise create " + manual
+    }
 
     var message: String {
         switch self {
@@ -457,6 +534,13 @@ enum ComposeRefusal: Equatable {
                 + "Create the draft WITHOUT the attachments argument and drag the file into "
                 + "the window — do not rename the file to ASCII, because the recipient sees "
                 + "that name."
+        case .mailtoURLTooLong(let actual, let body, let limit):
+            let alternative = Self.lengthAlternative(headerOnly: actual - body > limit,
+                                                     directWriteEnabled: DirectDraft.isEnabled)
+            return "MAILTO_URL_TOO_LONG: encoded mailto URL length \(actual) exceeds limit \(limit); "
+                + "body contributes \(body) encoded characters (subject/recipients also consume the budget). "
+                + "No Mail message was created, sent, or replaced. " + alternative
+                + "Do not truncate the body; body injection through AppleScript was removed (#304)."
         case .displayNameRecipient:
             return "a recipient carries a display name (Name <addr>) on a send. A mailto: URL "
                 + "carries addr-spec only (RFC 6068), so display names are filled through the "
@@ -534,7 +618,7 @@ func composeCallRefusal(
 }
 
 /// #304 — the pre-flight refusal for `reply_email` / `forward_email`. Only two
-/// of the six conditions can arise here: a reply has no subject, sender,
+/// of these conditions can arise here: a reply has no subject, sender,
 /// attachment-path or cc/bcc gate of its own on this path.
 func replyForwardRefusal(
     format: BodyFormat,

@@ -44,6 +44,9 @@ final class NoLegacyFallbackClaimGuardTests: XCTestCase {
             ("guidance()", AccessibilityStatus.guidance()),
             ("setupNote", AccessibilityStatus.setupNote),
             ("check_accessibility description", description),
+            // #388 verify: the length refusal names the direct write when it is on.
+            ("length refusal, direct write on", ComposeRefusal.lengthAlternative(headerOnly: false, directWriteEnabled: true)),
+            ("length refusal, direct write off", ComposeRefusal.lengthAlternative(headerOnly: false, directWriteEnabled: false)),
         ]
     }
 

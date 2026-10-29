@@ -24,12 +24,12 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 `sanitize_links`（只服務 markdown 渲染）、`format` 的 `markdown` / `html`、
 以及兩個 env hatch（`CHE_MAIL_DISABLE_MAILTO_COMPOSE` / `CHE_MAIL_DISABLE_PASTE_REPLY`）。
 
-## 呼叫失敗時怎麼辦（封閉七類，不得依性質相似類推第八類）
+## 呼叫失敗時怎麼辦（封閉八類，不得依性質相似類推第九類）
 
-以下七類屬 GUI 路徑。`create_draft` 的 opt-in 直接寫入（#472／#475）建立草稿時，第 3 類（Accessibility）不適用；直接寫入沒有建立草稿時，七類照常適用。
+以下八類屬 GUI 路徑。`create_draft` 的 opt-in 直接寫入（#472／#475）建立草稿時，第 3 類（Accessibility）與第 8 類（長度）不適用；直接寫入沒有建立草稿時，八類照常適用。
 
 前提不滿足時工具**直接失敗、零副作用**（不建草稿、不寄出、不刪既有草稿），
-訊息會具名原因與替代做法。七類與各自的處置：
+訊息會具名原因與替代做法。八類與各自的處置：
 
 | # | 原因 | 處置 |
 |---|---|---|
@@ -40,6 +40,7 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 | 5 | 附件路徑含非 ASCII | 建**不帶 `attachments`** 的草稿 + 請使用者手動拖曳。**不要改成 ASCII 檔名**——收件人看到的就是那個檔名 |
 | 6 | 寄出（`compose_email`）時任一收件人帶顯示名（`Name <addr>`） | 改用純位址寄出；或改建草稿（`create_draft`，**to/cc/bcc 顯示名皆支援**，#404）確認收件人後手動寄出 |
 | 7 | `signature` 為 `named`，但名稱在 Mail 裡不存在或不只一個（`SIGNATURE: name is missing or ambiguous in Mail`，#322） | 用 `list_signatures` 找出確切名稱；或改用 `mode: none`，自己在正文寫署名 |
+| 8 | `MAILTO_URL_TOO_LONG`：percent-encoded URL 超過 8000 字元（CJK 常見字約佔 9 個） | 先用 `check_compose_length` 精確計量 total/body/overhead。或帶 `from_address` 用 create_draft 的 opt-in 直接寫入（沒有長度上限；只在伺服器開了直接寫入、且呼叫符合其條件時）；或把完整正文保留在使用者選的地方，建立短／空正文草稿後在 Mail 手動貼上；或經使用者確認拆成多封。不要截斷、不要復活 legacy。此檢查在 GUI 路徑的任何 GUI 操作前拒絕（compose_email 與 update_draft 在任何 Mail 查詢前）；create_draft 的直接寫入建立草稿時不受此限（#388 verify），update_draft 不掃描／替換／刪除舊草稿。 |
 
 > 第 5、6 類的配方與 #304 之前的規則一致——差別是現在**工具自己會說**，不必靠人記得。
 
@@ -81,8 +82,12 @@ signed MCP binary 自持 Automation 授權（TCC identity 綁 binary 簽章身�
 
 ## 具名收件人：逗號格式與剪貼簿
 
-顯示名含 ASCII 逗號時必須加引號，例如 `"Doe, Jane" <jane@example.test>`；也可改用裸位址。這是輸入格式驗證，不是新增第七種資格理由。[mail #411](https://github.com/PsychQuant/che-apple-mail-mcp/issues/411)
+顯示名含 ASCII 逗號時必須加引號，例如 `"Doe, Jane" <jane@example.test>`；也可改用裸位址。這是輸入格式驗證，不是新增一類資格理由。[mail #411](https://github.com/PsychQuant/che-apple-mail-mcp/issues/411)
 
 `create_draft`／`update_draft` 的 To／Cc／Bcc 任一份清單只要有具名項目，**該份完整清單**（包含混合的裸位址與 Bcc 位址）就會在 GUI 填入期間短暫經過系統剪貼簿。其他剪貼簿工具或 Universal Clipboard 可能依系統設定取得內容；程式嘗試還原原剪貼簿，不能撤回已被讀取或同步的資料。
 
 若不能接受這條路徑，將該份清單全部改用裸位址，或在 Mail 手動輸入。不要把剪貼簿還原當成保密保證。AXValue 的單一 token 寫入結果不足以證明可逐次追加多個 token；目前保留已使用的 paste／token-count 流程，不宣稱 AX 替代已驗證。
+
+## mailto 預檢（mail#388）
+
+`check_compose_length({to, cc?, bcc?, subject, body})` 是只讀長度檢查，回傳 encoded_url_length、body_encoded_length、other_encoded_length、limit、remaining、fits。長度依 UTF-8 percent-encoding 精算，不是 body 字元數；display-name 清單依真實 URL/GUI partition 計算。`other_requirements_checked:false` 明示沒有驗證其他資格，fits=true 不是可送出承諾。

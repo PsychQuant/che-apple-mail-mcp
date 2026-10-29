@@ -58,11 +58,13 @@ enum AccessibilityStatus {
         case .granted:
             return "✅ " + summary(probe)
                 + "\nEligible compose_email / create_draft calls use the clean compose path."
-                + " Six named preflight refusal reasons cover: non-plain format, empty subject,"
+                + " Eight named preflight refusal reasons cover: non-plain format, empty subject,"
                 + " missing Accessibility, a non-simple from_address, a non-ASCII attachment path,"
-                + " or display-name recipients on a SEND (drafts support names in to/cc/bcc)."
+                + " display-name recipients on a SEND (drafts support names in to/cc/bcc),"
+                + " a named signature that is missing or ambiguous in Mail,"
+                + " or a mailto URL over 8000 encoded characters (MAILTO_URL_TOO_LONG)."
                 + " A preflight refusal returns a named reason before composition starts."
-                + " Other input validation can also fail before GUI steps, including an over-long mailto URL."
+                + " Other input validation can also fail before GUI steps."
                 + " A GUI-step failure returns an error without switching to another body path;"
                 + " it may leave a compose window or draft. A send-stage failure or timeout can"
                 + " leave the send state unknown: check Sent/Outbox before sending again."
