@@ -17,6 +17,11 @@ import SQLite3
 /// actor or lock is needed on top of it.
 public final class EnvelopeIndexReader {
 
+    // Built once during initialization from the schema, which does not change
+    // while the reader is open. Mailbox names are data and are read by every
+    // query through `che_drafts_folder` (#374 verify).
+    private var draftStatusSQL = "NULL"
+
     // MARK: - Constants
 
     private static let mailDataVersion = "V10"
@@ -149,6 +154,8 @@ public final class EnvelopeIndexReader {
                 )
             )
         }
+        draftStatusSQL = Self.resolveDraftStatusSQL(db)
+
     }
 
     deinit {
@@ -177,6 +184,143 @@ public final class EnvelopeIndexReader {
         defer { sqlite3_finalize(stmt) }
         guard sqlite3_step(stmt) == SQLITE_ROW else { return -1 }
         return sqlite3_column_int(stmt, 0)
+    }
+
+    private static func messageColumns(_ db: OpaquePointer?) throws -> Set<String> {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(messages)", -1, &statement, nil) == SQLITE_OK else {
+            throw MailSQLiteError.queryFailed("Cannot inspect messages columns: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        defer { sqlite3_finalize(statement) }
+        var columns: Set<String> = []
+        var status = sqlite3_step(statement)
+        while status == SQLITE_ROW {
+            if let name = sqlite3_column_text(statement, 1) { columns.insert(String(cString: name).lowercased()) }
+            status = sqlite3_step(statement)
+        }
+        guard status == SQLITE_DONE else {
+            throw MailSQLiteError.queryFailed("Message schema inspection failed: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        return columns
+    }
+
+    /// The draft-status expression for this connection, or NULL when the schema
+    /// cannot be inspected or the folder function cannot be registered: draft
+    /// status is then unknown, and the rest of the reader still works (#374 verify).
+    static func resolveDraftStatusSQL(_ db: OpaquePointer?) -> String {
+        do {
+            let columns = try messageColumns(db)
+            try registerDraftsFolderFunction(db)
+            return draftStatusExpression(columns: columns)
+        } catch {
+            // The throwing overload: a closed stderr must not abort the server (#346).
+            try? FileHandle.standardError.write(contentsOf: Data(
+                "EnvelopeIndexReader: draft status unavailable (\(error.localizedDescription))\n".utf8))
+            return "NULL"
+        }
+    }
+
+    /// Folder names that mean "drafts" in Mail's common localizations, compared
+    /// case- and normalization-insensitively. A folder with one of these names
+    /// never makes a message a draft; it only keeps a message in it, or a copy
+    /// of one, from being reported as a known non-draft (#374 verify).
+    static let draftsFolderNames: Set<String> = Set([
+        "Drafts", "Draft", "草稿", "草稿箱", "草稿夾", "下書き", "임시 보관함", "Brouillons", "Entwürfe",
+        "Borradores", "Bozze", "Rascunhos", "Concepten", "Utkast", "Kladder", "Luonnokset", "Черновики",
+        "Kopie robocze", "Wersje robocze", "임시보관함", "Taslaklar",
+    ].map(foldName))
+
+    static func foldName(_ name: String) -> String {
+        name.decomposedStringWithCanonicalMapping.folding(options: .caseInsensitive, locale: nil)
+    }
+
+    /// Whether a mailbox URL's last component is a drafts-folder name.
+    static func isDraftsFolderURL(_ url: String) -> Bool {
+        let leaf = url.split(separator: "/").last.map(String.init) ?? ""
+        return draftsFolderNames.contains(foldName(leaf.removingPercentEncoding ?? leaf))
+    }
+
+    static let draftsFolderFunction = "che_drafts_folder"
+
+    /// `che_drafts_folder(url)` on this connection: 1 for a drafts-folder name or
+    /// a NULL url (the name is unknown), else 0. A function rather than a list of
+    /// ids taken at open, so a folder created or renamed later is seen by the next
+    /// query (#374 verify).
+    static func registerDraftsFolderFunction(_ db: OpaquePointer?) throws {
+        let status = sqlite3_create_function_v2(
+            db, draftsFolderFunction, 1, SQLITE_UTF8 | SQLITE_DETERMINISTIC, nil,
+            { context, count, values in
+                guard count == 1, let values, let text = sqlite3_value_text(values[0]) else {
+                    sqlite3_result_int(context, 1)
+                    return
+                }
+                sqlite3_result_int(context, EnvelopeIndexReader.isDraftsFolderURL(String(cString: text)) ? 1 : 0)
+            }, nil, nil, nil)
+        guard status == SQLITE_OK else {
+            throw MailSQLiteError.queryFailed("Cannot register \(draftsFolderFunction): \(String(cString: sqlite3_errmsg(db)))")
+        }
+    }
+
+    /// One SQL expression for every projection: 1 (draft), 0 (known non-draft)
+    /// or NULL (unknown), for the row aliased `m`.
+    ///
+    /// Draft when the message, or any copy sharing its global message id, has
+    /// type 5 or Mail's draft flag (0x40 in `flags`). Known non-draft only when
+    /// the type is 0 and every piece of evidence is present and negative: the
+    /// flag column and the copy column exist, and the message and each copy have
+    /// a type other than 5, a flag value without 0x40, and a mailbox whose name
+    /// is known and not a drafts name. Everything else is unknown. The type alone
+    /// is not enough: drafts synced from a server or another device are stored
+    /// with type 0, often in the account's Drafts folder (#374 verify).
+    static func draftStatusExpression(columns: Set<String>) -> String {
+        guard columns.contains("type") else { return "NULL" }
+        let flags = columns.contains("flags")
+        let copies = columns.contains("global_message_id")
+        func evidence(_ alias: String) -> String {
+            flags ? "(\(alias).type = 5 OR (\(alias).flags & 64) != 0)" : "\(alias).type = 5"
+        }
+        func sharing(_ condition: String) -> String {
+            "EXISTS (SELECT 1 FROM messages c WHERE c.global_message_id = m.global_message_id AND \(condition))"
+        }
+        let isDraft = copies
+            ? "(\(evidence("m")) OR (m.global_message_id IS NOT NULL AND \(sharing(evidence("c")))))"
+            : evidence("m")
+        // Without the flag or copy columns, no type-0 message can be shown clean.
+        guard flags, copies else { return "(CASE WHEN \(isDraft) THEN 1 ELSE NULL END)" }
+        func clean(_ alias: String) -> String {
+            "(\(alias).type IS NOT NULL AND \(alias).type != 5 AND \(alias).flags IS NOT NULL "
+                + "AND (\(alias).flags & 64) = 0 AND EXISTS (SELECT 1 FROM mailboxes f "
+                + "WHERE f.ROWID = \(alias).mailbox AND \(draftsFolderFunction)(f.url) = 0))"
+        }
+        // The message is one of the rows sharing its own global message id.
+        let known = "(m.type = 0 AND m.global_message_id IS NOT NULL AND \(clean("m")) "
+            + "AND NOT \(sharing("NOT \(clean("c"))")))"
+        return "(CASE WHEN \(isDraft) THEN 1 WHEN \(known) THEN 0 ELSE NULL END)"
+    }
+
+    private static func draftFlag(_ statement: OpaquePointer?, column: Int32) -> Bool? {
+        guard sqlite3_column_type(statement, column) == SQLITE_INTEGER else { return nil }
+        switch sqlite3_column_int64(statement, column) {
+        case 0: return false
+        case 1: return true
+        default: return nil
+        }
+    }
+
+    /// Read a per-message fact, not a mailbox-role inference. Unknown is nil.
+    public func messageIsDraft(messageId: Int) throws -> Bool? {
+        guard let db else { throw MailSQLiteError.queryFailed("Database not open") }
+        let sql = "SELECT \(draftStatusSQL) FROM messages m WHERE m.ROWID = ?"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw MailSQLiteError.queryFailed("Draft status query failed: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, Int64(messageId))
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            throw MailSQLiteError.queryFailed("Draft status unavailable for message \(messageId)")
+        }
+        return Self.draftFlag(statement, column: 0)
     }
 
     // MARK: - Account Mapping
@@ -359,7 +503,7 @@ public final class EnvelopeIndexReader {
         conditions.append(Self.rowIdInCondition("m.mailbox", mailboxIds))
 
         let sql = """
-            SELECT m.ROWID, s.subject, a.address, a.comment, m.date_received
+            SELECT m.ROWID, s.subject, a.address, a.comment, m.date_received, \(draftStatusSQL)
             FROM messages m
             JOIN subjects s ON m.subject = s.ROWID
             JOIN addresses a ON m.sender = a.ROWID
@@ -394,7 +538,8 @@ public final class EnvelopeIndexReader {
             results.append([
                 "id": String(rowId),
                 "subject": subject,
-                "sender": sender
+                "sender": sender,
+                "is_draft": Self.draftFlag(stmt, column: 5).map { $0 as Any } ?? NSNull()
             ])
         }
         let truncated = results.count > limit
@@ -476,7 +621,7 @@ public final class EnvelopeIndexReader {
 
         let sql = """
             SELECT m.read, m.flagged, m.deleted, m.size, m.date_received,
-                   m.conversation_id, s.subject, a.address, mb.url
+                   m.conversation_id, s.subject, a.address, mb.url, \(draftStatusSQL)
             FROM messages m
             JOIN subjects s ON m.subject = s.ROWID
             JOIN addresses a ON m.sender = a.ROWID
@@ -496,6 +641,7 @@ public final class EnvelopeIndexReader {
 
         let dateReceived = Date(timeIntervalSince1970: TimeInterval(sqlite3_column_int64(stmt, 4)))
         return [
+            "is_draft": Self.draftFlag(stmt, column: 9).map { $0 as Any } ?? NSNull(),
             "read": sqlite3_column_int(stmt, 0) != 0,
             "flagged": sqlite3_column_int(stmt, 1) != 0,
             "deleted": sqlite3_column_int(stmt, 2) != 0,
@@ -567,7 +713,7 @@ public final class EnvelopeIndexReader {
 
         let sql = """
             SELECT m.ROWID, s.subject, a.address, a.comment,
-                   m.date_received, m.read, m.flagged, mb.url
+                   m.date_received, m.read, m.flagged, mb.url, \(draftStatusSQL)
             FROM messages m
             JOIN subjects s ON m.subject = s.ROWID
             JOIN addresses a ON m.sender = a.ROWID
@@ -625,7 +771,8 @@ public final class EnvelopeIndexReader {
                 mailboxPath: mbPath,
                 isRead: isRead,
                 isFlagged: isFlagged,
-                toRecipients: toAddrs
+                toRecipients: toAddrs,
+                isDraft: Self.draftFlag(stmt, column: 8)
             ))
         }
 
@@ -639,13 +786,13 @@ public final class EnvelopeIndexReader {
         try searchPage(params).results
     }
 
-    /// #177: triage (`summary`) projection — `id/subject/sender/date/mailbox`
+    /// #177: triage (`summary`) projection — `id/subject/sender/date/mailbox/is_draft`
     /// only, performing **no** per-row recipient subquery (the cost `full` pays).
     /// With `dedup`, collapses mailbox-duplicate rows via `GROUP BY` + `MIN(ROWID)`
     /// (SQLite's single-aggregate bare-column rule returns each group's
     /// `MIN(ROWID)`-row values). Same definitive `limit + 1` truncation as
     /// `searchPage`/`searchIds`. Returns `SearchResult`s with empty `toRecipients`
-    /// (the summary shape drops recipients); the caller emits the 5 triage fields.
+    /// (the summary shape drops recipients); the caller emits the 6 triage fields.
     public func searchSummaryPage(_ params: SearchParameters, dedup: Bool = false) throws -> (results: [SearchResult], truncated: Bool) {
         guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
 
@@ -657,7 +804,7 @@ public final class EnvelopeIndexReader {
         let rowIdExpr = dedup ? "MIN(m.ROWID)" : "m.ROWID"
         let groupBy = dedup ? "GROUP BY s.subject, a.address, m.date_received" : ""
         let sql = """
-            SELECT \(rowIdExpr), s.subject, a.address, a.comment, m.date_received, mb.url
+            SELECT \(rowIdExpr), s.subject, a.address, a.comment, m.date_received, mb.url, \(draftStatusSQL)
             FROM messages m
             JOIN subjects s ON m.subject = s.ROWID
             JOIN addresses a ON m.sender = a.ROWID
@@ -699,7 +846,8 @@ public final class EnvelopeIndexReader {
             results.append(SearchResult(
                 id: rowId, subject: subject, senderAddress: senderAddr, senderName: senderName,
                 dateReceived: dateReceived, accountName: acctName, accountId: acctId,
-                mailboxPath: mbPath, isRead: false, isFlagged: false, toRecipients: []
+                mailboxPath: mbPath, isRead: false, isFlagged: false, toRecipients: [],
+                isDraft: Self.draftFlag(stmt, column: 6)
             ))
         }
 

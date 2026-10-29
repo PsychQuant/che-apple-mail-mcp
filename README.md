@@ -702,6 +702,45 @@ such a server is refused or prompted when it writes into `~/Desktop`,
 attachment is complete when Mail's save returns. A failure of the private stage
 itself is reported as `stage_failed`, not as a destination error.
 
+## Per-message draft status
+
+`search_emails` (`full` and `summary`), `list_emails`, `get_email_metadata`, and
+export manifest items include `is_draft`:
+
+- `true` when the message, or any copy of it (the same message in another
+  mailbox, such as Gmail's All Mail), has Mail's draft type (`messages.type` 5) or
+  Mail's draft flag.
+- `false` only when the type is 0 and every piece of evidence is present and
+  negative: neither the message nor any copy has type 5, the draft flag, a NULL
+  type or flag, or a folder named as drafts (`Drafts`, `草稿` and the other common
+  localizations) or of unknown name.
+- `null` otherwise, including the AppleScript fallback, message types other
+  than 0 and 5, and an index without the flag or copy columns.
+
+A folder name is never evidence of a draft; it only keeps a message from being
+reported as a known non-draft. The type alone is not enough: drafts synced from
+a server or another device are stored with type 0, often in the account's Drafts
+folder. Folder names are read on every query, so a Drafts folder created or
+renamed while the server runs counts at once. A drafts folder whose name is not in
+the list (another language) can still let such a draft be reported `false`. Unknown is **not** false. Summary has six
+fields; `ids` and `count` keep their shapes. With `dedup: "logical"` the flag
+describes the row kept for each group.
+
+For correspondence exports, set `opts.skip_drafts: true`. Known drafts get status
+`draft_skipped` (counted in `drafts_skipped`, apart from the Message-ID dedup's
+`skipped`); a message whose status is unknown is a per-item `draft_status_unknown`
+error that names the cause when the lookup failed. Neither fetches the body or
+attachments, so these items can omit `message_id`. To decide an unknown item,
+read its `X-Uniform-Type-Identifier` header with `get_email_headers`:
+`com.apple.mail-draft` marks a draft written by Apple Mail, but a draft written
+elsewhere may not carry it, so a missing header does not make the item a
+non-draft. Otherwise leave it out. The default remains false for compatibility and can
+still export drafts, with the observed flag in the manifest. `skip_drafts` given
+outside `opts`, or an `opts` that is neither an object nor null, is rejected. The field is a
+read-time observation, not a durable message identity. Consumer adoption
+(including the archive-mail default exclusion tracked by plugins#127) remains
+explicit.
+
 ## Development tests
 
 Run `make test` on macOS with Xcode Command Line Tools, Python 3 and `jq` on

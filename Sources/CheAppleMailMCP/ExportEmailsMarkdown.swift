@@ -4,11 +4,11 @@ import MailSQLite
 /// One per-email entry in the `export_emails_markdown` manifest.
 struct ExportManifestItem {
     let id: String                   // input message id (SQLite rowId as string)
-    let messageId: String?           // resolved RFC 5322 Message-ID (nil on fetch error)
+    let messageId: String?           // resolved RFC 5322 Message-ID (nil before fetch, including draft exclusion)
     let writtenPath: String?         // absolute path of the written .md (nil on error)
     let attachments: [String]        // paths of saved attachments (relative to output_dir)
     let attachmentErrors: [String]   // per-attachment failures (never silently dropped)
-    let status: String               // "written" | "error" | "skipped" (#177 dedup)
+    let status: String               // "written" | "error" | "skipped" (Message-ID dedup) | "draft_skipped" (#374)
                                      //   | "header_only" (#283 skip_partial)
     let error: String?
     // #283 — negative-only partial-`.emlx` signal (#274 contract parity):
@@ -43,9 +43,13 @@ struct ExportManifestItem {
     // signal useless. The alias gap needs a real address source (the AppleScript
     // `list_accounts` path enumerates them), not a broader guess.
     var directionInferred: Bool? = nil
+    var isDraft: Bool? = nil
+    var skipReason: String? = nil
 
     var jsonObject: [String: Any] {
         var o: [String: Any] = ["id": id, "status": status, "attachments": attachments]
+        o["is_draft"] = isDraft.map { $0 as Any } ?? NSNull()
+        if let skipReason { o["skip_reason"] = skipReason }
         if let m = messageId { o["message_id"] = m }
         if let p = writtenPath { o["written_path"] = p }
         if !attachmentErrors.isEmpty { o["attachment_errors"] = attachmentErrors }
@@ -137,8 +141,11 @@ struct ExportManifest {
 
     var written: Int { items.filter { $0.status == "written" }.count }
     var errors: Int { items.filter { $0.status == "error" }.count }
-    /// #177: dedup-skipped (already-archived Message-ID) count.
+    /// Already-archived IDs skipped by the Message-ID dedup.
     var skipped: Int { items.filter { $0.status == "skipped" }.count }
+    /// Known drafts excluded by `opts.skip_drafts` — counted apart from the
+    /// dedup skips so a reader of `skipped` keeps its meaning (#374 verify).
+    var draftsSkipped: Int { items.filter { $0.status == "draft_skipped" }.count }
     /// #283: items whose content came from a partial `.emlx` with the body
     /// absent (`body_downloaded: false`) — written-but-header-only by default,
     /// or status "header_only" under `skip_partial`. O(1) SOP check.
@@ -150,6 +157,7 @@ struct ExportManifest {
             "written": written,
             "errors": errors,
             "skipped": skipped,
+            "drafts_skipped": draftsSkipped,
             "body_not_downloaded": bodyNotDownloaded,
             "items": items.map { $0.jsonObject },
         ]
@@ -438,6 +446,8 @@ enum ExportEmailsMarkdown {
         attachmentData: (String, String) throws -> Data,
         skipMessageIds: Set<String> = [],
         skipPartial: Bool = false,
+        skipDrafts: Bool = false,
+        draftStatusFor: (String) throws -> Bool? = { _ in nil },
         fileManager: FileManager = .default
     ) throws -> ExportManifest {
         try? fileManager.createDirectory(at: outputDir, withIntermediateDirectories: true)
@@ -493,7 +503,45 @@ enum ExportEmailsMarkdown {
                  + "directory may be overwritten.\n"))
         }
 
+        // One stderr line for the first failed lookup and one count at the end,
+        // not one line per id (#374 verify).
+        var lookupFailures = 0
+        defer {
+            if lookupFailures > 1 {
+                Diagnostics.emit("export draft status lookup failed for \(lookupFailures) ids in this call\n")
+            }
+        }
         for id in ids {
+            let isDraft: Bool?
+            var lookupFailure: String?
+            do { isDraft = try draftStatusFor(id) }
+            catch {
+                lookupFailures += 1
+                if lookupFailures == 1 {
+                    // The caller's id is echoed only when it is a plain rowId.
+                    let shown = id.count <= 20 && !id.isEmpty && id.allSatisfy(\.isASCII) && id.allSatisfy(\.isNumber) ? id : "(not a numeric rowId)"
+                    Diagnostics.emit("export draft status lookup failed for id \(shown): \(error.localizedDescription)\n")
+                }
+                lookupFailure = error.localizedDescription
+                isDraft = nil
+            }
+            // Stamp this iteration's observation, including duplicate input IDs.
+            let itemIndex = items.count
+            defer { if items.count > itemIndex { items[itemIndex].isDraft = isDraft } }
+            if skipDrafts, isDraft != false {
+                if isDraft == true {
+                    items.append(ExportManifestItem(
+                        id: id, messageId: nil, writtenPath: nil, attachments: [],
+                        attachmentErrors: [], status: "draft_skipped", error: nil, skipReason: "draft"))
+                } else {
+                    items.append(ExportManifestItem(
+                        id: id, messageId: nil, writtenPath: nil, attachments: [],
+                        attachmentErrors: [], status: "error",
+                        error: "draft_status_unknown: skip_drafts requires a known non-draft message"
+                            + (lookupFailure.map { " (lookup failed: \($0))" } ?? "")))
+                }
+                continue
+            }
             let content: EmailContent
             do {
                 content = try fetch(id)
