@@ -35,6 +35,11 @@ final class SaveAttachmentVerificationTests: XCTestCase {
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: dir)
     }
+    /// An explicit root: the default policy would need the real home, and a set
+    /// CHE_MAIL_EXPORT_ALLOWED_ROOTS would reject it (#402 verify).
+    private func destination(_ p: String) throws -> AttachmentDestination {
+        try AttachmentDestination(savePath: p, allowedRoots: [dir.path])
+    }
     private func path(_ n: String) -> String { dir.appendingPathComponent(n).path }
 
     /// Install the script-runner seam and reset it **synchronously** on both
@@ -191,17 +196,14 @@ final class SaveAttachmentVerificationTests: XCTestCase {
         FileManager.default.createFile(atPath: p, contents: Data())   // starts empty
 
         let calls = Counter()
-        try await withSeam({ _ in
-            // Call 1 is the fetch-trigger; the saves follow. Let the first save
-            // find an empty file, then have the bytes "arrive".
-            if calls.bump() >= 3 {
-                FileManager.default.createFile(atPath: p, contents: Data(repeating: 9, count: 512))
-            }
-            return "Attachment saved to \(p)"
+        try await withSeam({ source in
+            let count = calls.bump()
+            if source.contains("source of") { return "" }
+            return try stageAttachmentFixture(source, data: count >= 3 ? Data(repeating: 9, count: 512) : Data())
         }) {
             let out = try await MailController.shared.saveAttachmentRetryingForDownload(
                 id: "1", mailbox: "INBOX", accountId: nil, accountName: "A",
-                attachmentName: "late.pdf", savePath: p,
+                attachmentName: "late.pdf", destination: try destination(p),
                 enteredAfterUnverifiedWrite: .empty,
                 policy: DownloadRetryPolicy(timeout: 2.0, pollInterval: 0.05))
             XCTAssertTrue(out.hasSuffix("(512 bytes)"),
@@ -226,11 +228,15 @@ final class SaveAttachmentVerificationTests: XCTestCase {
         FileManager.default.createFile(atPath: p, contents: Data())
 
         let calls = Counter()
-        try await withSeam({ _ in _ = calls.bump(); return "Attachment saved to \(p)" }) {
+        try await withSeam({ source in
+            _ = calls.bump()
+            if source.contains("source of") { return "" }
+            return try stageAttachmentFixture(source, data: Data())
+        }) {
             do {
                 _ = try await MailController.shared.saveAttachmentRetryingForDownload(
                     id: "1", mailbox: "INBOX", accountId: nil, accountName: "A",
-                    attachmentName: "never.pdf", savePath: p,
+                    attachmentName: "never.pdf", destination: try destination(p),
                     enteredAfterUnverifiedWrite: .empty,
                     policy: DownloadRetryPolicy(timeout: 0.3, pollInterval: 0.05))
                 XCTFail("budget exhausted with an empty file must throw, never return success")

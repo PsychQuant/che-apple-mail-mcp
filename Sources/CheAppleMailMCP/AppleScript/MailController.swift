@@ -2371,55 +2371,28 @@ actor MailController {
         }
     }
 
-    func saveAttachment(id: String, mailbox: String, accountName: String, attachmentName: String, savePath: String, allowEmpty: Bool = false) throws -> String {
-        let ref = msgRef(id, mailbox: mailbox, account: accountName)
-        let script = """
-        tell application "Mail"
-            set msg to \(ref)
-            repeat with att in mail attachments of msg
-                if name of att is "\(appleScriptEscape(attachmentName))" then
-                    save att in POSIX file "\(appleScriptEscape(savePath))"
-                    return "Attachment saved to \(appleScriptEscape(savePath))"
-                end if
-            end repeat
-            return "Attachment not found"
-        end tell
-        """
-        return try Self.verifySavedAttachmentOnDisk(
-            try runScript(script), savePath: savePath, allowEmpty: allowEmpty)
+    func saveAttachment(id: String, mailbox: String, accountName: String, attachmentName: String,
+                        savePath: String, allowEmpty: Bool = false) throws -> String {
+        try saveAttachment(id: id, mailbox: mailbox, accountId: nil, accountName: accountName,
+                           attachmentName: attachmentName, savePath: savePath, allowEmpty: allowEmpty)
     }
 
-    /// `save_attachment` overload with optional `accountId` (UUID) for
-    /// multi-account-same-display_name disambiguation (#101).
-    ///
-    /// When `accountId` is non-nil and non-empty, the underlying AppleScript
-    /// uses Mail.app's `(account id "<UUID>")` selector — globally unique,
-    /// no collision risk. Otherwise behavior is identical to the 5-arg
-    /// `saveAttachment(id:mailbox:accountName:...)` overload above.
-    ///
-    /// Script construction is delegated to `buildSaveAttachmentScript` (in
-    /// `SaveAttachmentScriptBuilder.swift`) so the AppleScript generation
-    /// is testable without spinning up the actor — same pattern as
-    /// `ComposeScriptBuilder`.
-    func saveAttachment(
-        id: String,
-        mailbox: String,
-        accountId: String?,
-        accountName: String,
-        attachmentName: String,
-        savePath: String,
-        allowEmpty: Bool = false
-    ) throws -> String {
-        let script = buildSaveAttachmentScript(
-            id: id,
-            mailbox: mailbox,
-            accountId: accountId,
-            accountName: accountName,
-            attachmentName: attachmentName,
-            savePath: savePath
-        )
-        return try Self.verifySavedAttachmentOnDisk(
-            try runScript(script), savePath: savePath, allowEmpty: allowEmpty)
+    func saveAttachment(id: String, mailbox: String, accountId: String?, accountName: String,
+                        attachmentName: String, savePath: String, allowEmpty: Bool = false) throws -> String {
+        let destination = try AttachmentDestination(savePath: savePath)
+        return try saveAttachment(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName,
+                                  attachmentName: attachmentName, destination: destination, allowEmpty: allowEmpty)
+    }
+
+    /// The only AppleScript save sink receives a private stage path (#402).
+    func saveAttachment(id: String, mailbox: String, accountId: String?, accountName: String,
+                        attachmentName: String, destination: AttachmentDestination,
+                        allowEmpty: Bool = false) throws -> String {
+        try destination.saveUsingScript({ stagePath in
+            try runScript(buildSaveAttachmentScript(
+                id: id, mailbox: mailbox, accountId: accountId, accountName: accountName,
+                attachmentName: attachmentName, savePath: stagePath))
+        }, allowEmpty: allowEmpty)
     }
 
     /// Best-effort `save_attachment` for a server-side-only (`not_downloaded`)
@@ -2447,6 +2420,25 @@ actor MailController {
         enteredAfterUnverifiedWrite: AttachmentWriteProblem? = nil,
         policy: DownloadRetryPolicy = .default
     ) async throws -> String {
+        let destination = try AttachmentDestination(savePath: savePath)
+        return try await saveAttachmentRetryingForDownload(
+            id: id, mailbox: mailbox, accountId: accountId, accountName: accountName,
+            attachmentName: attachmentName, destination: destination, allowEmpty: allowEmpty,
+            enteredAfterUnverifiedWrite: enteredAfterUnverifiedWrite, policy: policy)
+    }
+
+    func saveAttachmentRetryingForDownload(
+        id: String,
+        mailbox: String,
+        accountId: String?,
+        accountName: String,
+        attachmentName: String,
+        destination: AttachmentDestination,
+        allowEmpty: Bool = false,
+        enteredAfterUnverifiedWrite: AttachmentWriteProblem? = nil,
+        policy: DownloadRetryPolicy = .default
+    ) async throws -> String {
+        let savePath = destination.savePath
         // 1. Nudge Mail to materialize the message (best-effort). Errors are
         //    non-fatal — the save-retry below is the real success test — but log
         //    them so a no-op fetch is distinguishable from a working one (the
@@ -2469,9 +2461,6 @@ actor MailController {
         //    keeps real elapsed ≈ policy.timeout) AND `maxAttempts` as a hard cap
         //    (belt-and-suspenders if the clock misbehaves; the range is always
         //    valid since maxAttempts ≥ 1).
-        let saveScript = buildSaveAttachmentScript(
-            id: id, mailbox: mailbox, accountId: accountId, accountName: accountName,
-            attachmentName: attachmentName, savePath: savePath)
         let intervalNanos = UInt64(min(max(0, policy.pollInterval), policy.timeout) * 1_000_000_000)
         let deadline = Date().addingTimeInterval(max(0, policy.timeout))
         for _ in 1...policy.maxAttempts {
@@ -2479,15 +2468,10 @@ actor MailController {
             // first poll gives Mail one interval to land the download.
             try await Task.sleep(nanoseconds: intervalNanos)
             do {
-                let result = try runScript(saveScript)
-                // "Attachment saved to ..." = the binary is now local — but
-                // verify the bytes actually landed (#314): a stale cache can
-                // produce a 0-byte write with a success return, which is the
-                // exact state this retry loop exists to escape.
-                if result.hasPrefix("Attachment saved") {
-                    return try Self.verifySavedAttachmentOnDisk(
-                        result, savePath: savePath, allowEmpty: allowEmpty)
-                }
+                let result = try saveAttachment(
+                    id: id, mailbox: mailbox, accountId: accountId, accountName: accountName,
+                    attachmentName: attachmentName, destination: destination, allowEmpty: allowEmpty)
+                if result.hasPrefix("Attachment saved") { return result }
                 // A non-throwing NON-saved result ("Attachment not found") is a
                 // DEFINITIVE negative — the named part isn't on this message (a
                 // name-matching problem, not a download delay). Don't burn the
@@ -3190,16 +3174,16 @@ enum MailError: LocalizedError {
         case .attachmentWriteUnverified(let path, let problem):
             switch problem {
             case .missing:
-                return "save_attachment reported success but no file exists at \(path) — "
-                    + "Mail.app's save silently failed (#314). Try synchronize_account, or open "
-                    + "the message in Mail so the attachment downloads, then retry."
+                return "save_attachment: Mail reported saving the attachment for \(path) but "
+                    + "produced no file — Mail.app's save silently failed (#314). Nothing was "
+                    + "written to save_path. Try synchronize_account, or open the message in Mail "
+                    + "so the attachment downloads, then retry."
             case .notRegular(let kind):
                 // Deliberately does NOT suggest retrying: no amount of waiting
                 // turns a directory or a FIFO into a regular file (#347).
-                return "save_attachment reported success but \(path) is a \(kind), not a "
-                    + "regular file (#347). Pass a save_path that names a file — note this "
-                    + "is checked through symlinks, so a link pointing at a directory or a "
-                    + "FIFO is rejected here too."
+                return "save_attachment: Mail reported saving the attachment for \(path), but "
+                    + "what it produced is a \(kind), not a regular file (#347). Nothing was "
+                    + "written to save_path, and retrying will not change it."
             case .statFailed(let e):
                 let detail = String(cString: strerror(e))
                 return "save_attachment reported success but \(path) could not be examined: "
@@ -3207,11 +3191,11 @@ enum MailError: LocalizedError {
                     + "a missing file and retrying will not change it. Check for a symlink loop, "
                     + "permissions on the containing directory, or an I/O error on the volume."
             case .empty:
-                return "save_attachment reported success but wrote a 0-byte file at \(path) — "
-                    + "Mail's local attachment cache likely lacks the bytes (#314). The empty "
-                    + "file was left in place for inspection; try synchronize_account or "
-                    + "save_attachment with download_if_missing, then retry. If the attachment "
-                    + "is genuinely empty, pass allow_empty (the success string then says so)."
+                return "save_attachment produced a 0-byte attachment for \(path) — Mail's "
+                    + "local attachment cache likely lacks the bytes (#314). Nothing was written "
+                    + "to save_path; try synchronize_account or save_attachment with "
+                    + "download_if_missing, then retry. If the attachment is genuinely empty, "
+                    + "pass allow_empty (the success string then says so)."
             }
         }
     }

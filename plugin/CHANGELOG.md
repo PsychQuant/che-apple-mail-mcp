@@ -21,6 +21,20 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 
 ## [Unreleased]
 
+### Changed
+
+- `/archive-mail` reports a rejected attachment destination on its own line
+  ([#402](https://github.com/PsychQuant/che-apple-mail-mcp/issues/402)). When
+  `save_attachment` answers `destination_rejected` or `destination_write_failed`,
+  the run lists the path under `⚠ 附件目的地被拒` instead of recording the
+  attachment as one Mail could not download. The check reads the start of the
+  error, so an attachment name cannot imitate it; the email's Markdown still gets
+  an annotation for an inline image that was not saved (with its own wording
+  when the server's private stage failed, `stage_failed`); and the coverage
+  audit counts these attachments once, as not saved, rather than again as
+  missing.
+  The trust-boundary note no longer says the server has no path containment.
+
 ## [3.0.0] - 2026-10-27
 
 - `binary_version` 3.3.1 → 3.4.0 (no new tools or parameters). What the binary brings: a text body whose charset label disagrees with its bytes is read as UTF-8 when the bytes are valid UTF-8, so exported text no longer turns into mojibake ([#538](https://github.com/PsychQuant/che-apple-mail-mcp/issues/538)); overlapping read tools no longer livelock the SQLite fast path ([#536](https://github.com/PsychQuant/che-apple-mail-mcp/issues/536)); an index refused at startup is retried, and `check_fda` reports what the server actually has open ([#537](https://github.com/PsychQuant/che-apple-mail-mcp/issues/537)); timeout messages name the read-only queries that look for evidence, and the send gate is unchanged ([#522](https://github.com/PsychQuant/che-apple-mail-mcp/issues/522)).
