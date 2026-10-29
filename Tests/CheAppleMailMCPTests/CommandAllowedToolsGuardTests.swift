@@ -187,14 +187,23 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
         }
     }
 
+    /// Tools no command may pre-authorize, though a command may call them: the
+    /// host permission prompt is the human gate, because commands read
+    /// third-party mail that could carry instructions (#395, #356 verify).
+    private static let promptGatedTools: Set<String> = ["configure_email_classification", "apply_email_classification"]
+
     func testInvokedMailToolsAreAuthorized() throws {
         let known = Set(CheAppleMailMCPServer.defineTools().map(\.name))
         for command in try loadCommands() {
             let authorized = Set(command.allowedTools
                 .filter { $0.hasPrefix(Self.mailPrefix) }
                 .map { String($0.dropFirst(Self.mailPrefix.count)) })
+            let gated = Self.promptGatedTools
+            XCTAssertTrue(authorized.isDisjoint(with: gated),
+                "plugin/commands/\(command.name).md pre-authorizes \(authorized.intersection(gated).sorted()), "
+                + "which must stay behind the host permission prompt (#356 verify).")
             let invoked = try invokedMailTools(in: command.body, knownNames: known)
-            let unauthorized = invoked.subtracting(authorized).sorted()
+            let unauthorized = invoked.subtracting(authorized).subtracting(gated).sorted()
             XCTAssertTrue(unauthorized.isEmpty,
                 "plugin/commands/\(command.name).md invokes mail tool(s) missing from its own "
                 + "`allowed-tools`: \(unauthorized.joined(separator: ", ")). Either add them or "
@@ -203,7 +212,7 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
         }
     }
 
-    func testArchiveCommandsAuthorizeExactlyTheirRequiredSets() throws {
+    func testCommandsAuthorizeExactlyTheirRequiredSets() throws {
         let commands = try loadCommands()
         let policies: [(String, Set<String>, Set<String>)] = [
             ("archive-mail", [
@@ -214,6 +223,9 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
             ("archive-mail-repair-synthetic-ids", [
                 "search_emails", "get_email_headers",
             ], ["Read", "Write", "Glob"]),
+            ("classify-mail", [
+                "get_email_classification_policy", "classify_emails", "search_emails", "get_email",
+            ], ["Read"]),
         ]
         for (name, expectedMail, expectedOther) in policies {
             let command = try XCTUnwrap(commands.first { $0.name == name }, "Missing command: \(name)")

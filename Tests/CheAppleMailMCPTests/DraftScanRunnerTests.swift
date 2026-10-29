@@ -58,7 +58,8 @@ final class DraftScanRunnerTests: XCTestCase {
         let source = try String(contentsOf: URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift"))
-        XCTAssertTrue(source.contains("if guiFlow { Self.dismissLingeringGuiMenu() }"))
+        // GUI-only, and only after the script was delivered (#356 verify).
+        XCTAssertTrue(source.contains("if guiFlow && delivered { Self.dismissLingeringGuiMenu() }"))
         XCTAssertTrue(source.contains("runSubprocessScript(source, timeout: timeout ?? Self.defaultScriptTimeout, guiFlow: false)"))
         XCTAssertFalse(source.contains("runScript(receiptScript)"), "both receipt families must avoid background NSAppleScript")
         XCTAssertFalse(source.contains("runScript(listScript)"), "locate must use scan runner")
