@@ -367,12 +367,12 @@ extension SpecialMailboxesScriptBuilderTests {
         XCTAssertEqual(obj["drafts"], "草稿")
         XCTAssertEqual(obj["inbox"], "收件匣")
         // new parallel full-path fields
-        XCTAssertEqual(obj["drafts_path"], "[Gmail]/草稿")
-        XCTAssertEqual(obj["sent_path"], "[Gmail]/寄件備份")
-        XCTAssertEqual(obj["trash_path"], "[Gmail]/垃圾桶")
-        XCTAssertEqual(obj["junk_path"], "[Gmail]/垃圾郵件")
+        XCTAssertNil(obj["drafts_path"], "legacy tuple paths are not native evidence")
+        XCTAssertNil(obj["sent_path"], "legacy tuple paths are not native evidence")
+        XCTAssertNil(obj["trash_path"], "legacy tuple paths are not native evidence")
+        XCTAssertNil(obj["junk_path"], "legacy tuple paths are not native evidence")
         // a top-level mailbox (no container) → path == leaf
-        XCTAssertEqual(obj["inbox_path"], "收件匣")
+        XCTAssertNil(obj["inbox_path"], "legacy tuple paths are not native evidence")
     }
 
     /// An empty path slot (container-walk failed / absent child) → `<key>_path` omitted,
@@ -384,7 +384,7 @@ extension SpecialMailboxesScriptBuilderTests {
         guard case let .resolved(obj) = resolveSpecialMailboxesResult(raw) else {
             return XCTFail("expected .resolved")
         }
-        XCTAssertEqual(obj["drafts_path"], "Drafts")
+        XCTAssertNil(obj["drafts_path"], "legacy tuple paths are not native evidence")
         XCTAssertEqual(obj["sent"], "Sent", "leaf survives even if its path walk failed")
         XCTAssertNil(obj["sent_path"], "empty path slot → omitted, not empty string")
         XCTAssertNil(obj["trash_path"])
