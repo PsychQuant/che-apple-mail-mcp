@@ -13,3 +13,7 @@
 跨計畫防重派：`classification-dispatch/` 依 account 與 Message-ID 的雜湊持久保存 started／unknown／已完成紀錄。新 plan、confirmed_preview 或 server 重啟都不解除它。分類器不提供覆寫封鎖的旗標；若需介入，先獨立查證原信匣與 Trash，再由使用者明確選定既有處置工具。不可刪除紀錄來讓自動流程盲重試。明確的 native guard refusal 沒有動作，可在修正後重新分類。
 
 來源比對只將 CRLF／CR 統一為 LF，其餘 UTF-8 bytes 完整比較；原生 source 暫存在當次呼叫記憶體及 osascript stdin，不寫入政策／audit／plan 回應。Mail 沒有原子 compare-and-move，外部改動仍可能落在最後查核與 move 間；不能宣稱消除了這個原生 API 限制。
+
+- VIP 與 VIP 狀態未知的信件，即使命中已批准的 trash 規則，仍不能自動處置。必須呈現 `vip_protected`／`vip_status_unknown` 並取得本次明列 ids 的預覽確認。規則批准不能覆蓋這個保護條件，不能把讀取失敗的空名單當成非 VIP 證據。套用時 VIP 狀態改變則重新分類，confirmed_preview 不豁免指紋檢查。
+
+目前版本的安全限制：尚未取得現行 macOS Mail VIP 檔案來源完整性的實機證據，內建 reader 只確認 VIP 正向命中；未命中或合法空名單也視為 unknown。因此目前所有 proposed-trash 都要逐封預覽確認，不能靠批准規則自動移信。這個限制沒有使用者 bypass。

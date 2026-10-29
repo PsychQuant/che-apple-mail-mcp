@@ -22,3 +22,8 @@
 ## Impact
 
 Swift policy／store／plan engine、Server MCP schemas/dispatch、MailController guarded move、plugin 分類命令與 confirmation 例外。依 #340 runtime stack 實作，不混入獨立歸檔 stack。
+
+
+## #586 VIP 保護補強
+
+分類規則批准不能覆蓋 VIP 寄件者保護。名單讀取失敗不能當成空名單；預覽與套用均重新取得 VIP 狀態，變更後拒絕舊 plan。現行 Mail 檔案尚無完整 VIP 來源的實機證據，內建 reader 只提供正向保護，未命中也視為 unknown；因此本版所有 proposed-trash 都須逐封預覽確認。上列自動分支設計仍受 VIP／來源完整性 gate 約束。此修正不變更 #585 所討論的規則批准介面，且保留所有 audit／防重派契約。

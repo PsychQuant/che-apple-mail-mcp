@@ -16,14 +16,17 @@ class CheAppleMailMCPServer {
     private let classificationStore: ClassificationPolicyStore
     private let classificationEngine: ClassificationPlanEngine
     private let classificationLoader: (@Sendable (String) async throws -> ClassificationMessage)?
+    private let classificationVIPLoader: @Sendable () -> VIPSenderSnapshot
 
     init(databasePath: String = EnvelopeIndexReader.defaultDatabasePath,
          initialSync: Bool = true,
          classificationDirectory: URL = ClassificationPolicyStore.defaultDirectory,
-         classificationLoader: (@Sendable (String) async throws -> ClassificationMessage)? = nil) async throws {
+         classificationLoader: (@Sendable (String) async throws -> ClassificationMessage)? = nil,
+         classificationVIPLoader: @escaping @Sendable () -> VIPSenderSnapshot = { .read() }) async throws {
         self.classificationStore = ClassificationPolicyStore(directory: classificationDirectory)
         self.classificationEngine = ClassificationPlanEngine(store: self.classificationStore)
         self.classificationLoader = classificationLoader
+        self.classificationVIPLoader = classificationVIPLoader
         self.tools = Self.defineTools()
         self.server = Server(
             name: "che-apple-mail-mcp",
@@ -842,23 +845,29 @@ class CheAppleMailMCPServer {
     // MARK: - Tool Call Handler
 
     private func classificationMessage(_ id: String, retainNativeSource: Bool = false) async throws -> ClassificationMessage {
+        var message: ClassificationMessage
         if let classificationLoader {
             let loaded = try await classificationLoader(id)
             guard loaded.id == id else { throw ClassificationError.invalidPlan("loader returned a different id") }
-            return loaded
+            message = loaded
+        } else {
+            guard let reader = indexReader, let rowID = Int(id),
+                  let url = try reader.mailboxURL(forMessageId: rowID), let mailbox = MailboxURL.decode(url) else {
+                throw MailError.invalidParameter("Classification requires the Envelope Index to locate ids. " + FullDiskAccessHelp.unavailableSuffix())
+            }
+            let metadata = try reader.getEmailMetadata(messageId: rowID)
+            guard metadata["deleted"] as? Bool != true else { throw ClassificationError.invalidPlan("message is already marked deleted") }
+            // Plan and refresh use the same authoritative representation. Local
+            // .emlx bytes can lag Mail and are not interchangeable with Mail source.
+            let native = try await mailController.classificationSource(
+                id: id, accountID: mailbox.accountUUID, components: mailbox.pathComponents)
+            message = try classificationMessageFromNative(id: id, mailboxURL: url, metadata: metadata,
+                nativeSource: native, retainNativeSource: retainNativeSource)
         }
-        guard let reader = indexReader, let rowID = Int(id),
-              let url = try reader.mailboxURL(forMessageId: rowID), let mailbox = MailboxURL.decode(url) else {
-            throw MailError.invalidParameter("Classification requires the Envelope Index to locate ids. " + FullDiskAccessHelp.unavailableSuffix())
-        }
-        let metadata = try reader.getEmailMetadata(messageId: rowID)
-        guard metadata["deleted"] as? Bool != true else { throw ClassificationError.invalidPlan("message is already marked deleted") }
-        // Plan and refresh use the same authoritative representation. Local
-        // .emlx bytes can lag Mail and are not interchangeable with Mail source.
-        let native = try await mailController.classificationSource(
-            id: id, accountID: mailbox.accountUUID, components: mailbox.pathComponents)
-        return try classificationMessageFromNative(id: id, mailboxURL: url, metadata: metadata,
-                                                    nativeSource: native, retainNativeSource: retainNativeSource)
+        // Read after the potentially slow native source read, both for preview
+        // and refresh. Missing/expired/unsupported VIP data remains unknown.
+        message.isVIP = classificationVIPLoader().status(for: message.sender)
+        return message
     }
 
     private func handleToolCall(name: String, arguments: [String: Value]) async -> CallTool.Result {
@@ -906,7 +915,8 @@ class CheAppleMailMCPServer {
             let result = try await classificationEngine.apply(planID: planID, ids: ids, confirmed: confirmed,
                 refresh: { [self] id in try await classificationMessage(id, retainNativeSource: true) },
                 move: { [self] message, digest, deadline in
-                    try await mailController.moveClassifiedMessage(message, policyDigest: digest, deadline: deadline, store: classificationStore)
+                    try await mailController.moveClassifiedMessage(message, policyDigest: digest, deadline: deadline,
+                        store: classificationStore, vipSnapshot: classificationVIPLoader)
                 })
             return try classificationJSON(result)
 

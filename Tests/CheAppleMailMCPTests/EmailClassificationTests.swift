@@ -14,7 +14,7 @@ final class EmailClassificationTests: XCTestCase {
                          flagged: Bool = false, messageID: String = "<m@example.invalid>") -> ClassificationMessage {
         .init(id: "12", accountID: "account-id", mailboxComponents: ["INBOX"],
               mailboxURL: "imap://account-id/INBOX", messageID: messageID, sender: sender,
-              subject: subject, listID: listID, isDraft: draft, isFlagged: flagged, contentDigest: String(repeating: "b", count: 64))
+              subject: subject, listID: listID, isDraft: draft, isFlagged: flagged, contentDigest: String(repeating: "b", count: 64), isVIP: false)
     }
     private func policy(_ rules: [ClassificationRule]) throws -> ClassificationPolicy {
         try ClassificationPolicy(version: 1, categories: [category], rules: rules).validated()

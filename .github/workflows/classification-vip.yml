@@ -1,0 +1,48 @@
+name: Classification VIP protection (macOS)
+
+on:
+  pull_request:
+    paths:
+      - 'Sources/**'
+      - 'Tests/**'
+      - 'Package.swift'
+      - 'Package.resolved'
+      - '.github/workflows/classification-vip.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  classification:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Record environment
+        run: |
+          sw_vers
+          swift --version
+          git rev-parse HEAD
+      - name: VIP regressions
+        run: swift test --filter 'ClassificationVIPProtectionTests|VIPSenderSnapshotTests'
+      - name: Existing classification contracts
+        if: always()
+        run: swift test --filter 'EmailClassificationTests|EmailClassificationStoreTests|ClassificationPlanEngineTests|ClassificationToolIntegrationTests|ClassificationTrashScriptTests'
+      - name: Full Swift suite (live Mail remains opt-in)
+        id: full
+        if: always()
+        run: swift test
+      - name: Plugin suite
+        if: always()
+        run: bash scripts/test-plugin.sh
+      - name: Verify pre-existing Mail-dependent failure on unchanged PR base
+        if: failure() && steps.full.outcome == 'failure'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git worktree add --detach "$RUNNER_TEMP/classification-base" "$BASE_SHA"
+          swift test --package-path "$RUNNER_TEMP/classification-base" --filter 'SpecialMailboxesScriptBuilderTests.test_runScriptAsList_preservesEmptyStringPositions'

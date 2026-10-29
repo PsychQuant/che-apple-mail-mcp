@@ -1,4 +1,5 @@
 import Darwin
+import MailSQLite
 import XCTest
 @testable import CheAppleMailMCP
 
@@ -48,7 +49,7 @@ final class ClassificationTrashLiveTests: XCTestCase {
             mailboxURL: "imap://" + fixture.accountID + "/" + fixture.token,
             messageID: "<" + fixture.token + "@example.invalid>", sender: metadata[3],
             subject: fixture.token, listID: nil, isDraft: false, isFlagged: false,
-            contentDigest: fixture.sourceDigest, nativeSource: source)
+            contentDigest: fixture.sourceDigest, isVIP: VIPSenderSnapshot.read().status(for: metadata[3]), nativeSource: source)
         // An isolated empty store exercises only the native primitive. Policy
         // approval/plan/audit authorization has separate integration tests.
         let physicalTemporaryPath = try XCTUnwrap(realpath(FileManager.default.temporaryDirectory.path, nil))
