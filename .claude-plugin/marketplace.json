@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "che-apple-mail-mcp",
-      "version": "3.0.0",
+      "version": "4.0.0",
       "description": "Apple Mail tools and Markdown archiving workflows for macOS. Current versions: plugin/.claude-plugin/plugin.json. Release notes: https://github.com/PsychQuant/che-apple-mail-mcp/blob/main/plugin/CHANGELOG.md (plugin), https://github.com/PsychQuant/che-apple-mail-mcp/blob/main/CHANGELOG.md (server).",
       "author": {
         "name": "Che Cheng"

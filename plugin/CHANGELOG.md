@@ -21,12 +21,18 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-10-29
+
+- `binary_version` 3.4.0 → 4.0.0. What the binary brings: the new tools `check_compose_length` ([#388](https://github.com/PsychQuant/che-apple-mail-mcp/issues/388)) and four email-classification tools ([#356](https://github.com/PsychQuant/che-apple-mail-mcp/issues/356)); a `signature` choice on `compose_email` / `create_draft` / `update_draft` ([#322](https://github.com/PsychQuant/che-apple-mail-mcp/issues/322)); per-message `is_draft` and `opts.skip_drafts` for exports ([#374](https://github.com/PsychQuant/che-apple-mail-mcp/issues/374)); export direction decided against every configured address, and `opts.filename_style` ([#375](https://github.com/PsychQuant/che-apple-mail-mcp/issues/375), [#340](https://github.com/PsychQuant/che-apple-mail-mcp/issues/340)); special-mailbox paths confirmed through Mail ([#376](https://github.com/PsychQuant/che-apple-mail-mcp/issues/376)); a server that shuts down on stdin EOF while a Mail call is blocked ([#329](https://github.com/PsychQuant/che-apple-mail-mcp/issues/329)). The full list is the server CHANGELOG's [4.0.0].
+- Major version because of the **BREAKING** changes in the binary: `save_attachment` only writes where Markdown export may write ([#402](https://github.com/PsychQuant/che-apple-mail-mcp/issues/402)), and the `search_emails` `summary` projection has new fields that strict readers must accept ([#374](https://github.com/PsychQuant/che-apple-mail-mcp/issues/374)).
+
 ### Added
 
 - 全域 archive registry、index tombstone 去重、目的地規劃與可恢復的分派 executor；新增 registry／tree 命令，原 archive-mail 對已登錄目標導入樹狀流程並保留本次 filter 範圍。分派 complete 後仍須完成各目標 reconcile。（#363）
 - `check_compose_length` 精確 UTF-8 percent-encoding 預檢；compose/create/update 走 GUI 路徑時，超過 8000 以 MAILTO_URL_TOO_LONG 在 Mail 作業前拒絕，並給手動貼上／經確認拆信指引；create_draft 的直接寫入不受此限。（#388）
 - compose/create_draft/update_draft 新增 Mail 預設／None／指定名稱的 signature 選項與編碼選取收據；不手工拼接 body、不宣稱 popup 證明正文插入。explicit selection 於 From 後執行，dispatch 前再核對；live GUI 驗證仍待完成。compose-signature 規則：none 需要撰寫視窗有簽名選單；create_draft 的直接寫入不插入簽名檔（#587），只用於 none 與帳號沒有簽名檔的 mail_default，首次核對要用 GUI 路徑做的草稿。（#322）
 - 四個郵件分類 MCP 工具與 `/classify-mail`：本機自訂判準、規則內容指紋批准、read-only plan、guarded Trash move 與最小化 audit／政策歷史。只有明確批准規則的適用 subset 可自動處置；其餘先預覽，不清空垃圾桶。`/classify-mail` 不預先授權批准規則與移動郵件的兩個工具，它們的權限提示是人工關卡。（#356）
+- `/review-draft-render`：對明確指定的草稿與帳號，擷取完整 RFC822 `.eml`（只拿得到工具文字時記錄 `capture_kind`），用 `plugin/scripts/draft-render-review.py prepare` 建立審閱包，之後以 `compare` 比對新的擷取，追蹤在非 Apple Mail 用戶端的人工驗收。它從不寄信；草稿一改就要重新審閱。（#305）
 
 ### Changed
 
@@ -41,6 +47,14 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
   audit counts these attachments once, as not saved, rather than again as
   missing.
   The trust-boundary note no longer says the server has no path containment.
+- `/archive-mail`'s batch step passes `filename_style: "archive-mail"` to `batch_export_emails_markdown` after checking
+  that the schema supports it, instead of building a per-id filename map; `written_path` stays the authority for the
+  final name ([#340](https://github.com/PsychQuant/che-apple-mail-mcp/issues/340)).
+- `rules/compose-wrapper-free.md`: a section on comma-quoted display names and the clipboard path for named
+  recipients ([#411](https://github.com/PsychQuant/che-apple-mail-mcp/issues/411)); the cite-block is described as the reported upstream regression FB11734014, no longer as
+  structurally impossible ([#310](https://github.com/PsychQuant/che-apple-mail-mcp/issues/310)); the refusal table is a closed list of eight ([#322](https://github.com/PsychQuant/che-apple-mail-mcp/issues/322), [#388](https://github.com/PsychQuant/che-apple-mail-mcp/issues/388)).
+- The session-start hook bounds its FDA probes to two seconds and lets only one concurrent caller offer the
+  first-run setup ([#422](https://github.com/PsychQuant/che-apple-mail-mcp/issues/422)).
 
 ## [3.0.0] - 2026-10-27
 
