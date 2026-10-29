@@ -84,6 +84,17 @@ final class VIPSenderSnapshotTests: XCTestCase {
         XCTAssertNil(VIPSenderSnapshot.read(from: url, observedAt: now).status(for: "a@example.invalid", at: now))
     }
 
+    func test_unverified_mail_source_never_proves_non_vip_even_for_valid_empty_list() throws {
+        let url = try file()
+        for records: [[String: Any]] in [[], [["Addresses": ["vip@example.invalid"]]]] {
+            try plist(records).write(to: url, options: .atomic)
+            let observed = VIPSenderSnapshot.read(from: url, observedAt: now)
+            XCTAssertNil(observed.status(for: "unlisted@example.invalid", at: now),
+                "The repository has no native evidence that this Mail file is a complete sender source")
+        }
+        XCTAssertEqual(VIPSenderSnapshot.read(from: url, observedAt: now).status(for: "vip@example.invalid", at: now), true)
+    }
+
     func test_nonregular_symlink_and_oversize_sources_are_unknown() throws {
         let url = try file()
         XCTAssertNil(VIPSenderSnapshot.read(from: url.deletingLastPathComponent(), observedAt: now).status(for: "a@example.invalid", at: now))
