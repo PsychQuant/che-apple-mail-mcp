@@ -17,7 +17,7 @@ class CheAppleMailMCPServer {
     /// provider (30 s) and logged to stderr.
     private var indexReader: EnvelopeIndexReader? { indexProvider.current() }
 
-    init() async throws {
+    init(databasePath: String = EnvelopeIndexReader.defaultDatabasePath) async throws {
         self.tools = Self.defineTools()
         self.server = Server(
             name: "che-apple-mail-mcp",
@@ -39,8 +39,11 @@ class CheAppleMailMCPServer {
         // Every failure surfaces to stderr so users can diagnose silent perf
         // degradation (#69 — without this log, every read tool silently
         // bypasses the SQLite + .emlx fast path with no observable cause).
+        // The FDA probe reads the same path as the open, so a probe started
+        // against a test-owned path never touches the user's index (#329 verify).
         self.indexProvider = IndexReaderProvider(
-            open: { try EnvelopeIndexReader(databasePath: EnvelopeIndexReader.defaultDatabasePath) },
+            open: { try EnvelopeIndexReader(databasePath: databasePath) },
+            probe: { FDAStatus.probeDetail(path: databasePath) },
             log: { Diagnostics.emit($0) })
         _ = indexProvider.current()
 
