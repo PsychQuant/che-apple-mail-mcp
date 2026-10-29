@@ -308,7 +308,17 @@ When a draft was created with any display-name `cc` or `bcc` recipient, then aft
 ---
 ### Requirement: Compose-window cleanup dismisses the discard-draft sheet
 
-When the clean compose path fails after its window has been identified and before its dispatch keystroke, and closes the compose window it opened with `saving no`, the system SHALL then check whether that window still exists with a sheet whose Accessibility identifier is `Mail.sendMessageAlert`. If so, and exactly one window carries the call's subject, the system SHALL click the sheet's button whose title is exactly `不儲存`, `Don't Save`, or `Don’t Save`, and SHALL confirm the window no longer exists. If more than one window carries the subject the system SHALL NOT click any sheet button. If the window still exists after this, the failure message SHALL additionally state that a compose window was left open and names its title. The system SHALL NOT click the sheet's save or cancel buttons. Failures that occur before the window is identified (a same-title window pre-existing, more than one new window, no new window) are outside this requirement and remain tracked by #333.
+Before the mailto hand-off, if a Mail window already carries the call's subject as its title, the system SHALL refuse the call without opening a compose window, and the failure message SHALL state that nothing was sent.
+
+When the clean compose path fails after its window has been identified and before its dispatch keystroke, the system SHALL classify that window from Mail's own window ids and titles, read together, as exactly one of: `absent` (the id captured at identification is gone), `owned` (the captured id is present once, its title is still exactly the subject, and exactly one window carries that title), `changed` (the captured id is present but its title is no longer the subject), `ambiguous` (the captured id still carries the subject but another window does too), or `unknown` (an id or title could not be read as the expected type, or the captured id appears more than once). The system SHALL close the window with `saving no` only when it is `owned`. If it is still `owned` afterwards, the system SHALL find the sheet only through a complete System Events scan in which exactly one window's title equals the subject case-sensitively. It SHALL re-check the classification before raising that window, after raising it (also requiring it to be Mail's front window), and immediately before clicking. It SHALL click only a button of a `Mail.sendMessageAlert` sheet whose title is exactly `不儲存`, `Don't Save`, or `Don’t Save`. The system SHALL NOT click the sheet's save or cancel buttons, and SHALL NOT close or click anything for a window that is `changed`, `ambiguous`, or `unknown`.
+
+If a read or re-check fails during cleanup, the failure message SHALL add, after the original error, that cleanup failed, the check that failed, and that the compose window state is unknown. Otherwise, if the window is not `absent` at the end, the failure message SHALL state that a compose window was left open: naming its title when the window is `owned` or `ambiguous`, and saying that its state could not be verified (`unknown`) or that it changed title and was preserved (`changed`). Failures that occur before the window is identified (more than one new window carries the subject, new windows carry another title, no new window appears) SHALL NOT close any window; their messages SHALL state that nothing was sent and to inspect Mail before retrying, and they remain tracked by #333.
+
+#### Scenario: Same-title window refuses before mailto
+
+- **WHEN** a window titled with the call's subject is already open in Mail
+- **THEN** the system SHALL NOT open a compose window
+- **AND** the failure message SHALL state that nothing was sent
 
 #### Scenario: Discard sheet is dismissed on abort
 
@@ -319,8 +329,14 @@ When the clean compose path fails after its window has been identified and befor
 
 #### Scenario: Window survives cleanup
 
-- **WHEN** the discard button was clicked and the compose window still exists
+- **WHEN** the discard button was clicked and the compose window still exists with the call's subject
 - **THEN** the failure message SHALL name the window title and state that it was left open
+
+#### Scenario: Unverifiable or changed window is preserved
+
+- **WHEN** cleanup classifies the identified window as `changed`, `ambiguous`, or `unknown`
+- **THEN** the system SHALL NOT close the window or click any sheet button
+- **AND** the failure message SHALL state that the window was left open
 
 ---
 ### Requirement: Direct-write draft path
