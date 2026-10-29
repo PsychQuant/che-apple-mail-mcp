@@ -146,7 +146,7 @@ No other body source is permitted.
 
 When a composing tool cannot use its non-injecting path, it SHALL fail with an error that names the reason and states an actionable alternative, and SHALL NOT create a draft, send mail, or delete an existing draft.
 
-The set of ineligibility reasons SHALL be exactly the following seven, and SHALL NOT be extended by analogy. They govern the GUI path; when `create_draft` creates the draft through Requirement: Direct-write draft path, reason 3 does not apply, because that path sends no keystrokes. When the direct write does not create the draft, the GUI path's reasons apply in full.
+The set of ineligibility reasons SHALL be exactly the following eight, and SHALL NOT be extended by analogy. They govern the GUI path; when `create_draft` creates the draft through Requirement: Direct-write draft path, reasons 3 and 8 do not apply, because that path sends no keystrokes. When the direct write does not create the draft, the GUI path's reasons apply in full.
 
 1. `format` is `markdown` or `html`
 2. the subject is empty (the clean path identifies its compose window by title)
@@ -155,6 +155,7 @@ The set of ineligibility reasons SHALL be exactly the following seven, and SHALL
 5. an attachment path contains non-ASCII characters
 6. a `to`, `cc`, or `bcc` recipient carries a display name on a send (`compose_email`); on a draft, display-name recipients are filled through the GUI and are not a refusal reason
 7. `signature` has mode `named` and the name is missing or not unique among Mail's signatures, refused before the mailto hand-off (#322)
+8. the percent-encoded `mailto:` URL is longer than 8000 characters (`MAILTO_URL_TOO_LONG`), refused on the GUI path before any GUI operation, and for `compose_email` and `update_draft` before any Mail query (the direct write has no such limit); `check_compose_length` reports the exact total, body and overhead sizes
 
 #### Scenario: Missing Accessibility fails and names the zero-TCC alternative
 

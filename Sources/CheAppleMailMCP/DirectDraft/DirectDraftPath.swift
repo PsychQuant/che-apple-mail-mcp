@@ -165,7 +165,12 @@ struct DirectDraftPath {
                 case .fellBack(let reason): note = fallbackNote(reason)
                 }
             }
-            return try await gui() + note
+            do { return try await gui() + note }
+            catch MailError.invalidParameter(let message) where !note.isEmpty {
+                // A refusal before any Mail work: keep why the direct write was
+                // not used, which is often what to change instead (#388 verify).
+                throw MailError.invalidParameter(message + note)
+            }
         }
     }
 

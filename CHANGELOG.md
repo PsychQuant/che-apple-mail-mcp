@@ -35,6 +35,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/classify-mail` does not pre-authorize the tools that approve rules or move
   mail. Only the native move has been run against real Mail.
 
+- **The mailto length limit is measured up front and refused by name**
+  ([#388](https://github.com/PsychQuant/che-apple-mail-mcp/issues/388)).
+  New read-only `check_compose_length` reports the exact percent-encoded size
+  (total, body, other, limit 8000, remaining, fits). On the GUI path,
+  `compose_email`, `create_draft` and `update_draft` refuse an over-limit URL
+  with `MAILTO_URL_TOO_LONG` (previously a generic script failure) before any
+  GUI operation (`compose_email` and `update_draft` before any Mail query), and never truncate. `create_draft`'s opt-in direct write has no such
+  limit; when it is enabled but not used, the refusal says why.
+
 - **Choose Mail's signature when composing**
   ([#322](https://github.com/PsychQuant/che-apple-mail-mcp/issues/322)).
   `compose_email`, `create_draft` and `update_draft` take `signature`:

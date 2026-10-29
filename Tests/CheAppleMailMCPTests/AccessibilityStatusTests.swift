@@ -20,8 +20,10 @@ final class AccessibilityStatusTests: XCTestCase {
     }
     func testGrantedReportSeparatesPreflightRefusalFromRuntimeFailure() {
         let text = AccessibilityStatus.report(for: .granted)
-        for required in ["GRANTED", "Six named preflight", "non-plain", "subject", "Accessibility",
-                         "from_address", "non-ASCII", "display-name", "over-long mailto URL", "before composition starts",
+        // Eight: the named signature (#322) and the length refusal (#388 verify).
+        for required in ["GRANTED", "Eight named preflight", "non-plain", "subject", "Accessibility",
+                         "from_address", "non-ASCII", "display-name", "named signature",
+                         "MAILTO_URL_TOO_LONG", "before composition starts",
                          "may leave", "send state unknown", "Sent/Outbox", "Automation",
                          "open_mailto", "no attachments", "save or send"] {
             XCTAssertTrue(text.contains(required), required + ": " + text)

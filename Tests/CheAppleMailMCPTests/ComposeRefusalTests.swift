@@ -16,10 +16,12 @@ final class ComposeRefusalTests: XCTestCase {
         try await super.tearDown()
     }
 
-    // MARK: the closed six — each names its reason AND an executable alternative
+    // MARK: the closed list — each names its reason AND an executable alternative
+    // (rule rows 1–6 and 8; row 7, the named signature, is checked in Mail by
+    // `signatureDefinitionPreflight` and is not a `ComposeRefusal` case)
 
     /// The enumeration is closed on purpose (`common-spec-prose-enumeration`):
-    /// a seventh case must not be added by analogy, because every case here is
+    /// a new case must not be added by analogy, because every case here is
     /// decidable BEFORE any side effect and therefore carries the "nothing
     /// happened" guarantee. Mid-operation failures are a different contract
     /// (see `testRuntimeFailure_propagates_neverRetried`).
@@ -30,6 +32,9 @@ final class ComposeRefusalTests: XCTestCase {
         .customSenderNotSimple,
         .nonASCIIAttachmentPath,
         .displayNameRecipient,
+        // #388: both message branches (body over the budget; headers alone over it).
+        .mailtoURLTooLong(encodedLength: 9100, bodyEncodedLength: 9000, limit: 8000),
+        .mailtoURLTooLong(encodedLength: 9100, bodyEncodedLength: 100, limit: 8000),
     ]
 
     func testEveryRefusal_namesAReasonAndAnAlternative() {

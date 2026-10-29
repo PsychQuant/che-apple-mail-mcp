@@ -40,7 +40,7 @@ Apple Mail MCP server for macOS,加上 Foresay-derived confirmation protocol + I
 ### Rules(v2.7.0+ 新增)
 - `confirmation-triggers.md` — 何時必 confirm、何時可 skip
 - `false-positive-detection.md` — Search 結果中偵測 sibling activity / CC pollution / subject collision
-- `compose-wrapper-free.md`(v2.43.0 匯入)— **cite-block 已在結構上不可能(#304)**:compose 工具的 body 來源(只來自 Mail 編輯器;`create_draft` 的 opt-in 直接寫入例外,#475)、七類失敗原因與處置、自訂寄件人/人名收件人/附件 recipes、TCC fallback ladder(-1743 時走 `open_mailto`)。Canonical 版在 server repo 的 `.claude/rules/`,此為同步副本
+- `compose-wrapper-free.md`(v2.43.0 匯入)— **cite-block 已在結構上不可能(#304)**:compose 工具的 body 來源(只來自 Mail 編輯器;`create_draft` 的 opt-in 直接寫入例外,#475)、八類失敗原因與處置、自訂寄件人/人名收件人/附件 recipes、TCC fallback ladder(-1743 時走 `open_mailto`)。Canonical 版在 server repo 的 `.claude/rules/`,此為同步副本
 
 ## 設計哲學
 
@@ -163,6 +163,10 @@ AI: [直接執行,沒 confirmation]
 ## 新建郵件的簽名
 
 compose/create_draft/update_draft 支援 signature 物件（mail_default／none／named + name），由目標視窗原生 popup 選取，不手工拼接簽名。收據證明選取，不證明正文插入；首次設定先確認草稿，再正式送出。詳見 [compose-signature](rules/compose-signature.md)。
+
+## 長正文預檢（mail#388）
+
+`check_compose_length` 以與真 mailto builder 相同的 UTF-8 encoding／recipient partition 回傳精確 total/body/overhead 與 8000 預算。超限時 compose/create/update 走 GUI 路徑，在任何 GUI 操作前回 MAILTO_URL_TOO_LONG（create_draft 的 opt-in 直接寫入不受此限，只在開了旗標且呼叫符合其條件時），提供手動貼上或經確認拆信指引；不截斷、不改走 legacy。fits=true 只代表長度，其他資格仍需各自通過。
 
 ## Configuration
 
