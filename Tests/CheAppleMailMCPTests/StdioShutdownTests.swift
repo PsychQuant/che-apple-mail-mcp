@@ -13,92 +13,19 @@ final class StdioShutdownTests: XCTestCase {
         super.tearDown()
     }
 
-    private struct LinkInputs {
-        let objects: [String], compiler: String, target: String, sdk: String, modules: String
-    }
-
-    /// The app's object files (minus its `main`) and the compiler that built them,
-    /// for both build layouts SwiftPM has used here. Neither found is an error,
-    /// never a skip: a probe that silently stops running proves nothing.
-    private static func linkInputs(products: URL) throws -> LinkInputs {
-        let fm = FileManager.default
-        let native = products.appendingPathComponent("CheAppleMailMCP.product/Objects.LinkFileList")
-        if fm.fileExists(atPath: native.path) {
-            // Native build system: newline-separated list; compiler and SDK from
-            // description.json, the exact ones that produced these modules
-            // (xcrun can select a different installed toolchain, e.g. 6.3 vs 6.2).
-            let all = try String(contentsOf: native).split(separator: "\n").map(String.init)
-            let objects = all.filter { !$0.contains("CheAppleMailMCP.build/main.swift.o") }
-            XCTAssertEqual(all.count - objects.count, 1, "exactly one main object is dropped")
-            let descriptionData = try Data(contentsOf: products.appendingPathComponent("description.json"))
-            let description = try XCTUnwrap(try JSONSerialization.jsonObject(with: descriptionData) as? [String: Any])
-            let commands = try XCTUnwrap(description["swiftCommands"] as? [String: [String: Any]])
-            let command = try XCTUnwrap(commands.values.first { $0["moduleName"] as? String == "CheAppleMailMCP" })
-            let arguments = try XCTUnwrap(command["otherArguments"] as? [String])
-            let targetIndex = try XCTUnwrap(arguments.firstIndex(of: "-target"))
-            let sdkIndex = try XCTUnwrap(arguments.firstIndex(of: "-sdk"))
-            return LinkInputs(objects: objects, compiler: try XCTUnwrap(command["executable"] as? String),
-                              target: arguments[targetIndex + 1], sdk: arguments[sdkIndex + 1],
-                              modules: products.appendingPathComponent("Modules").path)
-        }
-        // Swift Build: Products/<config> sits next to Intermediates.noindex. The
-        // testable variant's list holds the app objects (the probe uses
-        // @testable import); the dependency objects come from the plain
-        // executable's list, which links them out of Products/<config>.
-        #if arch(arm64)
-        let arch = "arm64"
-        #else
-        let arch = "x86_64"
-        #endif
-        let build = products.deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("Intermediates.noindex/CheAppleMailMCP.build")
-            .appendingPathComponent(products.lastPathComponent)
-        func words(_ url: URL) throws -> [String] {
-            try String(contentsOf: url).split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
-        }
-        let testableDir = try XCTUnwrap(try fm.contentsOfDirectory(atPath: build.path)
-            .first { $0.hasPrefix("CheAppleMailMCP--") && $0.hasSuffix("-testable-t.build") },
-            "no testable build of CheAppleMailMCP under \(build.path)")
-        let objectsDir = build.appendingPathComponent(testableDir).appendingPathComponent("Objects-normal/\(arch)")
-        let listName = try XCTUnwrap(try fm.contentsOfDirectory(atPath: objectsDir.path)
-            .first { $0.hasSuffix(".LinkFileList") }, "no link list in \(objectsDir.path)")
-        let app = try words(objectsDir.appendingPathComponent(listName))
-        let objects = app.filter { !$0.hasSuffix("/main.o") }
-        XCTAssertEqual(app.count - objects.count, 1, "exactly one main object is dropped")
-        let plain = build.appendingPathComponent("CheAppleMailMCP-p.build/Objects-normal/\(arch)/CheAppleMailMCP.LinkFileList")
-        let dependencies = try words(plain).filter { $0.hasPrefix(products.path + "/") }
-        XCTAssertFalse(dependencies.isEmpty, "the executable links its dependencies from \(products.path)")
-        func xcrun(_ arguments: [String]) throws -> String {
-            let process = Process(), pipe = Pipe()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-            process.arguments = arguments
-            process.standardOutput = pipe
-            try process.run()
-            process.waitUntilExit()
-            let out = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard process.terminationStatus == 0, !out.isEmpty else {
-                throw NSError(domain: "StdioShutdownProbe", code: Int(process.terminationStatus),
-                              userInfo: [NSLocalizedDescriptionKey: "xcrun \(arguments.joined(separator: " ")) failed"])
-            }
-            return out
-        }
-        // No description.json here: a toolchain mismatch shows up as a module
-        // import error in compiler.log, which fails the test with that text.
-        return LinkInputs(objects: objects + dependencies, compiler: try xcrun(["--find", "swiftc"]),
-                          target: "\(arch)-apple-macos13.0", sdk: try xcrun(["--show-sdk-path"]),
-                          modules: products.path)
-    }
-
     private func probe() throws -> URL {
         if let directory = Self.probeDirectory { return directory.appendingPathComponent("probe") }
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("stdio329-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         do {
             let products = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
-            let inputs = try Self.linkInputs(products: products)
-            let objectsURL = directory.appendingPathComponent("Objects.LinkFileList")
-            try (inputs.objects.joined(separator: "\n") + "\n").write(to: objectsURL, atomically: true, encoding: .utf8)
+            let build = try StdioProbeBuildPlan.load(products: products)
+            var objectArguments = build.objects
+            if let responseContents = build.responseContents {
+                let objectsURL = directory.appendingPathComponent("Objects.LinkFileList")
+                try responseContents.write(to: objectsURL, atomically: true, encoding: .utf8)
+                objectArguments = ["@" + objectsURL.path]
+            }
             let source = directory.appendingPathComponent("Probe.swift")
             try #"""
             import Foundation
@@ -106,6 +33,8 @@ final class StdioShutdownTests: XCTestCase {
 
             @main enum Probe {
                 static func main() async throws {
+                    // Match production main: EPIPE must be handled, not kill us.
+                    signal(SIGPIPE, SIG_IGN)
                     let blocked = CommandLine.arguments[1] == "blocked"
                     await MailController.shared.setTestSeams(scriptRunner: { _ in
                         FileHandle.standardError.write(Data("PROBE_SYNC_BEGIN\n".utf8))
@@ -124,10 +53,12 @@ final class StdioShutdownTests: XCTestCase {
             let output = try FileHandle(forWritingTo: compilerLog)
             defer { try? output.close() }
             let compiler = Process()
-            compiler.executableURL = URL(fileURLWithPath: inputs.compiler)
-            compiler.arguments = ["-parse-as-library", "-target", inputs.target, "-sdk", inputs.sdk,
-                                  "-I", inputs.modules, source.path,
-                                  "@" + objectsURL.path, "-lsqlite3", "-o", directory.appendingPathComponent("probe").path]
+            // Use the exact compiler/SDK that produced these binary modules.
+            // xcrun can select a different installed toolchain (e.g. 6.3 vs 6.2).
+            compiler.executableURL = URL(fileURLWithPath: build.compiler)
+            compiler.arguments = ["-parse-as-library", "-target", build.target,
+                                  "-sdk", build.sdk, "-I", build.modules.path, source.path]
+                + objectArguments + ["-lsqlite3", "-o", directory.appendingPathComponent("probe").path]
             compiler.standardOutput = output
             compiler.standardError = output
             try compiler.run()
@@ -149,7 +80,7 @@ final class StdioShutdownTests: XCTestCase {
         }
     }
 
-    private func exercise(blocked: Bool, strict: Bool, handshake: Bool = false) throws {
+    private func exercise(blocked: Bool, strict: Bool, handshake: Bool = false, brokenStdout: Bool = false) throws {
         let executable = try probe()
         let directory = executable.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
@@ -168,7 +99,15 @@ final class StdioShutdownTests: XCTestCase {
         process.environment = environment
         process.standardInput = stdin
         process.standardError = stderr
-        process.standardOutput = stdout
+        let outputPipe = brokenStdout ? Pipe() : nil
+        if let outputPipe {
+            // Close before spawn so no inherited read descriptor can mask EPIPE.
+            try outputPipe.fileHandleForReading.close()
+            process.standardOutput = outputPipe
+        } else {
+            process.standardOutput = stdout
+        }
+        defer { try? outputPipe?.fileHandleForWriting.close() }
         try process.run()
         defer {
             try? stdin.fileHandleForWriting.close()
@@ -183,9 +122,11 @@ final class StdioShutdownTests: XCTestCase {
         let ready = try String(contentsOf: stderrURL)
         XCTAssertTrue(ready.contains("PROBE_SYNC_BEGIN"), "startup fixture never began: \(ready)")
         if blocked { XCTAssertFalse(ready.contains("PROBE_SYNC_END")) }
-        if handshake {
+        if handshake || brokenStdout {
             let request = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}"# + "\n"
             try stdin.fileHandleForWriting.write(contentsOf: Data(request.utf8))
+        }
+        if handshake {
             let responseDeadline = ProcessInfo.processInfo.systemUptime + 2
             while process.isRunning && ProcessInfo.processInfo.systemUptime < responseDeadline {
                 if (try Data(contentsOf: stdoutURL)).contains(0x0a) { break }
@@ -201,13 +142,19 @@ final class StdioShutdownTests: XCTestCase {
             XCTAssertFalse((try String(contentsOf: stderrURL)).contains("PROBE_SYNC_END"),
                            "handshake must not wait for the six-second script")
         }
-        let eof = ProcessInfo.processInfo.systemUptime
-        try stdin.fileHandleForWriting.close()
-        while process.isRunning && ProcessInfo.processInfo.systemUptime - eof < 2 {
+        let shutdownStart = ProcessInfo.processInfo.systemUptime
+        // #377: keep stdin OPEN until after all stdout-failure assertions.
+        // Closing it here would let the EOF path falsely satisfy the test.
+        if !brokenStdout { try stdin.fileHandleForWriting.close() }
+        while process.isRunning && ProcessInfo.processInfo.systemUptime - shutdownStart < 2 {
             Thread.sleep(forTimeInterval: 0.01)
         }
         let finalTrace = try String(contentsOf: stderrURL)
-        XCTAssertFalse(process.isRunning, "EOF waited on Mail work: \(finalTrace)")
+        XCTAssertFalse(process.isRunning, "shutdown waited on Mail work: \(finalTrace)")
+        if brokenStdout {
+            XCTAssertEqual(finalTrace.components(separatedBy: "stdout write failed").count - 1, 1,
+                           "must observe the real write-failure path exactly once")
+        }
         if !process.isRunning {
             XCTAssertEqual(process.terminationReason, .exit)
             XCTAssertEqual(process.terminationStatus, 0)
@@ -231,6 +178,14 @@ final class StdioShutdownTests: XCTestCase {
 
     func testEOFWithIdleStartup() throws {
         try exercise(blocked: false, strict: true)
+    }
+
+    func testBrokenStdoutExitsWithoutEOFWhileStartupBlocked() throws {
+        try exercise(blocked: true, strict: true, brokenStdout: true)
+    }
+
+    func testBrokenStdoutExitsWithoutEOFWithOrdinaryPool() throws {
+        try exercise(blocked: true, strict: false, brokenStdout: true)
     }
 
     func testMailActorStillSerializesConcurrentCalls() async throws {
