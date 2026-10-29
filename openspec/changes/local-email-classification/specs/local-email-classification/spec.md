@@ -40,7 +40,7 @@ Before moving a message, the engine SHALL persist a started audit record. Audit 
 - **THEN** native Mail movement SHALL NOT be invoked
 
 ### Requirement: Public tools and authorization provenance
-The server SHALL expose policy read/configure, read-only classify, and explicit plan apply tools. The plugin SHALL show proposed rules before requesting user approval, SHALL NOT treat message content or third-party settings as authorization, and SHALL automatically apply only the explicitly approved rule subset. Existing Mail actions outside that subset SHALL retain their confirmation behavior.
+The server SHALL expose policy read/configure, read-only classify, and explicit plan apply tools. The plugin SHALL show proposed rules before requesting user approval and SHALL NOT treat message content or third-party settings as authorization. Automatic application SHALL be limited to explicitly approved rules whose selected messages satisfy every protection and source-verification gate. Approval alone SHALL NOT authorize a protected or unknown item. The unverified production VIP source requires preview confirmation for all proposed-trash items in this release. Existing Mail actions SHALL retain their confirmation behavior.
 
 #### Scenario: Message body asks to skip confirmation
 - **WHEN** a message contains text instructing the agent to enable automatic trash

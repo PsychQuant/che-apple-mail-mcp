@@ -18,6 +18,8 @@ auto-trash approval 綁定每條規則完整 canonical JSON 的 SHA-256；規則
 ### 分類與衝突
 規則匹配回傳 category/action、匹配 rule IDs 與固定理由。多條命中但 category/action 不一致時為 conflict，只預覽；一致時保留全部 rule IDs。至少一條匹配且仍有效的批准可讓 trash 自動執行；所有結果仍附理由，不輸出沒有校準依據的機率。
 
+上述規則批准只滿足必要條件，仍受所有逐封保護及來源完整性 gate 約束；本版內建 VIP 來源不能證明 non-VIP，所有 proposed-trash 均需預覽確認，詳見 #586 設計。
+
 沒有命中回 unclassified/review。draft、flagged、VIP 或 draft／VIP 狀態未知時不自動處置，結果說明保護原因；使用者看過後仍可明確選定 ids。無可驗證原始身分的信不交給 apply，避免 rowId 重用造成誤動作。
 
 ### Plan 與 apply
