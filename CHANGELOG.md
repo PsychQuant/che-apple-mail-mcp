@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Per-message draft status, and exports that can leave drafts out**
+  ([#374](https://github.com/PsychQuant/che-apple-mail-mcp/issues/374)).
+  `search_emails` (`full` and `summary`), `list_emails`, `get_email_metadata`
+  and export manifest items carry `is_draft`: `true` when the message or a copy
+  of it has Mail's draft type or draft flag, `false` only when it has neither and
+  neither it nor a copy is in a folder named as drafts, `null` otherwise. The
+  type alone was not enough: drafts synced from a server or another device are
+  stored with the ordinary type. `batch_export_emails_markdown` takes
+  `opts.skip_drafts` (default false): known drafts get status `draft_skipped`,
+  counted in `drafts_skipped`, and an unknown status is a per-item
+  `draft_status_unknown` error; neither fetches content.
+
 ### Changed
 
 - **BREAKING: `save_attachment` only writes where Markdown export may write**
@@ -47,6 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   denylists,
   and a root that cannot be resolved matches nothing instead of failing every
   attachment save.
+
+- **BREAKING for strict readers:** the `search_emails` `summary` projection now
+  has six fields (`is_draft` added), and `batch_export_emails_markdown` rejects
+  `skip_drafts` outside `opts`, or an `opts` that is neither an object nor null,
+  instead of ignoring it
+  ([#374](https://github.com/PsychQuant/che-apple-mail-mcp/issues/374)).
 
 ### Fixed
 
