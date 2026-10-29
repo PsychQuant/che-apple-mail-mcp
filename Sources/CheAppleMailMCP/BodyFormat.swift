@@ -11,15 +11,17 @@ import Foundation
 ///
 /// Both were removed because no path this project ships today can deliver rich
 /// text without assigning the body through the AppleScript `html content`
-/// property, and assigning it that way is what makes Mail wrap the whole letter
-/// in `<blockquote type="cite">` (#175 / #304).
+/// property, which triggered the observed upstream wrapper regression FB11734014
+/// (#175 / #304 / #310). Apple may fix it; public reports do not establish its
+/// current private status or universal behavior across OS versions.
+/// Evidence: https://developer.apple.com/forums/thread/738842
 ///
-/// That is a statement about what exists, NOT a proof of impossibility (#310).
-/// The clipboard paste path (#218) is a second wrapper-free route already in
-/// production, and `NSPasteboard` can carry `public.rtf` / `public.html` — but
-/// nobody has checked the MIME such a paste produces, so "rich text is
-/// impossible without injection" is UNVERIFIED. #306 is the spike that settles
-/// it; #308 / #309 are alternative architectures.
+/// This is a product integration limit, NOT proof of impossibility (#310).
+/// The #306 experiment reports four rich draft variants passing and the HTML
+/// combination passing in Sent and received MIME. Those ASCII results do not
+/// establish CJK, other OS versions, or sending with every flavor. Rich paste
+/// is not integrated in the product; #308 / #309 are alternative architectures.
+/// Evidence: https://github.com/PsychQuant/che-apple-mail-mcp/issues/306#issuecomment-5112852813
 ///
 /// This type used to live in `MarkdownRendering.swift`, which #304 deleted along
 /// with the markdown/HTML compose renderer. The export path
