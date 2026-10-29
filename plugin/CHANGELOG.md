@@ -21,6 +21,10 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 
 ## [Unreleased]
 
+### Added
+
+- 全域 archive registry、index tombstone 去重、目的地規劃與可恢復的分派 executor；新增 registry／tree 命令，原 archive-mail 對已登錄目標導入樹狀流程並保留本次 filter 範圍。分派 complete 後仍須完成各目標 reconcile。（#363）
+
 ### Changed
 
 - `/archive-mail` reports a rejected attachment destination on its own line
