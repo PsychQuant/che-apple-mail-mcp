@@ -76,14 +76,15 @@ final class ComposeDisclosureGuardTests: XCTestCase {
             // rewrite keeping the phrase but dropping the conditions would
             // otherwise pass — the same silent-drop failure one level up).
             for condition in ["'plain'", "subject", "from_address", "Accessibility",
-                              "open_mailto", "non-ASCII", "display name"] {
+                              "open_mailto", "non-ASCII", "display name", "list_signatures"] {
                 XCTAssertTrue(window.contains(condition),
                     "\(tool) description must state refusal condition '\(condition)': \(window.prefix(240))")
             }
             XCTAssertTrue(window.contains("FAILS"),
                 "\(tool) description must say the call fails rather than degrades: \(window.prefix(240))")
-            XCTAssertTrue(window.contains("six"),
-                "\(tool) description must state the enumeration is closed at six: \(window.prefix(240))")
+            // Seven since the named-signature refusal (#322 verify).
+            XCTAssertTrue(window.contains("seven"),
+                "\(tool) description must state the enumeration is closed at seven: \(window.prefix(240))")
         }
     }
 }

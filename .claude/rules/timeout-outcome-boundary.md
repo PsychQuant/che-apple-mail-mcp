@@ -94,4 +94,4 @@ Apple Event。Mail 端那個 Apple Event 最後有沒有完成，沒有可靠的
 - `deferred-live-verification.md`：選項 A 不宣稱延遲、不保證有寄件備份，因此沒有 KNOWN GATE 要記
 
 本規則只放在本 repo 的 `.claude/rules/`，不複製到 `plugin/rules/` 或全域鏡像：呼叫端最可靠的管道是錯誤訊息
-本身；`compose-wrapper-free.md` 的失敗表是封閉的六類事前拒絕，逾時不在其中，不加第七列。
+本身；`compose-wrapper-free.md` 的失敗表是封閉的七類事前拒絕，逾時不在其中，不加第八列。

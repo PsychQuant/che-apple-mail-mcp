@@ -40,7 +40,7 @@ Apple Mail MCP server for macOS,加上 Foresay-derived confirmation protocol + I
 ### Rules(v2.7.0+ 新增)
 - `confirmation-triggers.md` — 何時必 confirm、何時可 skip
 - `false-positive-detection.md` — Search 結果中偵測 sibling activity / CC pollution / subject collision
-- `compose-wrapper-free.md`(v2.43.0 匯入)— **cite-block 已在結構上不可能(#304)**:compose 工具的 body 來源(只來自 Mail 編輯器;`create_draft` 的 opt-in 直接寫入例外,#475)、六類失敗原因與處置、自訂寄件人/人名收件人/附件 recipes、TCC fallback ladder(-1743 時走 `open_mailto`)。Canonical 版在 server repo 的 `.claude/rules/`,此為同步副本
+- `compose-wrapper-free.md`(v2.43.0 匯入)— **cite-block 已在結構上不可能(#304)**:compose 工具的 body 來源(只來自 Mail 編輯器;`create_draft` 的 opt-in 直接寫入例外,#475)、七類失敗原因與處置、自訂寄件人/人名收件人/附件 recipes、TCC fallback ladder(-1743 時走 `open_mailto`)。Canonical 版在 server repo 的 `.claude/rules/`,此為同步副本
 
 ## 設計哲學
 
@@ -159,6 +159,10 @@ AI: [直接執行,沒 confirmation]
 `/classify-mail` 使用 get_email_classification_policy／configure_email_classification／classify_emails／apply_email_classification。自訂判準存於 `~/.claude/.mail/classification-policy.json`；只有真正批准且指紋未變的規則可自動移到原生 Trash，其餘先預覽。不是永久刪除、不建立背景規則。完整流程與授權來源見 [分類命令](commands/classify-mail.md) 和 [分類授權規則](rules/email-classification.md)。
 
 本機 audit 先於移動寫入，並以 policy_digest 對應不可變的當時規則快照。audit 不存主旨／本文；未知結果不盲重試。plan 300 秒有效、每次最多 200 個明確 ids；同一筆已開始派送就不可重試同 plan。
+
+## 新建郵件的簽名
+
+compose/create_draft/update_draft 支援 signature 物件（mail_default／none／named + name），由目標視窗原生 popup 選取，不手工拼接簽名。收據證明選取，不證明正文插入；首次設定先確認草稿，再正式送出。詳見 [compose-signature](rules/compose-signature.md)。
 
 ## Configuration
 

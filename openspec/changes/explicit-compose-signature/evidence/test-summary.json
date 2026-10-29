@@ -1,0 +1,35 @@
+{
+  "full": {
+    "tests": 1366,
+    "skipped": 12,
+    "failures": 0
+  },
+  "focused": {
+    "tests": 79,
+    "failures": 0
+  },
+  "compiled_scripts": true,
+  "synthetic_handlers_executed": true,
+  "live_signature_body_verified": false,
+  "claude_review": "pending_weekly_quota",
+  "prior_snapshot": {
+    "full": {
+      "tests": 1331,
+      "skipped": 11,
+      "failures": 0
+    },
+    "focused": {
+      "tests": 70,
+      "failures": 0
+    },
+    "compiled_scripts": true,
+    "synthetic_handlers_executed": true,
+    "live_signature_body_verified": false,
+    "AX_Mail_windows": 0,
+    "claude_review": "pending_authentication"
+  },
+  "live_signature_evidence": {
+    "mail_default": "two cases verified",
+    "named_none": "pending"
+  }
+}

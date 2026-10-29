@@ -164,12 +164,16 @@ func buildMailtoComposeScript(
     send: Bool,
     fromAddress: String? = nil,
     fill: [RecipientFill] = [],
-    timing: Bool = ComposeTiming.isEnabled
+    timing: Bool = ComposeTiming.isEnabled,
+    signature: ComposeSignatureSelection = .mailDefault
 ) -> String {
-    // #464: per-step timing marks, appended at line ends so the disabled
-    // script stays byte-for-byte unchanged (see ComposeTiming).
+    // #464: per-step timing marks, appended at line ends; with timing off the
+    // script carries no marks (see ComposeTiming).
     func tm(_ label: String, _ indent: String = "    ") -> String {
         timing ? "\n" + indent + ComposeTiming.markStatement(label) : ""
+    }
+    guard (try? signature.validated()) != nil else {
+        return "error \"SIGNATURE: invalid selection; no compose opened\""
     }
     let windowDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_WINDOW_DELAY", fallback: 1.8)
     let stepDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_STEP_DELAY", fallback: 0.7)
@@ -180,9 +184,11 @@ func buildMailtoComposeScript(
         : "Draft created successfully (mailto path)"
     let subjEsc = appleScriptEscape(subject)
 
-    // raiseOnly (runs inside `tell process "Mail"`): re-locate the compose window
-    // BY TITLE (= subject) and best-effort raise it so the NEXT keystroke lands on
-    // OUR window. Re-applied before EVERY keystroke phase (each attach + dispatch)
+    // raiseOnly (runs inside `tell process "Mail"`): check native ownership, re-locate the
+    // compose window by its unique title and resolve the reference (`contents of`), so it names
+    // that window rather than "the k-th window", which AXRaise reorders (#322 verify). Then
+    // best-effort raise it so the NEXT keystroke lands on OUR window; native ownership and the
+    // front-window id are checked again after raising. Re-applied before EVERY phase
     // — focus the user/system stole during a delay is reclaimed. Hard-errors if
     // our window is gone (→ the call fails, nothing sent; #304). Keys off the target `_w`, never
     // `front window` (that evaluated unreliably under the actor's in-process
@@ -190,11 +196,12 @@ func buildMailtoComposeScript(
     // best-effort (wrapped) so an AX quirk can't break the path.
     let raiseOnly = """
                 set _t to "\(subjEsc)"
+                my assertComposeWindowOwner(_ourId, _t, false)
                 set _w to missing value
                 set _wMatches to 0
                 repeat with _cand in windows
                     if title of _cand is _t then
-                        set _w to _cand
+                        set _w to contents of _cand
                         set _wMatches to _wMatches + 1
                     end if
                 end repeat
@@ -204,6 +211,7 @@ func buildMailtoComposeScript(
                     perform action "AXRaise" of _w
                 end try
                 delay 0.25
+                my assertComposeWindowOwner(_ourId, _t, true)
     """
     // verifyNoSheet: raiseOnly + assert no open sheet (the File▸Attach panel must
     // have closed) — used immediately before dispatch.
@@ -341,8 +349,11 @@ func buildMailtoComposeScript(
     end senderMatches
 
     """ : ""
-    let timingHead = timing ? ComposeTiming.prelude + ComposeTiming.markStatement("script_start") + "\n" : ""
-    var s = timingHead + composeCleanupIdentityHandlers + fillHandlers + senderMatchHandler + """
+    // ComposeTiming.prelude already opens with the same two `use` lines.
+    let scriptHead = timing
+        ? ComposeTiming.prelude + ComposeTiming.markStatement("script_start") + "\n"
+        : "use framework \"Foundation\"\nuse scripting additions\n\n"
+    var s = scriptHead + composeCleanupIdentityHandlers + composeSignatureHandlers + fillHandlers + senderMatchHandler + signatureDefinitionPreflight(signature) + """
     tell application "Mail"
         set _beforeIds to (id of every window)
         set _beforeTitles to (name of every window)
@@ -669,6 +680,8 @@ func buildMailtoComposeScript(
         """
     }
 
+    s += buildComposeSignaturePhase(signature, guardWindow: verifyNoSheet, stepDelay: stepDelay)
+
     // 2. Attachments: re-raise OUR window, then one File ▸ Attach (⇧⌘A) cycle each,
     // path pasted into the Go-to-folder (⇧⌘G) field (clipboard set here, restored by
     // the caller in Swift). ASCII-only paths reach this flow: the sheet hangs
@@ -769,6 +782,7 @@ func buildMailtoComposeScript(
     // re-checks that our window is gone, and otherwise appends a
     // WINDOWLEFTOPEN note to the error so the caller knows to close it.
     let cleanupBody = """
+            if not (my dismissSignatureTracking()) then error (_mErr as text) & " — WINDOWLEFTOPEN: signature menu ownership or dismissal could not be verified; no native cleanup was attempted"
             set _titleMatches to 0
             set _cleanupState to my composeCleanupOwnerState(_ourId, "\(subjEsc)", false)
             if _cleanupState is "owned" then
@@ -880,14 +894,19 @@ func buildMailtoComposeScript(
         tell application "System Events"
             tell process "Mail"
                 set frontmost to true
-    \(verifyNoSheet)\(tm("pre_dispatch", "                "))
+    \(verifyNoSheet)
+    \(composeSignatureDispatchCheck(signature))
+                my assertComposeWindowOwner(_ourId, _t, true)\(tm("pre_dispatch", "                "))
     \(dispatchBlock)\(tm("dispatched", "                "))
             end tell
         end tell\(preHandlerTail)
     on error _mErr
+        if (_mErr as text) starts with "COMPOSEIDENTITY:" then
+            error (_mErr as text) & " — WINDOWLEFTOPEN: original compose identity changed; no window was discarded; inspect Mail before retrying"
+        end if
     \(handlerBlock)
     end try\(postTryTail)\(tm("script_end"))
-    \(fillsBcc ? "set _bccTag to \"\"\n    if _bccRevealed then set _bccTag to \" [bcc-field-revealed]\"\n    return \"\(dispatchLabel)\" & _bccTag" : "return \"\(dispatchLabel)\"")
+    \(fillsBcc ? "set _bccTag to \"\"\n    if _bccRevealed then set _bccTag to \" [bcc-field-revealed]\"\n    return \"\(dispatchLabel)\" & _signatureTag & _bccTag" : "return \"\(dispatchLabel)\" & _signatureTag")
     """
     return s
 }

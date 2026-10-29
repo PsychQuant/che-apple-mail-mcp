@@ -22,7 +22,7 @@ enum DirectDraft {
 
     enum Ineligible: Equatable {
         case disabled, format, attachments, ccOrBcc, noRecipient, displayName, unsupportedAddress,
-             emptySubject, missingFromAddress, fromNotBare
+             emptySubject, missingFromAddress, fromNotBare, signature
 
         var reason: String {
             switch self {
@@ -36,12 +36,14 @@ enum DirectDraft {
             case .emptySubject: return "empty subject"
             case .missingFromAddress: return "from_address is required to pick the account"
             case .fromNotBare: return "from_address must be a bare address"
+            case .signature: return "a named signature is applied only on the GUI path (#587)"
             }
         }
     }
 
     static func eligibility(enabled: Bool, format: BodyFormat, to: [String], cc: [String], bcc: [String],
-                            attachments: [String], subject: String, fromAddress: String?) -> Ineligible? {
+                            attachments: [String], subject: String, fromAddress: String?,
+                            signature: ComposeSignatureSelection = .mailDefault) -> Ineligible? {
         guard enabled else { return .disabled }
         guard format == .plain else { return .format }
         guard attachments.isEmpty else { return .attachments }
@@ -59,7 +61,22 @@ enum DirectDraft {
         let parsedFrom = parseRecipient(from)
         guard parsedFrom.name == nil, from.trimmingCharacters(in: .whitespaces) == parsedFrom.address,
               isSimpleAddrSpec(parsedFrom.address) else { return .fromNotBare }
+        // #322: the direct write inserts no signature yet (#587). That is
+        // exactly `none`; a named one is left to the GUI path, which applies it.
+        // mail_default is checked per account once the account is known.
+        guard signature.mode != .named else { return .signature }
         return nil
+    }
+
+    /// Whether the direct write, which inserts no signature, gives what the
+    /// selection asks for: always for none; for mail_default only when Mail
+    /// lists no signature for the account (an unreadable list is not "none").
+    static func signatureAllowsDirectWrite(_ signature: ComposeSignatureSelection, accountSignatureIDs: [String]?) -> Bool {
+        switch signature.mode {
+        case .none: return true
+        case .named: return false
+        case .mailDefault: return accountSignatureIDs?.isEmpty == true
+        }
     }
 
     // MARK: - MIME

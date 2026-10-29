@@ -9,6 +9,30 @@ public enum AccountMapper {
         return "\(home)/Library/Mail/V10/MailData/Signatures/AccountsMap.plist"
     }()
 
+    private static let ubiquitousSignaturesPath: String = {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return "\(home)/Library/Mobile Documents/com~apple~mail/Data/V10/MailData/Signatures"
+    }()
+
+    /// The account's signature ids when the local AccountsMap.plist is the only
+    /// signature store. With iCloud-synced signatures present, the local list
+    /// may be stale, so the answer is unknown (nil) (#322 verify).
+    public static func localSignatureIDs(forAccount uuid: String, path: String? = nil,
+                                         ubiquitousPath: String? = nil) -> [String]? {
+        guard !FileManager.default.fileExists(atPath: ubiquitousPath ?? ubiquitousSignaturesPath) else { return nil }
+        return signatureIDs(forAccount: uuid, path: path)
+    }
+
+    /// The signature ids Mail lists for an account in AccountsMap.plist, or nil
+    /// when the file, the account entry or its `Signatures` list cannot be
+    /// read (#322 verify, #587).
+    public static func signatureIDs(forAccount uuid: String, path: String? = nil) -> [String]? {
+        guard let data = FileManager.default.contents(atPath: path ?? accountsMapPath),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
+              let entry = plist[uuid] as? [String: Any] else { return nil }
+        return entry["Signatures"] as? [String]
+    }
+
     /// Build UUID → account name mapping from AccountsMap.plist.
     ///
     /// The plist maps each UUID to a dictionary with an `AccountURL` key

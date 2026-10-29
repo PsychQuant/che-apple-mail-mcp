@@ -77,6 +77,10 @@ final class PostIdentificationCleanupTests: XCTestCase {
         property fixtureState : "\(initial)"
         property closeCalls : 0
         property axCalls : 0
+        -- Signature menu dismissal is an external boundary for this ownership fixture.
+        on dismissSignatureTracking()
+            return true
+        end dismissSignatureTracking
         on composeCleanupOwnerState(expectedID, expectedTitle, requireFront)
             return my fixtureState
         end composeCleanupOwnerState
@@ -140,20 +144,20 @@ final class PostIdentificationCleanupTests: XCTestCase {
             block = $0; return ""
         }
         XCTAssertFalse(block.isEmpty)
-        let boxes = ["partial", "ambiguous", "near-title"].contains(mode) ? "{1, 2}" : "{1}"
+        let boxes = ["partial", "ambiguous", "near-title", "exact-first"].contains(mode) ? "{1, 2}" : "{1}"
         block = block.replacingOccurrences(of: "tell application \"System Events\"", with: "tell me")
             .replacingOccurrences(of: "tell process \"Mail\"", with: "tell me")
             .replacingOccurrences(of: "repeat with _cw2 in windows", with: "repeat with _cw2 in " + boxes)
             .replacingOccurrences(of: "(title of _cw2 as string)", with: "(my fixtureTitle(contents of _cw2))")
             .replacingOccurrences(of: "(title of _cw2)", with: "(my fixtureTitle(contents of _cw2))")
             .replacingOccurrences(of: "title of _cw2", with: "my fixtureTitle(contents of _cw2)")
-            .replacingOccurrences(of: "(count of sheets of _cw2)", with: "1")
-            .replacingOccurrences(of: "perform action \"AXRaise\" of _cw2", with: "my fixtureRaise()")
-            .replacingOccurrences(of: "set _sh to sheet 1 of _cw2", with: "set _sh to 1")
+            .replacingOccurrences(of: "(count of sheets of _cw2)", with: "(my fixtureSheetCount(contents of _cw2))")
+            .replacingOccurrences(of: "perform action \"AXRaise\" of _cw2", with: "my fixtureRaise(contents of _cw2)")
+            .replacingOccurrences(of: "set _sh to sheet 1 of _cw2", with: "set _sh to my fixtureSheet(contents of _cw2)")
             .replacingOccurrences(of: "(value of attribute \"AXIdentifier\" of _sh)", with: "\"Mail.sendMessageAlert\"")
-            .replacingOccurrences(of: "buttons of _sh", with: "{1}")
-            .replacingOccurrences(of: "(title of _b as text)", with: "(my fixtureButton())")
-            .replacingOccurrences(of: "click _b", with: "set my clicks to my clicks + 1")
+            .replacingOccurrences(of: "buttons of _sh", with: "{_sh}")
+            .replacingOccurrences(of: "(title of _b as text)", with: "(my fixtureButton(contents of _b))")
+            .replacingOccurrences(of: "click _b", with: "my fixtureClick(contents of _b)")
             .replacingOccurrences(of: "delay 0.1", with: "delay 0")
         guard !block.contains("tell application"), !block.contains("perform action"), !block.contains("click _b") else {
             throw NSError(domain: "AXCleanupFixture", code: 1)
@@ -171,14 +175,34 @@ final class PostIdentificationCleanupTests: XCTestCase {
         on fixtureTitle(row)
             if my mode is "partial" and row is 2 then error "fixture AX read failed" number -9997
             if my mode is "near-title" and row is 1 then return "target"
+            if my mode is "exact-first" and row is 2 then return "Other"
             return "Target"
         end fixtureTitle
-        on fixtureRaise()
+        on fixtureTarget(row)
+            set expectedRow to 1
+            if my mode is "near-title" then set expectedRow to 2
+            if row is not expectedRow then error "wrong AX action target" number -9996
+        end fixtureTarget
+        on fixtureSheetCount(row)
+            my fixtureTarget(row)
+            return 1
+        end fixtureSheetCount
+        on fixtureSheet(row)
+            my fixtureTarget(row)
+            return row
+        end fixtureSheet
+        on fixtureClick(row)
+            my fixtureTarget(row)
+            set my clicks to my clicks + 1
+        end fixtureClick
+        on fixtureRaise(row)
+            my fixtureTarget(row)
             set my raises to my raises + 1
             if my mode is "after-raise" then set my ownerState to "changed"
             if my mode is "wrong-front" then set my wrongFront to true
         end fixtureRaise
-        on fixtureButton()
+        on fixtureButton(row)
+            my fixtureTarget(row)
             if my mode is "before-click" then set my ownerState to "absent"
             return "\(button)"
         end fixtureButton
@@ -226,6 +250,7 @@ final class PostIdentificationCleanupTests: XCTestCase {
 
     func testAXActionUsesTheSameExactTitleAsItsUniquenessCheck() throws {
         XCTAssertEqual(try executeAX(mode: "near-title"), "1|1|ok")
+        XCTAssertEqual(try executeAX(mode: "exact-first"), "1|1|ok")
     }
 
     func testAXCleanupOnlyClicksSupportedDiscardLabels() throws {

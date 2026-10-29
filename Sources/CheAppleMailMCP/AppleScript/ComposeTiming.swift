@@ -13,7 +13,8 @@ import Foundation
 /// `CHE_MAIL_TIMING|<step>|<NSDate reference seconds>` line per step to
 /// osascript's stderr (the transport already tolerates `log` noise there,
 /// #301). The Swift side adds its own marks and appends one CSV row per mark.
-/// With the variable unset the script is byte-for-byte what it was.
+/// With the variable unset the script carries no timing prelude or marks.
+/// The #322 signature phase has no timing points of its own.
 enum ComposeTiming {
     static let envKey = "CHE_MAIL_COMPOSE_TIMING_CSV"
     static let logPrefix = "CHE_MAIL_TIMING|"

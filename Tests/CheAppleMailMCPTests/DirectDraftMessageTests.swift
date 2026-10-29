@@ -11,9 +11,11 @@ final class DirectDraftMessageTests: XCTestCase {
 
     private func check(enabled: Bool = true, format: BodyFormat = .plain, to: [String] = ["a@example.org"],
                        cc: [String] = [], bcc: [String] = [], attachments: [String] = [],
-                       subject: String = "S", from: String? = "me@example.org") -> DirectDraft.Ineligible? {
+                       subject: String = "S", from: String? = "me@example.org",
+                       signature: ComposeSignatureSelection = .mailDefault) -> DirectDraft.Ineligible? {
         DirectDraft.eligibility(enabled: enabled, format: format, to: to, cc: cc, bcc: bcc,
-                                attachments: attachments, subject: subject, fromAddress: from)
+                                attachments: attachments, subject: subject, fromAddress: from,
+                                signature: signature)
     }
 
     func testEligibleWhenEverythingIsInTheVerifiedRange() {
@@ -33,6 +35,10 @@ final class DirectDraftMessageTests: XCTestCase {
         XCTAssertEqual(check(from: nil), .missingFromAddress)
         XCTAssertEqual(check(from: ""), .missingFromAddress)
         XCTAssertEqual(check(from: "Me <me@example.org>"), .fromNotBare)
+        // #322 verify: the direct write inserts no signature, which is exactly
+        // none; a named one takes the GUI path (#587). mail_default is a gate.
+        XCTAssertNil(check(signature: ComposeSignatureSelection(mode: .none)))
+        XCTAssertEqual(check(signature: ComposeSignatureSelection(mode: .named, name: "Work")), .signature)
     }
 
     func testTheFlagIsOffByDefault() {
