@@ -61,7 +61,149 @@ struct AllowedRootsValidator {
         ".ssh", ".config", ".gnupg", ".aws", ".docker", ".kube", ".local",
         ".zshrc", ".bashrc", ".bash_profile", ".zprofile", ".profile",
         ".netrc", ".pgpass", ".git-credentials", ".gitconfig",
+        // #402 verify: save_attachment publishes sender-chosen bytes, so the
+        // remaining shell startup files and the agent configuration this
+        // server runs under are denied too.
+        ".zshenv", ".zlogin", ".zlogout", ".bash_login", ".bash_logout",
+        ".claude", ".claude.json", ".mcp.json", ".codex", ".cursor",
     ]
+
+    /// Cloud-sync storage that macOS keeps inside `~/Library` (#402 verify):
+    /// an existing provider folder in `~/Library/CloudStorage` (Dropbox, Google
+    /// Drive, OneDrive, Box; `~/Dropbox` is a link into it); iCloud Drive,
+    /// `~/Library/Mobile Documents/com~apple~CloudDocs`; and the `Documents`
+    /// folder of each app's iCloud container, which Finder shows inside iCloud
+    /// Drive (an Obsidian vault, Pages documents). Their contents are the user's
+    /// own documents, so paths inside them are not denied with the rest of
+    /// `~/Library`. The rest of each app container (Mail keeps its synced
+    /// signatures in `com~apple~mail/Data`) stays denied, and so does anything
+    /// directly under `CloudStorage` that is not an existing provider folder.
+    static func isCloudSyncPath(_ components: [Substring], homePath: String,
+                                directoryExists: (String) -> Bool) -> Bool {
+        guard components.count >= 3, fold(components[0]) == "library" else { return false }
+        switch fold(components[1]) {
+        case "mobile documents":
+            if fold(components[2]) == "com~apple~clouddocs" { return true }
+            // An app container's Documents folder must already exist, as a
+            // CloudStorage provider folder must: a save cannot create one.
+            return components.count >= 4 && fold(components[3]) == "documents"
+                && directoryExists(homePath + "/" + components[0...3].joined(separator: "/"))
+        case "cloudstorage":
+            return directoryExists(homePath + "/" + components[0...2].joined(separator: "/"))
+        default:
+            return false
+        }
+    }
+
+    static func isExistingDirectory(_ path: String) -> Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
+    /// Where the denied home names really are (#402 verify). A dotfile kept in a
+    /// cloud-sync folder or a dotfiles repository (`~/.zshrc` →
+    /// `~/Library/CloudStorage/Dropbox/dotfiles/.zshrc`, `~/.claude/hooks` →
+    /// `~/Developer/<config repo>/hooks`, `~/Library/LaunchAgents` restored by
+    /// Mackup) resolves outside the denied name, so checking names alone would
+    /// let a write through the target replace it. Covered: a denied name that
+    /// is a link, and a link directly inside a denied directory, including
+    /// links whose target does not exist yet. Not covered: links deeper inside
+    /// a denied directory; that is the limit of a denylist, and configured
+    /// roots are the way to narrow writes further.
+    static func resolvedDeniedTargets(homePath: String) -> [String] {
+        // The names as they are on disk: on a case-sensitive volume `~/Library`
+        // cannot be reached as `~/library` (#402 verify).
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: homePath)) ?? [])
+            .filter { homeRelativeDenylist.contains(fold(Substring($0))) }
+        var targets: [String] = []
+        for name in names.sorted() {
+            let path = homePath + "/" + name
+            if let target = linkTarget(path) { targets.append(target) }
+            // A denied folder that is itself a link (stow's tree folding) is
+            // searched through the link.
+            var info = stat()
+            guard fstatat(AT_FDCWD, path, &info, 0) == 0, (info.st_mode & S_IFMT) == S_IFDIR,
+                  let children = try? FileManager.default.contentsOfDirectory(atPath: path) else { continue }
+            for child in children {
+                if let target = linkTarget(path + "/" + child) { targets.append(target) }
+            }
+        }
+        return targets
+    }
+
+    /// Where a link points, resolved as far as the filesystem allows. A link to
+    /// something that does not exist yet still names it.
+    static func linkTarget(_ path: String) -> String? {
+        var info = stat()
+        guard lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK else { return nil }
+        if let resolved = realpath(path, nil) {
+            defer { free(resolved) }
+            return String(cString: resolved)
+        }
+        var budget = 8
+        return resolvingLinks(path, budget: &budget)
+    }
+
+    /// Resolve `path` one component at a time, following every link met on the
+    /// way (a dangling one partway along included) until a component does not
+    /// exist; the rest is kept as written. At most `budget` links are followed.
+    private static func resolvingLinks(_ path: String, budget: inout Int) -> String? {
+        var pending = path.split(separator: "/").map(String.init)
+        var resolved = ""   // "" stands for "/"
+        while !pending.isEmpty {
+            let component = pending.removeFirst()
+            if component == "." { continue }
+            if component == ".." {
+                resolved = (resolved as NSString).deletingLastPathComponent
+                if resolved == "/" { resolved = "" }
+                continue
+            }
+            let candidate = resolved + "/" + component
+            var info = stat()
+            guard lstat(candidate, &info) == 0 else {
+                guard errno == ENOENT else { return nil }
+                return ([candidate] + pending).joined(separator: "/")
+            }
+            if (info.st_mode & S_IFMT) == S_IFLNK {
+                guard budget > 0, let raw = try? FileManager.default.destinationOfSymbolicLink(atPath: candidate) else {
+                    return nil
+                }
+                budget -= 1
+                if raw.hasPrefix("/") { resolved = "" }
+                pending = raw.split(separator: "/").map(String.init) + pending
+                continue
+            }
+            resolved = candidate
+        }
+        return resolved.isEmpty ? "/" : resolved
+    }
+
+    /// The home-name rule alone, for a path in any representation: the caller's
+    /// own spelling of the path is checked as well as its resolved form, so
+    /// `~/.zshrc` is denied even when it is a link into a permitted folder.
+    func checkHomeNames(_ path: String, homePath: String,
+                        directoryExists: (String) -> Bool = AllowedRootsValidator.isExistingDirectory) throws {
+        // The home prefix is compared folded too: `/users/<u>` names the same
+        // directory as `/Users/<u>` on the default volume (#402 verify).
+        let foldedPath = Self.fold(Substring(path)), foldedHome = Self.fold(Substring(homePath))
+        guard foldedPath == foldedHome || foldedPath.hasPrefix(foldedHome + "/") else { return }
+        let components = path.dropFirst(homePath.count).split(separator: "/")
+        // Case-INSENSITIVE: the default macOS volume is case-insensitive APFS,
+        // so `~/.KUBE` == `~/.kube` on disk; a case-sensitive match would let
+        // an absent-dir case variant bypass the denylist (6-AI verify).
+        if let first = components.first, Self.homeRelativeDenylist.contains(Self.fold(first)),
+           !Self.isCloudSyncPath(components, homePath: homePath, directoryExists: directoryExists) {
+            throw AllowedRootsError.deniedHomePath(path: path)
+        }
+    }
+
+    /// The comparison the default case-insensitive APFS volume makes: full case
+    /// folding plus canonical normalization. `lowercased()` is not enough —
+    /// APFS folds `ſ` to `s`, so `~/.ſſh` opens `~/.ssh` (#402 verify).
+    static func fold(_ component: Substring) -> String {
+        String(component).decomposedStringWithCanonicalMapping
+            .folding(options: .caseInsensitive, locale: nil)
+    }
 
     init() {}
 
@@ -73,9 +215,23 @@ struct AllowedRootsValidator {
     /// - Throws: `AllowedRootsError.systemPath` if under a denied system dir;
     ///   `AllowedRootsError.escapesAllowedRoots` if outside all roots.
     func validate(_ outputDir: String, allowedRoots: [String]) throws -> URL {
+        let lexical = URL(fileURLWithPath: (outputDir as NSString).expandingTildeInPath).standardizedFileURL.path
+        try checkHomeNames(lexical, homePath: URL(fileURLWithPath: NSHomeDirectory()).standardizedFileURL.path)
         let canonical = Self.canonicalize(outputDir)
-        let canonicalPath = canonical.path
+        try validateCanonicalPath(canonical.path,
+                                  homePath: Self.canonicalize(NSHomeDirectory()).path,
+                                  allowedRoots: allowedRoots.filter { !$0.isEmpty }
+                                    .map { Self.canonicalize($0).path })
+        return canonical
+    }
 
+    /// Policy-only entry for callers that already resolved the path they will
+    /// use. Never resolve this candidate again: a second symlink lookup can
+    /// authorize a different file while the caller retains the first (#402).
+    /// Home and roots must use the same canonical representation as candidate.
+    func validateCanonicalPath(_ canonicalPath: String, homePath: String, allowedRoots: [String],
+                               deniedTargets: [String]? = nil,
+                               directoryExists: (String) -> Bool = AllowedRootsValidator.isExistingDirectory) throws {
         for deny in Self.systemDenylist {
             if canonicalPath == deny || canonicalPath.hasPrefix(deny + "/") {
                 throw AllowedRootsError.systemPath(path: canonicalPath)
@@ -86,14 +242,11 @@ struct AllowedRootsValidator {
         // in the default all-of-home mode (and even if such a path were a
         // configured root). Runs on the canonical, `..`-collapsed path so
         // `~/Documents/../Library` is caught.
-        let homePath = Self.canonicalize(NSHomeDirectory()).path
-        if canonicalPath == homePath || canonicalPath.hasPrefix(homePath + "/") {
-            let relative = canonicalPath.dropFirst(homePath.count).drop(while: { $0 == "/" })
-            let firstComponent = relative.split(separator: "/", maxSplits: 1).first.map(String.init) ?? ""
-            // Case-INSENSITIVE: the default macOS volume is case-insensitive APFS,
-            // so `~/.KUBE` == `~/.kube` on disk; a case-sensitive match would let
-            // an absent-dir case variant bypass the denylist (6-AI verify).
-            if Self.homeRelativeDenylist.contains(firstComponent.lowercased()) {
+        try checkHomeNames(canonicalPath, homePath: homePath, directoryExists: directoryExists)
+        let foldedPath = Self.fold(Substring(canonicalPath))
+        for target in deniedTargets ?? Self.resolvedDeniedTargets(homePath: homePath) {
+            let foldedTarget = Self.fold(Substring(target))
+            if foldedPath == foldedTarget || foldedPath.hasPrefix(foldedTarget + "/") {
                 throw AllowedRootsError.deniedHomePath(path: canonicalPath)
             }
         }
@@ -101,13 +254,11 @@ struct AllowedRootsValidator {
         // #197: roots policy. No configured roots → default to the user's home
         // (backward-compatible). One or more configured roots → those REPLACE
         // home (opt-in strict allowlist / deny-by-default).
-        let configured = allowedRoots.filter { !$0.isEmpty }.map { Self.canonicalize($0) }
-        let roots = configured.isEmpty ? [Self.canonicalize(NSHomeDirectory())] : configured
-
-        for root in roots {
-            let rootPath = root.path
-            if canonicalPath == rootPath || canonicalPath.hasPrefix(rootPath + "/") {
-                return canonical
+        let roots = allowedRoots.isEmpty ? [homePath] : allowedRoots
+        for rootPath in roots {
+            // A root of "/" has no "//" prefix to match, so name it explicitly.
+            if rootPath == "/" || canonicalPath == rootPath || canonicalPath.hasPrefix(rootPath + "/") {
+                return
             }
         }
         throw AllowedRootsError.escapesAllowedRoots(path: canonicalPath)

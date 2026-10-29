@@ -177,4 +177,158 @@ final class AllowedRootsValidatorTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - #402 verify: cloud-sync folders, full case folding, agent config
+
+    private let fixtureHome = "/Users/fixture"
+    /// Provider folders that exist in the fixture home's CloudStorage.
+    private let providers: Set<String> = ["/Users/fixture/Library/CloudStorage/Dropbox",
+                                          "/Users/fixture/Library/CloudStorage/GoogleDrive-x",
+                                          "/Users/fixture/Library/Mobile Documents/iCloud~md~obsidian/Documents"]
+
+    private func policy(_ path: String, roots: [String] = []) throws {
+        try validator.validateCanonicalPath(path, homePath: fixtureHome, allowedRoots: roots,
+                                            deniedTargets: [], directoryExists: providers.contains)
+    }
+
+    /// `~/Dropbox` (and Google Drive, OneDrive, Box) resolve into
+    /// `~/Library/CloudStorage`, and iCloud Drive is `~/Library/Mobile
+    /// Documents/com~apple~CloudDocs`. Denying them with the rest of
+    /// `~/Library` rejected every cloud-synced archive folder, with no root
+    /// able to allow it.
+    func testCloudStorageInsideLibraryIsPermitted() throws {
+        for path in ["/Library/CloudStorage/Dropbox/ws/a.pdf",
+                     "/Library/CloudStorage/GoogleDrive-x/My Drive/a.pdf",
+                     "/Library/Mobile Documents/com~apple~CloudDocs/a.pdf",
+                     "/library/mobile documents/COM~APPLE~CLOUDDOCS/a.pdf",
+                     "/Library/Mobile Documents/iCloud~md~obsidian/Documents/vault/a.md",
+                     "/Library/CloudStorage/Dropbox"] {
+            XCTAssertNoThrow(try policy(fixtureHome + path), path)
+        }
+        let root = fixtureHome + "/Library/CloudStorage/Dropbox/ws"
+        XCTAssertNoThrow(try policy(root + "/a.pdf", roots: [root]))
+        XCTAssertThrowsError(try policy(fixtureHome + "/Documents/a.pdf", roots: [root]),
+                             "configured roots still replace home")
+    }
+
+    /// The other children of Mobile Documents are apps' iCloud containers — Mail
+    /// keeps its synced signatures there — and anything directly under
+    /// CloudStorage that is not an existing provider folder stays denied.
+    func testTheRestOfLibraryStaysDenied() {
+        for path in ["/Library/LaunchAgents/x.plist", "/Library/CloudStorage",
+                     "/Library/Mobile Documents",
+                     "/Library/Mobile Documents/com~apple~mail/Data/V4/Signatures/x.mailsignature",
+                     "/Library/Mobile Documents/iCloud~md~obsidian/x.md",
+                     "/Library/CloudStorage/x.pdf", "/Library/CloudStorage/NewFolder/x.pdf",
+                     "/Library/Mobile Documents/iCloud~new~app/Documents/x.md",
+                     "/Library/CloudStorageX/a", "/Library/Preferences/CloudStorage/a", "/Library"] {
+            XCTAssertThrowsError(try policy(fixtureHome + path), path) { error in
+                guard case AllowedRootsError.deniedHomePath = error else { return XCTFail("\(path): \(error)") }
+            }
+        }
+    }
+
+    /// A dotfile kept in a cloud folder resolves into a permitted folder; the
+    /// resolved targets of the denied names keep it denied, and the caller's own
+    /// spelling is checked too.
+    func testADeniedNameLinkedIntoACloudFolderStaysDenied() throws {
+        let fm = FileManager.default
+        let home = try XCTUnwrap(realpath(fm.temporaryDirectory.path, nil).map { p -> String in defer { free(p) }; return String(cString: p) })
+            + "/idd402-home-\(UUID().uuidString)"
+        addTeardownBlock { try? fm.removeItem(atPath: home) }
+        let dotfiles = home + "/Library/CloudStorage/Dropbox/dotfiles"
+        try fm.createDirectory(atPath: dotfiles, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: URL(fileURLWithPath: dotfiles + "/.zshrc"))
+        try fm.createSymbolicLink(atPath: home + "/.zshrc", withDestinationPath: dotfiles + "/.zshrc")
+        try fm.createDirectory(atPath: dotfiles + "/ssh", withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: home + "/.ssh", withDestinationPath: dotfiles + "/ssh")
+
+        for target in [dotfiles + "/.zshrc", dotfiles + "/ssh/authorized_keys"] {
+            XCTAssertThrowsError(try validator.validateCanonicalPath(target, homePath: home, allowedRoots: []), target)
+        }
+        XCTAssertNoThrow(try validator.validateCanonicalPath(dotfiles + "/notes.md", homePath: home, allowedRoots: []))
+        XCTAssertThrowsError(try validator.checkHomeNames(home + "/.zshrc", homePath: home),
+                             "the caller's spelling of a denied name is denied before resolution")
+    }
+
+    /// The other link shapes: a denied name pointing at a file that does not
+    /// exist yet (writing the target would make the link live), a chain of
+    /// links, and a link directly inside a denied directory (`~/.claude/hooks`
+    /// kept in a config repository).
+    func testDanglingChainedAndNestedLinksOfDeniedNamesStayDenied() throws {
+        let fm = FileManager.default
+        let home = try XCTUnwrap(realpath(fm.temporaryDirectory.path, nil).map { p -> String in defer { free(p) }; return String(cString: p) })
+            + "/idd402-home-\(UUID().uuidString)"
+        addTeardownBlock { try? fm.removeItem(atPath: home) }
+        let cloud = home + "/Library/CloudStorage/Dropbox/dotfiles"
+        let repo = home + "/Developer/config"
+        try fm.createDirectory(atPath: cloud, withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: repo + "/hooks", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: home + "/.claude", withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: home + "/.zshrc", withDestinationPath: cloud + "/shellrc")      // dangling
+        try fm.createSymbolicLink(atPath: home + "/.zshenv", withDestinationPath: home + "/env-link")    // chain
+        try fm.createSymbolicLink(atPath: home + "/env-link", withDestinationPath: cloud + "/env")       // dangling end
+        try fm.createSymbolicLink(atPath: home + "/.claude/hooks", withDestinationPath: repo + "/hooks") // nested
+
+        for target in [cloud + "/shellrc", cloud + "/env", repo + "/hooks/session-start.sh"] {
+            XCTAssertThrowsError(try validator.validateCanonicalPath(target, homePath: home, allowedRoots: []), target)
+        }
+        for allowed in [cloud + "/notes.md", repo + "/README.md"] {
+            XCTAssertNoThrow(try validator.validateCanonicalPath(allowed, homePath: home, allowedRoots: []), allowed)
+        }
+    }
+
+    /// Two more shapes: a dangling directory link partway along a denied name's
+    /// target, and a denied folder that is itself a link (stow's tree folding),
+    /// whose children are links too.
+    func testIntermediateDanglingLinksAndLinkedDeniedFoldersStayDenied() throws {
+        let fm = FileManager.default
+        let home = try XCTUnwrap(realpath(fm.temporaryDirectory.path, nil).map { p -> String in defer { free(p) }; return String(cString: p) })
+            + "/idd402-home-\(UUID().uuidString)"
+        addTeardownBlock { try? fm.removeItem(atPath: home) }
+        let config = home + "/Developer/config"
+        try fm.createDirectory(atPath: config, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: config + "/alias", withDestinationPath: config + "/not-yet-created")
+        try fm.createSymbolicLink(atPath: home + "/.zshrc", withDestinationPath: config + "/alias/rc")
+        let dotfiles = home + "/Developer/dotfiles/config"
+        try fm.createDirectory(atPath: dotfiles, withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: home + "/Developer/nvim-config", withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: home + "/.config", withDestinationPath: dotfiles)
+        try fm.createSymbolicLink(atPath: dotfiles + "/nvim", withDestinationPath: home + "/Developer/nvim-config")
+
+        for target in [config + "/not-yet-created/rc", home + "/Developer/nvim-config/init.lua", dotfiles + "/x"] {
+            XCTAssertThrowsError(try validator.validateCanonicalPath(target, homePath: home, allowedRoots: []), target)
+        }
+        XCTAssertNoThrow(try validator.validateCanonicalPath(config + "/README.md", homePath: home, allowedRoots: []))
+    }
+
+    /// The caller's spelling is compared with the home prefix folded, as the
+    /// default volume compares it.
+    func testTheHomePrefixIsComparedCaseInsensitively() {
+        XCTAssertThrowsError(try validator.checkHomeNames("/users/FIXTURE/.ssh/x", homePath: fixtureHome))
+    }
+
+    /// APFS folds `ſ` to `s` and `ﬆ` to `st`; `lowercased()` does neither, so
+    /// `~/.ſſh` passed the denylist while opening `~/.ssh`.
+    func testCaseFoldingVariantsOfDeniedNamesAreDenied() {
+        for path in ["/.ſſh/authorized_keys", "/.SSH/x", "/.kube/config", "/LIBRARY/LaunchAgents/x"] {
+            XCTAssertThrowsError(try policy(fixtureHome + path), path)
+        }
+    }
+
+    func testShellStartupAndAgentConfigAreDenied() {
+        for name in [".zshenv", ".zlogin", ".zlogout", ".bash_login", ".bash_logout",
+                     ".claude/settings.json", ".claude.json", ".mcp.json", ".codex/config.toml", ".cursor/mcp.json"] {
+            XCTAssertThrowsError(try policy(fixtureHome + "/" + name), name)
+        }
+    }
+
+    /// `canonicalPath.hasPrefix("/" + "/")` never matched, so a root of "/"
+    /// rejected everything. It now permits everything outside the system and
+    /// home denylists.
+    func testRootOfSlashPermitsEverythingOutsideTheDenylists() throws {
+        XCTAssertNoThrow(try policy("/Volumes/Archive/a.pdf", roots: ["/"]))
+        XCTAssertThrowsError(try policy("/etc/hosts", roots: ["/"]))
+        XCTAssertThrowsError(try policy(fixtureHome + "/.ssh/x", roots: ["/"]))
+    }
 }

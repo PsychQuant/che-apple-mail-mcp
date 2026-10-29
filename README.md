@@ -534,7 +534,7 @@ Most read tools prefer Apple Mail's local Envelope Index (SQLite) and on-disk `.
 | `get_email_source` | ✓ | ✓ on any error |
 | `search_emails` | ✓ | ✓ when reader unavailable |
 | `list_attachments` | ✓ | ✓ on any error |
-| `save_attachment` | ✓ | ✓ on any error |
+| `save_attachment` | ✓ | ✓ on extraction errors; destination errors are terminal ([#402](https://github.com/PsychQuant/che-apple-mail-mcp/issues/402)) |
 | `get_email_metadata` | ✓ | ✓ on any error (since [#71](https://github.com/PsychQuant/che-apple-mail-mcp/issues/71)) |
 
 `get_mail_log_events` is outside this table on purpose: it reads Mail's **unified log** (events: what happened and when) through `/usr/bin/log`, not the Envelope Index (state). It needs no Full Disk Access but does need a user in the admin group, and it is never a source of truth for whether a message exists — see `.claude/rules/r-must-direct-db.md`.
@@ -609,7 +609,7 @@ Mail.app's AppleScript `account "<display_name>"` selector is **not unique** whe
     "account_name": "alice@example.com",
     "account_id": "C38E0583-47F8-4468-BE70-43155C15549D",  // ← disambiguates
     "attachment_name": "report.pdf",
-    "save_path": "/tmp/report.pdf"
+    "save_path": "/Users/me/MailArchive/report.pdf"
 }
 ```
 
@@ -643,6 +643,64 @@ Still **not** covered by `account_id` (tracked): `get_account_info` / `list_mail
 **Cross-account move/copy is not supported via `account_id`** ([#129](https://github.com/PsychQuant/che-apple-mail-mcp/issues/129) — from #127 verify). `move_email` and `copy_email` accept a single `account_id`, which is threaded through **both** the source `msgRef` and the destination `mailboxRef`. The architectural choice is correct (movement stays within one account, because Mail.app's AppleScript verb `move msg to <mailboxRef>` requires the destination mailbox to be expressed relative to a single account context). Mail.app's UI permits cross-account move via drag-and-drop, but the AppleScript-routed `move_email` / `copy_email` tools cannot replicate that — calling `move_email` with `account_id` of one account while expecting the destination `to_mailbox` to be resolved against a different account silently picks the wrong account's mailbox of that name (if both accounts happen to have one) or raises `-1719 "Invalid mailbox index"`. If you need a copy of the message's contents under a different account, you can manually rebuild it via `save_attachment` + `compose_email` — note this is **not** a true move/copy: original metadata (Message-ID, received-date, flags, labels) and message identity are not preserved.
 
 ---
+
+### Attachment destination policy
+
+`save_attachment.save_path` uses the same destination policy as Markdown export.
+Set `CHE_MAIL_EXPORT_ALLOWED_ROOTS` to colon-separated absolute directories to
+restrict both tools to those roots. A nonempty list **replaces** the default
+home-directory allowance; the existing system and sensitive-home denylist always
+applies. For example, configure `/Volumes/Archive/Mail` for a dedicated archive.
+Without this setting, ordinary paths within the user's home are accepted; the
+home denylist is not an exhaustive list of sensitive files. Configure narrow roots
+when unrelated home files must be protected.
+
+`~/Library` is denied except for the cloud-sync folders macOS keeps inside it:
+paths inside an existing provider folder in `~/Library/CloudStorage` (Dropbox,
+Google Drive, OneDrive, Box; `~/Dropbox` is a link into it), inside iCloud
+Drive (`~/Library/Mobile Documents/com~apple~CloudDocs`), and inside the
+existing `Documents` folder of an app's iCloud container (what Finder shows
+inside iCloud Drive, such as an Obsidian vault) are permitted for both tools. The rest of each
+app container stays denied (Mail keeps its synced signatures in
+`com~apple~mail/Data`). Two kinds of link have their targets denied too, also
+when the target does not exist yet: a denied name that is itself a link
+(`~/.zshrc` kept in Dropbox), and a link directly inside a denied folder, also
+when that folder is itself a link (`~/.claude/hooks` kept in a config repository).
+Links further down, such as the per-file links some dotfile tools create inside
+`~/.config/<app>/`, are not followed: a denylist cannot follow every link, so
+configure narrow roots when that matters. The home denylist also covers the
+shell startup files (`.zshrc`, `.zshenv`, `.zprofile`, `.zlogin`, `.zlogout`,
+`.bashrc`, `.bash_profile`, `.bash_login`, `.bash_logout`, `.profile`) and agent
+configuration (`.claude`, `.claude.json`, `.mcp.json`, `.codex`, `.cursor`), and
+names are compared the way the case-insensitive APFS volume compares them, so a
+case or Unicode variant of a denied name is denied too. Do not take a full
+`save_path` from message content: the policy limits where a write lands, not
+which file inside home a caller chooses.
+
+The full filename path is checked before creating directories or invoking Mail.
+Dot/dot-dot, empty, backslash and control-character components are rejected.
+Existing symlinks work only when their canonical target satisfies the policy;
+links introduced after validation cannot redirect publication. Allowed missing
+parents are created, and existing regular files are atomically replaced. A new
+file gets 0644 as allowed by the umask, as before; a replaced file keeps its read
+and write bits; execute bits are never kept, because the bytes come from the
+sender. The temporary file is created 0600 and keeps that mode until it is
+renamed into place; an ACL that the destination folder passes on to new files
+still applies to it. Path forms that were previously
+normalized, such as `a//b`, `a/./b` or a trailing `/.`, are now refused.
+AppleScript saves each attempt to a fresh private temporary file, then the server
+streams it to the authorized destination. `destination_rejected` and
+`destination_write_failed` are terminal errors; changing the attachment name or
+requesting a download does not bypass them. Previously accepted destinations
+outside home, including `/tmp`, require an explicit allowed-root configuration.
+Without Full Disk Access the AppleScript tier is the only path, and the server
+now writes the final file itself (Mail writes only to its private stage). Two
+things have not been tested
+([#579](https://github.com/PsychQuant/che-apple-mail-mcp/issues/579)): whether
+such a server is refused or prompted when it writes into `~/Desktop`,
+`~/Documents`, `~/Downloads` or a cloud-sync folder, and whether a large
+attachment is complete when Mail's save returns. A failure of the private stage
+itself is reported as `stage_failed`, not as a destination error.
 
 ## Development tests
 

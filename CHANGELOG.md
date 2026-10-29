@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: `save_attachment` only writes where Markdown export may write**
+  ([#402](https://github.com/PsychQuant/che-apple-mail-mcp/issues/402)).
+  `save_path` was written as given, with its parents created first, so a
+  sender-chosen file name could land anywhere. It now goes through export's
+  destination policy before anything is created or Mail is asked: home by
+  default, or only `CHE_MAIL_EXPORT_ALLOWED_ROOTS` when that is set, never the
+  system or sensitive-home denylist. Dot/dot-dot, empty, backslash and control
+  components are refused, and so are forms that used to be normalized, such as
+  `a//b` or a trailing `/.`. Destinations outside home, including `/tmp`, need an
+  allowed root. Mail now saves into a private stage and the server copies the
+  file through a pinned directory, so a symlink swapped in later cannot redirect
+  it; a rejected or unwritable destination is reported as `destination_rejected`
+  or `destination_write_failed` and is not retried through another tier; a
+  failure of the private stage is `stage_failed`. A new file gets 0644 as the
+  umask allows, a replaced file keeps its read and write bits, and execute bits
+  are never kept. Not yet tested
+  ([#579](https://github.com/PsychQuant/che-apple-mail-mcp/issues/579)): without
+  Full Disk Access the server writes the final file itself, which may be refused
+  or prompted in `~/Desktop`, `~/Documents`, `~/Downloads` or a cloud-sync
+  folder; and whether a large attachment is complete when Mail's save returns.
+- **The shared destination policy permits cloud-sync folders and compares names
+  as APFS does** ([#402](https://github.com/PsychQuant/che-apple-mail-mcp/issues/402)).
+  Paths inside an existing provider folder in `~/Library/CloudStorage` (Dropbox,
+  Google Drive, OneDrive, Box), inside iCloud Drive
+  (`~/Library/Mobile Documents/com~apple~CloudDocs`) and inside each app's iCloud
+  `Documents` folder are no longer denied with the rest of `~/Library`, for both
+  export and `save_attachment`; export could not write into a Dropbox workspace
+  before. The rest of each app container stays denied. A denied name that is a
+  link, or a link directly inside a denied folder (`~/.zshrc` kept in Dropbox,
+  `~/.claude/hooks` kept in a config repository), has its target denied too;
+  deeper links are not followed. Denied home names are
+  compared with full case folding, so `~/.ſſh` is denied like `~/.ssh`, and the
+  list now also covers `.zshenv`, `.zlogin`, `.zlogout`, `.bash_login`,
+  `.bash_logout`, `.claude`, `.claude.json`, `.mcp.json`, `.codex` and `.cursor`.
+  A configured root of `/` now permits everything outside the system and home
+  denylists,
+  and a root that cannot be resolved matches nothing instead of failing every
+  attachment save.
+
 ### Fixed
 
 - **A failed clean compose no longer leads the retry to open a second window,
