@@ -50,6 +50,135 @@ public enum EmailAddress {
         return trimmed.lowercased()
     }
 
+    /// One configured mailbox, with no dropped list entries or trailing data.
+    /// Keeps canonical()'s addr-spec shaping; general From parsing is unchanged.
+    public static func singleCanonical(_ raw: String) -> String? {
+        guard !raw.unicodeScalars.contains(where: {
+            ($0.value < 32 && $0.value != 9) || (127...159).contains($0.value)
+                || $0.value == 0x2028 || $0.value == 0x2029
+        }), let uncommented = configuredWithoutComments(raw) else { return nil }
+        let clean = uncommented.trimmingCharacters(in: .whitespacesAndNewlines)
+        let scalars = clean.unicodeScalars
+        var quoted = false, escaped = false
+        var openedAt: String.UnicodeScalarView.Index?
+        var closedAt: String.UnicodeScalarView.Index?
+        for index in scalars.indices {
+            let scalar = scalars[index]
+            if escaped { escaped = false; continue }
+            if scalar == "\\" {
+                guard quoted else { return nil }
+                escaped = true
+                continue
+            }
+            if scalar == "\"" { quoted.toggle(); continue }
+            if quoted { continue }
+            switch scalar {
+            case ",", ";": return nil
+            case "<":
+                guard openedAt == nil else { return nil }
+                openedAt = index
+            case ">":
+                guard openedAt != nil, closedAt == nil else { return nil }
+                closedAt = index
+            default: break
+            }
+        }
+        guard !quoted, !escaped else { return nil }
+        let candidate: String
+        if let openedAt {
+            guard let closedAt,
+                  String(scalars[scalars.index(after: closedAt)...]).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  configuredDisplayNameIsValid(String(scalars[..<openedAt])) else { return nil }
+            candidate = String(scalars[scalars.index(after: openedAt)..<closedAt])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            candidate = clean
+        }
+        let comparable = configuredAddressWithoutCFWS(candidate)
+        guard isAddressShaped(comparable) else { return nil }
+        return comparable.lowercased()
+    }
+
+    /// CFWS can surround addr-spec separators; it cannot join two atom words.
+    private static func configuredAddressWithoutCFWS(_ raw: String) -> String {
+        let input = Array(raw.unicodeScalars)
+        var output = String.UnicodeScalarView()
+        var quoted = false, escaped = false
+        var index = 0
+        while index < input.count {
+            let scalar = input[index]
+            if escaped { output.append(scalar); escaped = false; index += 1; continue }
+            if scalar == "\\" { escaped = true }
+            else if scalar == "\"" { quoted.toggle() }
+            if !quoted && (scalar == " " || scalar == "\t") {
+                var end = index + 1
+                while end < input.count && (input[end] == " " || input[end] == "\t") { end += 1 }
+                let previous = output.last
+                let next = end < input.count ? input[end] : nil
+                if previous != "@" && previous != "." && next != "@" && next != "." {
+                    output.append(contentsOf: input[index..<end])
+                }
+                index = end
+            } else {
+                output.append(scalar)
+                index += 1
+            }
+        }
+        return String(output)
+    }
+
+    /// Quotes and angles inside a comment are data, not mailbox delimiters.
+    private static func configuredWithoutComments(_ raw: String) -> String? {
+        var output = String.UnicodeScalarView()
+        var depth = 0
+        var quoted = false, escaped = false
+        for scalar in raw.unicodeScalars {
+            if depth > 0 {
+                if escaped { escaped = false }
+                else if scalar == "\\" { escaped = true }
+                else if scalar == "(" { depth += 1 }
+                else if scalar == ")" { depth -= 1 }
+                continue
+            }
+            if escaped { output.append(scalar); escaped = false; continue }
+            if scalar == "\\" {
+                guard quoted else { return nil }
+                output.append(scalar)
+                escaped = true
+            } else if scalar == "\"" {
+                quoted.toggle()
+                output.append(scalar)
+            } else if !quoted && scalar == "(" {
+                depth = 1
+                output.append(" ") // Never concatenate atoms across comments.
+            } else if !quoted && scalar == ")" {
+                return nil
+            } else {
+                output.append(scalar)
+            }
+        }
+        guard depth == 0, !quoted, !escaped else { return nil }
+        return String(output)
+    }
+
+    private static func configuredDisplayNameIsValid(_ name: String) -> Bool {
+        let atom = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&'*+-/=?^_`{|}~.")
+        var quoted = false, escaped = false
+        for scalar in name.unicodeScalars {
+            if escaped { escaped = false; continue }
+            if scalar == "\\" {
+                guard quoted else { return false }
+                escaped = true
+            } else if scalar == "\"" {
+                quoted.toggle()
+            } else if !quoted && scalar != " " && scalar != "\t"
+                        && scalar.value < 128 && !atom.contains(scalar) {
+                return false
+            }
+        }
+        return !quoted && !escaped
+    }
+
     /// EVERY mailbox in the field, canonicalised — for identity questions.
     ///
     /// #343's first fix took the FIRST mailbox because last-wins had archived a
