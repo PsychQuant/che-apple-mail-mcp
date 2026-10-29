@@ -1,3 +1,7 @@
+## Purpose
+
+Provide local, explainable email classification and auditable Trash actions constrained by exact user-approved rules and per-message protections.
+
 ## ADDED Requirements
 
 ### Requirement: Local explicit policy and approvals
@@ -8,7 +12,7 @@ The policy SHALL support custom categories and enabled deterministic rules with 
 - **THEN** its old approval SHALL NOT authorize automatic disposal
 
 ### Requirement: Explainable read-only classification
-Classification SHALL return each message's category, matching rule ids, proposed action, and reason without modifying Mail. Conflicting matched outcomes SHALL require preview. No match SHALL yield unclassified/review. Automatic trash eligibility SHALL require a matching valid approved trash rule, verified identity, known non-draft status, and an unflagged message.
+Classification SHALL return each message's category, matching rule ids, proposed action, and reason without modifying Mail. Conflicting matched outcomes SHALL require preview. No match SHALL yield unclassified/review. Automatic trash eligibility SHALL require a matching valid approved trash rule, verified identity, known non-draft and non-VIP status, and an unflagged message.
 
 #### Scenario: Conflicting rules
 - **WHEN** a keep rule and a trash rule both match a message
@@ -49,3 +53,26 @@ Before dispatch the policy envelope SHALL be archived by digest, and the audit S
 #### Scenario: Another plan attempts an uncertain identity
 - **WHEN** plan A has an unknown native outcome and plan B selects the same account and Message-ID
 - **THEN** plan B SHALL NOT dispatch, including after a new engine reads the persisted records
+
+
+### Requirement: Fresh VIP protection for automatic Trash
+Automatic Trash SHALL additionally require known non-VIP status. VIP status SHALL be derived from a fresh, completely parsed local sender snapshot using the same conservative canonical address parser for both sides. Missing, unreadable, malformed, unsupported, changed-during-read or expired snapshots and ambiguous sender fields SHALL yield unknown and SHALL block automatic Trash. VIP and unknown messages SHALL remain proposed-trash preview items with `vip_protected` or `vip_status_unknown`. A rule approval SHALL NOT override either protection. Explicit per-message preview confirmation SHALL retain the existing manual selection contract.
+
+#### Scenario: Approved rule matches a VIP
+- **WHEN** a message from a VIP matches an approved trash rule
+- **THEN** its category and proposed action SHALL remain visible and automatic_trash_allowed SHALL be false
+
+#### Scenario: VIP lookup cannot prove absence
+- **WHEN** a VIP snapshot cannot be fully read and parsed or is 60 seconds old
+- **THEN** automatic Trash SHALL be disabled rather than treating the lookup as an empty list
+
+### Requirement: VIP changes invalidate pending classification
+Preview, each apply refresh, and the native dispatch boundary SHALL read the VIP source again. The per-message VIP state SHALL participate in the existing message fingerprint, without persisting the sender list or observation timestamp. Changed VIP status SHALL prevent dispatch from a stale plan even with preview confirmation. Existing audit-before-move, policy fingerprint and persistent duplicate-dispatch blocks SHALL remain enforced.
+
+#### Scenario: Sender becomes VIP after preview
+- **WHEN** an eligible non-VIP preview is applied after the sender becomes VIP
+- **THEN** the stale item SHALL NOT move and a fresh classification SHALL be required
+
+#### Scenario: Explicit confirmation cannot override uncertain prior dispatch
+- **WHEN** a confirmed VIP preview selects an identity with an uncertain previous attempt
+- **THEN** the persistent dispatch block SHALL continue to prevent movement

@@ -494,9 +494,14 @@ public final class EnvelopeIndexReader {
     }
 
     /// List VIP senders from VIPMailboxes.plist.
+    public static var defaultVIPSendersURL: URL {
+        URL(fileURLWithPath: mailStoragePath).appendingPathComponent("MailData/VIPMailboxes.plist")
+    }
+
+    /// Best-effort display API. Its empty result is NOT proof of no VIPs;
+    /// classification uses VIPSenderSnapshot to preserve unknown/freshness.
     public func listVIPSenders() -> [[String: Any]] {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let path = "\(home)/Library/Mail/V10/MailData/VIPMailboxes.plist"
+        let path = Self.defaultVIPSendersURL.path
         guard let data = FileManager.default.contents(atPath: path),
               let plist = try? PropertyListSerialization.propertyList(
                   from: data, options: [], format: nil

@@ -22,3 +22,8 @@
 ## Impact
 
 Swift policy／store／plan engine、Server MCP schemas/dispatch、MailController guarded move、plugin 分類命令與 confirmation 例外。依 #340 runtime stack 實作，不混入獨立歸檔 stack。
+
+
+## #586 VIP 保護補強
+
+分類規則批准不能覆蓋 VIP 寄件者保護。名單讀取失敗不能當成空名單；預覽與套用均重新取得 VIP 狀態，變更後拒絕舊 plan。此修正保留 #585 原有規則批准界線及所有 audit／防重派契約。

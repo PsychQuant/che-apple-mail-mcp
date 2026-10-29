@@ -167,6 +167,9 @@ struct ClassificationMessage: Codable, Equatable, Sendable {
     var isDraft: Bool?
     var isFlagged: Bool
     var contentDigest: String
+    // Unknown is intentionally the default, including older decoded snapshots.
+    // Only a fresh, complete VIP lookup can establish false.
+    var isVIP: Bool? = nil
     // Transient native source for the final compare-and-move guard. Deliberately
     // excluded from Codable, plan responses, persisted audit, and policy files.
     var nativeSource: String? = nil
@@ -199,7 +202,7 @@ struct ClassificationMessage: Codable, Equatable, Sendable {
         case id, subject, sender
         case accountID = "account_id", mailboxComponents = "mailbox_components", mailboxURL = "mailbox_url"
         case messageID = "message_id", listID = "list_id", isDraft = "is_draft", isFlagged = "is_flagged"
-        case contentDigest = "content_digest"
+        case contentDigest = "content_digest", isVIP = "is_vip"
     }
 }
 
@@ -291,8 +294,9 @@ enum EmailClassifier {
         if !message.hasVerifiableIdentity { reasons.append("identity_unavailable") }
         if message.isDraft != false { reasons.append(message.isDraft == true ? "draft_protected" : "draft_status_unknown") }
         if message.isFlagged { reasons.append("flagged_protected") }
+        if message.isVIP != false { reasons.append(message.isVIP == true ? "vip_protected" : "vip_status_unknown") }
         let automatic = first.action == .trash && !authorized.isEmpty && message.hasVerifiableIdentity
-            && message.isDraft == false && !message.isFlagged
+            && message.isDraft == false && !message.isFlagged && message.isVIP == false
         return .init(message: message, category: first.category,
                      categoryLabel: policy.categories.first(where: { $0.id == first.category })!.label,
                      action: first.action, matchedRules: matches.map(\.id), authorizingRules: authorized,

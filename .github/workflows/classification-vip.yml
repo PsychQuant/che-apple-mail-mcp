@@ -8,12 +8,6 @@ on:
       - 'Package.swift'
       - 'Package.resolved'
       - '.github/workflows/classification-vip.yml'
-  push:
-    branches: ['codex/586-vip-classification-protection']
-    paths:
-      - 'Sources/**'
-      - 'Tests/**'
-      - '.github/workflows/classification-vip.yml'
 
 permissions:
   contents: read
@@ -37,5 +31,15 @@ jobs:
         if: always()
         run: swift test --filter 'EmailClassificationTests|EmailClassificationStoreTests|ClassificationPlanEngineTests|ClassificationToolIntegrationTests|ClassificationTrashScriptTests'
       - name: Full Swift suite (live Mail remains opt-in)
+        id: full
         if: always()
         run: swift test
+      - name: Verify pre-existing Mail-dependent failure on unchanged PR base
+        if: failure() && steps.full.outcome == 'failure'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          git worktree add --detach "$RUNNER_TEMP/classification-base" "$BASE_SHA"
+          swift test --package-path "$RUNNER_TEMP/classification-base" --filter 'SpecialMailboxesScriptBuilderTests.test_runScriptAsList_preservesEmptyStringPositions'

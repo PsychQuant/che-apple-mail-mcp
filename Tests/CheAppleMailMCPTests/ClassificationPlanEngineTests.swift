@@ -29,7 +29,7 @@ final class ClassificationPlanEngineTests: XCTestCase {
     private func message(_ id: String = "12") -> ClassificationMessage {
         .init(id: id, accountID: "account", mailboxComponents: ["INBOX"], mailboxURL: "imap://account/INBOX",
               messageID: "<\(id)@example.invalid>", sender: "news@example.invalid", subject: "PRIVATE SUBJECT SENTINEL",
-              listID: nil, isDraft: false, isFlagged: false, contentDigest: String(repeating: "a", count: 64))
+              listID: nil, isDraft: false, isFlagged: false, contentDigest: String(repeating: "a", count: 64), isVIP: false)
     }
 
     func test_started_audit_precedes_move_and_item_is_not_retried() async throws {

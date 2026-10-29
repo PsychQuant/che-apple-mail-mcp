@@ -1400,10 +1400,14 @@ actor MailController {
     /// #356: explicit native Trash role, exact source guards, bounded non-GUI
     /// transport. A timeout propagates as uncertainty; never retry here.
     func moveClassifiedMessage(_ message: ClassificationMessage, policyDigest: String,
-                               deadline: Date, store: ClassificationPolicyStore) throws -> ClassificationMoveReceipt {
+                               deadline: Date, store: ClassificationPolicyStore,
+                               vipSnapshot: @Sendable () -> VIPSenderSnapshot = { .read() }) throws -> ClassificationMoveReceipt {
         try Task.checkCancellation()
         guard deadline > Date(), try store.load().fingerprint() == policyDigest else { return .refused }
         let script = try buildClassificationTrashScript(message, deadline: deadline)
+        // Re-read inside the Mail actor, after queueing/source preparation and
+        // immediately before dispatch. Never reuse a plan's negative VIP lookup.
+        guard vipSnapshot().status(for: message.sender) == message.isVIP else { return .refused }
         let remaining = deadline.timeIntervalSinceNow
         guard remaining > 0 else { return .refused }
         let raw: String

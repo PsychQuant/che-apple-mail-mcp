@@ -115,16 +115,16 @@ final class ClassificationTrashScriptTests: XCTestCase {
         }, refusal: nil)
         do {
             let receipt = try await controller.moveClassifiedMessage(msg, policyDigest: digest,
-                deadline: Date().addingTimeInterval(30), store: store)
+                deadline: Date().addingTimeInterval(30), store: store, vipSnapshot: { .unavailable })
             XCTAssertEqual(receipt, .moved)
             await controller.setTestSeams(scriptRunner: { _ in XCTFail("stale policy must not invoke script"); return "CLASSIFY_MOVED" }, refusal: nil)
             let stale = try await controller.moveClassifiedMessage(msg, policyDigest: "stale",
-                deadline: Date().addingTimeInterval(30), store: store)
+                deadline: Date().addingTimeInterval(30), store: store, vipSnapshot: { .unavailable })
             XCTAssertEqual(stale, .refused)
             await controller.setTestSeams(scriptRunner: { _ in "arbitrary output" }, refusal: nil)
             do {
                 _ = try await controller.moveClassifiedMessage(msg, policyDigest: digest,
-                    deadline: Date().addingTimeInterval(30), store: store)
+                    deadline: Date().addingTimeInterval(30), store: store, vipSnapshot: { .unavailable })
                 XCTFail("unknown output is not a success receipt")
             } catch {}
             await controller.setTestSeams(scriptRunner: nil, refusal: nil)
