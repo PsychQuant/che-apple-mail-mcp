@@ -94,10 +94,8 @@ public final class EnvelopeIndexReader {
     /// - Throws: `MailSQLiteError.databaseNotAccessible` if the file
     ///   does not exist or cannot be opened (e.g., missing Full Disk Access).
     public init(databasePath: String, accountMapping: [String: String]? = nil) throws {
-        let mapping = accountMapping ?? AccountMapper.buildMapping()
-        self.accountMap = mapping
-        self.reverseAccountMap = Self.buildReverseMap(from: mapping)
-
+        // Checked before the account mapping, so an absent path (a test-owned
+        // fixture, #329) never reads the user's AccountsMap.plist.
         guard FileManager.default.fileExists(atPath: databasePath) else {
             throw MailSQLiteError.databaseNotAccessible(
                 FullDiskAccessHelp.guidance(
@@ -105,6 +103,10 @@ public final class EnvelopeIndexReader {
                 )
             )
         }
+
+        let mapping = accountMapping ?? AccountMapper.buildMapping()
+        self.accountMap = mapping
+        self.reverseAccountMap = Self.buildReverseMap(from: mapping)
 
         // FULLMUTEX, not NOMUTEX: this one connection is shared by concurrent
         // request handlers (#536). Merely dropping NOMUTEX would not help: the

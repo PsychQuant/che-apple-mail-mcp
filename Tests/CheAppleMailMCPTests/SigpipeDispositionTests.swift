@@ -35,11 +35,13 @@ import XCTest
 ///
 /// Deliberately NOT tested here: "exits within N seconds of stdin EOF".
 /// Interleaved A/B measurement showed shutdown-after-EOF latency is highly
-/// variable on the UNMODIFIED binary too (4s to >40s under load — a
-/// pre-existing property, likely the fire-and-forget startup sync's 45s
-/// guard), so a bounded-exit assertion would flake on noise this change does
-/// not own. The no-spin property was verified live (broken-pipe stdout +
-/// stdin EOF → clean rc=0 exit) and is recorded in the PR.
+/// variable on the UNMODIFIED binary too (4s to >40s under load), so a
+/// bounded-exit assertion would flake on noise this change does not own. The
+/// no-spin property was verified live (broken-pipe stdout + stdin EOF → clean
+/// rc=0 exit) and is recorded in the PR. StdioShutdownTests (#329) pins one
+/// cause of a slow EOF exit — blocking Mail work starving the cooperative pool,
+/// which reproduces only under the strict pool — not that measured variance,
+/// whose cause on the real binary is still unestablished.
 final class SigpipeDispositionTests: XCTestCase {
 
     /// Skip-not-fail when the server product is absent mirrors the existing

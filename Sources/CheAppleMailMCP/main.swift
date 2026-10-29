@@ -12,10 +12,9 @@ import MCP
 //
 // With SIG_IGN the write returns EPIPE as an errno instead: the throwing
 // stderr writes swallow it (advisory diagnostics must not kill the server),
-// and the stdio transport's shutdown remains governed by stdin EOF — verified
-// empirically before this change (the server exits rc=0 ~8s after stdin
-// closes, independent of stdout state) and pinned by SigpipeTests afterwards
-// (broken-pipe stdout + stdin EOF → clean exit, no spin).
+// and stdin EOF still ends the stdio receive loop. StdioShutdownTests (#329)
+// separately pin progress during blocked Mail work; SIG_IGN does not provide
+// that scheduling guarantee.
 signal(SIGPIPE, SIG_IGN)
 
 // Entry point for che-apple-mail-mcp.
