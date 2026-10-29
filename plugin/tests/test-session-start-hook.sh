@@ -47,7 +47,8 @@ if [ ! -x "$REAL_HOOK" ]; then
 fi
 
 FAKE_PLUGIN="$TEST_DIR/fake-plugin"
-mkdir -p "$FAKE_PLUGIN/hooks" "$FAKE_PLUGIN/.claude-plugin"
+mkdir -p "$FAKE_PLUGIN/hooks" "$FAKE_PLUGIN/.claude-plugin" "$FAKE_PLUGIN/scripts"
+cp "$REAL_HOOK_DIR/../scripts/fda-assist.pl" "$FAKE_PLUGIN/scripts/fda-assist.pl"
 cp "$REAL_HOOK" "$FAKE_PLUGIN/hooks/session-start.sh"
 chmod +x "$FAKE_PLUGIN/hooks/session-start.sh"
 

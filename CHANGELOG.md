@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GUI operation (`compose_email` and `update_draft` before any Mail query), and never truncate. `create_draft`'s opt-in direct write has no such
   limit; when it is enabled but not used, the refusal says why.
 
+- **FDA assist no longer waits indefinitely or offers twice at concurrent startup**
+  ([#422](https://github.com/PsychQuant/che-apple-mail-mcp/issues/422)).
+  Version and quiet probes each have a two-second deadline with bounded
+  termination grace; timeouts and unknown states preserve the offer marker.
+  Atomic creation of the same legacy marker allows only one denied caller to
+  offer detached setup. The helper remains independent of jq and ps.
+
 - **Compose documentation identifies FB11734014 as a reported upstream regression**
   ([#310](https://github.com/PsychQuant/che-apple-mail-mcp/issues/310)).
   Rules, README, schema descriptions and code comments distinguish removal of

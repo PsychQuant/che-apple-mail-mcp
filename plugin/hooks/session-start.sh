@@ -16,9 +16,9 @@
 # decides who gets swallowed) was still live for the next feature.
 #
 # What each part actually needs: the staleness block needs jq + ps. The FDA
-# assist needs the binary plus tr / sort / head / mkdir — NOT "no
-# external tool", as this header claimed before #399 round 2; the accurate
-# statement is that it needs neither jq nor ps, which is what #394 turned on.
+# assist needs the binary and macOS /usr/bin/perl with core modules, not jq or
+# ps. Each probe is limited to 2 seconds plus termination grace (#422), and
+# unavailable helper/runtime preserves the opportunity for a later session.
 # The hook's global plugin-path resolution additionally uses dirname.
 #
 # CHE_MAIL_HOOK_DEBUG=1 (exactly "1") makes gate decisions say so on stderr —
@@ -69,39 +69,13 @@ PLUGIN_JSON="$PLUGIN_ROOT/.claude-plugin/plugin.json"
 first_run_fda_assist() {
     local binary="$INSTALL_DIR/$BINARY_NAME"
     [ -x "$binary" ] || return 0
-
+    local helper="$PLUGIN_ROOT/scripts/fda-assist.pl"
+    if [ ! -x /usr/bin/perl ] || [ ! -f "$helper" ]; then
+        [ "${CHE_MAIL_HOOK_DEBUG:-}" != "1" ] || echo "che-apple-mail-mcp: FDA assist helper unavailable; preserving offer" >&2
+        return 0
+    fi
     local marker_dir="${XDG_STATE_HOME:-$HOME/.local/state}/che-apple-mail-mcp"
-    local marker="$marker_dir/fda-setup-offered"
-    [ -f "$marker" ] && return 0
-
-    # `--check-fda --quiet` (status only, no output, no pane) landed in binary
-    # 2.28.0. Anything older: skip rather than risk the loud path.
-    local bin_ver
-    bin_ver=$("$binary" --version 2>/dev/null | tr -d '[:space:]')
-    [ -z "$bin_ver" ] && return 0
-    [ "$(printf '%s\n2.28.0\n' "$bin_ver" | sort -V | head -1)" = "2.28.0" ] || return 0
-
-    # Only an explicit denial can justify an offer (#403). No Mail data,
-    # undetermined status, or a failed probe must preserve the once-only marker
-    # for a later session that can actually determine the permission state.
-    local fda_status
-    "$binary" --check-fda --quiet >/dev/null 2>&1
-    fda_status=$?
-    case "$fda_status" in
-        1) ;;          # denied: offer below
-        *) return 0 ;; # granted, unknown, or abnormal exit: leave state alone
-    esac
-
-    mkdir -p "$marker_dir" 2>/dev/null || return 0
-    : > "$marker" 2>/dev/null || return 0
-
-    echo "che-apple-mail-mcp: Full Disk Access is not granted — opening the setup window." >&2
-    echo "  It shows live status and links straight to the right System Settings pane." >&2
-    echo "  (Shown once. Re-open any time with: $binary --setup)" >&2
-
-    # Detached: the window owns a GUI runloop and must not block session start.
-    ( "$binary" --setup >/dev/null 2>&1 & ) >/dev/null 2>&1
-
+    /usr/bin/perl "$helper" "$binary" "$marker_dir"
     return 0
 }
 first_run_fda_assist
