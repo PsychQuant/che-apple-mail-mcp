@@ -1,23 +1,28 @@
 import Darwin
 import Foundation
 
-/// A complete local VIP lookup, never a best-effort list. Unknown data cannot
-/// authorize automatic disposition. This snapshot is transient, not Codable.
+/// A local VIP observation with an explicit completeness boundary. Unknown data
+/// cannot authorize automatic disposition. This snapshot is transient, not Codable.
 public struct VIPSenderSnapshot: Sendable {
     private let addresses: Set<String>?
     private let observedAt: Date
+    private let canProveAbsence: Bool
     private static let maximumBytes = 1_048_576
     private static let lifetime: TimeInterval = 60
 
-    public static let unavailable = VIPSenderSnapshot(addresses: nil, observedAt: .distantPast)
+    public static let unavailable = VIPSenderSnapshot(addresses: nil, observedAt: .distantPast, canProveAbsence: false)
 
     public func status(for sender: String, at now: Date = Date()) -> Bool? {
         let age = now.timeIntervalSince(observedAt)
         guard age >= 0, age < Self.lifetime, let addresses,
               let address = Self.canonicalAddress(sender) else { return nil }
-        return addresses.contains(address)
+        if addresses.contains(address) { return true }
+        return canProveAbsence ? false : nil
     }
 
+    /// Parse an independently verified COMPLETE sender source. Format validation
+    /// alone cannot establish that a Mail file contains every VIP; production
+    /// callers must use read(), which does not grant negative lookup authority.
     /// Supported sender-record shapes only. Do not search arbitrary plist
     /// strings, drop malformed records, or infer an empty list from an unknown
     /// layout. A future Mail format must fail closed until explicitly supported.
@@ -44,7 +49,7 @@ public struct VIPSenderSnapshot: Sendable {
                 addresses.insert(address)
             }
         }
-        return .init(addresses: addresses, observedAt: observedAt)
+        return .init(addresses: addresses, observedAt: observedAt, canProveAbsence: true)
     }
 
     private static func canonicalAddress(_ raw: String) -> String? {
@@ -64,6 +69,9 @@ public struct VIPSenderSnapshot: Sendable {
     /// Freshness dates the observation, not mtime (an old unchanged plist is
     /// still current). A bounded, nonblocking regular-file read also rejects
     /// replacement or modification during the read, including atomic rename.
+    /// The current VIPMailboxes.plist source has no verified completeness
+    /// contract. Positive matches protect VIPs; all misses (including an empty
+    /// list) remain unknown until a native source contract is established.
     public static func read(from url: URL = EnvelopeIndexReader.defaultVIPSendersURL,
                             observedAt: Date = Date()) -> VIPSenderSnapshot {
         let fd = open(url.path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
@@ -78,7 +86,8 @@ public struct VIPSenderSnapshot: Sendable {
         var after = stat(), path = stat()
         guard fstat(fd, &after) == 0, lstat(url.path, &path) == 0,
               sameFile(before, after), sameFile(after, path) else { return .unavailable }
-        return parse(data, observedAt: observedAt)
+        let parsed = parse(data, observedAt: observedAt)
+        return .init(addresses: parsed.addresses, observedAt: parsed.observedAt, canProveAbsence: false)
     }
 
     private static func sameFile(_ lhs: stat, _ rhs: stat) -> Bool {

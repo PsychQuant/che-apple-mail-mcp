@@ -76,7 +76,7 @@ audit 的 policy_digest 連到 immutable policy-history snapshot（只含判準�
 ### VIP snapshot 與失效
 既有 `EnvelopeIndexReader.listVIPSenders()` 每次讀取固定 MailData 的 `VIPMailboxes.plist`，無快取、無地址標準化，且將讀取／解析錯誤折成 `[]`；AppleScript fallback 只列出 VIP 信箱現有信件的寄件人，不能證明完整名單。因此分類安全判斷不使用這個空陣列或 AppleScript fallback。新增有明確 unknown 的快照讀取器，共用來源路徑，以 `EmailAddress.singleCanonical` 同時標準化名單與 From。
 
-支援契約：既有 array-of-records，以及明確的 Senders 容器；每個 record 必須有非空 Addresses 字串陣列。未知格式、任一無效地址、讀取失敗、檔案讀取中變動及非一般檔案均為 unknown，不默默略過。這是保守解析契約，尚未以目前 macOS 真實匿名化 plist 驗證；不宣稱支援所有 Mail 私有格式。公開舊版原始碼有 Senders/Addresses 路徑：https://gist.github.com/ot-joe-ocampo/2d93761cf1277e7c198c 。
+支援契約：既有 array-of-records，以及明確的 Senders 容器；每個 record 必須有非空 Addresses 字串陣列。未知格式、任一無效地址、讀取失敗、檔案讀取中變動及非一般檔案均為 unknown，不默默略過。這是保守解析契約，尚未以目前 macOS 真實匿名化 plist 驗證；不宣稱支援所有 Mail 私有格式。公開 2015 年原始碼僅能證明 V2/MailData/VIPSenders.plist 的 Senders/Addresses 路徑，不能證明目前 V10/MailData/VIPMailboxes.plist 的來源完整性：https://gist.github.com/ot-joe-ocampo/2d93761cf1277e7c198c 。
 
 快照 freshness 依本次成功讀取時間（60 秒），不依 plist mtime；長期不改動的名單不等於過期。讀取不快取成功值，也不在失敗時沿用舊值。預覽／每封 refresh／原生 dispatch 前均重讀；新增 VIP、讀取失敗或狀態改變會拒絕舊快照。Mail 檔案與 native move 沒有跨程序原子交易，最後檢查後的外部變動仍是已揭露的限制。
 
@@ -84,3 +84,9 @@ audit 的 policy_digest 連到 immutable policy-history snapshot（只含判準�
 `ClassificationMessage.isVIP` 為 optional Bool，缺值等同 unknown，納入既有 fingerprint；只有明確 false 才符合 auto-trash。true 附 `vip_protected`，unknown 附 `vip_status_unknown`。規則批准、重新批准或規則廣度均不能覆蓋此 gate。逐封明確 confirmed_preview 沿用既有 flagged/draft 的人工處置契約；VIP 狀態改變仍須重新分類，確認旗標不豁免 fingerprint。
 
 不增加 bypass-VIP、永久授權或自動重試選項，不改 policy/audit/dispatch 格式。snapshot 名單與讀取時間不寫入 audit 或 plan，僅每封保護狀態參與指紋。驗收為 parser／classifier／engine／實際 MCP dispatch 合成資料測試及 macOS CI；真實 Mail 格式與最後原生邊界另明列證據限制。
+
+
+### 未驗證來源不提供負向證明
+獨立審查指出：成功解析既有檔案外形不代表已驗證其為完整 VIP sender 名單。production `VIPSenderSnapshot.read()` 因此只提供正向 VIP 保護；未命中（含合法空陣列）一律降為 unknown。目前預設 provider 無法證明任何信件為 non-VIP，因此所有 proposed-trash 都需要本次逐封預覽確認。純 parser 的完整名單契約僅供已知完整來源／注入合成資料測試，production 不使用它來繞過來源 gate。沒有使用者 override、環境變數或設定可解除此 gate；取得目前 macOS 的去識別化 native 來源／schema／更新證據後才能另作程式修正啟用負向證明。
+
+地址比對另限 canonical 後的 ASCII dot-atom local-part 與 DNS labels；quoted local-part、escape、address-literal、Unicode、trailing-dot 等無法證明字串等價的形式，在任一側出現都為 unknown。這保留既有共用 parser 的其他用途。

@@ -1,5 +1,5 @@
 ---
-description: "依本機判準分類郵件；明確批准的規則可自動移至垃圾桶，其餘先預覽"
+description: "依本機判準分類郵件；本版移至垃圾桶前須逐封預覽確認，保護 VIP 與未知狀態"
 argument-hint: "[明確的郵件 ids 或搜尋範圍]"
 allowed-tools: Read, mcp__plugin_che-apple-mail-mcp_mail__get_email_classification_policy, mcp__plugin_che-apple-mail-mcp_mail__configure_email_classification, mcp__plugin_che-apple-mail-mcp_mail__classify_emails, mcp__plugin_che-apple-mail-mcp_mail__apply_email_classification, mcp__plugin_che-apple-mail-mcp_mail__search_emails, mcp__plugin_che-apple-mail-mcp_mail__get_email
 ---
@@ -53,3 +53,5 @@ allowed-tools: Read, mcp__plugin_che-apple-mail-mcp_mail__get_email_classificati
 
 
 VIP 保護：即使規則已批准，`vip_protected` 或 `vip_status_unknown` 仍須逐封預覽與實際確認，不能重新批准規則來覆蓋。名單缺檔、權限不足、格式不明或快照過期都不是「沒有 VIP」。快照有效期依成功讀取時間為 60 秒，不以 plist 的修改時間判斷；每次重新讀取，不沿用失敗前的成功結果。`list_vip_senders` 的空結果不能代替這項安全判斷。
+
+目前版本的安全限制：尚未取得現行 macOS Mail VIP 檔案來源完整性的實機證據，內建 reader 只確認 VIP 正向命中；未命中或合法空名單也視為 unknown。因此目前所有 proposed-trash 都要逐封預覽確認，不能靠批准規則自動移信。這個限制沒有使用者 bypass。

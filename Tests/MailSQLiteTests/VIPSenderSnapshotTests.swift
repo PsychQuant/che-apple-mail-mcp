@@ -72,10 +72,12 @@ final class VIPSenderSnapshotTests: XCTestCase {
     func test_reader_rereads_changes_and_does_not_reuse_last_success_on_failure() throws {
         let url = try file()
         XCTAssertNil(VIPSenderSnapshot.read(from: url, observedAt: now).status(for: "a@example.invalid", at: now))
-        try plist([]).write(to: url)
-        // An unchanged old file is current when successfully read now.
+        try plist([["Addresses": ["A@EXAMPLE.INVALID"]]]).write(to: url)
+        // An old mtime does not invalidate a freshly observed positive match.
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 0)], ofItemAtPath: url.path)
-        XCTAssertEqual(VIPSenderSnapshot.read(from: url, observedAt: now).status(for: "a@example.invalid", at: now), false)
+        XCTAssertEqual(VIPSenderSnapshot.read(from: url, observedAt: now).status(for: "a@example.invalid", at: now), true)
+        try plist([]).write(to: url, options: .atomic)
+        XCTAssertNil(VIPSenderSnapshot.read(from: url, observedAt: now).status(for: "a@example.invalid", at: now))
         try plist([["Addresses": ["A@EXAMPLE.INVALID"]]]).write(to: url, options: .atomic)
         XCTAssertEqual(VIPSenderSnapshot.read(from: url, observedAt: now).status(for: "a@example.invalid", at: now), true)
         try Data("corrupt".utf8).write(to: url)

@@ -18,7 +18,7 @@
 
 ## 4. #586 VIP 保護
 
-- [ ] 4.1 VIP snapshot 與失效：實作 Fresh VIP protection for automatic Trash 的完整解析／unknown／60 秒 freshness；以 VIPSenderSnapshotTests 驗證名單、正規化、失敗與更新。
+- [ ] 4.1 VIP snapshot 與失效、未驗證來源不提供負向證明：實作 Fresh VIP protection for automatic Trash 的完整解析／unknown／60 秒 freshness 與 Unverified Mail source cannot prove non-VIP；以 VIPSenderSnapshotTests 驗證名單、正規化、失敗與更新。
 - [ ] 4.2 VIP 授權界線：VIP 與 unknown 即使已批准也保持預覽；以 ClassificationVIPProtectionTests 驗證且保留既有 flagged/draft／規則編輯失效測試。
 - [ ] 4.3 VIP changes invalidate pending classification：preview、refresh 與 native dispatch 前重新讀取並驗狀態；以 ClassificationPlanEngineTests 及 ClassificationToolIntegrationTests 驗證拒派、人工確認及防重派。
 - [ ] 4.4 macOS CI 執行回歸測試與完整 Swift suite，記錄結果；更新工具／plugin 說明，核對與 #585 無矛盾。

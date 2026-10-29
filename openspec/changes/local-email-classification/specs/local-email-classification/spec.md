@@ -76,3 +76,11 @@ Preview, each apply refresh, and the native dispatch boundary SHALL read the VIP
 #### Scenario: Explicit confirmation cannot override uncertain prior dispatch
 - **WHEN** a confirmed VIP preview selects an identity with an uncertain previous attempt
 - **THEN** the persistent dispatch block SHALL continue to prevent movement
+
+
+### Requirement: Unverified Mail source cannot prove non-VIP
+The production VIP file reader SHALL NOT infer non-VIP membership from a nonmatching address or a syntactically valid empty list until the source's completeness is established by current native Mail evidence. It SHALL retain positive VIP matches and otherwise yield unknown. In this release, all production proposed-trash items SHALL require explicit per-message preview confirmation. There SHALL be no user-configurable bypass of this source-verification gate.
+
+#### Scenario: Valid empty file with unverified provenance
+- **WHEN** the production reader successfully parses an empty VIPMailboxes.plist array
+- **THEN** the result SHALL be unknown for automatic-disposition purposes and SHALL NOT authorize automatic Trash

@@ -8,9 +8,12 @@ import XCTest
 private final class ClassificationVIPSequence: @unchecked Sendable {
     private let lock = NSLock()
     private var reads = 0
+    private let unavailableAtBoundary: Bool
+    init(unavailableAtBoundary: Bool = false) { self.unavailableAtBoundary = unavailableAtBoundary }
     func snapshot() -> VIPSenderSnapshot {
         lock.lock(); defer { lock.unlock() }
         reads += 1
+        if reads >= 3 && unavailableAtBoundary { return .unavailable }
         let records: [[String: Any]] = reads < 3 ? [] : [["Addresses": ["news@example.invalid"]]]
         let data = try! PropertyListSerialization.data(fromPropertyList: records, format: .xml, options: 0)
         return .parse(data)
@@ -156,7 +159,12 @@ final class ClassificationToolIntegrationTests: XCTestCase {
                 let url = vipRoot.appendingPathComponent("VIPMailboxes.plist")
                 let empty = try PropertyListSerialization.data(fromPropertyList: [], format: .xml, options: 0)
                 try empty.write(to: url)
-                let server = try await approvedServer(root: root, vip: { .read(from: url) })
+                // This injected fixture is known to be a complete sender list.
+                // Production read() cannot assert completeness of Mail's private file.
+                let server = try await approvedServer(root: root, vip: {
+                    guard let data = try? Data(contentsOf: url) else { return .unavailable }
+                    return .parse(data)
+                })
                 let plan = try await classify(server)
                 XCTAssertTrue(plan.items[0].automaticTrashAllowed)
                 let changed: Data
@@ -178,29 +186,65 @@ final class ClassificationToolIntegrationTests: XCTestCase {
     }
 
     func test_native_boundary_rechecks_vip_after_refresh_before_script_dispatch() async throws {
-        let root = directory(), sequence = ClassificationVIPSequence()
-        let server = try await approvedServer(root: root, vip: { sequence.snapshot() })
-        let plan = try await classify(server)
-        XCTAssertTrue(plan.items[0].automaticTrashAllowed)
-        let controller = MailController.shared
-        await controller.setTestSeams(scriptRunner: { _ in XCTFail("VIP changed at native boundary"); return "CLASSIFY_MOVED" }, refusal: nil)
-        do {
-            let raw = try await server.executeToolCall(name: "apply_email_classification", arguments: [
-                "plan_id": .string(plan.planID), "ids": .array([.string("12")])])
-            let result = try JSONDecoder().decode(ClassificationApplication.self, from: Data(raw.utf8))
-            XCTAssertEqual(result.items[0].status, .refused)
-            XCTAssertEqual(result.items[0].reason, "native_guard_refused")
-            XCTAssertTrue(result.items[0].auditRecorded)
-            let audit = try String(contentsOf: root.appendingPathComponent("classification-audit.jsonl"))
-            XCTAssertTrue(audit.contains("started"))
-            XCTAssertTrue(audit.contains("refused"))
-            let fresh = try await classify(server)
-            XCTAssertFalse(fresh.items[0].automaticTrashAllowed)
-            XCTAssertTrue(fresh.items[0].reasons.contains("vip_protected"))
-            await controller.setTestSeams(scriptRunner: nil, refusal: nil)
-        } catch {
-            await controller.setTestSeams(scriptRunner: nil, refusal: nil)
-            throw error
+        for unknown in [false, true] {
+            let root = directory(), sequence = ClassificationVIPSequence(unavailableAtBoundary: unknown)
+            let server = try await approvedServer(root: root, vip: { sequence.snapshot() })
+            let plan = try await classify(server)
+            XCTAssertTrue(plan.items[0].automaticTrashAllowed)
+            let controller = MailController.shared
+            await controller.setTestSeams(scriptRunner: { _ in XCTFail("VIP changed at native boundary"); return "CLASSIFY_MOVED" }, refusal: nil)
+            do {
+                let raw = try await server.executeToolCall(name: "apply_email_classification", arguments: [
+                    "plan_id": .string(plan.planID), "ids": .array([.string("12")])])
+                let result = try JSONDecoder().decode(ClassificationApplication.self, from: Data(raw.utf8))
+                XCTAssertEqual(result.items[0].status, .refused)
+                XCTAssertEqual(result.items[0].reason, "native_guard_refused")
+                XCTAssertTrue(result.items[0].auditRecorded)
+                let audit = try String(contentsOf: root.appendingPathComponent("classification-audit.jsonl"))
+                XCTAssertTrue(audit.contains("started"))
+                XCTAssertTrue(audit.contains("refused"))
+                let fresh = try await classify(server)
+                XCTAssertFalse(fresh.items[0].automaticTrashAllowed)
+                XCTAssertTrue(fresh.items[0].reasons.contains(unknown ? "vip_status_unknown" : "vip_protected"))
+                await controller.setTestSeams(scriptRunner: nil, refusal: nil)
+            } catch {
+                await controller.setTestSeams(scriptRunner: nil, refusal: nil)
+                throw error
+            }
         }
+    }
+
+    func test_actual_server_explicit_confirmation_can_move_stable_vip_or_unknown() async throws {
+        let vipData = try PropertyListSerialization.data(fromPropertyList: [["Addresses": ["news@example.invalid"]]], format: .xml, options: 0)
+        for unknown in [false, true] {
+            let root = directory()
+            let server = try await approvedServer(root: root, vip: { unknown ? .unavailable : .parse(vipData) })
+            let plan = try await classify(server)
+            XCTAssertFalse(plan.items[0].automaticTrashAllowed)
+            let controller = MailController.shared
+            await controller.setTestSeams(scriptRunner: { _ in "CLASSIFY_MOVED" }, refusal: nil)
+            do {
+                let raw = try await server.executeToolCall(name: "apply_email_classification", arguments: [
+                    "plan_id": .string(plan.planID), "ids": .array([.string("12")]), "confirmed_preview": .bool(true)])
+                let result = try JSONDecoder().decode(ClassificationApplication.self, from: Data(raw.utf8))
+                XCTAssertEqual(result.items[0].status, .moved)
+                XCTAssertTrue(result.items[0].auditRecorded)
+                await controller.setTestSeams(scriptRunner: nil, refusal: nil)
+            } catch {
+                await controller.setTestSeams(scriptRunner: nil, refusal: nil)
+                throw error
+            }
+        }
+    }
+
+    func test_production_reader_empty_mail_file_does_not_authorize_automatic_trash() async throws {
+        let root = directory(), vipRoot = directory()
+        try FileManager.default.createDirectory(at: vipRoot, withIntermediateDirectories: true)
+        let url = vipRoot.appendingPathComponent("VIPMailboxes.plist")
+        try PropertyListSerialization.data(fromPropertyList: [], format: .xml, options: 0).write(to: url)
+        let server = try await approvedServer(root: root, vip: { .read(from: url) })
+        let plan = try await classify(server)
+        XCTAssertFalse(plan.items[0].automaticTrashAllowed)
+        XCTAssertTrue(plan.items[0].reasons.contains("vip_status_unknown"))
     }
 }
