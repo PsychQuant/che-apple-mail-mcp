@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-10-29
+
 ### Added
 
 - **Per-message draft status, and exports that can leave drafts out**
@@ -85,6 +87,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   menu and confirms closure before querying Mail; uncertain ownership leaves
   the window intact. Final named/none native replay remains a verification gate.
 
+- **Export direction checks every address Mail has configured**
+  ([#375](https://github.com/PsychQuant/che-apple-mail-mcp/issues/375)). Whether an exported message was sent or received is decided
+  against every address Mail has configured, EWS accounts and aliases included,
+  read from Mail's own account metadata instead of a single account URL. The
+  snapshot stays in memory for 300 seconds (nothing is written to disk, no new
+  permission prompt); `opts.refresh_identity` reads it again. When the source is
+  incomplete or unavailable, results say so (`identity_source`,
+  `identity_complete`, `direction_inferred`) instead of claiming every alias was
+  checked.
+
+- **`batch_export_emails_markdown` can name files the way `/archive-mail` does**
+  ([#340](https://github.com/PsychQuant/che-apple-mail-mcp/issues/340)). `opts.filename_style: "archive-mail"` writes
+  `YYYY-MM-DD_<slug>.md` from the raw subject (50 graphemes, `no-subject` when
+  empty); `"default"` keeps the existing names. `written_path` is the final name.
+
 ### Changed
 
 - **BREAKING: `save_attachment` only writes where Markdown export may write**
@@ -139,6 +156,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#322](https://github.com/PsychQuant/che-apple-mail-mcp/issues/322); direct
   insertion is [#587](https://github.com/PsychQuant/che-apple-mail-mcp/issues/587)).
 
+- **`get_special_mailboxes` returns a mailbox path only when Mail confirms it**
+  ([#376](https://github.com/PsychQuant/che-apple-mail-mcp/issues/376)). With an account selector, a `<key>_path` is returned only when
+  Mail's own mailbox and container objects confirm the candidate read from the
+  index; the earlier leaf-name join is removed. When the check cannot run, leaf
+  names are returned without paths and the reason goes to stderr.
+
+- **A display name with an unquoted comma is refused before any GUI work**
+  ([#411](https://github.com/PsychQuant/che-apple-mail-mcp/issues/411)). Write it as `"Doe, Jane" <jane@example.test>` or use the bare
+  address; Mail would otherwise split it into two recipients. `create_draft` and
+  `update_draft` also state that a To/Cc/Bcc list containing a display name is
+  written whole to the system clipboard during GUI filling, where clipboard
+  readers or Universal Clipboard may obtain it; restoring the clipboard cannot
+  revoke that.
+
+- **Draft ids are described as transient** ([#405](https://github.com/PsychQuant/che-apple-mail-mcp/issues/405)). `create_draft`,
+  `list_drafts` and `update_draft` say that a draft id is a message ROWID that
+  autosave or synchronization can replace, and how to recover from a stale-id
+  refusal; `update_draft`'s zero-match error points at listing drafts again
+  instead of retrying.
+
+- **Cc no longer has a View-menu reveal path** ([#408](https://github.com/PsychQuant/che-apple-mail-mcp/issues/408)). Its menu fragments
+  could also match the Bcc item, so only Bcc keeps one. The `create_draft`
+  caveat now states what one macOS 27 live run covered and what remains
+  unverified.
+
 ### Fixed
 
 - **A failed clean compose no longer leads the retry to open a second window,
@@ -160,6 +202,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   has not yet been run against real Mail. Failures before identification still
   leave the new window open; their messages now say to inspect Mail before
   retrying.
+
+- **The server shuts down on stdin EOF even while a Mail call is blocked**
+  ([#329](https://github.com/PsychQuant/che-apple-mail-mcp/issues/329)). Mail work runs on its own serial executor, so synchronous
+  AppleScript and subprocess waits no longer occupy the pool that also drives
+  the stdio receive loop.
 
 ## [3.4.0] - 2026-10-27
 
