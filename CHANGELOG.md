@@ -44,6 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   GUI operation (`compose_email` and `update_draft` before any Mail query), and never truncate. `create_draft`'s opt-in direct write has no such
   limit; when it is enabled but not used, the refusal says why.
 
+- **Malformed recipient receipts now disclose unavailable instead of a mismatch**
+  ([#427](https://github.com/PsychQuant/che-apple-mail-mcp/issues/427)).
+  The production parser requires exactly two cc/bcc groups and valid address
+  item structure. Only NOTFOUND remains a polling result; parse failures follow
+  the same non-retry path as read failures. Normal empty groups and quoted or
+  international addresses remain supported. This does not resolve the separate
+  subject/creation-identity limitations tracked in #409.
+
 - **FDA assist no longer waits indefinitely or offers twice at concurrent startup**
   ([#422](https://github.com/PsychQuant/che-apple-mail-mcp/issues/422)).
   Version and quiet probes each have a two-second deadline with bounded
