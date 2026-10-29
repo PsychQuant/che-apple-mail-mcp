@@ -24,6 +24,8 @@ struct RecipientReceipt: Equatable {
 /// draft's recipients (PR #407 R3; a stronger identification is #409). The subject
 /// comparison runs under `considering case` for parity with the Swift `==`
 /// that `update_draft`'s receipt applies to `parseDraftRows`.
+/// A failed subject/id read invalidates the entire scan, including any earlier
+/// candidate. It must not become NOTFOUND or a partial address verification.
 func buildDraftRecipientReceiptScript(subject: String) -> String {
     return """
     -- #404 recipient receipt
@@ -40,6 +42,10 @@ func buildDraftRecipientReceiptScript(subject: String) -> String {
                                 set _best to dm
                             end if
                         end if
+                    on error number _metadataNumber
+                        -- Preserve the error category, not a native diagnostic
+                        -- that might echo unrelated message/account metadata.
+                        error "RECIPIENT_METADATA_UNAVAILABLE" number _metadataNumber
                     end try
                 end repeat
             end repeat
