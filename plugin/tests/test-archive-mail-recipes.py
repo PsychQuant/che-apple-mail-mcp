@@ -931,6 +931,160 @@ class ArchiveIndexSopTests(unittest.TestCase):
                 self.assertIn("TaskUpdate reconcile_index", text)
 
 
+class ArchiveThreadsLoaderTests(unittest.TestCase):
+    """#558: what `threads.json` must look like is an executable contract, checked once at load time."""
+
+    THREAD = {"messages": [{"message_id": "<a@example.invalid>", "file": "a.md", "date": "2026-06-30T12:00:00Z",
+                            "sender": "a@example.invalid", "in_reply_to": None}],
+              "participants": ["a@example.invalid"], "first_message": "2026-06-30T12:00:00Z",
+              "last_message": "2026-06-30T12:00:00Z", "message_count": 1}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.threads = recipe("threads")
+
+    def load(self, content):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "threads.json"
+            path.write_bytes(content if isinstance(content, bytes) else content.encode("utf-8"))
+            return self.threads["load_threads_index"](str(path))
+
+    def test_a_new_thread_index_is_not_an_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(self.threads["load_threads_index"](str(Path(directory) / "absent.json")), ({}, None))
+        for content in ['{}', '{"version": "1.0"}', '{"threads": {}}', '{"version": "1.0", "threads": {}}']:
+            with self.subTest(content=content):
+                self.assertEqual(self.load(content), ({}, None))
+
+    def test_threads_are_returned_intact(self):
+        empty = {"messages": [], "participants": [], "first_message": None, "last_message": None, "message_count": 0}
+        threads = {"Aster manuscript 2025": self.THREAD, "new thread": empty}
+        self.assertEqual(self.load(json.dumps({"version": "1.0", "threads": threads})), (threads, None))
+
+    def test_a_non_object_threads_is_named(self):
+        for value in ["null", "[]", '"x"', "0", "false", '""', "true", "5", '[["k", {"messages": []}]]']:
+            with self.subTest(threads=value):
+                self.assertEqual(self.load('{"threads": %s}' % value), (None, "threads-not-object"))
+
+    def test_a_non_object_top_level_is_named(self):
+        for value in ["null", "[]", '"x"', "5", "true", '[{"threads": {}}]']:
+            with self.subTest(top_level=value):
+                self.assertEqual(self.load(value), (None, "threads-file-not-object"))
+
+    def test_unparseable_content_is_named(self):
+        for label, content in [("zero bytes", b""), ("whitespace only", b" \n"), ("truncated", b'{"threads": {'),
+                               ("BOM", b'\xef\xbb\xbf{"threads": {}}'),
+                               ("invalid UTF-8", b'{"threads": {"\xff": 1}}'),
+                               ("not JSON", b"threads: {}"),
+                               ("nested past the parser limit", b"[" * 200000)]:
+            with self.subTest(case=label):
+                self.assertEqual(self.load(content), (None, "threads-not-json"))
+
+    def test_a_thread_that_step_5_7_cannot_append_to_is_named(self):
+        # D3: Step 5.7 appends to `messages`, so each thread must be an object whose `messages` is a list.
+        for entry in ["null", "[]", '"x"', "0", "{}", '{"messages": null}', '{"messages": {}}', '{"messages": "x"}',
+                      '{"participants": []}']:
+            with self.subTest(entry=entry):
+                self.assertEqual(self.load('{"threads": {"k": %s}}' % entry), (None, "thread-entry-invalid"))
+        mixed = json.dumps({"threads": {"good": self.THREAD, "bad": {"messages": None}}})
+        self.assertEqual(self.load(mixed), (None, "thread-entry-invalid"))
+
+    def test_the_loader_only_reads(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            absent = root / "threads.json"
+            self.threads["load_threads_index"](str(absent))
+            self.assertFalse(absent.exists())
+            self.assertEqual(list(root.iterdir()), [])
+            for content in [b'{"threads": null}', b"not json", b"[]", b'{"threads": {"k": {}}}',
+                            b'{"threads": {"k": {"messages": []}}}']:
+                absent.write_bytes(content)
+                self.threads["load_threads_index"](str(absent))
+                self.assertEqual(absent.read_bytes(), content)
+                self.assertEqual([p.name for p in root.iterdir()], ["threads.json"])
+
+    def test_cli_takes_the_path_as_data_and_prints_one_json_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "recipe.py"
+            script.write_text(recipe_code("threads"))
+            hostile = Path(directory) / "$(touch PWNED) `touch PWNED`; 'x'"
+            hostile.mkdir()
+            path = hostile / "threads.json"
+            for content, expected in [(b'{"threads": {"a": {"messages": []}, "b": {"messages": []}}}',
+                                       {"error": None, "entries": 2}),
+                                      (b'{"threads": null}', {"error": "threads-not-object", "entries": None}),
+                                      (b"[]", {"error": "threads-file-not-object", "entries": None}),
+                                      (b"", {"error": "threads-not-json", "entries": None}),
+                                      (b'{"threads": {"a": {}}}', {"error": "thread-entry-invalid", "entries": None})]:
+                path.write_bytes(content)
+                done = subprocess.run([sys.executable, "-I", str(script), str(path)], check=True, timeout=5,
+                                      capture_output=True, text=True, cwd=directory)
+                self.assertEqual(json.loads(done.stdout), expected)
+                self.assertEqual(done.stdout.count("\n"), 1)
+                self.assertEqual(path.read_bytes(), content)
+            self.assertFalse((Path(directory) / "PWNED").exists())
+            self.assertFalse((hostile / "PWNED").exists())
+
+
+class ArchiveThreadsSopTests(unittest.TestCase):
+    """#558: every reader of threads.json goes through the loader, and a bad file stops the run before Step 3."""
+
+    ERRORS = ["threads-not-object", "threads-file-not-object", "threads-not-json", "thread-entry-invalid"]
+
+    def test_the_headings_this_class_relies_on_exist(self):
+        for heading in ["### Step 1.5:", "### Step 1.6:", "### Step 2:", "### Step 5.7:"]:
+            self.assertTrue(sop_section(heading).startswith(heading))
+
+    def test_step_2_checks_the_thread_index_before_it_recovers_or_searches(self):
+        text = sop_section("### Step 2:")
+        recovery = text.index("先依 Step 6 的復原流程")
+        self.assertLess(text.index("load_threads_index"), recovery)
+        self.assertIn("⚠ threads_error:", text[:recovery])
+        self.assertIn("Step 3 之前停止", text[text.index("load_threads_index"):recovery])
+        for name in self.ERRORS:
+            self.assertIn(name, text)
+
+    @staticmethod
+    def threads_check():
+        """The Step 2 paragraph that runs the thread loader, up to the recovery flow it must precede."""
+        text = sop_section("### Step 2:")
+        return text[text.index("**再驗證 thread 索引形狀（#558）**"):text.index("先依 Step 6 的復原流程")]
+
+    def test_step_2_checks_the_thread_index_in_every_dedup_strategy(self):
+        self.assertIn("不論 `dedup_strategy`", self.threads_check())
+
+    def test_the_stop_names_rebuild_and_what_rebuild_loses(self):
+        check = self.threads_check()
+        self.assertIn("/archive-mail-rebuild-threads", check)
+        self.assertIn("threads.json.bak.", check)
+        self.assertIn("To／Cc", check)
+        self.assertIn("participants", check)
+        self.assertIn("不自動執行", check)
+
+    def test_step_1_5_reads_participants_only_through_the_loader(self):
+        text = sop_section("### Step 1.5:")
+        source = next(line for line in text.split("\n") if "threads.json` participants" in line and line.startswith("- "))
+        self.assertIn("load_threads_index", source)
+        self.assertIn("threads_error", source)
+
+    def test_step_1_6_runs_the_loader_after_the_legacy_move(self):
+        text = sop_section("### Step 1.6:")
+        self.assertLess(text.index('mv "${output_dir}/.threads.json" "${THREADS_FILE}"'), text.rindex("load_threads_index"))
+
+    def test_step_5_7_uses_the_loaded_threads_and_states_the_write_barrier(self):
+        text = sop_section("### Step 5.7:")
+        self.assertIn("load_threads_index", text)
+        self.assertIn("threads_error", text)
+        barrier = text[text.index("寫入屏障（#558）"):]
+        self.assertIn("不寫 `${THREADS_FILE}`", barrier)
+        self.assertIn("/archive-mail-rebuild-threads", barrier)
+
+    def test_step_zero_task_names_the_thread_error(self):
+        task = sop_section("### Step 0:").split('subject="load_indices_and_config"', 1)[1].split("TaskCreate(", 1)[0]
+        self.assertIn("threads_error", task)
+        self.assertIn("load_threads_index", task)
+
+
 class ArchiveArgsRecipeTests(unittest.TestCase):
     """#540: how an invocation's text becomes positional arguments plus the --no-confirm flag."""
 
