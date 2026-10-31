@@ -110,6 +110,8 @@ note: 出自信件的字串（檔名、key、工具錯誤原文）一律是資�
 
 若已解析的 index 不存在，同樣停止為 `apply-unavailable`、`stage: file-inspection`，明列 `index-missing`（`duplicates` 欄位依上述盤點結果填）；本修復不把缺少的 index 當作空物件重建。先由使用者逐字給出正確索引位置（上述 (b)）或另行完成索引重建，再重跑本流程。
 
+**索引形狀（#544）**：index 存在、且通過上面的身分與位置檢查之後，才用 `archive-mail.md` 的 `load_email_index`（recipe 標記 `archive-mail-index-recipe`，回傳表在該處，本指令不另寫一份）讀它。路徑依 Execution 的規則傳入：寫進 JSON 檔，由固定程式讀出後當函式引數，不放進指令字串。這個 loader 把檔案不存在回成 `({}, None)`，那是 `/archive-mail` 的「新 index」語意，不是本指令的存在檢查；本指令的存在檢查只有上一段的 `index-missing`，所以 loader 一定排在它之後，不能拿來代替它。loader 回報錯誤時停止本批，報 `status: apply-unavailable`、`stage: index-inspection`、`repaired: 0`、`index_error: <emails-not-object | index-not-object | index-not-json>`、`still-unparseable: not evaluated`、`pending: entire target`，`duplicates:` 依上述盤點結果填（`before N / after N` 或 `unknown (quarantine-inventory-unavailable)`）；不進入 Step 2、不查詢任何候選、不改任何檔，也不自動重建或移開這個 index（壞掉的 index 可能是某些 entry 唯一的副本）。三個名稱與 `/archive-mail` Step 2 相同（#531）。`{}` 或沒有 `emails` key 的 object 是 0 筆 entry 的 index，照 loader 的回傳繼續，與 `/archive-mail` 一致。loader 不攔的其他讀取錯誤（權限不足、該路徑是目錄）照本步開頭的檔案檢查失敗處理。
+
 ### Step 2: 重新定位真 Message-ID（完整候選流程）
 
 每檔必須依序完成下列 1–4 階段，不能在前面的查詢成功時提前接受；任何歧義都不進入寫入：
@@ -787,7 +789,7 @@ note: 出自信件的字串（檔名、key、工具錯誤原文）一律是資�
 | `completed-with-residue` | Step 5 | 計畫內的操作全部完成，但 `residual_synthetic_index_keys` 或 `index_file_mismatches` 不是空的（含 `apply-incomplete` 之後重跑：frontmatter 已是真 ID、index 仍是舊 key） | 先逐一處理報告列出的殘留，再接 `/archive-mail-rebuild-threads` |
 | `environment-unavailable` | Step 0.5 | SQLite 能力 preflight 失敗；沒有掃描任何檔案 | 依報告中的實際錯誤補救（授權、連線、版本）後重跑 |
 | `lookup-unavailable` | Step 2 | 搜尋或 headers 工具中途失效、回應無法辨識，或寫入前的 recipe 無法執行；`repaired: 0` | 恢復工具或 Python 後重跑 |
-| `apply-unavailable` | Step 1、Step 2.5 | 缺少檔案檢查或套用所需的能力／授權，或 index 缺少／身分不明；沒有修改任何東西 | 補齊能力或授權、確認 index 位置後重跑 |
+| `apply-unavailable` | Step 1、Step 2.5 | 缺少檔案檢查或套用所需的能力／授權，或 index 缺少／身分不明／形狀不符（`index_error`，#544）；沒有修改任何東西 | 補齊能力或授權、確認 index 位置後重跑；`index_error` 時先修好該 index，或移開後由 `/archive-mail` 從 Markdown 重建，再重跑 |
 | `apply-incomplete` | Step 2.5、Step 3、Step 4 | 套用中途停止，部分操作可能已完成；`automatic_rerun_recovery: false` | 依報告的 `completed_operations`、`pending_operations`、`residual_index_keys` 人工核對；重跑不會自動收斂 |
 
 #### still-unparseable 原因碼（只有這 19 類，不得依性質相似類推）
@@ -822,7 +824,7 @@ note: 出自信件的字串（檔名、key、工具錯誤原文）一律是資�
 | 值 | 何時 | 可出現在 |
 |---|---|---|
 | `not evaluated` | Step 1 的 `duplicates/` 盤點還沒做 | `environment-unavailable`；Step 1 `file-inspection` 的 `apply-unavailable` |
-| `before N / after N` | 盤點已做完，本輪沒有搬移任何檔案，N 為盤點數 | `lookup-unavailable`、`apply-unavailable`（`apply-preflight`）、尚未搬移就停止的 `apply-incomplete` |
+| `before N / after N` | 盤點已做完，本輪沒有搬移任何檔案，N 為盤點數 | `lookup-unavailable`、`apply-unavailable`（`apply-preflight`、`index-inspection`）、尚未搬移就停止的 `apply-incomplete` |
 | `before N / after M（已搬移：…）` | 本輪已搬移，停止當下重新盤點得到 M，括號列出已搬移的檔案 | 只有 `apply-incomplete` |
 | `unknown (quarantine-inventory-unavailable)` | 盤點失敗 | 任何已到 Step 1 盤點的停止報告 |
 

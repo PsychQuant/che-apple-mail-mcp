@@ -24,6 +24,7 @@ procedure, an agent replay against a fixture archive, was left out on purpose in
 import json
 from pathlib import Path
 import re
+import tempfile
 import unittest
 
 
@@ -363,12 +364,39 @@ def check_recipe_blocks(text):
     return problems
 
 
+# The names the shared index loader in archive-mail.md returns (#531), written out by hand on purpose: the parity test
+# below compares this set with the loader's code and with what the loader returns when executed.
+INDEX_ERRORS = ("emails-not-object", "index-not-object", "index-not-json")
+INDEX_GATE_FRAGMENTS = (
+    "load_email_index", "archive-mail-index-recipe", "不是本指令的存在檢查", "status: apply-unavailable",
+    "stage: index-inspection", "repaired: 0", "index_error:", "still-unparseable: not evaluated", "duplicates:",
+) + INDEX_ERRORS
+
+
+def check_index_shape_gate(text):
+    """#544: Step 1 reads the index through the shared loader, after the index-missing check, and stops by name."""
+    step1 = section_text(text, "Step 1:")
+    if step1 is None:
+        return ["no section starts with 'Step 1:'"]
+    paragraphs = step1.split("\n\n")
+    missing = next((i for i, p in enumerate(paragraphs) if "index-missing" in p and "stage: file-inspection" in p), None)
+    gate = next((i for i, p in enumerate(paragraphs) if "load_email_index" in p), None)
+    if gate is None:
+        return ["Step 1 does not read the index through load_email_index"]
+    problems = [f"the load_email_index paragraph lacks {fragment}" for fragment in INDEX_GATE_FRAGMENTS
+                if fragment not in paragraphs[gate]]
+    if missing is None or gate < missing:
+        problems.append("load_email_index must come after the index-missing check (it maps a missing file to an empty index)")
+    return problems
+
+
 PINS = {
     "code tables": check_code_tables,
     "report templates": check_report_templates,
     "preflight": check_preflight,
     "clause anchors": check_clause_anchors,
     "recipe blocks": check_recipe_blocks,
+    "index shape gate": check_index_shape_gate,
 }
 
 
@@ -398,6 +426,18 @@ def move_fragment(text, title_prefix, fragment, into_prefix):
     start, _ = section_bounds(removed, into_prefix)
     lines = removed.split("\n")
     return "\n".join(lines[:start + 1] + [fragment] + lines[start + 1:])
+
+
+def move_index_gate_before_missing(text):
+    """Put Step 1's load_email_index paragraph in front of its index-missing paragraph."""
+    start, end = section_bounds(text, "Step 1:")
+    lines = text.split("\n")
+    paragraphs = "\n".join(lines[start:end]).split("\n\n")
+    gate = next(i for i, p in enumerate(paragraphs) if "load_email_index" in p)
+    missing = next(i for i, p in enumerate(paragraphs) if "index-missing" in p and "stage: file-inspection" in p)
+    assert missing < gate, "the shipped order is already wrong"
+    moved = paragraphs[:missing] + [paragraphs[gate]] + [p for i, p in enumerate(paragraphs[missing:], missing) if i != gate]
+    return "\n".join(lines[:start] + "\n\n".join(moved).split("\n") + lines[end:])
 
 
 def swap_sections(text, first_prefix, second_prefix):
@@ -462,6 +502,12 @@ class SopPinsCatchNamedChanges(unittest.TestCase):
             ("recipe blocks", "the recipe invents a group status", lambda t: replaced(t, '{"status": "message-id-format-collision", "candidates": answers}', '{"status": "ambiguous", "candidates": answers}'), "ambiguous"),
             ("recipe blocks", "stage 4 stops mentioning the recipe", lambda t: replaced(t, "以下方 Message-ID recipe 的 `classify-candidates` 計算", "以下方 Message-ID recipe 計算"), "stage 4"),
             ("recipe blocks", "P1 stops pointing at its recipe function", lambda t: remove_in_section(t, "P1:", "第 4、5 項由下方計畫 recipe 的 `check_index_references` 執行，不靠逐項心算。"), "check_index_references"),
+            ("index shape gate", "the loader paragraph moves in front of the index-missing check", move_index_gate_before_missing, "must come after the index-missing check"),
+            ("index shape gate", "the loader is no longer named", lambda t: replaced(t, "load_email_index", "the index loader", count=-1), "does not read the index through load_email_index"),
+            ("index shape gate", "the stop loses its stage", lambda t: remove_in_section(t, "Step 1:", "`stage: index-inspection`、"), "stage: index-inspection"),
+            ("index shape gate", "one of the loader's names is dropped", lambda t: remove_in_section(t, "Step 1:", " | index-not-json"), "index-not-json"),
+            ("index shape gate", "the stop loses its duplicates field", lambda t: remove_in_section(t, "Step 1:", "`duplicates:` 依上述盤點結果填"), "duplicates:"),
+            ("index shape gate", "the loader is no longer said to differ from the existence check", lambda t: remove_in_section(t, "Step 1:", "不是本指令的存在檢查"), "不是本指令的存在檢查"),
         ]
         for name, prefix, fragment in ANCHORS:
             cls.mutations.append(("clause anchors", f"{name}: the fragment is deleted",
@@ -484,6 +530,60 @@ class SopPinsCatchNamedChanges(unittest.TestCase):
         for name in ("code tables", "clause anchors", "recipe blocks"):
             with self.subTest(pin=name):
                 self.assertEqual(PINS[name](mutated), [])
+
+
+ARCHIVE_MAIL = DOCUMENT.parent / "archive-mail.md"
+INDEX_RECIPE = ("<!-- archive-mail-index-recipe:start -->", "<!-- archive-mail-index-recipe:end -->")
+
+
+def index_loader_code():
+    text = ARCHIVE_MAIL.read_text()
+    for marker in INDEX_RECIPE:
+        if text.count(marker) != 1:
+            raise AssertionError(f"archive-mail.md must carry exactly one {marker}")
+    block = text.split(INDEX_RECIPE[0], 1)[1].split(INDEX_RECIPE[1], 1)[0]
+    code = re.fullmatch(r"\s*```python\n(.*?)\n```\s*", block, re.S)
+    if code is None:
+        raise AssertionError("the archive-mail index recipe is not exactly one python fence")
+    return code.group(1)
+
+
+class IndexLoaderParityTests(unittest.TestCase):
+    """#544: the repair command stops with the shared loader's names, so the two commands cannot drift apart."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.code = index_loader_code()
+        namespace = {"__name__": "archive_mail_index_recipe"}
+        exec(compile(cls.code, str(ARCHIVE_MAIL) + ":index", "exec"), namespace)
+        cls.load = staticmethod(namespace["load_email_index"])
+
+    def test_the_shared_loader_returns_exactly_the_three_names(self):
+        self.assertEqual(set(re.findall(r'return None, "([a-z-]+)"', self.code)), set(INDEX_ERRORS))
+
+    def test_step_1_names_exactly_what_the_shared_loader_returns(self):
+        step1 = section_text(sop_text(), "Step 1:")
+        written = set(re.findall(r"(?<![a-z-])(?:emails|index)-not-[a-z]+(?![a-z-])", step1))
+        self.assertEqual(written, set(re.findall(r'return None, "([a-z-]+)"', self.code)))
+
+    def test_the_executed_loader_answers_the_shapes_the_stop_is_for(self):
+        cases = (
+            ('{"emails": null}', (None, "emails-not-object")),
+            ('{"emails": []}', (None, "emails-not-object")),
+            ("[]", (None, "index-not-object")),
+            ("", (None, "index-not-json")),
+            ("{}", ({}, None)),   # D3: an index with no entries, not a stop
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for content, expected in cases:
+                with self.subTest(content=content):
+                    path = Path(directory) / "email_index.json"
+                    path.write_text(content)
+                    self.assertEqual(self.load(str(path)), expected)
+
+    def test_a_missing_file_reads_as_an_empty_index_which_is_why_it_runs_after_index_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(self.load(str(Path(directory) / "absent.json")), ({}, None))
 
 
 if __name__ == "__main__":
