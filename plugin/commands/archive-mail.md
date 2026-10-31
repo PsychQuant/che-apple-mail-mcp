@@ -394,8 +394,12 @@ if [ -f "${CONFIG_FILE}" ]; then
     # Sequence-form: `<field>:` on its own line, with `  - item` lines following → awk parser handles cleanly.
     # Inline scalar or non-empty inline list on the same line → refuse here, do not silently coerce.
     # Empty inline list `[]` and bare `<field>:` (no value) are both valid sequence forms.
+    # #521: in the source file the awk field and the shell positional parameter below carry a backslash
+    # before the `$`, because Claude Code would otherwise replace them with the invocation's arguments;
+    # Claude Code removes that backslash when it loads this file. Copying straight from the source file
+    # into a shell? Remove the backslash before the `$` first.
     for _f in sender_includes sender_excludes recipient_includes recipient_excludes subject_includes subject_excludes; do
-        _line=$(awk -v field="^${_f}:" '$0 ~ field {print; exit}' "${CONFIG_FILE}")
+        _line=$(awk -v field="^${_f}:" '\$0 ~ field {print; exit}' "${CONFIG_FILE}")
         if [ -n "$_line" ]; then
             _val=$(printf '%s' "$_line" | sed -E "s/^${_f}:[[:space:]]*//")
             if [ -n "$_val" ] && [ "$_val" != "[]" ]; then
@@ -408,7 +412,7 @@ if [ -f "${CONFIG_FILE}" ]; then
     # Strip empty entries from refinement lists per spec (sender_excludes: [""] ≡ sender_excludes: []).
     # The awk above prints raw item text; drop blank lines, "" and '' entries here.
     _strip_empty_refinement_entries() {
-        printf '%s\n' "$1" | awk 'NF > 0 && $0 != "\"\"" && $0 != "'"'"''"'"'"'
+        printf '%s\n' "\$1" | awk 'NF > 0 && \$0 != "\"\"" && \$0 != "'"'"''"'"'"'
     }
     SENDER_INCLUDES=$(_strip_empty_refinement_entries "$SENDER_INCLUDES")
     SENDER_EXCLUDES=$(_strip_empty_refinement_entries "$SENDER_EXCLUDES")
