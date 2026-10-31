@@ -422,26 +422,44 @@ class ArchiveRecipesTests(unittest.TestCase):
             self.assertFalse((root / "PWNED").exists())
 
 
-class Step85RepairPointerTests(unittest.TestCase):
-    """Step 8.5 points users at the repair command; the pointer must carry its prerequisite (#527)."""
+class RepairCommandPointerTests(unittest.TestCase):
+    """Every place that points users at the repair command carries its prerequisite (#527 for Step 8.5, #551 for all).
+
+    The pointers sit in very long single-line bullets, so the words are looked for in a bounded window right after
+    each mention, not anywhere on the line: another clause of the same bullet must not satisfy the check.
+    """
 
     REPAIR = "/archive-mail-repair-synthetic-ids"
+    WINDOW = 120   # characters after the mention; the Step 8.5 summary line needs about 70
+    KNOWN_POINTERS = 3   # Step 5.1, the Step 8.5 synthetic_placeholder bullet, the Step 8.5 example summary
 
     @classmethod
     def setUpClass(cls):
-        text = DOCUMENT.read_text()
-        section = text.split("### Step 8.5:", 1)[1]
-        cls.pointer_lines = [line for line in section.split("\n## ", 1)[0].splitlines()
-                             if cls.REPAIR in line]
+        cls.text = DOCUMENT.read_text()
+        cls.mentions = [m.end() for m in re.finditer(re.escape(cls.REPAIR), cls.text)]
 
-    def test_step_8_5_still_points_at_the_repair_command(self):
-        self.assertTrue(self.pointer_lines,
-                        "Step 8.5 no longer mentions the repair command; update this guard with it")
+    def missing_prerequisite(self, text):
+        """(line number, missing word) for each mention whose window lacks SQLite or Full Disk Access."""
+        found = []
+        for match in re.finditer(re.escape(self.REPAIR), text):
+            window = text[match.end():match.end() + self.WINDOW]
+            for word in ("SQLite", "Full Disk Access"):
+                if word not in window:
+                    found.append((text.count("\n", 0, match.start()) + 1, word))
+        return found
+
+    def test_the_file_still_points_at_the_repair_command_from_each_known_place(self):
+        self.assertGreaterEqual(len(self.mentions), self.KNOWN_POINTERS,
+                                "a pointer to the repair command was removed; update KNOWN_POINTERS with it")
 
     def test_every_pointer_names_the_sqlite_and_full_disk_access_prerequisite(self):
-        for line in self.pointer_lines:
-            self.assertIn("SQLite", line, line[:80])
-            self.assertIn("Full Disk Access", line, line[:80])
+        self.assertEqual(self.missing_prerequisite(self.text), [],
+                         "after the command name, say it needs a usable SQLite envelope index (Full Disk Access)")
+
+    def test_the_words_elsewhere_on_the_same_line_do_not_count(self):
+        # Positive control for the window: the prerequisite placed before the mention, or far after it, is missed.
+        line = "需可用的 SQLite envelope index／Full Disk Access；" + "x" * 10 + self.REPAIR + "。" + "y" * 200 + "SQLite Full Disk Access"
+        self.assertEqual(self.missing_prerequisite(line), [(1, "SQLite"), (1, "Full Disk Access")])
 
 
 def sop_section(heading):
