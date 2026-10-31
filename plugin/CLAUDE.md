@@ -192,7 +192,7 @@ compose/create_draft/update_draft 支援 signature 物件（mail_default／none�
 | `exclude_mailboxes` | 字串清單；空清單 | 搜尋時排除指定 mailbox。 |
 | `subject_keywords` | 字串清單；空清單 | Step 2／3 增加 subject-keyword 搜尋，補抓原搜尋漏掉的 thread。 |
 | `participant_aliases` | email → 顯示名稱對應表；空對應表 | Step 1.4 以全域 identity 為基底，workspace 條目原樣補充新地址；衝突以全域為準且具名揭露。沒有 identity 檔時搜尋與 alias 解析不變（例外見 SOP Step 1.4 第 4 項）。Phase 1 候選與 audit 共用結果，不直接改 filter。 |
-| `dedup_strategy` | `index`（預設）、`last_archived`、`both` | Step 1.6／4：Message-ID 去重、日期去重，或兩者同時成立。 |
+| `dedup_strategy` | `index`（預設）、`last_archived`、`both` | Step 1.6／4：Message-ID 去重、日期去重，或兩者同時成立。`last_archived` 不讀也不寫 `email_index.json`；Step 8.5 只做唯讀稽核（掃頂層 md 與日期稽核，不寫 index、不重建 threads，#545）。 |
 | `distributed_archives` | 歸檔目錄字串清單；空清單 | Step 2.1 讀取已分派歸檔的 Message-ID，併入 capture 層去重集合。 |
 | `sender_includes` | 字串清單；空清單不限制 | Step 4.0：每個 thread 至少一封信的寄件人符合此軸條件。 |
 | `sender_excludes` | 字串清單；空清單不排除 | Step 4.0：任一寄件人符合即排除整個 thread。 |
@@ -244,7 +244,7 @@ enrichment: none
 ### 欄位互動與格式限制
 
 - **輸出路徑**：未 pin 時，依序檢查 `communications/email/`、`correspondence/emails/`；兩者都有 Markdown 時須指定 `output_dir`，不能猜測。皆無適用 layout 才用 `communication/emails`。
-- **日期與去重**：`dedup_strategy: last_archived` 必須提供 `last_archived`。有 `last_archived` 時，搜尋也會使用日期界線；`both` 在 Step 4 同時要求 Message-ID 未見過及日期較新。不要把 `last_archived` 寫成下一行縮排的值，也不要假設 SOP 會自動更新這個欄位。
+- **日期與去重**：`dedup_strategy: last_archived` 必須提供 `last_archived`。有 `last_archived` 時，搜尋也會使用日期界線；`both` 在 Step 4 同時要求 Message-ID 未見過及日期較新。不要把 `last_archived` 寫成下一行縮排的值，也不要假設 SOP 會自動更新這個欄位。`dedup_strategy: last_archived` 時 Step 8.5 改做唯讀稽核：Phase 0 不執行，Phase 1 只掃描、不補寫 entry，日期稽核在記憶體裡跑，不寫 `email_index.json`、不重建 threads；摘要列出可解析日期的最大值 `last_updated`，供手動推進 `last_archived`（#545）。
 - **跨目錄去重**：`distributed_archives` 僅在 `index`／`both` 生效；`last_archived` 策略略過。目錄可在 `output_dir` 之外，相對 workspace root 解析；不存在時警告並略過。只讀取該目錄及下一層的 Markdown，不移動信件或檔案。Message-ID 格式與掃描限制見 Step 2.1。
 - **全域身份檔（mail#334）**：`~/.claude/.mail/identity.yaml` 只支援 `participant_aliases`（bare email → 非空顯示名稱字串）。不是一般 config 的第二層，沒有 `own_addresses` 或其他設定繼承。Step 1.4 在消歧義之前讀取；缺檔靜默沿用 workspace aliases。存在但無法讀取、YAML 無法解析、根節點或 `participant_aliases` 非 mapping，或用了 YAML 的 tag、anchor、merge key 時，警告並捨棄該檔資料，歸檔仍繼續。未知鍵與無效條目警告後忽略，被忽略的條目不佔用該地址。trim + lowercase 只用來判斷是不是同一個地址（不移除 plus tag／dots）；identity 檔內相同或正規化後相同的鍵（含完全重複的鍵）只忽略那幾個鍵。workspace 條目原樣使用、不丟棄，無效條目只在報告警告。警告只寫 email 與錯誤類型，不是 email 的鍵以位置指出，不重印原始行、鍵或顯示名稱。歸檔報告本身列有參與者的姓名與地址，不要貼到公開處。
 - **身份優先權**：identity 已有的 email 不能被 workspace 改寫（即使名稱相同，仍具名列入忽略清單）；workspace 只補充新 email。Phase 1 候選與 Step 7 報告使用同一 effective map，附上 bare email 並標示來源；只來自全域 identity 的候選不標「推薦」；identity 與 workspace 以同一顯示名稱指向不同地址時都不標「推薦」。`--no-confirm` 時，若模糊人名經全域 identity 對到的地址不在本 workspace，仍列候選；其餘照舊跳過、filter 照輸入。此資料不改 search filter、direction、frontmatter 或確認授權，只會讓一種情況多問一次。用有 remote 的 git repo 同步 identity 檔，等於把第三方姓名與地址放到託管服務上。檔案由使用者自行維護／同步，工作流只讀；不把 home 路徑誤稱為自動跨機器同步。

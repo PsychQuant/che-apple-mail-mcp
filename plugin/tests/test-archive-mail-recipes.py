@@ -1428,5 +1428,76 @@ class ArchiveNoConfirmDocsTests(unittest.TestCase):
         self.assertRegex(changed, r"未知.*--.*#540|unknown.*--.*#540")
 
 
+class ArchiveLastArchivedGateTests(unittest.TestCase):
+    """#545: with dedup_strategy=last_archived the Step 8.5 gate is a read-only audit, and the other steps agree.
+
+    These pin text only. Whether an agent really leaves email_index.json unwritten needs the manual run in #545."""
+
+    BRANCH = "**`dedup_strategy=last_archived`：唯讀稽核（#545）**"
+    TWO_PHASES = "執行分**兩 phase**"
+
+    @classmethod
+    def read_only_branch(cls):
+        """The Step 8.5 paragraph for last_archived, up to where the two-phase flow for index / both begins."""
+        text = sop_section("### Step 8.5:")
+        branch = between(text, cls.BRANCH, cls.TWO_PHASES)
+        return text, branch
+
+    def test_step_8_5_has_a_read_only_branch_for_last_archived(self):
+        text, branch = self.read_only_branch()
+        self.assertLess(text.index(self.BRANCH), text.index(self.TWO_PHASES))   # stated before the flow it limits
+        self.assertRegex(branch, r"Phase 0.{0,8}不執行")
+        self.assertIn("不寫 `${INDEX_FILE}`", branch)
+        self.assertIn("`${INDEX_FILE}.tmp`", branch)
+        self.assertIn("不讀 `${INDEX_FILE}`", branch)
+        self.assertRegex(branch, r"不跑 `/archive-mail-rebuild-threads`")
+        self.assertIn("reconcile_dates", branch)
+        for reported in ["unparseable", "synthetic_placeholder", "last_updated"]:
+            self.assertIn(reported, branch)
+        summary = re.search(r"```\n(Index Reconcile[^\n]*)\n```", branch)
+        self.assertIsNotNone(summary, "the read-only branch shows its own summary line")
+        line = summary.group(1)
+        self.assertIn("read-only", line)
+        self.assertIn("last_updated=", line)
+        for word in ["verified", "repaired", "orphan"]:
+            self.assertNotIn(word, line)
+
+    def test_the_deferral_sentence_is_replaced_by_the_decision(self):
+        document = DOCUMENT.read_text()
+        for gone in ["這裡不決定", "本 gate 要讀檔也經同一個 loader"]:   # the gate no longer loads the index in this mode
+            self.assertFalse(gone in document, f"still in {DOCUMENT.name}: {gone}")
+        barrier = between(sop_section("### Step 8.5:"), "**`index_error` 與寫入屏障（#531）**", "**Append-only 邊界")
+        self.assertIn("issues/545", barrier)
+        self.assertIn("唯讀稽核", barrier)
+
+    def test_item_7_defines_failure_as_omitting_the_required_output(self):
+        item = next(line for line in sop_section("### Step 8.5:").split("\n") if line.startswith("7. "))
+        self.assertNotIn("跳過本步 = run 失敗", item)
+        self.assertIn("省略本策略要求的輸出", item)
+        self.assertRegex(item, r"`index`[／/]`both`")
+        self.assertIn("`last_archived`", item)
+        self.assertIn("唯讀", item)
+        self.assertIn("reconcile_index", item)
+        self.assertIn("原因", item)
+
+    def test_step_2_recovery_applies_only_to_index_and_both(self):
+        line = next(line for line in sop_section("### Step 2:").split("\n") if "先依 Step 6 的復原流程" in line)
+        self.assertRegex(line, r"`index`[／/]`both`")
+        excluded = re.search(r"`(?:dedup_strategy=)?last_archived`", line)
+        self.assertIsNotNone(excluded, "the recovery line names last_archived as the strategy it does not apply to")
+        self.assertLess(excluded.start(), line.index("先依 Step 6 的復原流程"))   # the condition comes first
+
+    def test_the_strategy_table_and_step_8_5_agree(self):
+        lines = sop_section("### Step 1.6:").split("\n")
+        header = next(line for line in lines if line.startswith("| `dedup_strategy`"))
+        row = next(line for line in lines if line.startswith("| `last_archived` |"))
+        self.assertIn("Step 8.5", header)
+        self.assertIn("唯讀稽核", row)
+        self.read_only_branch()   # Step 8.5 carries the branch heading, which names the same 唯讀稽核
+        self.assertIn("唯讀稽核", self.BRANCH)
+        note = "\n".join(lines[lines.index(row):])
+        self.assertIn("archive-mail-tree", note)   # registered targets keep their index whatever the local strategy
+
+
 if __name__ == "__main__":
     unittest.main()
