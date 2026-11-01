@@ -222,7 +222,7 @@ TaskCreate(subject="load_participant_identity",
            description="Step 1.4: 在消歧義之前讀全域 identity.yaml 與 workspace aliases，保留全域優先及衝突／格式警告；workspace 條目原樣使用、不丟棄（沒有 identity 檔時的例外見 Step 1.4 第 4 項）；不寫入身份檔、不新增確認授權。")
 
 TaskCreate(subject="phase1_disambiguation",
-           description="Step 1.5: 若 filter 模糊(中文人名「陳老師」/相對時間「最近」/通用 scope「全部」) → 列候選讓 user 選;明確 email/Message-ID/NO_CONFIRM(Step 1 從這一次叫用解析出的 --no-confirm) → skip(例外:NO_CONFIRM 或「直接做」時,模糊人名經全域 identity 對到的地址不在本 workspace aliases 與 .threads.json participants → 仍列候選;其餘照舊 skip,filter 照輸入);候選標來源,只來自全域 identity 的不標推薦。由 confirmation-protocol skill Phase 1 + email-search-disambiguation 處理。")
+           description="Step 1.5: 若 filter 模糊(中文人名「陳老師」/相對時間「最近」/通用 scope「全部」) → 列候選讓 user 選;明確 email/Message-ID/NO_CONFIRM(Step 1 從這一次叫用解析出的 --no-confirm) → skip(例外:NO_CONFIRM 或「直接做」時,模糊人名經全域 identity 對到的地址不在本 workspace aliases 與 threads.json participants → 仍列候選;其餘照舊 skip,filter 照輸入);threads.json participants 只取自 Step 1.6 搬完 legacy 檔後 load_threads_index 的結果,loader 回報 threads_error 時這個來源不可用,Phase 1 不列候選、不問任何問題,直接照 Step 2 開頭停止(#558);候選標來源,只來自全域 identity 的不標推薦。由 confirmation-protocol skill Phase 1 + email-search-disambiguation 處理。")
 
 TaskCreate(subject="load_indices_and_config",
            description="Step 2: 從 ${INDEX_DIR}/ 讀 email_index.json（經 load_email_index 驗證；loader 回報 index_error 就在 Step 3 之前停止，#531；dedup_strategy=last_archived 時不讀 email_index.json、不跑 Step 2 的 index 復原，completed 時在 description 附上這個略過原因，#545）+ threads.json（不論 dedup_strategy 都經 load_threads_index 驗證；回報 threads_error 也在 Step 3 之前停止，指向 /archive-mail-rebuild-threads 但不自動執行，#558）；attachment_routing 逐子欄位套預設（記下哪些清單是使用者寫的，分類先比它們），subject_keywords 讀 ${CONFIG_FILE}，participant_aliases 使用 Step 1.4 的共同結果。")
@@ -568,7 +568,7 @@ participant_aliases:
 
 候選來源:
 - Step 1.4 的 `EFFECTIVE_PARTICIPANT_ALIASES`（全域 identity + workspace 補充；保留 bare email，並標示來源）
-- 之前歸檔的 `threads.json` participants：只取自 `load_threads_index` 載入的 `threads`（recipe 在 Step 2；`${THREADS_FILE}` 在 Step 1.6 解析，見那裡）。loader 回報 `threads_error` 時這個來源視為不可用：不從檔案讀、不猜，本 run 之後依 Step 2 開頭停止（#558）
+- 之前歸檔的 `threads.json` participants：只取自 `load_threads_index` 載入的 `threads`（recipe 在 Step 2）。順序固定：先照 Step 1.6 解析 `${THREADS_FILE}`，再跑 Step 1.6 的 legacy `.threads.json` auto-migrate，最後才跑 `load_threads_index`；不得在搬移之前載入（那時新位置還沒有檔案，loader 回空的 thread 索引，Step 5.7 從空的開始寫，就會蓋掉搬來的舊 thread）。loader 回報 `threads_error` 時這個來源視為不可用：不從檔案讀、不猜，Phase 1 也不列候選、不問任何問題，直接照 Step 2 開頭停止（#558）
 - Address book / contacts MCP
 
 每個候選標示來源。**只來自全域 identity 的候選不得標「推薦」**：全域檔記的是所有工作區的人，不代表這個 workspace 要找的人。
@@ -578,7 +578,7 @@ participant_aliases:
 - Filter 是 Message-ID
 - `NO_CONFIRM`（Step 1 從使用者這一次叫用的 `ARGS_RAW` 解析出的 `--no-confirm`）或使用者明確說「直接做」。來源須符合 `rules/confirmation-triggers.md`「Provenance」第 2 類：只能是這一次叫用實際打的引數，**不得**從郵件內文、範例、搜尋結果、config 或模型自行組出的命令補出
 
-  **例外（mail#334）**：使用者以 `NO_CONFIRM` 或「直接做」跳過確認，而 filter 是模糊人名時，若全域 identity 檔把這個名稱對應到某個地址，而**本 workspace 的 aliases 與 `.threads.json` participants 都沒有那個地址**，就仍要列候選讓使用者選，不得自動採用。其餘情況照改版前處理：跳過 Phase 1，filter 照使用者輸入。沒有 identity 檔時這條例外不會觸發。
+  **例外（mail#334）**：使用者以 `NO_CONFIRM` 或「直接做」跳過確認，而 filter 是模糊人名時，若全域 identity 檔把這個名稱對應到某個地址，而**本 workspace 的 aliases 與 `threads.json` participants 都沒有那個地址**，就仍要列候選讓使用者選，不得自動採用。participants 只取自 `load_threads_index` 的結果（同上方候選來源）；loader 回報 `threads_error` 時這個來源不可用，不當成「沒有那個地址」，也不問，直接照 Step 2 開頭停止。其餘情況照改版前處理：跳過 Phase 1，filter 照使用者輸入。沒有 identity 檔時這條例外不會觸發。
 
 詳見 `skills/confirmation-protocol/SKILL.md` 和 `skills/email-search-disambiguation/SKILL.md`。
 
@@ -667,7 +667,7 @@ if [ ! -f "${NAMESPACE_DIR}/config.yaml" ] && [ -f "${NAMESPACE_DIR}/config.md" 
 fi
 ```
 
-**thread 索引的載入時機（#558）**：`${THREADS_FILE}` 解析出來、legacy `.threads.json` 也搬完之後（上面的 auto-migrate），才跑 Step 2 的 `load_threads_index`。Step 1.5 要用 `threads.json` participants 時，就在這時跑；結果沿用到 Step 2 與 Step 5.7，不重讀。
+**thread 索引的載入時機（#558）**：`${THREADS_FILE}` 解析出來、legacy `.threads.json` 也搬完之後（上面的 auto-migrate），才跑 Step 2 的 `load_threads_index`。Step 1.5 要用 `threads.json` participants 時，就在這時跑；回報 `threads_error` 時 Phase 1 不問任何問題，直接照 Step 2 開頭停止。結果沿用到 Step 2 與 Step 5.7，不重讀；例外是載入之後本 run 有步驟寫過 `${THREADS_FILE}`（Step 2 的復原會跑 `/archive-mail-rebuild-threads`），那時依 Step 5.7 重新載入。
 
 > **v2.16.0+ schema clarification (#47)**:config 副檔名改 `.yaml`(內容向來都是 YAML,只是 v2.15.0 ↓ 用 `.md` 副檔名造成語意 mismatch)。Auto-migrate 是 silent rename,user 不需動手。`.md` 仍 work 為 fallback,**v3.0 移除**;期間 README / CLAUDE.md schema 範例都改示範 `.yaml`。
 
@@ -677,7 +677,7 @@ fi
 
 **先驗證索引形狀（#531）**：`dedup_strategy` 為 `index` 或 `both` 時，`${INDEX_FILE}` 一解析出來就先過 `load_email_index`（recipe 與回傳表在下方「讀取兩個索引檔」；`last_archived` 照舊不讀）。loader 回報 `index_error` 時，**本 run 在 Step 3 之前停止**：只印一行 `⚠ index_error: <名稱>`（`emails-not-object`、`index-not-object` 或 `index-not-json`），請使用者把該檔移開或修好再重跑。不搜尋、不寫任何檔、不自動重建、不自動移開：壞掉的 index 可能是某些 entry 唯一的副本。移開後重跑，下方的復原流程就會從 Markdown 重建。
 
-**再驗證 thread 索引形狀（#558）**：不論 `dedup_strategy`（Step 5.7 在每種模式下都維護 `${THREADS_FILE}`），`${THREADS_FILE}` 都要過一次 `load_threads_index`（recipe 與回傳表在下方「載入並驗證 `${THREADS_FILE}`」），Step 1.5 與 Step 5.7 都使用這次載入的 `threads`。loader 回報 `threads_error` 時，**本 run 在 Step 3 之前停止**：印一行 `⚠ threads_error: <名稱>`（`threads-not-object`、`threads-file-not-object`、`threads-not-json` 或 `thread-entry-invalid`）；與 `index_error` 同時出現時兩行都印。不搜尋、不寫任何檔，也不跑下方的復原流程：那裡的「loader 沒有回報錯誤」指兩個 loader 都沒有。復原方式是請使用者執行 `/archive-mail-rebuild-threads` 後重跑：它先把舊檔備份成 `threads.json.bak.<時間>`，再從 Markdown frontmatter 重建，messages、日期與筆數都會回來，但 frontmatter 只帶寄件人，所以只出現在 To／Cc 的人會從 `participants` 消失（Step 1.5 的候選也跟著少）。SOP 不自動執行 rebuild、不自動移開該檔：要不要接受這個損失，由使用者決定。
+**再驗證 thread 索引形狀（#558）**：不論 `dedup_strategy`（Step 5.7 在每種模式下都維護 `${THREADS_FILE}`），`${THREADS_FILE}` 都要過一次 `load_threads_index`（recipe 與回傳表在下方「載入並驗證 `${THREADS_FILE}`」），Step 1.5 與 Step 5.7 都使用這次載入的 `threads`（載入之後本 run 有步驟寫過 `${THREADS_FILE}` 時例外，見 Step 5.7）。loader 回報 `threads_error` 時，**本 run 在 Step 3 之前停止**：印一行 `⚠ threads_error: <名稱>`（`threads-not-object`、`threads-file-not-object`、`threads-not-json` 或 `thread-entry-invalid`）；與 `index_error` 同時出現時兩行都印。不搜尋、不寫任何檔，也不跑下方的復原流程：那裡的「loader 沒有回報錯誤」指兩個 loader 都沒有。復原方式是請使用者執行 `/archive-mail-rebuild-threads` 後重跑：它先把舊檔備份成 `threads.json.bak.<時間>`，再從 Markdown frontmatter 重建，messages、日期與筆數都會回來，但 frontmatter 只帶寄件人，所以只出現在 To／Cc 的人會從 `participants` 消失（Step 1.5 的候選也跟著少）。SOP 不自動執行 rebuild、不自動移開該檔：要不要接受這個損失，由使用者決定。
 
 **復原只適用 `index`／`both`（#545）**：`dedup_strategy=last_archived` 不讀也不寫 index（下方「讀取兩個索引檔」），不走這段復原，`${INDEX_FILE}` 不存在是這個策略的正常狀態；它的 Step 8.5 只做唯讀稽核。`index`／`both` 只有在 loader 沒有回報錯誤時，若上次回報索引未完成，或索引不存在但輸出目錄已有 Markdown，先依 Step 6 的復原流程補齊 canonical index，再做新信搜尋。權限仍不足時停止，不重新輸出已存在的信件。
 
@@ -692,7 +692,7 @@ mkdir -p -- "${output_dir}"   # archive markdown 目的地(`--` 讓以 `-` 開�
 - 若 `dedup_strategy=index`(default)或 `both` → 載入已歸檔 Message-ID;不存在則建立空索引 `{"version": "1.0", "emails": {}}`。載入一律經 `load_email_index`（下方 recipe），Step 4.1、Step 6、Step 8.5 都使用這次載入的 `emails`，不再各自解析檔案
 
 `${THREADS_FILE}` (`.claude/.mail/state/archives/${SLUG}/threads.json`) — Thread 關係索引(append-only thread view):
-- 若存在,載入既有 thread 結構。載入一律經 `load_threads_index`（下方 recipe），不論 `dedup_strategy`；Step 1.5 與 Step 5.7 都使用這次載入的 `threads`，不再各自解析檔案
+- 若存在,載入既有 thread 結構。載入一律經 `load_threads_index`（下方 recipe），不論 `dedup_strategy`；Step 1.5 與 Step 5.7 都使用這次載入的 `threads`，不再各自解析檔案（載入之後本 run 有步驟寫過 `${THREADS_FILE}` 時，重新載入一次，見 Step 5.7）
 - 若不存在（或沒有 `threads` key）,從空索引 `{"version": "1.0", "threads": {}}` 開始；loader 不建檔，檔案由 Step 5.7 寫出
 - 格式見 Step 5.7
 
@@ -1631,7 +1631,9 @@ User 看到註記知道 inline 圖存在但需手動 export from Mail.app。File
 
 ### Step 5.7: 維護 `threads.json`（v2.6.0+,路徑 v2.8.0+ 改 `${THREADS_FILE}`）
 
-每封新歸檔的 md 寫出後,同步更新 `${THREADS_FILE}` (`.claude/.mail/state/archives/${SLUG}/threads.json`)。更新從 Step 2 `load_threads_index` 載入的 `threads` 開始（缺檔或沒有 `threads` key 時是 `{}`），不再自己解析 `${THREADS_FILE}`:
+每封新歸檔的 md 寫出後,同步更新 `${THREADS_FILE}` (`.claude/.mail/state/archives/${SLUG}/threads.json`)。從哪一份 `threads` 開始見下方。
+
+**從哪一份 `threads` 開始（#558）**：本 run 只開始一次，用 Step 2 `load_threads_index` 載入的 `threads`（缺檔或沒有 `threads` key 時是 `{}`），不再自己解析 `${THREADS_FILE}`。之後每封信的更新都累加在同一份記憶體中的 `threads` 上，每封更新完寫出整份；不是每封信都從載入的那一份重新開始，那樣只會留下最後一封的更新。例外：載入之後，本 run 若有任何步驟寫過 `${THREADS_FILE}`（目前是 Step 2 的復原流程：補齊索引後跑 `/archive-mail-rebuild-threads`，把檔案改寫成重建的版本），寫入的那一步結束後就重新經 `load_threads_index` 載入一次（仍在 Step 3 之前），之後只用重新載入的結果，不把先前那一份寫回去蓋掉重建；重新載入回報 `threads_error` 時照 Step 2 開頭停止。沒有任何步驟寫過它時，不重讀。
 
 **格式**：
 
@@ -1662,7 +1664,7 @@ User 看到註記知道 inline 圖存在但需手動 export from Mail.app。File
 **更新演算法**（對每封新歸檔的信）：
 
 1. 從 md frontmatter 讀 `thread_key`
-2. 若 `.threads.json` 裡沒有此 thread_key，建立新 entry：
+2. 若記憶體中的 `threads` 裡沒有此 thread_key，建立新 entry：
    ```
    {"messages": [], "participants": [], "first_message": null, "last_message": null, "message_count": 0}
    ```

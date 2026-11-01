@@ -1061,15 +1061,74 @@ class ArchiveThreadsSopTests(unittest.TestCase):
         self.assertIn("participants", check)
         self.assertIn("不自動執行", check)
 
-    def test_step_1_5_reads_participants_only_through_the_loader(self):
-        text = sop_section("### Step 1.5:")
-        source = next(line for line in text.split("\n") if "threads.json` participants" in line and line.startswith("- "))
-        self.assertIn("load_threads_index", source)
-        self.assertIn("threads_error", source)
+    # Any wording that names the participants of the thread index: `threads.json` or the legacy `.threads.json`,
+    # with or without backticks, followed by "participants".
+    PARTICIPANTS = re.compile(r"\.?threads\.json`? participants")
+
+    def test_every_participants_reader_goes_through_the_loader(self):
+        # #558 verify (findings 15, 23): the candidate bullet, the mail#334 exception and the Step 0 task text all
+        # read participants, and each says where they come from and what a threads_error makes of them.
+        lines = [line for line in DOCUMENT.read_text().split("\n") if self.PARTICIPANTS.search(line)]
+        self.assertGreaterEqual(len(lines), 3, "a participants reader disappeared; this floor names three")
+        for line in lines:
+            with self.subTest(line=line.strip()[:60]):
+                self.assertNotIn("`.threads.json` participants", line)   # the legacy name is not a source
+                self.assertIn("load_threads_index", line)
+                self.assertIn("threads_error", line)
+        exception = next(line for line in lines if "例外（mail#334）" in line)
+        self.assertIn("不可用", exception)   # unavailable, not "has no such address"
+
+    def test_step_1_5_states_the_load_order(self):
+        # #558 verify (findings 13, 22): resolve, then the legacy move, then the loader; never load before the move.
+        bullet = next(line for line in sop_section("### Step 1.5:").split("\n")
+                      if self.PARTICIPANTS.search(line) and line.startswith("- "))
+        order = bullet[bullet.index("順序固定"):]
+        steps = ["解析 `${THREADS_FILE}`", "auto-migrate", "load_threads_index"]
+        self.assertEqual([order.index(step) for step in steps], sorted(order.index(step) for step in steps))
+        self.assertIn("不得在搬移之前載入", order)
+
+    def test_a_known_threads_error_asks_no_disambiguation_question(self):
+        # #558 verify (finding 36): the run is going to stop at Step 2, so Phase 1 does not ask first.
+        bullet = next(line for line in sop_section("### Step 1.5:").split("\n")
+                      if self.PARTICIPANTS.search(line) and line.startswith("- "))
+        self.assertIn("不列候選、不問任何問題，直接照 Step 2 開頭停止", bullet)
+        task = sop_section("### Step 0:").split('subject="phase1_disambiguation"', 1)[1].split("TaskCreate(", 1)[0]
+        self.assertIn("threads_error", task)
+
+    def test_a_registered_target_loads_its_thread_index_before_step_1_5_uses_it(self):
+        # #558 verify (finding 32): archive-mail-tree reuses Step 1.5 but never reaches Step 1.6 / Step 2.
+        tree = (DOCUMENT.parent / "archive-mail-tree.md").read_text()
+        item = next(line for line in tree.split("\n") if line.startswith("3. ") and "Steps 1.4、1.5" in line)
+        for word in ["load_threads_index", "threads_error", "⚠ threads_error:", "index_file", "Step 1.5"]:
+            self.assertIn(word, item)
 
     def test_step_1_6_runs_the_loader_after_the_legacy_move(self):
         text = sop_section("### Step 1.6:")
         self.assertLess(text.index('mv "${output_dir}/.threads.json" "${THREADS_FILE}"'), text.rindex("load_threads_index"))
+
+    def test_a_run_that_wrote_the_thread_index_reloads_it_before_step_5_7(self):
+        # #558 verify B4 (finding 11): Step 2's recovery runs /archive-mail-rebuild-threads; Step 5.7 must not
+        # write back the snapshot taken before that.
+        text = sop_section("### Step 5.7:")
+        rule = text[text.index("**從哪一份 `threads` 開始（#558）**"):]
+        self.assertIn("寫過 `${THREADS_FILE}`", rule)
+        self.assertIn("/archive-mail-rebuild-threads", rule)
+        self.assertIn("重新經 `load_threads_index` 載入", rule)
+        self.assertIn("threads_error", rule)
+        # Every other place that says the load is reused without re-reading names the same exception.
+        for heading in ["### Step 1.6:", "### Step 2:"]:
+            for line in sop_section(heading).split("\n"):
+                if "不重讀" in line or "使用這次載入的 `threads`" in line:
+                    with self.subTest(step=heading, line=line.strip()[:50]):
+                        self.assertIn("寫過", line)
+                        self.assertIn("Step 5.7", line)
+
+    def test_step_5_7_carries_one_threads_object_across_the_run(self):
+        # #558 verify (finding 21): the per-email updates accumulate; no email restarts from the loaded snapshot.
+        rule = sop_section("### Step 5.7:")
+        rule = rule[rule.index("**從哪一份 `threads` 開始（#558）**"):]
+        self.assertIn("只開始一次", rule)
+        self.assertIn("累加", rule)
 
     def test_step_5_7_uses_the_loaded_threads_and_states_the_write_barrier(self):
         text = sop_section("### Step 5.7:")
