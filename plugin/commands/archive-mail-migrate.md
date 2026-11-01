@@ -70,12 +70,18 @@ ARGS_RAW: $ARGUMENTS
 2. 恰好一個 token，且它**完全等於** `--dry-run` → `DRY_RUN = true`：只做 Step 2 的掃描與預覽，不搬任何檔。
 3. 其他任何情況都停止：多於一個 token（例如 `--dry-run extra`）、一個不等於 `--dry-run` 的 token
    （例如智慧破折號打成的 `—dry-run`、大小寫不同的 `--Dry-Run`、加了引號的 `"--dry-run"`）。
-   輸出下面這一句後停止，**不掃描、不建立目錄、不搬任何檔**：
+   輸出下面其中一句後停止，**不掃描、不建立目錄、不搬任何檔**：
 
-   `Error: 不認得的引數 <token>。/archive-mail-migrate 只接受一個引數 --dry-run，或不帶引數。`
+   - 每個 token 都等於 `--dry-run`、但不只一個（例如 `--dry-run --dry-run`）：
 
-   和 `/archive-mail` 的 `unknown-flag`（#540）一樣只指名一個 token，不重印整串 `ARGS_RAW`：`<token>` 是
-   第一個不等於 `--dry-run` 的 token；每個 token 都等於 `--dry-run`（例如 `--dry-run --dry-run`）時是第二個 token。
+     `Error: --dry-run 重複了。/archive-mail-migrate 只接受一個 --dry-run，或不帶引數。`
+
+   - 其他情況：
+
+     `Error: 不認得的引數 <token>。/archive-mail-migrate 只接受一個引數 --dry-run，或不帶引數。`
+
+     和 `/archive-mail` 的 `unknown-flag`（#540）一樣只指名一個 token，不重印整串 `ARGS_RAW`：`<token>` 是
+     第一個不等於 `--dry-run` 的 token。
 
 為什麼讀錯就停：這個指令會 `mv` 檔案。把「要預覽」讀成「實際搬移」的代價，比停下來請使用者重打大得多，
 所以解析失敗一律 fail closed。

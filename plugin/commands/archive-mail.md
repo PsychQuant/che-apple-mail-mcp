@@ -395,10 +395,10 @@ if [ -f "${CONFIG_FILE}" ]; then
     # Inline scalar or non-empty inline list on the same line → refuse here, do not silently coerce.
     # Empty inline list `[]` and bare `<field>:` (no value) are both valid sequence forms.
     # #521: in the source file the awk field and the shell positional parameter below carry a backslash
-    # before the `$`, because Claude Code would otherwise replace them with the invocation's arguments;
-    # Claude Code 2.1.163 and later removes that backslash when it loads the command, with or without
-    # arguments (older versions keep it). Copying straight from the source file into a shell, or running
-    # an older Claude Code? Remove the backslash before the `$` first.
+    # before the `$`, because Claude Code would otherwise replace them with the invocation's arguments.
+    # Measured on Claude Code 2.1.316 (2026-11-01): it removes that backslash when it loads the command,
+    # with and without arguments. The escape syntax was introduced in 2.1.163; other versions were not tested.
+    # Copying straight from the source file into a shell? Remove the backslash before the `$` first.
     for _f in sender_includes sender_excludes recipient_includes recipient_excludes subject_includes subject_excludes; do
         _line=$(awk -v field="^${_f}:" '\$0 ~ field {print; exit}' "${CONFIG_FILE}")
         if [ -n "$_line" ]; then

@@ -106,21 +106,32 @@ def escape_comment(text: str) -> str:
 
 
 class EscapeCommentTests(unittest.TestCase):
-    """#521 verify (findings 3, 10, 28): the comment states the condition under which the backslash goes away.
+    """#521 verify: the comment states only what was measured (round 1 findings 3, 10, 28; round 2 7, 15, 20, 27).
 
-    Claude Code 2.1.163 and later removes it when it loads the command, with or without arguments; the
-    comment must say both, so a reader on an older Claude Code, or one who copies the line by hand, is warned.
+    The live probe (2026-11-01, on #521) ran Claude Code 2.1.316 once with and once without arguments. The
+    escape syntax first appeared in 2.1.163, but positional substitution changed again at 2.1.210 and 2.1.233,
+    and no other version was run, so the comment may not claim a version range or what older versions do.
     """
+
+    CHANGELOG_ENTRY = "issues/521"
 
     @classmethod
     def setUpClass(cls) -> None:
         cls.comment = escape_comment((PLUGIN / "commands/archive-mail.md").read_text(encoding="utf-8"))
+        changelog = (PLUGIN / "CHANGELOG.md").read_text(encoding="utf-8")
+        cls.entry = next(line for line in changelog.split("\n") if cls.CHANGELOG_ENTRY in line)
 
-    def test_the_comment_names_the_minimum_version(self) -> None:
-        self.assertIn("2.1.163", self.comment)
+    def test_the_comment_names_the_measured_version_and_both_calls(self) -> None:
+        self.assertIn("2.1.316", self.comment)
+        self.assertIn("with and without arguments", self.comment)
+        self.assertIn("not tested", self.comment)
 
-    def test_the_comment_covers_calls_with_and_without_arguments(self) -> None:
-        self.assertIn("with or without arguments", self.comment)
+    def test_neither_the_comment_nor_the_changelog_claims_a_range_or_older_behaviour(self) -> None:
+        for name, text in (("comment", self.comment), ("CHANGELOG", self.entry)):
+            for claim in ("and later", "older versions keep", "older Claude Code", "or later"):
+                with self.subTest(place=name, claim=claim):
+                    self.assertNotIn(claim, text)
+        self.assertIn("2.1.316", self.entry)
 
     def test_the_comment_still_tells_a_copier_to_remove_the_backslash(self) -> None:
         self.assertIn("Remove the backslash", self.comment)
@@ -173,6 +184,12 @@ class MigrateArgumentsTests(unittest.TestCase):
         self.assertNotIn("<ARGS_RAW>", message)
         self.assertIn("<token>", message)
         self.assertIn("第一個不等於 `--dry-run` 的 token", self.step_1)
+
+    def test_a_repeated_flag_has_its_own_message(self) -> None:
+        # #521 verify round 2 (finding 16): `--dry-run --dry-run` is not an unrecognized argument.
+        message = next(line for line in self.step_1.split("\n") if "Error: --dry-run 重複" in line)
+        self.assertNotIn("不認得", message)
+        self.assertNotIn("第二個 token", self.step_1)   # the old rule that echoed --dry-run as unrecognized
 
     def test_usage_says_which_invocations_stop(self) -> None:
         usage = section(self.document, "## 使用方式", "## 執行步驟")
