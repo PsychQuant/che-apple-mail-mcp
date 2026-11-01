@@ -431,7 +431,14 @@ class RepairCommandPointerTests(unittest.TestCase):
 
     REPAIR = "/archive-mail-repair-synthetic-ids"
     WINDOW = 120   # characters after the mention; the Step 8.5 summary line needs about 70
-    KNOWN_POINTERS = 3   # Step 5.1, the Step 8.5 synthetic_placeholder bullet, the Step 8.5 example summary
+    # Exact, not a floor (#551 verify, findings 16, 27, 34): with a floor, the fourth pointer that #545 added let any one
+    # removal pass. The five, in file order:
+    #   1. Step 5.1, the `message_id` frontmatter rule;
+    #   2. Step 8.5 read-only branch (#545), the `synthetic_placeholder` repair bullet;
+    #   3. Step 8.5 read-only branch (#545), its example summary line;
+    #   4. Step 8.5 Phase 1, the `synthetic_placeholder` bullet;
+    #   5. Step 8.5 item 4, the index / both example summary line.
+    KNOWN_POINTERS = 5
 
     @classmethod
     def setUpClass(cls):
@@ -449,8 +456,8 @@ class RepairCommandPointerTests(unittest.TestCase):
         return found
 
     def test_the_file_still_points_at_the_repair_command_from_each_known_place(self):
-        self.assertGreaterEqual(len(self.mentions), self.KNOWN_POINTERS,
-                                "a pointer to the repair command was removed; update KNOWN_POINTERS with it")
+        self.assertEqual(len(self.mentions), self.KNOWN_POINTERS,
+                         "a pointer to the repair command was added or removed; update KNOWN_POINTERS and the list above it")
 
     def test_every_pointer_names_the_sqlite_and_full_disk_access_prerequisite(self):
         self.assertEqual(self.missing_prerequisite(self.text), [],
