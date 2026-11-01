@@ -554,6 +554,28 @@ class SopPinsCatchNamedChanges(unittest.TestCase):
                 self.assertEqual(PINS[name](mutated), [])
 
 
+class IndexMissingDuplicatesTests(unittest.TestCase):
+    """#544 verify round 2 (findings 10, 38): the closed duplicates table lists a value for both index-missing stops.
+
+    An index that never existed stops after the duplicates/ inventory (its value comes from the inventory); one that
+    disappears after the identity check stops before it (not evaluated). Both are `file-inspection` stops.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        rows = [line for line in sop_text().split("\n") if line.startswith("| `")]
+        cls.not_evaluated = next(line for line in rows if line.startswith("| `not evaluated` |"))
+        cls.before_after = next(line for line in rows if line.startswith("| `before N / after N` |"))
+
+    def test_the_stop_after_the_inventory_is_listed_under_before_and_after(self):
+        self.assertIn("`index-missing`", self.before_after)
+        self.assertIn("file-inspection", self.before_after)
+
+    def test_the_stop_before_the_inventory_is_listed_under_not_evaluated(self):
+        self.assertIn("`index-missing`", self.not_evaluated)
+        self.assertIn("file-inspection", self.not_evaluated)
+
+
 ARCHIVE_MAIL = DOCUMENT.parent / "archive-mail.md"
 INDEX_RECIPE = ("<!-- archive-mail-index-recipe:start -->", "<!-- archive-mail-index-recipe:end -->")
 

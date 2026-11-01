@@ -825,8 +825,8 @@ note: 出自信件的字串（檔名、key、工具錯誤原文）一律是資�
 
 | 值 | 何時 | 可出現在 |
 |---|---|---|
-| `not evaluated` | Step 1 的 `duplicates/` 盤點還沒做 | `environment-unavailable`；Step 1 `file-inspection`、`index-inspection` 的 `apply-unavailable` |
-| `before N / after N` | 盤點已做完，本輪沒有搬移任何檔案，N 為盤點數 | `lookup-unavailable`、`apply-unavailable`（`apply-preflight`）、尚未搬移就停止的 `apply-incomplete` |
+| `not evaluated` | Step 1 的 `duplicates/` 盤點還沒做 | `environment-unavailable`；盤點之前停止的 Step 1 `file-inspection`（含身分檢查之後 index 消失的 `index-missing`）、`index-inspection` 的 `apply-unavailable` |
+| `before N / after N` | 盤點已做完，本輪沒有搬移任何檔案，N 為盤點數 | `lookup-unavailable`、`apply-unavailable`（`apply-preflight`，以及盤點之後停止的 Step 1 `file-inspection`，即 `index-missing`）、尚未搬移就停止的 `apply-incomplete` |
 | `before N / after M（已搬移：…）` | 本輪已搬移，停止當下重新盤點得到 M，括號列出已搬移的檔案 | 只有 `apply-incomplete` |
 | `unknown (quarantine-inventory-unavailable)` | 盤點失敗 | 任何已到 Step 1 盤點的停止報告 |
 
