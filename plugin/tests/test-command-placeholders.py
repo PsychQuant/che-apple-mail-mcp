@@ -97,6 +97,35 @@ class PluginFilesTests(unittest.TestCase):
         self.assertEqual(len(unescaped_placeholders(mutated)), 1)
 
 
+def escape_comment(text: str) -> str:
+    """The `# #521:` comment in archive-mail.md that explains the escaped `\\$0` / `\\$1` below it."""
+    start = text.index("# #521:")
+    end = text.index("for _f in sender_includes", start)
+    # One line of prose: drop each line's indent and leading `#`, so a phrase may wrap across comment lines.
+    return " ".join(line.strip().lstrip("#").strip() for line in text[start:end].splitlines())
+
+
+class EscapeCommentTests(unittest.TestCase):
+    """#521 verify (findings 3, 10, 28): the comment states the condition under which the backslash goes away.
+
+    Claude Code 2.1.163 and later removes it when it loads the command, with or without arguments; the
+    comment must say both, so a reader on an older Claude Code, or one who copies the line by hand, is warned.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.comment = escape_comment((PLUGIN / "commands/archive-mail.md").read_text(encoding="utf-8"))
+
+    def test_the_comment_names_the_minimum_version(self) -> None:
+        self.assertIn("2.1.163", self.comment)
+
+    def test_the_comment_covers_calls_with_and_without_arguments(self) -> None:
+        self.assertIn("with or without arguments", self.comment)
+
+    def test_the_comment_still_tells_a_copier_to_remove_the_backslash(self) -> None:
+        self.assertIn("Remove the backslash", self.comment)
+
+
 def section(text: str, start: str, end: str) -> str:
     for anchor in (start, end):
         if anchor not in text:
@@ -133,6 +162,17 @@ class MigrateArgumentsTests(unittest.TestCase):
                          "--dry-run extra", "Error: 不認得的引數", "不得依性質相似類推"):
             self.assertIn(required, self.step_1)
         self.assertIn("不搬任何檔", self.step_1)
+
+    def test_args_raw_never_becomes_code(self) -> None:
+        # #521 verify (finding 39): the #540 data-handling rule, in the same words as /archive-mail Step 1.
+        self.assertIn("不得把 `ARGS_RAW` 放進 `python3 -c` 文字或 shell 原始碼", self.step_1)
+
+    def test_the_stop_message_names_one_token_not_the_whole_text(self) -> None:
+        # #521 verify (finding 39): like /archive-mail's unknown-flag error (#540), echo one token, not ARGS_RAW.
+        message = next(line for line in self.step_1.split("\n") if "Error: 不認得的引數" in line)
+        self.assertNotIn("<ARGS_RAW>", message)
+        self.assertIn("<token>", message)
+        self.assertIn("第一個不等於 `--dry-run` 的 token", self.step_1)
 
     def test_usage_says_which_invocations_stop(self) -> None:
         usage = section(self.document, "## 使用方式", "## 執行步驟")
