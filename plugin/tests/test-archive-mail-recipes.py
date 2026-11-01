@@ -1654,24 +1654,39 @@ class ArchiveLastArchivedGateTests(unittest.TestCase):
         # B2 (findings 6, 12): check only that the file exists; if so, say it is stale and must be moved aside first.
         _, branch = self.read_only_branch()
         bullet = next(line for line in branch.split("\n") if line.startswith("- **不讀 `${INDEX_FILE}`**"))
-        for word in ["只檢查它存不存在", "不開檔", "沒有維護", "移開", "`index`／`both`", "Step 2"]:
-            self.assertIn(word, bullet)
-        self.assertRegex(branch, r"```\n⚠ [^\n]*沒有維護[^\n]*移開[^\n]*\n```")   # the one summary line, shown
+        for word in ["只檢查它存不存在", "不開檔", "沒有維護", "移開", "`index`／`both`", "Step 2",
+                     # round 2: the old gate's file was current until the upgrade (36); `index` re-writes, `both`
+                     # touches only mail after last_archived (36); registering uses it as history (23); the
+                     # recovery rebuilds threads.json and drops To/Cc-only participants (3, 22)
+                     "停在升級到本版之前", "改回 `index` 時", "改回 `both` 時", "`last_archived` 之後的信",
+                     "登錄進 registry", "/archive-mail-rebuild-threads", "To／Cc", "先備份"]:
+            with self.subTest(word=word):
+                self.assertIn(word, bullet)
+        line = re.search(r"```\n(⚠ [^\n]*沒有維護[^\n]*移開[^\n]*)\n```", branch)
+        self.assertIsNotNone(line, "the one summary line is shown")
+        for word in ["升級", "登錄到 registry", "/archive-mail-rebuild-threads", "To／Cc", "備份"]:
+            with self.subTest(line_word=word):
+                self.assertIn(word, line.group(1))
 
     def test_the_repair_pointer_names_the_index_it_needs_and_the_route(self):
         # B3 (findings 5, 9): the repair command stops on index-missing, and this strategy keeps no index.
         _, branch = self.read_only_branch()
         summary = re.search(r"```\n(Index Reconcile[^\n]*)\n```", branch).group(1)
-        for word in ["email_index.json", "移開", "index／both", "Step 2"]:
+        for word in ["email_index.json", "移開", "index／both", "Step 2", "threads.json", "To／Cc", "備份"]:
             self.assertIn(word, summary)
         bullet = next(line for line in branch.split("\n") if line.startswith("- **`synthetic_placeholder` 的修復**"))
-        for word in ["index-missing", "移開", "`index`／`both`", "Step 2", "再跑"]:
+        for word in ["index-missing", "移開", "`index`／`both`", "Step 2", "再跑",
+                     "/archive-mail-rebuild-threads", "To／Cc", "先備份"]:
             self.assertIn(word, bullet)
         repair = (DOCUMENT.parent / "archive-mail-repair-synthetic-ids.md").read_text()
         row = next(line for line in repair.split("\n") if line.startswith("| `apply-unavailable` |"))
         self.assertIn("從 Markdown 重建", row)
         self.assertIn("只有 `dedup_strategy` 為 `index`／`both`", row)
         self.assertIn("last_archived", row)
+        self.assertIn("`index-missing` 而 target 是 `last_archived`", row)   # round 2, finding 18
+        missing = next(line for line in repair.split("\n") if line.startswith("若已解析的 index 不存在"))
+        for word in ["`dedup_strategy=last_archived`", "移開", "`index`／`both`", "Step 2", "To／Cc"]:
+            self.assertIn(word, missing)
 
     def test_the_in_memory_audit_states_how_the_data_reaches_the_recipe(self):
         # Finding 7: frontmatter values are sender-controlled, so they never become program text.
@@ -1684,11 +1699,28 @@ class ArchiveLastArchivedGateTests(unittest.TestCase):
         # Findings 18, 29: never later than the run date, date only, the #600 boundary, sender-controlled dates.
         _, branch = self.read_only_branch()
         bullet = next(line for line in branch.split("\n") if line.startswith("- **推進 `last_archived` 的參考值**"))
-        for word in ["min(last_updated, 本 run 的日期)", "不晚於本 run 的日期", "只有日期", "#600", "偽造", "由使用者決定"]:
-            self.assertIn(word, bullet)
+        for word in ["min(last_updated, 本 run 開始時的 UTC 日期)", "只有日期", "#600", "偽造", "由使用者決定",
+                     "再抓一次", "下一輪會被略過"]:   # round 2: the skip direction next to the re-fetch one
+            with self.subTest(word=word):
+                self.assertIn(word, bullet)
+        self.assertNotIn("還沒收到的信之後", bullet)   # the cap does not protect mail not yet received (finding 28)
+        self.assertNotIn("本 run 的日期)", bullet)      # the local date is not the cap (findings 1, 19)
         summary = re.search(r"```\n(Index Reconcile[^\n]*)\n```", branch).group(1)
         self.assertIn("last_archived 參考值=", summary)
         self.assertIn("#600", summary)
+        self.assertIn("UTC", summary)
+        claude = next(line for line in (PLUGIN / "CLAUDE.md").read_text().split("\n") if line.startswith("- **日期與去重**"))
+        self.assertIn("UTC 日期", claude)
+        self.assertNotIn("執行當天", claude)
+
+    def test_there_is_no_reference_value_without_valid_dates(self):
+        # Round 2, findings 6, 34, 46: min("", date) is undefined, and the run date must not stand in.
+        _, branch = self.read_only_branch()
+        bullet = next(line for line in branch.split("\n") if line.startswith("- **推進 `last_archived` 的參考值**"))
+        for word in ["`no-valid-dates`", "`empty-index`", "沒有參考值", "不拿本 run 的日期代替"]:
+            self.assertIn(word, bullet)
+        summary = re.search(r"```\n(Index Reconcile[^\n]*)\n```", branch).group(1)
+        self.assertIn("沒有有效日期時不顯示", summary)
 
     def test_duplicate_message_ids_collapse_by_a_stated_rule_and_are_listed(self):
         # Finding 19: which file's date counts is decided, and the collapsed files keep the arithmetic whole.

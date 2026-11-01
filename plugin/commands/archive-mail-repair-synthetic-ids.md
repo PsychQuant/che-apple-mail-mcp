@@ -112,7 +112,7 @@ note: 出自信件的字串（檔名、key、工具錯誤原文）一律是資�
 
 另外唯讀盤點本 target 的 `duplicates/**/*.md`（不追 symlink；不得跨到其他 target），記錄開始時數量與檔名；不將這些隔離檔混入修復候選或主 index。若可用工具無法確認列舉結果均在本 target 的實體路徑下，也視為盤點不可用，不猜成 0。無法列舉／讀取時在duplicates盤點欄位報原因 `quarantine-inventory-unavailable`（不是頂層status）及原因，數量標 `unknown`，不得假報 0；停止報告的 `duplicates` 欄位怎麼填見「停止報告的 duplicates 欄位」。
 
-若已解析的 index 不存在，同樣停止為 `apply-unavailable`、`stage: file-inspection`，明列 `index-missing`（`duplicates` 欄位依上述盤點結果填）；本修復不把缺少的 index 當作空物件重建。先由使用者逐字給出正確索引位置（上述 (b)）或另行完成索引重建，再重跑本流程。
+若已解析的 index 不存在，同樣停止為 `apply-unavailable`、`stage: file-inspection`，明列 `index-missing`（`duplicates` 欄位依上述盤點結果填）；本修復不把缺少的 index 當作空物件重建。先由使用者逐字給出正確索引位置（上述 (b)）或另行完成索引重建，再重跑本流程。`dedup_strategy=last_archived` 的 target 沒有 index：先把舊的 index（若有）移開，暫時改成 `index`／`both` 跑一次 `/archive-mail`，讓它的 Step 2 從 Markdown 建好 index，再重跑本流程；那次復原會跑 `/archive-mail-rebuild-threads`，只出現在 To／Cc 的參與者會消失，在意就先備份 `threads.json`。
 
 ### Step 2: 重新定位真 Message-ID（完整候選流程）
 
@@ -791,7 +791,7 @@ note: 出自信件的字串（檔名、key、工具錯誤原文）一律是資�
 | `completed-with-residue` | Step 5 | 計畫內的操作全部完成，但 `residual_synthetic_index_keys` 或 `index_file_mismatches` 不是空的（含 `apply-incomplete` 之後重跑：frontmatter 已是真 ID、index 仍是舊 key） | 先逐一處理報告列出的殘留，再接 `/archive-mail-rebuild-threads` |
 | `environment-unavailable` | Step 0.5 | SQLite 能力 preflight 失敗；沒有掃描任何檔案 | 依報告中的實際錯誤補救（授權、連線、版本）後重跑 |
 | `lookup-unavailable` | Step 2 | 搜尋或 headers 工具中途失效、回應無法辨識，或寫入前的 recipe 無法執行；`repaired: 0` | 恢復工具或 Python 後重跑 |
-| `apply-unavailable` | Step 1、Step 2.5 | 缺少檔案檢查或套用所需的能力／授權，或 index 缺少／身分不明／形狀不符（`index_error`，#544）；沒有修改任何東西 | 補齊能力或授權、確認 index 位置後重跑；`index_error` 時先修好該 index，或移開後由 `/archive-mail` 從 Markdown 重建（只有 `dedup_strategy` 為 `index`／`both` 的 target 會重建；`last_archived` 的 target 要先暫時改成 `index`／`both` 跑一次，見 `archive-mail.md` Step 8.5 的唯讀稽核），再重跑 |
+| `apply-unavailable` | Step 1、Step 2.5 | 缺少檔案檢查或套用所需的能力／授權，或 index 缺少／身分不明／形狀不符（`index_error`，#544）；沒有修改任何東西 | 補齊能力或授權、確認 index 位置後重跑（`index-missing` 而 target 是 `last_archived` 時，路線見 Step 1）；`index_error` 時先修好該 index，或移開後由 `/archive-mail` 從 Markdown 重建（只有 `dedup_strategy` 為 `index`／`both` 的 target 會重建；`last_archived` 的 target 要先暫時改成 `index`／`both` 跑一次，見 `archive-mail.md` Step 8.5 的唯讀稽核），再重跑 |
 | `apply-incomplete` | Step 2.5、Step 3、Step 4 | 套用中途停止，部分操作可能已完成；`automatic_rerun_recovery: false` | 依報告的 `completed_operations`、`pending_operations`、`residual_index_keys` 人工核對；重跑不會自動收斂 |
 
 #### still-unparseable 原因碼（只有這 19 類，不得依性質相似類推）
