@@ -1034,9 +1034,20 @@ class ArchiveThreadsLoaderTests(unittest.TestCase):
 
 
 class ArchiveThreadsSopTests(unittest.TestCase):
-    """#558: every reader of threads.json goes through the loader, and a bad file stops the run before Step 3."""
+    """#558: every reader of threads.json validates it with the loader first, and a bad file stops the run.
+
+    Round 2 (findings 9, 35) replaced load-once with validate-then-read: the loader's CLI prints only
+    {error, entries}, so a step that needs the content runs the loader on the current file and reads the file only
+    when the loader reports no error.
+    """
 
     ERRORS = ["threads-not-object", "threads-file-not-object", "threads-not-json", "thread-entry-invalid"]
+    # The rebuild command with its target (round 2, findings 2, 13, 29): without --index-dir it rebuilds the
+    # slug-derived file under the current directory, which may be another archive or no archive at all.
+    REBUILD = "`/archive-mail-rebuild-threads <output_dir> --index-dir <${THREADS_FILE} 所在目錄的絕對路徑>`"
+    REBUILD_REGISTERED = "`/archive-mail-rebuild-threads <registered-output-dir> --index-dir <registry index_file 所在目錄>`"
+    TREE = DOCUMENT.parent / "archive-mail-tree.md"
+    SKILL = DOCUMENT.parents[1] / "skills/email-search-disambiguation/SKILL.md"   # PLUGIN is defined below
 
     def test_the_headings_this_class_relies_on_exist(self):
         for heading in ["### Step 1.5:", "### Step 1.6:", "### Step 2:", "### Step 5.7:"]:
@@ -1057,6 +1068,11 @@ class ArchiveThreadsSopTests(unittest.TestCase):
         text = sop_section("### Step 2:")
         return text[text.index("**再驗證 thread 索引形狀（#558）**"):text.index("先依 Step 6 的復原流程")]
 
+    @staticmethod
+    def paragraph(heading, opening):
+        """The one paragraph of a section that starts with `opening` (paragraphs split on blank lines)."""
+        return next(p for p in sop_section(heading).split("\n\n") if p.lstrip("> ").startswith(opening))
+
     def test_step_2_checks_the_thread_index_in_every_dedup_strategy(self):
         self.assertIn("不論 `dedup_strategy`", self.threads_check())
 
@@ -1068,15 +1084,47 @@ class ArchiveThreadsSopTests(unittest.TestCase):
         self.assertIn("participants", check)
         self.assertIn("不自動執行", check)
 
+    # --- validate-then-read (round 2, findings 9, 35) ------------------------------------------------------------
+
+    def test_the_rule_is_stated_once_with_the_reason(self):
+        note = self.paragraph("### Step 1.6:", "**thread 索引怎麼讀（#558）**")
+        for word in ["CLI 只印", "先驗證再讀", "當下的 `${THREADS_FILE}`", "沒有回報錯誤，才", "重建後的版本"]:
+            self.assertIn(word, note)
+        self.assertNotIn("threads.json` participants", note)   # the note explains the rule; it is not a reader
+        usage = next(line for line in sop_section("### Step 2:").split("\n") if line.startswith("呼叫方式與 index recipe 相同"))
+        self.assertIn("不輸出 thread 內容", usage)
+
+    def test_step_5_7_validates_the_current_file_before_it_reads_it(self):
+        # Scoped to its own paragraph (finding 25): the rest of Step 5.7 must not satisfy these words.
+        rule = self.paragraph("### Step 5.7:", "**怎麼讀 `threads.json`（#558）**")
+        for word in ["寫第一封之前", "當下的 `${THREADS_FILE}`", "load_threads_index", "沒有回報錯誤，才讀",
+                     "寫入屏障", "重建後的版本", "只讀這一次", "累加在同一份", "不是每封信都重新讀檔"]:
+            self.assertIn(word, rule)
+
+    def test_the_load_once_wording_is_gone(self):
+        document = DOCUMENT.read_text()
+        for gone in ["使用這次載入的 `threads`", "不重讀", "重新經 `load_threads_index` 載入", "從哪一份 `threads` 開始",
+                     "只取自 `load_threads_index` 載入的"]:
+            with self.subTest(gone=gone):
+                self.assertNotIn(gone, document)
+
+    # --- participants readers ---------------------------------------------------------------------------------
+
     # Any wording that names the participants of the thread index: `threads.json` or the legacy `.threads.json`,
     # with or without backticks, followed by "participants".
     PARTICIPANTS = re.compile(r"\.?threads\.json`? participants")
+    # Exact (finding 26). The lines of archive-mail.md that read participants, in file order:
+    #   1. Step 0, the phase1_disambiguation task text;
+    #   2. Step 1.5, the candidate-source bullet;
+    #   3. Step 1.5, the mail#334 exception paragraph.
+    PARTICIPANT_READERS = 3
 
-    def test_every_participants_reader_goes_through_the_loader(self):
-        # #558 verify (findings 15, 23): the candidate bullet, the mail#334 exception and the Step 0 task text all
-        # read participants, and each says where they come from and what a threads_error makes of them.
-        lines = [line for line in DOCUMENT.read_text().split("\n") if self.PARTICIPANTS.search(line)]
-        self.assertGreaterEqual(len(lines), 3, "a participants reader disappeared; this floor names three")
+    def readers(self):
+        return [line for line in DOCUMENT.read_text().split("\n") if self.PARTICIPANTS.search(line)]
+
+    def test_every_participants_reader_validates_first(self):
+        lines = self.readers()
+        self.assertEqual(len(lines), self.PARTICIPANT_READERS, "a participants reader was added or removed; update the list")
         for line in lines:
             with self.subTest(line=line.strip()[:60]):
                 self.assertNotIn("`.threads.json` participants", line)   # the legacy name is not a source
@@ -1085,59 +1133,65 @@ class ArchiveThreadsSopTests(unittest.TestCase):
         exception = next(line for line in lines if "例外（mail#334）" in line)
         self.assertIn("不可用", exception)   # unavailable, not "has no such address"
 
-    def test_step_1_5_states_the_load_order(self):
-        # #558 verify (findings 13, 22): resolve, then the legacy move, then the loader; never load before the move.
+    def test_the_disambiguation_skill_defers_to_the_same_rule(self):
+        # Finding 8: Step 1.5 hands candidate finding to this skill.
+        lines = [line for line in self.SKILL.read_text().split("\n") if "thread participants" in line]
+        self.assertEqual(len(lines), 2, "the skill's participants readers changed; update this test")
+        source = next(line for line in lines if line.startswith("- 從 contacts"))
+        for word in ["load_threads_index", "threads_error", "不可用", "Step 1.5"]:
+            self.assertIn(word, source)
+        self.assertIn("來源同下一項", next(line for line in lines if line is not source))
+
+    def test_step_1_5_states_the_order(self):
         bullet = next(line for line in sop_section("### Step 1.5:").split("\n")
                       if self.PARTICIPANTS.search(line) and line.startswith("- "))
         order = bullet[bullet.index("順序固定"):]
         steps = ["解析 `${THREADS_FILE}`", "auto-migrate", "load_threads_index"]
         self.assertEqual([order.index(step) for step in steps], sorted(order.index(step) for step in steps))
-        self.assertIn("不得在搬移之前載入", order)
+        self.assertIn("不得在搬移之前驗證或讀取", order)
 
-    def test_a_known_threads_error_asks_no_disambiguation_question(self):
-        # #558 verify (finding 36): the run is going to stop at Step 2, so Phase 1 does not ask first.
+    def test_a_known_threads_error_asks_nothing_and_still_reports_the_index(self):
+        # Findings 36, 37 (asks nothing, in the bullet and the task) and 24 (the early stop still runs Step 2's
+        # index shape check and prints both lines).
         bullet = next(line for line in sop_section("### Step 1.5:").split("\n")
                       if self.PARTICIPANTS.search(line) and line.startswith("- "))
-        self.assertIn("不列候選、不問任何問題，直接照 Step 2 開頭停止", bullet)
         task = sop_section("### Step 0:").split('subject="phase1_disambiguation"', 1)[1].split("TaskCreate(", 1)[0]
-        self.assertIn("threads_error", task)
+        for name, text in [("Step 1.5 bullet", bullet), ("Step 0 task", task)]:
+            with self.subTest(place=name):
+                self.assertIn("不列候選、不問任何問題", text)
+                self.assertIn("Step 2 開頭的停止", text)
+                self.assertIn("兩行都印", text)
+        self.assertIn("照樣先跑 Step 2 對 `${INDEX_FILE}` 的形狀檢查", bullet)
 
-    def test_a_registered_target_loads_its_thread_index_before_step_1_5_uses_it(self):
-        # #558 verify (finding 32): archive-mail-tree reuses Step 1.5 but never reaches Step 1.6 / Step 2.
-        tree = (DOCUMENT.parent / "archive-mail-tree.md").read_text()
-        item = next(line for line in tree.split("\n") if line.startswith("3. ") and "Steps 1.4、1.5" in line)
-        for word in ["load_threads_index", "threads_error", "⚠ threads_error:", "index_file", "Step 1.5"]:
-            self.assertIn(word, item)
+    # --- the rebuild command, with its target --------------------------------------------------------------------
 
-    def test_step_1_6_runs_the_loader_after_the_legacy_move(self):
-        text = sop_section("### Step 1.6:")
-        self.assertLess(text.index('mv "${output_dir}/.threads.json" "${THREADS_FILE}"'), text.rindex("load_threads_index"))
+    def test_every_rebuild_instruction_names_the_target(self):
+        check = self.threads_check()
+        barrier = self.paragraph("### Step 5.7:", "**寫入屏障（#558）**")
+        for name, text in [("Step 2 stop", check), ("Step 5.7 write barrier", barrier)]:
+            with self.subTest(place=name):
+                self.assertIn(self.REBUILD, text)
+        for path in (DOCUMENT, self.TREE):
+            with self.subTest(file=path.name):
+                bare = re.findall(r"請使用者(?:執行|跑) `/archive-mail-rebuild-threads`", path.read_text())
+                self.assertEqual(bare, [], "say which archive to rebuild: <output_dir> --index-dir <directory>")
 
-    def test_a_run_that_wrote_the_thread_index_reloads_it_before_step_5_7(self):
-        # #558 verify B4 (finding 11): Step 2's recovery runs /archive-mail-rebuild-threads; Step 5.7 must not
-        # write back the snapshot taken before that.
-        text = sop_section("### Step 5.7:")
-        rule = text[text.index("**從哪一份 `threads` 開始（#558）**"):]
-        self.assertIn("寫過 `${THREADS_FILE}`", rule)
-        self.assertIn("/archive-mail-rebuild-threads", rule)
-        self.assertIn("重新經 `load_threads_index` 載入", rule)
-        self.assertIn("threads_error", rule)
-        # Every other place that says the load is reused without re-reading names the same exception.
-        for heading in ["### Step 1.6:", "### Step 2:"]:
-            for line in sop_section(heading).split("\n"):
-                if "不重讀" in line or "使用這次載入的 `threads`" in line:
-                    with self.subTest(step=heading, line=line.strip()[:50]):
-                        self.assertIn("寫過", line)
-                        self.assertIn("Step 5.7", line)
+    # --- archive-mail-tree (findings 32; round 2: 2, 13, 14, 26) ---------------------------------------------
 
-    def test_step_5_7_carries_one_threads_object_across_the_run(self):
-        # #558 verify (finding 21): the per-email updates accumulate; no email restarts from the loaded snapshot.
-        rule = sop_section("### Step 5.7:")
-        rule = rule[rule.index("**從哪一份 `threads` 開始（#558）**"):]
-        self.assertIn("只開始一次", rule)
-        self.assertIn("累加", rule)
+    def test_a_registered_target_validates_its_thread_index_before_step_1_5_reads_it(self):
+        item = next(line for line in self.TREE.read_text().split("\n")
+                    if line.startswith("3. ") and "Steps 1.4、1.5" in line)
+        for word in ["load_threads_index", "threads_error", "⚠ threads_error:", "index_file", "Step 1.5",
+                     "沒有回報錯誤才讀",
+                     # the registry binding replaces Step 1.5's resolve-and-move order, and nothing is moved there
+                     "換成 registry 綁定的路徑", "不搬", "不寫",
+                     # the stop
+                     "並停止", "不問消歧義", "不搜尋", "不寫任何檔",
+                     self.REBUILD_REGISTERED]:
+            with self.subTest(word=word):
+                self.assertIn(word, item)
 
-    def test_step_5_7_uses_the_loaded_threads_and_states_the_write_barrier(self):
+    def test_step_5_7_validates_and_states_the_write_barrier(self):
         text = sop_section("### Step 5.7:")
         self.assertIn("load_threads_index", text)
         self.assertIn("threads_error", text)
@@ -1145,10 +1199,18 @@ class ArchiveThreadsSopTests(unittest.TestCase):
         self.assertIn("不寫 `${THREADS_FILE}`", barrier)
         self.assertIn("/archive-mail-rebuild-threads", barrier)
 
+    def test_step_1_6_runs_the_loader_after_the_legacy_move(self):
+        text = sop_section("### Step 1.6:")
+        self.assertLess(text.index('mv "${output_dir}/.threads.json" "${THREADS_FILE}"'), text.rindex("load_threads_index"))
+
     def test_step_zero_task_names_the_thread_error(self):
         task = sop_section("### Step 0:").split('subject="load_indices_and_config"', 1)[1].split("TaskCreate(", 1)[0]
         self.assertIn("threads_error", task)
         self.assertIn("load_threads_index", task)
+        self.assertIn("--index-dir", task)
+        update = sop_section("### Step 0:").split('subject="update_indices"', 1)[1].split("TaskCreate(", 1)[0]
+        self.assertIn("load_threads_index", update)
+        self.assertIn("累加", update)
 
 
 class ArchiveArgsRecipeTests(unittest.TestCase):
