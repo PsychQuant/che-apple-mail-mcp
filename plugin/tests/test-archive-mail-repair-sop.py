@@ -369,24 +369,42 @@ def check_recipe_blocks(text):
 INDEX_ERRORS = ("emails-not-object", "index-not-object", "index-not-json")
 INDEX_GATE_FRAGMENTS = (
     "load_email_index", "archive-mail-index-recipe", "不是本指令的存在檢查", "status: apply-unavailable",
-    "stage: index-inspection", "repaired: 0", "index_error:", "still-unparseable: not evaluated", "duplicates:",
+    "stage: index-inspection", "repaired: 0", "index_error:", "still-unparseable: not evaluated",
+    # #544 verify: the gate runs before the duplicates/ inventory, so its stop has nothing to report there yet
+    # (finding 14), and an empty load is checked against the disk before it is believed (finding 25).
+    "`pending: entire target`、`duplicates: not evaluated`", "再確認一次該檔仍存在", "index-missing",
 ) + INDEX_ERRORS
+# Anchors of the three Step 1 paragraphs the gate is ordered against.
+INDEX_IDENTITY = "現存 index 若是 symlink"
+CANDIDATE_READ = "才讀取 regular files"
+INVENTORY = "duplicates/**/*.md"
 
 
 def check_index_shape_gate(text):
-    """#544: Step 1 reads the index through the shared loader, after the index-missing check, and stops by name."""
+    """#544: Step 1 reads an existing index through the shared loader before any candidate is read, and stops by name.
+
+    Order (verify findings 14 and 26): after the index identity check, before the paragraph that reads the regular files
+    and before the duplicates/ inventory. The loader maps a missing file to an empty index, so the gate runs only on an
+    index that exists and checks again that it still exists when the load comes back empty (finding 25).
+    """
     step1 = section_text(text, "Step 1:")
     if step1 is None:
         return ["no section starts with 'Step 1:'"]
     paragraphs = step1.split("\n\n")
-    missing = next((i for i, p in enumerate(paragraphs) if "index-missing" in p and "stage: file-inspection" in p), None)
-    gate = next((i for i, p in enumerate(paragraphs) if "load_email_index" in p), None)
+
+    def first(anchor):
+        return next((i for i, p in enumerate(paragraphs) if anchor in p), None)
+
+    gate = first("load_email_index")
     if gate is None:
         return ["Step 1 does not read the index through load_email_index"]
     problems = [f"the load_email_index paragraph lacks {fragment}" for fragment in INDEX_GATE_FRAGMENTS
                 if fragment not in paragraphs[gate]]
-    if missing is None or gate < missing:
-        problems.append("load_email_index must come after the index-missing check (it maps a missing file to an empty index)")
+    identity, reads, inventory = first(INDEX_IDENTITY), first(CANDIDATE_READ), first(INVENTORY)
+    if identity is None or not identity < gate:
+        problems.append("load_email_index must come after the index identity check")
+    if reads is None or inventory is None or not gate < min(reads, inventory):
+        problems.append("load_email_index must come before any candidate file is read or the duplicates/ inventory is taken")
     return problems
 
 
@@ -428,15 +446,16 @@ def move_fragment(text, title_prefix, fragment, into_prefix):
     return "\n".join(lines[:start + 1] + [fragment] + lines[start + 1:])
 
 
-def move_index_gate_before_missing(text):
-    """Put Step 1's load_email_index paragraph in front of its index-missing paragraph."""
+def move_index_gate(text, anchor, after):
+    """Move Step 1's load_email_index paragraph to just after (or just before) the paragraph holding `anchor`."""
     start, end = section_bounds(text, "Step 1:")
     lines = text.split("\n")
     paragraphs = "\n".join(lines[start:end]).split("\n\n")
     gate = next(i for i, p in enumerate(paragraphs) if "load_email_index" in p)
-    missing = next(i for i, p in enumerate(paragraphs) if "index-missing" in p and "stage: file-inspection" in p)
-    assert missing < gate, "the shipped order is already wrong"
-    moved = paragraphs[:missing] + [paragraphs[gate]] + [p for i, p in enumerate(paragraphs[missing:], missing) if i != gate]
+    rest = [p for i, p in enumerate(paragraphs) if i != gate]
+    target = next(i for i, p in enumerate(rest) if anchor in p) + (1 if after else 0)
+    moved = rest[:target] + [paragraphs[gate]] + rest[target:]
+    assert moved != paragraphs, "the mutation changed nothing"
     return "\n".join(lines[:start] + "\n\n".join(moved).split("\n") + lines[end:])
 
 
@@ -502,11 +521,14 @@ class SopPinsCatchNamedChanges(unittest.TestCase):
             ("recipe blocks", "the recipe invents a group status", lambda t: replaced(t, '{"status": "message-id-format-collision", "candidates": answers}', '{"status": "ambiguous", "candidates": answers}'), "ambiguous"),
             ("recipe blocks", "stage 4 stops mentioning the recipe", lambda t: replaced(t, "以下方 Message-ID recipe 的 `classify-candidates` 計算", "以下方 Message-ID recipe 計算"), "stage 4"),
             ("recipe blocks", "P1 stops pointing at its recipe function", lambda t: remove_in_section(t, "P1:", "第 4、5 項由下方計畫 recipe 的 `check_index_references` 執行，不靠逐項心算。"), "check_index_references"),
-            ("index shape gate", "the loader paragraph moves in front of the index-missing check", move_index_gate_before_missing, "must come after the index-missing check"),
+            ("index shape gate", "the loader paragraph moves after the candidate read", lambda t: move_index_gate(t, CANDIDATE_READ, after=True), "must come before any candidate file is read"),
+            ("index shape gate", "the loader paragraph moves after the duplicates/ inventory", lambda t: move_index_gate(t, INVENTORY, after=True), "must come before any candidate file is read"),
+            ("index shape gate", "the loader paragraph moves in front of the identity check", lambda t: move_index_gate(t, INDEX_IDENTITY, after=False), "must come after the index identity check"),
+            ("index shape gate", "an empty load is no longer checked against the disk", lambda t: remove_in_section(t, "Step 1:", "，再確認一次該檔仍存在"), "仍存在"),
             ("index shape gate", "the loader is no longer named", lambda t: replaced(t, "load_email_index", "the index loader", count=-1), "does not read the index through load_email_index"),
             ("index shape gate", "the stop loses its stage", lambda t: remove_in_section(t, "Step 1:", "`stage: index-inspection`、"), "stage: index-inspection"),
             ("index shape gate", "one of the loader's names is dropped", lambda t: remove_in_section(t, "Step 1:", " | index-not-json"), "index-not-json"),
-            ("index shape gate", "the stop loses its duplicates field", lambda t: remove_in_section(t, "Step 1:", "`duplicates:` 依上述盤點結果填"), "duplicates:"),
+            ("index shape gate", "the stop reports the inventory it has not taken yet", lambda t: replaced(t, "`pending: entire target`、`duplicates: not evaluated`（`duplicates/` 還沒盤點）", "`pending: entire target`，`duplicates:` 依上述盤點結果填"), "duplicates: not evaluated"),
             ("index shape gate", "the loader is no longer said to differ from the existence check", lambda t: remove_in_section(t, "Step 1:", "不是本指令的存在檢查"), "不是本指令的存在檢查"),
         ]
         for name, prefix, fragment in ANCHORS:
@@ -581,7 +603,7 @@ class IndexLoaderParityTests(unittest.TestCase):
                     path.write_text(content)
                     self.assertEqual(self.load(str(path)), expected)
 
-    def test_a_missing_file_reads_as_an_empty_index_which_is_why_it_runs_after_index_missing(self):
+    def test_a_missing_file_reads_as_an_empty_index_which_is_why_an_empty_load_is_rechecked(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertEqual(self.load(str(Path(directory) / "absent.json")), ({}, None))
 
