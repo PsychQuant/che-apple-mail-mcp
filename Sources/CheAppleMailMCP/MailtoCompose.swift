@@ -493,6 +493,7 @@ enum ComposeRefusal: Equatable {
     /// (Rule row 7, a named signature missing or ambiguous in Mail, is checked
     /// in Mail by `signatureDefinitionPreflight`, so it is not a case here.)
     case mailtoURLTooLong(encodedLength: Int, bodyEncodedLength: Int, limit: Int)
+    case replyAttachmentsUnsupported
 
     /// What to do instead of an over-limit mailto URL. The direct write is
     /// named only when the server runs with it, and only for calls that meet
@@ -555,6 +556,8 @@ enum ComposeRefusal: Equatable {
                 + "failed would dispatch with missing recipients (#277). Use bare addresses to "
                 + "send now, or create a draft (create_draft), where display names in to, cc "
                 + "and bcc are supported (#404), and send it from Mail after checking the recipients."
+        case .replyAttachmentsUnsupported:
+            return "STUB"
         }
     }
 }
@@ -629,7 +632,8 @@ func composeCallRefusal(
 /// attachment-path or cc/bcc gate of its own on this path.
 func replyForwardRefusal(
     format: BodyFormat,
-    accessibilityTrusted: Bool
+    accessibilityTrusted: Bool,
+    hasAttachments: Bool = false
 ) -> ComposeRefusal? {
     guard format == .plain else { return .richTextFormat(format) }
     if !accessibilityTrusted { return .accessibilityNotGranted }
