@@ -16,8 +16,8 @@
 
 ## 3. 文件與規格
 
-- [ ] 3.1 [P] 兩份規則副本 `.claude/rules/compose-wrapper-free.md` 與 `plugin/rules/compose-wrapper-free.md` 的失敗表一起改：標題與內文由「封閉八類」明文改為九類（第 9 類暫時、只適用 `reply_email`、#608 落地時移除、不得類推），加第 9 列與處置；`README.md` 指向該標題的錨點連結與「eight」敘述同步更新。驗證：`diff` 兩份副本只差 plugin 版的匯入註解；`grep` 確認 README 錨點與新標題一致。
-- [ ] 3.2 [P] `CHANGELOG.md` 的 `[Unreleased]` 新增 `### Changed` 行為變更條目：`reply_email` 帶附件改為拒絕（原因、手動做法、#534／#608），物件模型附件程式碼移除與新守門測試，`CHE_MAIL_ATTACHMENT_DELAY_BETWEEN`／`_TRAILING` 不再讀取。驗證：內容審閱；`ChangelogParserTests` 通過。
+- [x] 3.1 [P] 兩份規則副本 `.claude/rules/compose-wrapper-free.md` 與 `plugin/rules/compose-wrapper-free.md` 的失敗表一起改：標題與內文由「封閉八類」明文改為九類（第 9 類暫時、只適用 `reply_email`、#608 落地時移除、不得類推），加第 9 列與處置；`README.md` 指向該標題的錨點連結與「eight」敘述同步更新。驗證：`diff` 兩份副本只差 plugin 版的匯入註解；`grep` 確認 README 錨點與新標題一致。
+- [x] 3.2 [P] `CHANGELOG.md` 的 `[Unreleased]` 新增 `### Changed` 行為變更條目：`reply_email` 帶附件改為拒絕（原因、手動做法、#534／#608），物件模型附件程式碼移除與新守門測試，`CHE_MAIL_ATTACHMENT_DELAY_BETWEEN`／`_TRAILING` 不再讀取。驗證：內容審閱；`ChangelogParserTests` 通過。
 
 ## 4. 驗證
 
