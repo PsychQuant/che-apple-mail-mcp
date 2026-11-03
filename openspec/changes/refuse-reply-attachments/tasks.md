@@ -21,5 +21,5 @@
 
 ## 4. 驗證
 
-- [ ] 4.1 執行完整 `make test`，記錄每個 suite 的通過數；若 `plugin/tests/test-fda-assist-lifecycle.py` 或 session-start hook 出現負載相關 flake（#605），單獨重跑並記錄兩次結果。驗證：`make test` 結束碼 0。
-- [ ] 4.2 確認 `Sources/CheAppleMailMCP/` 無 `make new attachment`、無 `attachmentFragment`、無 `needsAttachDrain`，且 `spectra validate refuse-reply-attachments` 通過。驗證：`grep -rn` 無結果、validate 輸出 valid。
+- [x] 4.1 執行完整 `make test`，記錄每個 suite 的通過數；若 `plugin/tests/test-fda-assist-lifecycle.py` 或 session-start hook 出現負載相關 flake（#605），單獨重跑並記錄兩次結果。驗證：`make test` 結束碼 0。
+- [x] 4.2 確認 `Sources/CheAppleMailMCP/` 無 `make new attachment`、無 `attachmentFragment`、無 `needsAttachDrain`，且 `spectra validate refuse-reply-attachments` 通過。驗證：`grep -rn` 無結果、validate 輸出 valid。
