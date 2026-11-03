@@ -493,6 +493,15 @@ enum ComposeRefusal: Equatable {
     /// (Rule row 7, a named signature missing or ambiguous in Mail, is checked
     /// in Mail by `signatureDefinitionPreflight`, so it is not a case here.)
     case mailtoURLTooLong(encodedLength: Int, bodyEncodedLength: Int, limit: Int)
+    /// 9 — TEMPORARY, `reply_email` only (#534): `attachments` is non-empty.
+    ///
+    /// The reply path used to attach through Mail's scripting object model after
+    /// pasting the body; that insertion writes the reply's `content`, which holds
+    /// neither the pasted body nor Mail's quote, so the saved draft kept only the
+    /// attachment while the call reported success. The insertion is removed and
+    /// the call is refused until #608 attaches through Mail's editor; remove this
+    /// case when #608 lands. It is not a precedent: no other tool or parameter is
+    /// refused by analogy with it (spec `message-composition`, reason 9).
     case replyAttachmentsUnsupported
 
     /// What to do instead of an over-limit mailto URL. The direct write is
@@ -557,7 +566,12 @@ enum ComposeRefusal: Equatable {
                 + "send now, or create a draft (create_draft), where display names in to, cc "
                 + "and bcc are supported (#404), and send it from Mail after checking the recipients."
         case .replyAttachmentsUnsupported:
-            return "STUB"
+            return "reply_email cannot attach files yet (temporary, #534): attaching through "
+                + "Mail's scripting object model after the body paste erased the pasted body and "
+                + "Mail's quote of the original while the call still reported success. No reply "
+                + "was saved or sent. Use save_as_draft: true WITHOUT the attachments argument, "
+                + "then open the saved reply from Drafts in Mail and drag the files into it. "
+                + "Attaching through Mail's editor is tracked in #608."
         }
     }
 }
@@ -627,14 +641,21 @@ func composeCallRefusal(
     )
 }
 
-/// #304 — the pre-flight refusal for `reply_email` / `forward_email`. Only two
-/// of these conditions can arise here: a reply has no subject, sender,
-/// attachment-path or cc/bcc gate of its own on this path.
+/// #304 — the pre-flight refusal for `reply_email` / `forward_email`. Two of the
+/// permanent conditions can arise here (format, Accessibility): a reply has no
+/// subject, sender, attachment-path or cc/bcc gate of its own on this path.
+///
+/// #534 adds the temporary reason 9 for `reply_email` only: any attachment.
+/// It is checked FIRST because it is decided by the arguments alone and its
+/// recipe (reply without attachments, attach in Mail) applies whatever else
+/// holds, so the outcome never depends on this machine's Accessibility grant.
+/// `forward_email` has no attachments and passes the default `false`.
 func replyForwardRefusal(
     format: BodyFormat,
     accessibilityTrusted: Bool,
     hasAttachments: Bool = false
 ) -> ComposeRefusal? {
+    if hasAttachments { return .replyAttachmentsUnsupported }
     guard format == .plain else { return .richTextFormat(format) }
     if !accessibilityTrusted { return .accessibilityNotGranted }
     return nil

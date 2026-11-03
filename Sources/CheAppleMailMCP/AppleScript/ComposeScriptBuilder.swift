@@ -11,34 +11,29 @@ func appleScriptEscape(_ string: String) -> String {
 }
 
 // Issue #39 / #61: helper-owns-indent contract.
-// `attachmentFragment` and `recipientFragment` emit lines with their own
-// 4-space indent baked in. Callers MUST prefix with bare "\n" (newline only,
-// no extra spaces) — the helper output already has the indent. Adding
-// extra prefix at call sites breaks visual alignment between first line
-// (caller-prefix + helper-indent = double-indented) and subsequent lines
-// (separator-only + helper-indent = single-indented), regressing #39's
-// single-source-of-truth promise.
+// `recipientFragment` emits lines with its own 4-space indent baked in.
+// Callers MUST prefix with bare "\n" (newline only, no extra spaces) — the
+// helper output already has the indent. Adding extra prefix at call sites
+// breaks visual alignment between first line (caller-prefix + helper-indent =
+// double-indented) and subsequent lines (separator-only + helper-indent =
+// single-indented), regressing #39's single-source-of-truth promise.
 //
-// Issue #60: Mail.app's AppleScript attachment pipeline is asynchronous.
-// Two failure modes when emitting consecutive `make new attachment` calls
-// without pacing: (1) `at after the last paragraph` in the next call
-// resolves to the same anchor as the previous one because the previous
-// insert hasn't materialized yet — Mail.app's collision behavior drops
-// all but one; (2) `save` / `send` commits before in-flight attachment
-// binds drain. For N >= 2 we interleave `delay 0.3` between attachments
-// (gives anchor materialization time) and append `delay 0.5` trailing
-// (ensures pipeline drain before dispatch). N == 1 has no race so emits
-// no delay — keeps the common path latency-free.
+// #534: the helper that attached files through Mail's scripting object model
+// (the paced attachment lines of #60, with the #64 delay env vars
+// CHE_MAIL_ATTACHMENT_DELAY_BETWEEN / _TRAILING) is removed. On the reply path it
+// ran after the body paste and wrote the reply's `content`, which holds neither
+// the pasted body nor Mail's quote, so the saved draft kept only the attachment
+// while the call reported success. Compose attaches through Mail's editor
+// (⇧⌘A, #175); reply attachments are refused until #608 does the same.
+// `NoObjectModelAttachmentGuardTests` keeps the object-model form out of this
+// source tree.
 
-// Issue #64: delay constants are escape-hatchable via env vars.
-// Defaults (0.3 / 0.5) are picked rather than measured; on a Mac under load
-// (Time Machine, Spotlight reindex, dozen apps) or after Mail.app updates
-// the timing window can shift. Without an escape hatch, a user reporting
-// "still drops attachments 6 months from now" has no way to test calibration
-// without a code change. Sane bounds (0–10s) prevent denial-of-self attacks.
-private let defaultDelayBetween = 0.3
-private let defaultDelayTrailing = 0.5
-
+// Issue #64: GUI delays are escape-hatchable via env vars. The defaults are
+// picked rather than measured; on a Mac under load (Time Machine, Spotlight
+// reindex, dozen apps) or after Mail.app updates the timing window can shift.
+// Without an escape hatch, a user reporting a timing failure has no way to test
+// calibration without a code change. Sane bounds (0–10s) prevent
+// denial-of-self attacks.
 private func resolvedDelay(envKey: String, fallback: Double) -> Double {
     guard let raw = ProcessInfo.processInfo.environment[envKey],
           let value = Double(raw),
@@ -46,27 +41,6 @@ private func resolvedDelay(envKey: String, fallback: Double) -> Double {
         return fallback
     }
     return value
-}
-
-private func attachmentFragment(for paths: [String]) -> String {
-    guard !paths.isEmpty else { return "" }
-    let lines = paths.map { path in
-        "    make new attachment with properties {file name:POSIX file \"\(appleScriptEscape(path))\"} at after the last paragraph"
-    }
-    if paths.count == 1 {
-        return lines[0]
-    }
-    let between = resolvedDelay(envKey: "CHE_MAIL_ATTACHMENT_DELAY_BETWEEN", fallback: defaultDelayBetween)
-    let trailing = resolvedDelay(envKey: "CHE_MAIL_ATTACHMENT_DELAY_TRAILING", fallback: defaultDelayTrailing)
-    var pieces: [String] = []
-    for (idx, line) in lines.enumerated() {
-        pieces.append(line)
-        if idx < lines.count - 1 {
-            pieces.append("    delay \(between)")
-        }
-    }
-    pieces.append("    delay \(trailing)")
-    return pieces.joined(separator: "\n")
 }
 
 // #251: internal (not private) so RecipientDisplayNameTests can pin the
@@ -964,7 +938,7 @@ func buildForwardNoBodyScript(messageRef: String, to: [String]) -> String {
 /// `openOptions` (appended after `with opening window`, e.g. `" and reply to all"`;
 /// default `""` leaves the reply and forward scripts byte-identical).
 /// `nativeLines` is the (already
-/// `\n`-prefixed, helper-indented) cc/to/attachment fragment block to set on the
+/// `\n`-prefixed, helper-indented) cc/to recipient fragment block to set on the
 /// reply/forward message object, or `""` for none. Delays reuse the #175 mailto
 /// env keys (same GUI-timing class).
 private func buildReplyForwardPasteScript(
@@ -974,14 +948,12 @@ private func buildReplyForwardPasteScript(
     msgVar: String,
     newBody: String,
     nativeLines: String,
-    needsAttachDrain: Bool,
     send: Bool,
     successLabel: String,
     notOpenedError: String
 ) -> String {
     let windowDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_WINDOW_DELAY", fallback: 1.8)
     let stepDelay = resolvedDelay(envKey: "CHE_MAIL_MAILTO_STEP_DELAY", fallback: 0.7)
-    let attachDrain = resolvedDelay(envKey: "CHE_MAIL_MAILTO_ATTACH_DRAIN", fallback: 1.5)
     let dispatchKey = composeDispatchKeystroke(send: send)
     let bodyEsc = appleScriptEscape(newBody)
 
@@ -1045,9 +1017,11 @@ private func buildReplyForwardPasteScript(
         end tell
     """
 
-    // 2. Native cc/to/attachments on the message object — set AFTER the body
+    // 2. Native cc/to recipients on the message object — set AFTER the body
     // paste so the fresh body-top cursor is undisturbed (the paste lands above
-    // Mail's quote; object mutations don't move the GUI insertion point).
+    // Mail's quote; recipient mutations don't move the GUI insertion point).
+    // Recipients only: inserting into the message's content here would replace
+    // the pasted body and Mail's quote (#534).
     if !nativeLines.isEmpty {
         s += """
 
@@ -1056,9 +1030,6 @@ private func buildReplyForwardPasteScript(
             end tell
         end tell
         """
-    }
-    if needsAttachDrain {
-        s += "\n        delay \(attachDrain)\n"
     }
 
     // 3. Re-confirm our window is still frontmost + no lingering panel + dispatch;
@@ -1155,24 +1126,22 @@ private func buildReplyForwardPasteScript(
 
 /// #218 — wrapper-free reply: native `reply` verb (Mail quotes the original;
 /// reply-all is that verb's `reply to all` option, not a separate `reply all`
-/// verb — #510) + clipboard paste of the plain new body at the cursor. cc/attachments
-/// are set natively on the reply message (unchanged from #34/#60). `saveAsDraft`
-/// ⌘S vs send ⇧⌘D. The new body is NEVER `set content`/`set html content`.
+/// verb — #510) + clipboard paste of the plain new body at the cursor. Extra cc
+/// recipients are set natively on the reply message (unchanged from #34).
+/// `saveAsDraft` ⌘S vs send ⇧⌘D. The new body is NEVER `set content`/`set html
+/// content`. There is no attachments parameter: attaching through the object
+/// model wiped the pasted body (#534); `reply_email` refuses attachments until
+/// #608 attaches through Mail's editor.
 func buildReplyEmailPasteScript(
     messageRef: String,
     newBody: String,
     replyAll: Bool,
     ccAdditional: [String]? = nil,
-    attachments: [String]? = nil,
     saveAsDraft: Bool
 ) -> String {
     var fragments: [String] = []
     if let cc = ccAdditional, !cc.isEmpty {
         fragments.append(recipientFragment(cc, kind: "cc"))
-    }
-    let hasAttachments = (attachments?.isEmpty == false)
-    if let atts = attachments, !atts.isEmpty {
-        fragments.append(attachmentFragment(for: atts))
     }
     let nativeLines = fragments.isEmpty ? "" : "\n" + fragments.joined(separator: "\n")
 
@@ -1183,7 +1152,6 @@ func buildReplyEmailPasteScript(
         msgVar: "replyMsg",
         newBody: newBody,
         nativeLines: nativeLines,
-        needsAttachDrain: hasAttachments,
         send: !saveAsDraft,
         successLabel: saveAsDraft ? "Reply saved as draft (paste path)"
                                   : "Reply sent successfully (paste path)",
@@ -1208,7 +1176,6 @@ func buildForwardEmailPasteScript(
         msgVar: "fwdMsg",
         newBody: newBody,
         nativeLines: nativeLines,
-        needsAttachDrain: false,
         send: true,
         successLabel: "Email forwarded successfully (paste path)",
         notOpenedError: "forward did not open a compose window"

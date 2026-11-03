@@ -123,27 +123,29 @@ final class MailAppIntegrationTests: XCTestCase {
     // message in the account's INBOX. If INBOX is empty, the test is skipped.
     // Cleanup deletes any draft whose subject contains the integration-test prefix.
 
-    /// Issue #37: end-to-end reply-as-draft + cc_additional + attachments.
-    /// Asserts that the AppleScript runs without error AND the resulting draft
-    /// appears in Drafts (not Sent). Body contents not asserted here; #45 covers that.
-    func test_replyEmail_asDraft_withCcAndAttachments_succeeds() async throws {
-        guard let (sourceId, sourceMailbox) = try await firstInboxMessage() else {
-            throw XCTSkip("INBOX has no messages — cannot run reply integration test")
-        }
+    /// #534 (was #37's reply-as-draft + cc + attachments success test): the
+    /// attachment step erased the pasted body and Mail's quote while this test
+    /// only checked the success string. A reply with attachments is now refused
+    /// before any Mail work, so this test reads no INBOX and touches no Mail. It
+    /// replies to id "-1", which matches no message, so even if the refusal
+    /// regressed the script could not create a reply to a real message.
+    func test_replyEmail_withAttachments_isRefused_issue534() async throws {
         let attachmentPath = try makeTempAttachment()
-        let result = try await MailController.shared.replyEmail(
-            id: sourceId,
-            mailbox: sourceMailbox,
-            accountName: accountName,
-            body: "Integration test reply (#37). Subject: \(uniqueReplySubject("cc-attach"))",
-            replyAll: false,
-            ccAdditional: ["test+cc@example.com"],
-            attachments: [attachmentPath],
-            saveAsDraft: true,
-            format: .plain
-        )
-        XCTAssertTrue(result.contains("Reply saved as draft") || result.contains("draft"),
-                      "expected draft-save success message, got: \(result)")
+        do {
+            _ = try await MailController.shared.replyEmail(
+                id: "-1",
+                mailbox: "INBOX",
+                accountName: accountName,
+                body: "Integration test reply (#534). Subject: \(uniqueReplySubject("attach-refused"))",
+                replyAll: false,
+                attachments: [attachmentPath],
+                saveAsDraft: true,
+                format: .plain
+            )
+            XCTFail("a reply with attachments must be refused (#534)")
+        } catch MailError.invalidParameter(let message) {
+            XCTAssertTrue(message.contains("#608"), message)
+        }
     }
 
     /// Issue #45: verify the runtime draft body contains the RFC 3676 `> ` quoted

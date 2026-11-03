@@ -1963,30 +1963,20 @@ actor MailController {
 
     /// #218/#304 — the pre-flight refusal for this reply/forward call, or nil to
     /// proceed on the clean native-verb + paste path. Probes Accessibility at
-    /// call time.
-    private func replyForwardRefusalForCall(format: BodyFormat) -> ComposeRefusal? {
+    /// call time. `hasAttachments` is `reply_email`'s temporary reason 9 (#534);
+    /// the test override still replaces the whole derivation.
+    private func replyForwardRefusalForCall(format: BodyFormat, hasAttachments: Bool = false) -> ComposeRefusal? {
         if let override = refusalOverride { return override() }
         return replyForwardRefusal(
             format: format,
-            accessibilityTrusted: AccessibilityStatus.isTrusted
+            accessibilityTrusted: AccessibilityStatus.isTrusted,
+            hasAttachments: hasAttachments
         )
     }
 
-    /// Reply to an email. Optionally add extra CC, attach files, and/or save as draft instead of sending.
+    /// Reply to an email. Optionally add extra CC and/or save as draft instead of
+    /// sending. A non-empty `attachments` is refused for now (#534, until #608).
     func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]? = nil, saveAsDraft: Bool = false, format: BodyFormat = .plain, accountId: String? = nil) throws -> String {
-        if let attachments = attachments { try validateAttachmentPaths(attachments) }
-        // Issue #41 + #34: validate cc_additional then dedup case-insensitively
-        // (within the user-supplied list; cross-list dedup vs reply_all-derived
-        // CCs requires fetching original CCs — out of scope, see #34).
-        let dedupedCC: [String]?
-        if let cc = ccAdditional {
-            try validateEmailAddresses(cc, field: "cc_additional")
-            dedupedCC = dedupAddresses(cc)
-        } else {
-            dedupedCC = nil
-        }
-        let ref = resolveMsgRef(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName)
-
         // #218/#304: the native-verb + paste path is the ONLY reply path. Mail's
         // native `reply` builds the quoted original itself (correct cite-blockquote
         // + threading headers) and we paste ONLY the new body at the cursor — never
@@ -1994,17 +1984,37 @@ actor MailController {
         // in the URLShare/cite wrapper. The clean path needs NO #43 pre-fetch
         // (Mail quotes the original). The injecting builder it used to fall back
         // to is gone: markdown/html and a missing Accessibility grant now refuse.
+        //
+        // #534: the refusal is the first thing evaluated (it is an argument of
+        // `dispatchComposePath`, and everything else lives in `cleanPath`), so a
+        // refused call does nothing at all — no cc check, no file check, no
+        // script. Any attachment refuses: the object-model attach that wiped the
+        // pasted body and Mail's quote is removed, and the attachment-path check
+        // it needed went with it.
         // #301: reply sends unless saved as draft — the timeout gate keys on this.
         let sendFlow = !saveAsDraft
         return try dispatchComposePath(
-            refusal: replyForwardRefusalForCall(format: format),
+            refusal: replyForwardRefusalForCall(format: format,
+                                                hasAttachments: attachments?.isEmpty == false),
             cleanPath: {
+                // Issue #41 + #34: validate cc_additional then dedup case-insensitively
+                // (within the user-supplied list; cross-list dedup vs reply_all-derived
+                // CCs requires fetching original CCs — out of scope, see #34). An
+                // invalid address throws `invalidParameter`, which `mapRuntimeError`
+                // passes through unchanged.
+                let dedupedCC: [String]?
+                if let cc = ccAdditional {
+                    try validateEmailAddresses(cc, field: "cc_additional")
+                    dedupedCC = dedupAddresses(cc)
+                } else {
+                    dedupedCC = nil
+                }
+                let ref = resolveMsgRef(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName)
                 let pasteScript = buildReplyEmailPasteScript(
                     messageRef: ref,
                     newBody: body,
                     replyAll: replyAll,
                     ccAdditional: dedupedCC,
-                    attachments: attachments,
                     saveAsDraft: saveAsDraft
                 )
                 // Always preserve the user's clipboard — the paste path sets it to
@@ -2036,7 +2046,7 @@ actor MailController {
         // With NO body there is nothing to inject at all, so the plain native
         // `forward` script runs directly: it needs no Accessibility grant and
         // cannot produce a wrapper (#304 — this is why the bodyless case is not
-        // one of the eight refusals).
+        // one of the closed refusal reasons).
         guard let newBody = body else {
             return try runScript(buildForwardNoBodyScript(messageRef: ref, to: to))
         }

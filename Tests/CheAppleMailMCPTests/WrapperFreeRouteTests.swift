@@ -258,7 +258,7 @@ final class ReplyForwardSendStageTests: XCTestCase {
         buildReplyEmailPasteScript(
             messageRef: "message id 1 of mailbox \"INBOX\"",
             newBody: "hi", replyAll: false, ccAdditional: nil,
-            attachments: nil, saveAsDraft: saveAsDraft)
+            saveAsDraft: saveAsDraft)
     }
 
     func testReplySend_sentinelAndFlagProtectDispatchAndTail() {
