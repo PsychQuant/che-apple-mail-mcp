@@ -32,9 +32,9 @@
 
 替代方案：直接做第二階段。否決，因為 ⇧⌘A 路徑需要 live 驗證（L1–L4），而且依 #220 會拒絕 CJK 路徑，在那之前錯誤的成功回報會持續發生。
 
-### Check reply attachments before every other pre-flight step
+### Check reply attachments before every Mail-side pre-flight step
 
-`replyForwardRefusal` 新增 `hasAttachments: Bool = false` 參數，並**最先**檢查它（在 format 與 Accessibility 之前）。理由：它只由引數決定，而且它的替代做法（不帶附件存草稿、在 Mail 手動附加）不論呼叫的其他條件為何都需要；放在最前面也讓結果與 Accessibility 授權狀態無關，生產端測試因此不必依賴機器的授權狀態。`replyEmail` 在計算出拒絕之前不做任何事：拒絕比 `validateAttachmentPaths`（讀檔案系統）更早，因此不存在的附件路徑也得到第九類而不是「not found」。由於所有非空附件都被拒絕，`replyEmail` 內的附件路徑檢查成為死碼，一併移除。`forward_email` 傳 `hasAttachments: false`（預設值），行為不變。
+`replyForwardRefusal` 新增 `hasAttachments: Bool = false` 參數，並在這個純函式裡**最先**檢查它（在 format 與 Accessibility 之前）。這個順序只描述 `replyForwardRefusal` 與 `MailController.replyEmail`：在 MCP 工具入口，`reply_email` 的 handler 先做引數解析（id、必填欄位、帳號反查、型別檢查，以及 format 的第 1 類拒絕），所以 `format: "markdown"` 加附件的呼叫得到第 1 類，與未修改的 Requirement: Composing tools accept a format parameter 一致。理由：它只由引數決定，而且它的替代做法（不帶附件存草稿、在 Mail 手動附加）不論呼叫的其他條件為何都需要；放在最前面也讓結果與 Accessibility 授權狀態無關，生產端測試因此不必依賴機器的授權狀態。`replyEmail` 在計算出拒絕之前不做任何事：拒絕比 `validateAttachmentPaths`（讀檔案系統）更早，因此不存在的附件路徑也得到第九類而不是「not found」。由於所有非空附件都被拒絕，`replyEmail` 內的附件路徑檢查成為死碼，一併移除。這個檢查（`validateAttachmentPaths`）是 #38 的外送附件控制：敏感目錄 deny-list、`MAIL_MCP_ATTACHMENT_ROOTS` allow-list 與數量上限（#63），不屬於被移除的物件模型附加；它現在用不到只是因為每個附件都被拒絕，#608 恢復回信附件時必須重新套用。`forward_email` 傳 `hasAttachments: false`（預設值），行為不變。
 
 `refusalOverride` 接縫維持「整個取代 pre-flight」的語意，與 compose 路徑一致；生產端拒絕測試不設定這個接縫，直接走真實的 `replyForwardRefusal`。
 
@@ -58,8 +58,9 @@ spec 的「never inject a body」requirement 同步把元素插入 `content`（`
 
 ## Implementation Contract
 
-- **行為**：`reply_email` 的 `attachments` 只要含至少一個元素（不論路徑是否存在、是否為 ASCII、`save_as_draft` 為何、`format` 為何、Accessibility 是否授權），呼叫就以 `MailError.invalidParameter` 失敗，訊息單行，包含：原因（附件那一步會洗掉貼上的內文與引用原信，#534）、替代做法（以 `save_as_draft: true` 且不帶 `attachments` 重新呼叫，再把檔案拖進 Mail 的撰寫視窗）、以及 #608。拒絕發生時不執行任何 AppleScript（script runner 呼叫次數為 0）、不開視窗、不建草稿、不寄信。
+- **行為**：`reply_email` 的 `attachments` 只要含至少一個元素（不論路徑是否存在、是否為 ASCII、`save_as_draft` 為何、Accessibility 是否授權；`format` 省略或為 `plain`，因為 format 在工具入口先解析，`markdown`／`html` 得到第 1 類），呼叫就以 `MailError.invalidParameter` 失敗，訊息單行，包含：原因（附件那一步會洗掉貼上的內文與引用原信，#534）、替代做法（以 `save_as_draft: true` 且不帶 `attachments` 重新呼叫，再把檔案拖進 Mail 的撰寫視窗）、以及 #608。拒絕發生時不執行任何 AppleScript（script runner 呼叫次數為 0）、不開視窗、不建草稿、不寄信。
 - **不變的行為**：`attachments` 省略或為空陣列時，`reply_email` 產生的 script 與現在不帶附件時相同；`forward_email` 不受影響。
+- **改變的錯誤順序**：`cc_additional` 的檢查移進 `cleanPath`，所以在 `MailController.replyEmail` 層級，被拒絕的呼叫（不論有沒有附件）現在先回報 pre-flight 拒絕，之後才輪到無效的 `cc_additional`。在 MCP 工具入口，format 本來就先解析，實際改變的是第 9 類與 Accessibility 排到無效 `cc_additional` 之前。兩種順序都沒有副作用；CHANGELOG 記錄這個改變。
 - **介面**：`ComposeRefusal` 新增 `replyAttachmentsUnsupported`；`replyForwardRefusal(format:accessibilityTrusted:hasAttachments:)`，`hasAttachments` 預設 `false`；`buildReplyEmailPasteScript` 不再有 `attachments` 參數；`buildReplyForwardPasteScript` 不再有 `needsAttachDrain` 參數。
 - **守門**：`Sources/CheAppleMailMCP/` 任何檔案含 `make new attachment` 時 `NoObjectModelAttachmentGuardTests` 失敗。
 - **驗收**：`swift test` 中的拒絕單元測試、生產端零 script 測試、守門測試、說明守門測試通過；`make test` 全綠；`spectra validate refuse-reply-attachments` 通過。

@@ -40,7 +40,7 @@ No other body source is permitted.
 
 When a composing tool cannot use its non-injecting path, it SHALL fail with an error that names the reason and states an actionable alternative, and SHALL NOT create a draft, send mail, or delete an existing draft.
 
-The set of ineligibility reasons SHALL be exactly the following nine, and SHALL NOT be extended by analogy. Reasons 1 to 8 are permanent. Reason 9 is temporary: it applies to `reply_email` only, and it SHALL be removed from this list when issue #608 (attaching through Mail's editor on the reply path) lands; it SHALL NOT be taken as a precedent for refusing any other tool or parameter. The reasons govern the GUI path; when `create_draft` creates the draft through Requirement: Direct-write draft path, reasons 3 and 8 do not apply, because that path sends no keystrokes. When the direct write does not create the draft, the GUI path's reasons apply in full.
+The set of ineligibility reasons SHALL be exactly the following nine, and SHALL NOT be extended by analogy. Reason 9 is temporary: it applies to `reply_email` only, and it SHALL be removed from this list when issue #608 (attaching through Mail's editor on the reply path) lands; it SHALL NOT be taken as a precedent for refusing any other tool or parameter. The reasons govern the GUI path; when `create_draft` creates the draft through Requirement: Direct-write draft path, reasons 3 and 8 do not apply, because that path sends no keystrokes. When the direct write does not create the draft, the GUI path's reasons apply in full.
 
 1. `format` is `markdown` or `html`
 2. the subject is empty (the clean path identifies its compose window by title)
@@ -50,7 +50,7 @@ The set of ineligibility reasons SHALL be exactly the following nine, and SHALL 
 6. a `to`, `cc`, or `bcc` recipient carries a display name on a send (`compose_email`); on a draft, display-name recipients are filled through the GUI and are not a refusal reason
 7. `signature` has mode `named` and the name is missing or not unique among Mail's signatures, refused before the mailto hand-off (#322)
 8. the percent-encoded `mailto:` URL is longer than 8000 characters (`MAILTO_URL_TOO_LONG`), refused on the GUI path before any GUI operation, and for `compose_email` and `update_draft` before any Mail query (the direct write has no such limit); `check_compose_length` reports the exact total, body and overhead sizes
-9. temporary, `reply_email` only (#534): `attachments` contains at least one path, in draft mode and in send mode alike, refused before any other check, before any attachment-path check, and before any AppleScript runs or any window opens; the error SHALL direct the caller to reply with `save_as_draft: true` and without `attachments`, then attach the file in Mail's compose window, and SHALL name #608
+9. temporary, `reply_email` only (#534): `attachments` contains at least one path, in draft mode and in send mode alike, refused before any Mail action, attachment-file check or AppleScript, and before any window opens; argument parsing at the tool boundary (including the format refusal, reason 1) runs first; the error SHALL direct the caller to reply with `save_as_draft: true` and without `attachments`, then attach the file in Mail's compose window, and SHALL name #608
 
 #### Scenario: Missing Accessibility fails and names the zero-TCC alternative
 
@@ -87,19 +87,20 @@ The set of ineligibility reasons SHALL be exactly the following nine, and SHALL 
 
 #### Scenario: Reply with attachments fails before any Mail work
 
-- **WHEN** `reply_email` is invoked with a non-empty `attachments`
+- **WHEN** `reply_email` is invoked with a non-empty `attachments` and with `format` omitted or `plain`
 - **THEN** the tool SHALL fail naming reason 9
 - **AND** the error SHALL direct the caller to save the reply as a draft without `attachments` and attach the file in Mail's compose window, and SHALL name #608
 - **AND** no AppleScript SHALL run, no compose window SHALL open, no draft SHALL be created, and no mail SHALL be sent
 
-##### Example: reason 9 takes precedence and ignores the other arguments
+##### Example: which reason a reply with attachments reports
 
 | `attachments` | `save_as_draft` | `format` | Accessibility | Outcome |
 | ------------- | --------------- | -------- | ------------- | ------- |
 | `["/tmp/a.txt"]` | `true` | `plain` | granted | fails, reason 9 |
 | `["/tmp/a.txt"]` | `false` | `plain` | granted | fails, reason 9 |
 | `["/tmp/missing.pdf"]` | `true` | `plain` | granted | fails, reason 9 (not a missing-file error) |
-| `["/tmp/a.txt"]` | `true` | `markdown` | not granted | fails, reason 9 |
+| `["/tmp/a.txt"]` | `true` | `plain` | not granted | fails, reason 9 (before Accessibility) |
+| `["/tmp/a.txt"]` | `true` | `markdown` | granted | fails, reason 1 (the format is parsed at the tool boundary first) |
 | `[]` | `true` | `plain` | granted | not refused for reason 9 |
 | omitted | `true` | `plain` | granted | not refused for reason 9 |
 

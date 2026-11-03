@@ -36,7 +36,7 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 
 ## 呼叫失敗時怎麼辦（封閉九類，不得依性質相似類推第十類）
 
-以下九類屬 GUI 路徑。第 1–8 類是永久的；第 9 類是**暫時**的，只適用 `reply_email`，#608（回信路徑改由 Mail 編輯器附加檔案）落地時從表中移除，**不得**當成拒絕其他工具或參數的前例。`create_draft` 的 opt-in 直接寫入（#472／#475）建立草稿時，第 3 類（Accessibility）與第 8 類（長度）不適用；直接寫入沒有建立草稿時，其餘各類照常適用。
+以下九類屬 GUI 路徑。第 9 類是**暫時**的，只適用 `reply_email`，#608（回信路徑改由 Mail 編輯器附加檔案）落地時從表中移除，**不得**當成拒絕其他工具或參數的前例。`create_draft` 的 opt-in 直接寫入（#472／#475）建立草稿時，第 3 類（Accessibility）與第 8 類（長度）不適用；直接寫入沒有建立草稿時，第 1–8 類照常全部適用（第 9 類只適用 `reply_email`）。
 
 前提不滿足時工具**直接失敗、零副作用**（不建草稿、不寄出、不刪既有草稿），
 訊息會具名原因與替代做法。九類與各自的處置：
@@ -51,7 +51,7 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 | 6 | 寄出（`compose_email`）時任一收件人帶顯示名（`Name <addr>`） | 改用純位址寄出；或改建草稿（`create_draft`，**to/cc/bcc 顯示名皆支援**，#404）確認收件人後手動寄出 |
 | 7 | `signature` 為 `named`，但名稱在 Mail 裡不存在或不只一個（`SIGNATURE: name is missing or ambiguous in Mail`，#322） | 用 `list_signatures` 找出確切名稱；或改用 `mode: none`，自己在正文寫署名 |
 | 8 | `MAILTO_URL_TOO_LONG`：percent-encoded URL 超過 8000 字元（CJK 常見字約佔 9 個） | 先用 `check_compose_length` 精確計量 total/body/overhead。或帶 `from_address` 用 create_draft 的 opt-in 直接寫入（沒有長度上限；只在伺服器開了直接寫入、且呼叫符合其條件時）；或把完整正文保留在使用者選的地方，建立短／空正文草稿後在 Mail 手動貼上；或經使用者確認拆成多封。不要截斷、不要復活 legacy。此檢查在 GUI 路徑的任何 GUI 操作前拒絕（compose_email 與 update_draft 在任何 Mail 查詢前）；create_draft 的直接寫入建立草稿時不受此限（#388 verify），update_draft 不掃描／替換／刪除舊草稿。 |
-| 9 | **暫時，只適用 `reply_email`**（#534）：`attachments` 非空，草稿與寄出皆然。在任何其他檢查、附件路徑檢查與 AppleScript 之前拒絕 | 以 `save_as_draft: true` 且**不帶 `attachments`** 回信，再到 Mail 的草稿匣開啟該回信、把檔案拖進撰寫視窗。原因：附件那一步在貼上內文之後寫入回信的 `content`，把貼上的內文與引用原信一起洗掉，卻回報成功。#608 落地後移除本列 |
+| 9 | **暫時，只適用 `reply_email`**（#534）：`attachments` 非空，草稿與寄出皆然。在任何 Mail 動作、附件檔案檢查與 AppleScript 之前拒絕；工具入口的引數解析（包括第 1 類的 format 拒絕）先執行 | 以 `save_as_draft: true` 且**不帶 `attachments`** 回信，再到 Mail 的草稿匣開啟該回信、把檔案拖進撰寫視窗。原因：附件那一步在貼上內文之後寫入回信的 `content`，把貼上的內文與引用原信一起洗掉，卻回報成功。#608 落地後移除本列 |
 
 > 第 5、6 類的配方與 #304 之前的規則一致——差別是現在**工具自己會說**，不必靠人記得。
 
