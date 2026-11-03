@@ -327,7 +327,8 @@ final class ReplyForwardSendStageTests: XCTestCase {
             refusal: { nil })
         do {
             _ = try await MailController.shared.replyEmail(
-                id: "123", mailbox: "INBOX", accountName: "a@b.c", body: "new text")
+                id: "123", mailbox: "INBOX", accountName: "a@b.c", body: "new text",
+                attachments: nil)
             XCTFail("post-dispatch reply failure must throw, not fall back")
         } catch {
             XCTAssertTrue("\(error)".contains("Sent"),

@@ -48,7 +48,8 @@ final class MailControllerSeamTests: XCTestCase {
             refusal: { .accessibilityNotGranted })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.replyEmail(
-                id: "123", mailbox: "INBOX", accountName: "a@b.c", body: "new text"))
+                id: "123", mailbox: "INBOX", accountName: "a@b.c", body: "new text",
+                attachments: nil))
         XCTAssertEqual(scripts, 0, "a refused reply must not even open the window")
     }
 

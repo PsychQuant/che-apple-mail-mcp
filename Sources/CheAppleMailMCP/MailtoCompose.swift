@@ -500,8 +500,11 @@ enum ComposeRefusal: Equatable {
     /// neither the pasted body nor Mail's quote, so the saved draft kept only the
     /// attachment while the call reported success. The insertion is removed and
     /// the call is refused until #608 attaches through Mail's editor; remove this
-    /// case when #608 lands. It is not a precedent: no other tool or parameter is
-    /// refused by analogy with it (spec `message-composition`, reason 9).
+    /// case when #608 lands, and at the same time run the reply's attachment
+    /// paths through `validateAttachmentPaths` (#38's deny-list, allow-list and
+    /// count cap), with a test, as compose does. It is not a precedent: no other
+    /// tool or parameter is refused by analogy with it (spec
+    /// `message-composition`, reason 9).
     case replyAttachmentsUnsupported
 
     /// What to do instead of an over-limit mailto URL. The direct write is

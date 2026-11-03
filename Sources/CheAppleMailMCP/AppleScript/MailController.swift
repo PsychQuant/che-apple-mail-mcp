@@ -1976,7 +1976,7 @@ actor MailController {
 
     /// Reply to an email. Optionally add extra CC and/or save as draft instead of
     /// sending. A non-empty `attachments` is refused for now (#534, until #608).
-    func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]? = nil, saveAsDraft: Bool = false, format: BodyFormat = .plain, accountId: String? = nil) throws -> String {
+    func replyEmail(id: String, mailbox: String, accountName: String, body: String, replyAll: Bool = false, ccAdditional: [String]? = nil, attachments: [String]?, saveAsDraft: Bool = false, format: BodyFormat = .plain, accountId: String? = nil) throws -> String {
         // #218/#304: the native-verb + paste path is the ONLY reply path. Mail's
         // native `reply` builds the quoted original itself (correct cite-blockquote
         // + threading headers) and we paste ONLY the new body at the cursor — never
@@ -1985,12 +1985,17 @@ actor MailController {
         // (Mail quotes the original). The injecting builder it used to fall back
         // to is gone: markdown/html and a missing Accessibility grant now refuse.
         //
-        // #534: the refusal is the first thing evaluated (it is an argument of
-        // `dispatchComposePath`, and everything else lives in `cleanPath`), so a
-        // refused call does nothing at all — no cc check, no file check, no
-        // script. Any attachment refuses: the object-model attach that wiped the
-        // pasted body and Mail's quote is removed, and the attachment-path check
-        // it needed went with it.
+        // #534: the refusal is the first thing evaluated here (it is an argument
+        // of `dispatchComposePath`, and everything else lives in `cleanPath`), so
+        // a refused call does nothing at all — no cc check, no script. (The tool
+        // handler parses its arguments, `format` included, before this call.)
+        // Any attachment refuses: the object-model attach that wiped the pasted
+        // body and Mail's quote is removed. `validateAttachmentPaths` is NOT part
+        // of that attach — it is #38's outbound control (sensitive-path
+        // deny-list, MAIL_MCP_ATTACHMENT_ROOTS allow-list, #63 count cap), which
+        // compose and create_draft still apply. It is unused here only because
+        // every attachment is refused; #608 must apply it again when it restores
+        // reply attachments.
         // #301: reply sends unless saved as draft — the timeout gate keys on this.
         let sendFlow = !saveAsDraft
         return try dispatchComposePath(

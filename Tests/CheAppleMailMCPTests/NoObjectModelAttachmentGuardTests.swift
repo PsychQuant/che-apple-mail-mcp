@@ -19,8 +19,8 @@ import XCTest
 ///
 /// Scanned over whole file text and comment-agnostic, for the reasons
 /// `NoBodyInjectionGuardTests` documents. Prose under `Sources/CheAppleMailMCP/`
-/// must therefore not spell the banned form; this file names it only inside the
-/// regex literal below.
+/// must therefore not spell the banned form in any letter case; this file names
+/// it only in the pattern below.
 final class NoObjectModelAttachmentGuardTests: XCTestCase {
 
     private func serverSourcesDir() -> URL {
@@ -32,7 +32,14 @@ final class NoObjectModelAttachmentGuardTests: XCTestCase {
     }
 
     func testNoSourceFileInsertsAnAttachmentThroughTheObjectModel() throws {
-        let insertion = try NSRegularExpression(pattern: #"make\s+new\s+attachment"#)
+        // AppleScript keywords are case-insensitive, so the match is too. The
+        // gap between the words may be whitespace (line breaks included), the
+        // AppleScript continuation `¬`, a Swift multi-line-string `\`, or a
+        // Swift string split `" + "` across lines.
+        let gap = #"(?:\s|¬|\\|"\s*\+\s*")+"#
+        let insertion = try NSRegularExpression(
+            pattern: "make" + gap + "new" + gap + "attachment",
+            options: [.caseInsensitive])
 
         var offenders: [String] = []
         for url in try swiftFiles() {

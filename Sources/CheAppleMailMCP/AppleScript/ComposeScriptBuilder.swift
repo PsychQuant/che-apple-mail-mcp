@@ -1019,9 +1019,11 @@ private func buildReplyForwardPasteScript(
 
     // 2. Native cc/to recipients on the message object — set AFTER the body
     // paste so the fresh body-top cursor is undisturbed (the paste lands above
-    // Mail's quote; recipient mutations don't move the GUI insertion point).
-    // Recipients only: inserting into the message's content here would replace
-    // the pasted body and Mail's quote (#534).
+    // Mail's quote). Recipients are a separate element of the message in Mail's
+    // scripting dictionary, so adding them is expected to leave the pasted body
+    // and the quote alone — expected, not verified: no live read-back has
+    // checked it yet (#609). What is known to destroy them is inserting into the
+    // message's content here, which replaced the pasted body and quote (#534).
     if !nativeLines.isEmpty {
         s += """
 

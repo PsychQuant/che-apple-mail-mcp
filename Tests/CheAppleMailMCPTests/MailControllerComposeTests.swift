@@ -807,8 +807,6 @@ final class MailControllerComposeTests: XCTestCase {
 
     // MARK: - Large originalPlain script size (#49)
 
-    // MARK: - attachmentFragment race-condition mitigation (issue #60)
-
     // MARK: - #61 indent parity (helper-owns-indent contract)
 
     // MARK: - #63 attachment count cap
@@ -843,7 +841,4 @@ final class MailControllerComposeTests: XCTestCase {
             XCTFail("unexpected error type: \(error)")
         }
     }
-
-    // MARK: - #64 env-configurable attachment delays
-
 }
