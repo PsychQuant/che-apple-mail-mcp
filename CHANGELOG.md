@@ -46,6 +46,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code, and compose attachments have gone through ⇧⌘A with the
   `CHE_MAIL_MAILTO_*` delays since #304.
 
+### Fixed
+
+- **A header value no longer ends at a Unicode line character**
+  ([#555](https://github.com/PsychQuant/che-apple-mail-mcp/issues/555)).
+  The header parser split lines with `CharacterSet.newlines`, which besides CR
+  and LF holds U+000B, U+000C, U+0085, U+2028 and U+2029. A value containing
+  one of them was cut there, and a tail shaped like `Name: value` was stored as
+  another header, so a sender could forge `Message-ID`, `From` or `Date` (and a
+  MIME part's `Content-Type`) from inside their own `Subject`. Lines now end
+  only at CR or LF (a bare CR still ends a line, as before), and those
+  characters stay in the value. Archives exported earlier with a forged
+  `message_id` are not repaired.
+
 ## [4.0.0] - 2026-10-29
 
 ### Added

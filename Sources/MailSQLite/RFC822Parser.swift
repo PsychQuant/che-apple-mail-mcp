@@ -73,6 +73,9 @@ public enum RFC822Parser {
         return nil
     }
 
+    /// The characters that end a header line: CR and LF only (#555).
+    private static let lineBreaks = CharacterSet(charactersIn: "\r\n")
+
     private static func parseHeaderBlock(_ data: Data) -> [String: String] {
         guard let text = String(data: data, encoding: .utf8)
                 ?? String(data: data, encoding: .ascii) else {
@@ -87,7 +90,15 @@ public enum RFC822Parser {
             .replacingOccurrences(of: "\n\t", with: " ")
 
         var headers: [String: String] = [:]
-        let lines = unfolded.components(separatedBy: .newlines)
+        // Only CR and LF end a header line (RFC 5322 §2.2; a bare CR is kept
+        // as a line end, as before). `CharacterSet.newlines` also holds U+000B,
+        // U+000C, U+0085, U+2028 and U+2029: splitting on it cut a value at any
+        // of those and turned a `Name: value` tail into a forged header (#555).
+        // The split is scalar based on purpose — `"\r\n"` is one Swift
+        // `Character`, so a Character-based split would stop splitting CRLF.
+        let lines = unfolded
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .components(separatedBy: RFC822Parser.lineBreaks)
         for line in lines {
             guard let colonIdx = line.firstIndex(of: ":") else { continue }
             let name = String(line[line.startIndex..<colonIdx]).lowercased().trimmingCharacters(in: .whitespaces)
