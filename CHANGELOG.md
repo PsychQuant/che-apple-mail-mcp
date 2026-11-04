@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING: `reply_email` refuses `attachments` for now**
+  ([#534](https://github.com/PsychQuant/che-apple-mail-mcp/issues/534)).
+  With a non-empty `attachments`, the reply script pasted the new body through
+  Mail's editor and then attached the file through Mail's scripting object
+  model. That insertion writes the reply's `content`, which holds neither the
+  pasted body nor the quote Mail's `reply` verb built, so the saved draft kept
+  only the attachment and the signature while the call returned
+  `Reply saved as draft (paste path)` (send mode used the same script). Any
+  non-empty `attachments` is now refused before any Mail action, attachment-file
+  check or AppleScript, in draft and send mode alike, with `invalidParameter`
+  naming the reason and the recipe: reply with `save_as_draft: true` and without
+  `attachments`, then open the saved reply from Drafts in Mail and drag the
+  files in. This is a temporary ninth refusal reason that applies to
+  `reply_email` only; it goes when
+  [#608](https://github.com/PsychQuant/che-apple-mail-mcp/issues/608) attaches
+  through Mail's editor. The parameter stays in the schema so such a call is
+  refused by name. Argument parsing at the tool boundary still runs first, so
+  `format: "markdown"` or `"html"` with attachments reports the format refusal.
+  Reply and forward scripts without attachments are unchanged.
+- **`reply_email` reports its refusal before an invalid `cc_additional`**
+  ([#534](https://github.com/PsychQuant/che-apple-mail-mcp/issues/534)). The
+  `cc_additional` check now runs after the pre-flight refusal, so a refused
+  reply reports the attachments refusal or the missing Accessibility grant
+  first, where an invalid `cc_additional` used to be reported first; it is now
+  reported once the call would otherwise proceed. The format refusal was already
+  first, because the tool parses `format` before calling into Mail. Both orders
+  have no side effects.
+- **The object-model attachment code is removed, not bypassed**
+  ([#534](https://github.com/PsychQuant/che-apple-mail-mcp/issues/534)).
+  `attachmentFragment`, its paced delays and the reply/forward attach drain are
+  gone, and `NoObjectModelAttachmentGuardTests` fails if any source file under
+  `Sources/CheAppleMailMCP/` inserts an attachment through Mail's object model
+  again. `CHE_MAIL_ATTACHMENT_DELAY_BETWEEN` and
+  `CHE_MAIL_ATTACHMENT_DELAY_TRAILING` are no longer read: they only paced that
+  code, and compose attachments have gone through ⇧⌘A with the
+  `CHE_MAIL_MAILTO_*` delays since #304.
+
 ## [4.0.0] - 2026-10-29
 
 ### Added

@@ -427,26 +427,29 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertFalse(s.contains("close (every window whose name"))
     }
 
-    func testBuildReplyPasteScript_ccAndAttachments_setNativelyAfterPaste() {
+    func testBuildReplyPasteScript_cc_setNativelyAfterPaste() {
         let s = buildReplyEmailPasteScript(
             messageRef: "msgRef", newBody: "B", replyAll: false,
-            ccAdditional: ["x@y.z"], attachments: ["/tmp/a.pdf"], saveAsDraft: false)
-        // cc / attachments are set on the reply message object natively (unchanged
-        // from #34/#60), inside `tell replyMsg`, AFTER the body paste so the
-        // body-top cursor is undisturbed.
+            ccAdditional: ["x@y.z"], saveAsDraft: false)
+        // Extra cc is set on the reply message object natively (unchanged from
+        // #34), inside `tell replyMsg`, AFTER the body paste so the body-top
+        // cursor is undisturbed.
         assertOrdered(s, "make new cc recipient", between: "tell replyMsg", and: "on error _mErr")
-        assertOrdered(s, "make new attachment", between: "tell replyMsg", and: "on error _mErr")
         XCTAssertTrue(s.contains("address:\"x@y.z\""))
-        XCTAssertTrue(s.contains("POSIX file \"/tmp/a.pdf\""))
         // paste must come before the native object mutations (cursor safety)
         assertOrdered(s, "keystroke \"v\" using command down",
                       between: "reply originalMsg with opening window", and: "make new cc recipient")
+        // #534: the reply script never attaches through the object model — that
+        // insertion wrote the reply's content and wiped the pasted body and quote.
+        XCTAssertFalse(s.contains("make new attachment"))
     }
 
-    func testBuildReplyPasteScript_noCcNoAttachments_omitsTellReplyMsgBlock() {
+    func testBuildReplyPasteScript_noCc_omitsTellReplyMsgBlock() {
         let s = buildReplyEmailPasteScript(
             messageRef: "msgRef", newBody: "B", replyAll: false, saveAsDraft: false)
         XCTAssertFalse(s.contains("make new cc recipient"))
+        XCTAssertFalse(s.contains("tell replyMsg"),
+                       "with nothing to set on the reply object, no `tell replyMsg` block is emitted")
         XCTAssertFalse(s.contains("make new attachment"))
     }
 
@@ -804,8 +807,6 @@ final class MailControllerComposeTests: XCTestCase {
 
     // MARK: - Large originalPlain script size (#49)
 
-    // MARK: - attachmentFragment race-condition mitigation (issue #60)
-
     // MARK: - #61 indent parity (helper-owns-indent contract)
 
     // MARK: - #63 attachment count cap
@@ -840,7 +841,4 @@ final class MailControllerComposeTests: XCTestCase {
             XCTFail("unexpected error type: \(error)")
         }
     }
-
-    // MARK: - #64 env-configurable attachment delays
-
 }

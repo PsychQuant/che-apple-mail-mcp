@@ -117,33 +117,38 @@ final class MailAppIntegrationTests: XCTestCase {
         )
     }
 
-    // MARK: - reply_email integration (#37 + #45)
+    // MARK: - reply_email integration (#45, #534)
     //
-    // Both tests need a real source message to reply to. We use the first
-    // message in the account's INBOX. If INBOX is empty, the test is skipped.
-    // Cleanup deletes any draft whose subject contains the integration-test prefix.
+    // The #45 test needs a real source message to reply to: it uses the first
+    // message in the account's INBOX and is skipped if INBOX is empty. The #534
+    // test needs none. Cleanup deletes drafts whose subject carries the
+    // integration-test prefix or whose content carries one of the markers below.
 
-    /// Issue #37: end-to-end reply-as-draft + cc_additional + attachments.
-    /// Asserts that the AppleScript runs without error AND the resulting draft
-    /// appears in Drafts (not Sent). Body contents not asserted here; #45 covers that.
-    func test_replyEmail_asDraft_withCcAndAttachments_succeeds() async throws {
-        guard let (sourceId, sourceMailbox) = try await firstInboxMessage() else {
-            throw XCTSkip("INBOX has no messages — cannot run reply integration test")
-        }
+    /// #534 (was #37's reply-as-draft + cc + attachments success test): the
+    /// attachment step erased the pasted body and Mail's quote while this test
+    /// only checked the success string. A reply with attachments is now refused
+    /// before any Mail work, so the call itself reads no INBOX and runs no
+    /// script; the class tearDown still runs its Drafts cleanup against Mail
+    /// whenever the gate is set. It replies to id "-1", which matches no
+    /// message, so even if the refusal regressed the script could not create a
+    /// reply to a real message; the cleanup also matches its "#534" marker.
+    func test_replyEmail_withAttachments_isRefused_issue534() async throws {
         let attachmentPath = try makeTempAttachment()
-        let result = try await MailController.shared.replyEmail(
-            id: sourceId,
-            mailbox: sourceMailbox,
-            accountName: accountName,
-            body: "Integration test reply (#37). Subject: \(uniqueReplySubject("cc-attach"))",
-            replyAll: false,
-            ccAdditional: ["test+cc@example.com"],
-            attachments: [attachmentPath],
-            saveAsDraft: true,
-            format: .plain
-        )
-        XCTAssertTrue(result.contains("Reply saved as draft") || result.contains("draft"),
-                      "expected draft-save success message, got: \(result)")
+        do {
+            _ = try await MailController.shared.replyEmail(
+                id: "-1",
+                mailbox: "INBOX",
+                accountName: accountName,
+                body: "Integration test reply (#534). Subject: \(uniqueReplySubject("attach-refused"))",
+                replyAll: false,
+                attachments: [attachmentPath],
+                saveAsDraft: true,
+                format: .plain
+            )
+            XCTFail("a reply with attachments must be refused (#534)")
+        } catch MailError.invalidParameter(let message) {
+            XCTAssertTrue(message.contains("#608"), message)
+        }
     }
 
     /// Issue #45: verify the runtime draft body contains the RFC 3676 `> ` quoted
@@ -161,6 +166,7 @@ final class MailAppIntegrationTests: XCTestCase {
             accountName: accountName,
             body: marker,
             replyAll: false,
+            attachments: nil,
             saveAsDraft: true,
             format: .plain
         )
@@ -207,12 +213,12 @@ final class MailAppIntegrationTests: XCTestCase {
     /// Issue #60: confirms `createDraft` with N=3 attachments produces a draft
     /// whose actual `mail attachments` count == 3. Pre-fix, this was the failure
     /// mode (AppleScript reported success but Mail.app silently dropped attachments
-    /// past the first one). The fix interleaves `delay 0.3` between consecutive
-    /// `make new attachment` lines + appends `delay 0.5` trailing.
+    /// past the first one). #60 paced the object-model attachment lines with
+    /// delays; since #304 compose attaches through Mail's editor (⇧⌘A), and
+    /// #534 removed the object-model attachment code and its delay env vars.
     ///
-    /// This test is the only behavioural verification of the fix — unit tests
-    /// can only confirm the emitted script TEXT contains delay tokens; only
-    /// real Mail.app round-trip can confirm the bug is actually mitigated.
+    /// Only a real Mail.app round-trip can confirm that all three attachments
+    /// land, so this gated test is the behavioural check for the compose path.
     func test_createDraft_threeAttachments_allLand_issue60() async throws {
         let attachA = try makeTempAttachmentNamed("issue60-A")
         let attachB = try makeTempAttachmentNamed("issue60-B")
@@ -342,7 +348,7 @@ final class MailAppIntegrationTests: XCTestCase {
                             try
                                 set c to content of m
                             end try
-                            if s contains "\(Self.testDraftSubjectPrefix)" or c contains "Integration test reply (#37)" or c contains "INTEGRATION-TEST-43-quote-" or c contains "issue #60 multi-attachment race smoke" then
+                            if s contains "\(Self.testDraftSubjectPrefix)" or c contains "Integration test reply (#37)" or c contains "Integration test reply (#534)" or c contains "INTEGRATION-TEST-43-quote-" or c contains "issue #60 multi-attachment race smoke" then
                                 set end of toDelete to m
                             end if
                         end try

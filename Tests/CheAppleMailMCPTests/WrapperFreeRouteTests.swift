@@ -258,7 +258,7 @@ final class ReplyForwardSendStageTests: XCTestCase {
         buildReplyEmailPasteScript(
             messageRef: "message id 1 of mailbox \"INBOX\"",
             newBody: "hi", replyAll: false, ccAdditional: nil,
-            attachments: nil, saveAsDraft: saveAsDraft)
+            saveAsDraft: saveAsDraft)
     }
 
     func testReplySend_sentinelAndFlagProtectDispatchAndTail() {
@@ -327,7 +327,8 @@ final class ReplyForwardSendStageTests: XCTestCase {
             refusal: { nil })
         do {
             _ = try await MailController.shared.replyEmail(
-                id: "123", mailbox: "INBOX", accountName: "a@b.c", body: "new text")
+                id: "123", mailbox: "INBOX", accountName: "a@b.c", body: "new text",
+                attachments: nil)
             XCTFail("post-dispatch reply failure must throw, not fall back")
         } catch {
             XCTAssertTrue("\(error)".contains("Sent"),
