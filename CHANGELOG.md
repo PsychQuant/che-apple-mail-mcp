@@ -46,6 +46,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code, and compose attachments have gone through ⇧⌘A with the
   `CHE_MAIL_MAILTO_*` delays since #304.
 
+### Fixed
+
+- **`TemplateExtractorTests` no longer fails on a loaded machine**
+  ([#502](https://github.com/PsychQuant/che-apple-mail-mcp/issues/502)).
+  `testTheDataShapeBackstopIsBoundedAndSharesTheRedactionPattern` timed two
+  1,024-byte `looksLikeData` scans with the wall clock and required them to
+  finish within 0.2 s; at a load of about 160 they took 0.32 s and the suite
+  failed, although the healthy cost is 5–6 ms. The timing now uses a monotonic
+  clock and the 5 s ceiling of the adversarial test in the same file, with the
+  elapsed time in the failure message. The deterministic guard (nothing over
+  1,024 bytes is scanned) is unchanged. Test-only change.
+
 ## [4.0.0] - 2026-10-29
 
 ### Added

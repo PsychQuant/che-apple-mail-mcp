@@ -141,10 +141,21 @@ final class TemplateExtractorTests: XCTestCase {
         XCTAssertTrue(TemplateExtractor.looksLikeData("Session 123e4567-e89b-12d3-a456-426614174000 took %lu ms"),
                       "a UUID in the template is data, not a compile-time string (finding 17c)")
         XCTAssertFalse(TemplateExtractor.looksLikeData("Session %{public}@ took %lu ms"))
-        let t0 = Date()
-        XCTAssertFalse(TemplateExtractor.looksLikeData(String(repeating: "a", count: 1024)))
-        XCTAssertFalse(TemplateExtractor.looksLikeData(String(repeating: "%{", count: 512)))
-        XCTAssertLessThan(Date().timeIntervalSince(t0), 0.2)
+        // The length bound above is the deterministic guard: nothing over 1,024 bytes is scanned, and a
+        // quadratic pattern over 1,024 characters still costs milliseconds. The timing below only catches
+        // a real blow-up. #502: the old wall-clock `< 0.2` (healthy cost 5–6 ms) failed at 0.32 s on a
+        // machine with load ~160; a monotonic clock and the 5 s ceiling of the adversarial test below
+        // keep the check without tying it to machine load.
+        let clock = ContinuousClock()
+        var longPlain = true
+        var longOpeners = true
+        let elapsed = clock.measure {
+            longPlain = TemplateExtractor.looksLikeData(String(repeating: "a", count: 1024))
+            longOpeners = TemplateExtractor.looksLikeData(String(repeating: "%{", count: 512))
+        }
+        XCTAssertFalse(longPlain)
+        XCTAssertFalse(longOpeners)
+        XCTAssertLessThan(elapsed, .seconds(5), "two 1,024-byte scans took \(elapsed)")
         XCTAssertEqual(TemplateExtractor.emailShapePattern, IdentifierRedactor.emailPattern,
                        "one email shape, not two that drift apart")
     }
