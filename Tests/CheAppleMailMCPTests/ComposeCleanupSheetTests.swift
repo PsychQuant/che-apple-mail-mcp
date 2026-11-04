@@ -149,6 +149,7 @@ final class ComposeCleanupSheetTests: XCTestCase {
             + "end try\nend repeat\nreturn _launchCount"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        try OsascriptFixtureGuard.check(source)   // #572: the exact text osascript runs
         process.arguments = ["-e", source]
         let output = Pipe()
         process.standardOutput = output
@@ -210,6 +211,7 @@ final class ComposeCleanupSheetTests: XCTestCase {
             + windows + "\n" + fragment + "\nreturn _ourId as text"
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        try OsascriptFixtureGuard.check(source)   // #572: the exact text osascript runs
         process.arguments = ["-e", source]
         let output = Pipe()
         process.standardOutput = output
@@ -270,6 +272,7 @@ final class ComposeCleanupSheetTests: XCTestCase {
         """
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        try OsascriptFixtureGuard.check(source)   // #572: the exact text osascript runs
         process.arguments = ["-e", source]
         let output = Pipe()
         process.standardOutput = output

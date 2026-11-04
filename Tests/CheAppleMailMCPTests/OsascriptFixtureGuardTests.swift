@@ -19,6 +19,14 @@ final class OsascriptFixtureGuardTests: XCTestCase {
             "do shell script \"osascript -e 'tell app \\\"Mail\\\" to activate'\"",
             "set _s to load script (POSIX file \"/tmp/x.scpt\")",
             "TELL APP \"Mail\" TO ACTIVATE",
+            // #572 verify:
+            "-- x\r\ntell app \"Mail\" to activate",                      // CRLF ends the comment
+            "set |a\"| to 1\ntell app \"Mail\" to activate",              // a quote inside |…|
+            "set x to |a--| & (name of application \"Mail\")",            // a comment marker inside |…|
+            "do ¬\nshell script \"true\"",                               // ¬ continuation
+            "open location \"mailto:a@example.invalid\"",                  // launches the mail handler
+            "store script me in (POSIX file \"/tmp/x.scpt\")",
+            "use framework \"AppKit\"\nset w to current application's NSWorkspace",
         ]
         for fragment in forms {
             XCTAssertThrowsError(try OsascriptFixtureGuard.check(fragment), "must refuse: \(fragment.debugDescription)")

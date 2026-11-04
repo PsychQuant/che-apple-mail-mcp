@@ -69,18 +69,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The two endless children are `exec yes <line>` instead of a shell
   `while true; do echo ...; done` loop, so they block on a full pipe instead of
   spinning a core. Test-only change.
-- **osascript test fixtures refuse every way of addressing an application**
+- **The osascript fixtures in two test files refuse the known ways of addressing an application**
   ([#572](https://github.com/PsychQuant/che-apple-mail-mcp/issues/572)).
-  Four fixtures in `ComposeCleanupSheetTests` and
-  `PostIdentificationCleanupTests` run fragments cut out of production scripts
-  through `/usr/bin/osascript`, and the only thing keeping them away from Mail
-  was a check for the literal `tell application`. `tell app "Mail"`,
-  `… of application "Mail"` and `activate application "Mail"` passed it. They now
-  share `OsascriptFixtureGuard`, which removes comments and empties string
-  literals and then refuses `application "`, `app "`, `System Events`,
-  `process "` and the words `app`, `application`, `process`, raw `«…»` codes,
-  `run script`, `do shell script` and `load script`. A false positive only fails
-  a test. Test-only change.
+  `ComposeCleanupSheetTests` and `PostIdentificationCleanupTests` run fragments
+  cut out of production scripts through `/usr/bin/osascript`, and at most a check
+  for the literal `tell application` kept them away from Mail; `tell app "Mail"`,
+  `… of application "Mail"` and `activate application "Mail"` passed it. Every
+  osascript run in those two files now checks the exact text it executes with
+  `OsascriptFixtureGuard`, which removes comments and empties string literals
+  (lexing Unicode scalars, `|…|` identifiers and `¬` continuations) and then
+  refuses `application "`, `app "`, `System Events`, `process "` and the words
+  `app`, `application`, `process`, raw `«…»` codes, `run script`,
+  `do shell script`, `load script`, `store script`, `open location` and `use`
+  statements. It is a deny list, not a proof; a false positive only fails a test.
+  Four other test files still use literal checks
+  ([#617](https://github.com/PsychQuant/che-apple-mail-mcp/issues/617)).
+  Test-only change.
 
 ## [4.0.0] - 2026-10-29
 
