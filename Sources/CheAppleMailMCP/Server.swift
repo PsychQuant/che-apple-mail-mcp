@@ -74,6 +74,34 @@ class CheAppleMailMCPServer {
         await server.waitUntilCompleted()
     }
 
+    // MARK: - Index read failures (#549)
+
+    /// A read the Envelope Index could not complete (prepare or step failure,
+    /// database not open). These fall back to AppleScript; resolution answers
+    /// such as `accountNotResolvable` and `mailboxNotResolvable` do not.
+    static func isIndexReadFailure(_ error: Error) -> Bool {
+        if case MailSQLiteError.queryFailed = error { return true }
+        return false
+    }
+
+    static func logIndexFallback(_ tool: String, _ error: Error) {
+        Diagnostics.emit("SQLite \(tool) fast path failed: \(error.localizedDescription); "
+            + "falling through to AppleScript\n")
+    }
+
+    /// `list_attachments`' two index reads, or `nil` (logged) when the index
+    /// could not complete them, so the tool falls back to AppleScript (#549).
+    static func indexAttachmentRows(_ reader: EnvelopeIndexReader,
+                                    rowId: Int) -> ([[String: Any]], String?)? {
+        do {
+            return (try reader.listAttachments(messageId: rowId),
+                    try reader.mailboxURL(forMessageId: rowId))
+        } catch {
+            logIndexFallback("list_attachments", error)
+            return nil
+        }
+    }
+
     // MARK: - Tool Definitions
 
     static func defineTools() -> [Tool] {
@@ -1002,8 +1030,12 @@ class CheAppleMailMCPServer {
             // / resolveAccountIdForTool) instead of returning every account's boxes.
             let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName ?? "", tool: invokedTool)
             if let reader = indexReader {
-                let mailboxes = try reader.listMailboxes(accountName: accountName, accountId: accountId)
-                return formatJSON(mailboxes)
+                do {
+                    let mailboxes = try reader.listMailboxes(accountName: accountName, accountId: accountId)
+                    return formatJSON(mailboxes)
+                } catch let error where Self.isIndexReadFailure(error) {
+                    Self.logIndexFallback("list_mailboxes", error)
+                }
             }
             let mailboxes = try await mailController.listMailboxes(accountName: accountName, accountId: accountId)
             return formatJSON(mailboxes)
@@ -1274,28 +1306,34 @@ class CheAppleMailMCPServer {
                     mailbox: mailbox, dateFrom: dateFrom, dateTo: dateTo,
                     sort: sortOrder, limit: limit
                 )
-                switch projection {
-                case "ids":
-                    let page = try reader.searchIds(params, dedup: dedup)
-                    let ids = page.ids.map { String($0) }
-                    return formatJSON([
-                        "results": ids,
-                        "returned": ids.count,
-                        "limit": limit,
-                        "truncated": page.truncated
-                    ])
-                case "count":
-                    let count = try reader.searchCount(params, dedup: dedup)
-                    return formatJSON(["count": count])
-                case "summary":
-                    // #374: triage shape adds the nullable per-message is_draft fact.
-                    let page = try reader.searchSummaryPage(params, dedup: dedup)
-                    let formatted: [[String: Any]] = page.results.map(Self.formatSummaryResultForJSON)
-                    return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
-                default:
-                    let page = try reader.searchPage(params)
-                    let formatted: [[String: Any]] = page.results.map(Self.formatSearchResultForJSON)
-                    return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
+                // #549: only the full projection has an AppleScript fallback; the
+                // others are SQLite-only and report the failure.
+                do {
+                    switch projection {
+                    case "ids":
+                        let page = try reader.searchIds(params, dedup: dedup)
+                        let ids = page.ids.map { String($0) }
+                        return formatJSON([
+                            "results": ids,
+                            "returned": ids.count,
+                            "limit": limit,
+                            "truncated": page.truncated
+                        ])
+                    case "count":
+                        let count = try reader.searchCount(params, dedup: dedup)
+                        return formatJSON(["count": count])
+                    case "summary":
+                        // #374: triage shape adds the nullable per-message is_draft fact.
+                        let page = try reader.searchSummaryPage(params, dedup: dedup)
+                        let formatted: [[String: Any]] = page.results.map(Self.formatSummaryResultForJSON)
+                        return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
+                    default:
+                        let page = try reader.searchPage(params)
+                        let formatted: [[String: Any]] = page.results.map(Self.formatSearchResultForJSON)
+                        return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
+                    }
+                } catch let error where projection == "full" && Self.isIndexReadFailure(error) {
+                    Self.logIndexFallback("search_emails", error)
                 }
             }
 
@@ -1312,8 +1350,12 @@ class CheAppleMailMCPServer {
             let mailbox = arguments["mailbox"]?.stringValue
             let accountName = arguments["account_name"]?.stringValue
             if let reader = indexReader {
-                let count = try reader.getUnreadCount(mailbox: mailbox, accountName: accountName)
-                return "Unread count: \(count)"
+                do {
+                    let count = try reader.getUnreadCount(mailbox: mailbox, accountName: accountName)
+                    return "Unread count: \(count)"
+                } catch let error where Self.isIndexReadFailure(error) {
+                    Self.logIndexFallback("get_unread_count", error)
+                }
             }
             let accountId = decodeAccountId(arguments, tool: invokedTool)
             let count = try await mailController.getUnreadCount(mailbox: mailbox, accountName: accountName, accountId: accountId)
@@ -1481,14 +1523,14 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("mailbox, and account_name are required")
             }
-            if let reader = indexReader, let rowId = Int(id) {
-                let sqliteAttachments = try reader.listAttachments(messageId: rowId)
+            if let reader = indexReader, let rowId = Int(id),
+               let (sqliteAttachments, mailboxUrl) = Self.indexAttachmentRows(reader, rowId: rowId) {
                 // Cross-validate SQLite metadata against actual .emlx contents
                 // (issue #24): SQLite caches attachment rows even after Mail.app
                 // strips the binary on Sent / IMAP lazy-load, leaving stale
                 // entries that save_attachment then fails to extract. Filter
                 // SQLite results to names actually present in the .emlx body.
-                if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
+                if let mailboxUrl {
                     do {
                         // #105: the savability keys ARE the validated names
                         // (== attachmentNames), so one .emlx parse yields both
@@ -1582,8 +1624,17 @@ class CheAppleMailMCPServer {
                         // #183: thread the Envelope Index attachment_id so the
                         // name-free part-dir probe can rescue a degraded disk
                         // filename (best-effort lookup; nil keeps prior behavior).
-                        let partId = (try? reader.listAttachments(messageId: rowId))?
-                            .first { ($0["name"] as? String) == attachmentName }?["attachment_id"] as? String
+                        // A failed lookup is logged and only loses the rescue hint (#549).
+                        let partId: String?
+                        do {
+                            partId = try reader.listAttachments(messageId: rowId)
+                                .first { ($0["name"] as? String) == attachmentName }?["attachment_id"] as? String
+                        } catch {
+                            partId = nil
+                            Diagnostics.emit(
+                                "save_attachment: Envelope Index attachment lookup failed for rowId=\(rowId): "
+                                + "\(error.localizedDescription); continuing without the part id\n")
+                        }
                         localData = try EmlxParser.attachmentData(
                             rowId: rowId,
                             mailboxURL: mailboxUrl,

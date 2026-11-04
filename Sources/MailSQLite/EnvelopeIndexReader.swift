@@ -365,7 +365,7 @@ public final class EnvelopeIndexReader {
         }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_int64(statement, 1, Int64(messageId))
-        guard sqlite3_step(statement) == SQLITE_ROW else {
+        guard try stepFirstRow(statement, "Draft status query") else {
             throw MailSQLiteError.queryFailed("Draft status unavailable for message \(messageId)")
         }
         return Self.draftFlag(statement, column: 0)
@@ -550,12 +550,12 @@ public final class EnvelopeIndexReader {
         }
 
         var results: [[String: Any]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try forEachRow(stmt, "Mailbox list") {
             let url = columnText(stmt, 0)
             let totalCount = Int(sqlite3_column_int(stmt, 1))
             let unreadCount = Int(sqlite3_column_int(stmt, 2))
 
-            guard let parsed = MailboxURL.decode(url) else { continue }
+            guard let parsed = MailboxURL.decode(url) else { return }
             let acctName = self.accountName(for: parsed.accountUUID)
 
             results.append([
@@ -624,7 +624,7 @@ public final class EnvelopeIndexReader {
         sqlite3_bind_int(stmt, idx, Int32(fetchLimit))
 
         var results: [[String: Any]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try forEachRow(stmt, "Email list") {
             let rowId = Int(sqlite3_column_int64(stmt, 0))
             let subject = columnText(stmt, 1)
             let senderAddr = columnText(stmt, 2)
@@ -682,7 +682,7 @@ public final class EnvelopeIndexReader {
             sqlite3_bind_text(stmt, Int32(i + 1), binding, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         }
 
-        if sqlite3_step(stmt) == SQLITE_ROW {
+        if try stepFirstRow(stmt, "Unread count") {
             return Int(sqlite3_column_int64(stmt, 0))
         }
         return 0
@@ -701,7 +701,7 @@ public final class EnvelopeIndexReader {
         sqlite3_bind_int64(stmt, 1, Int64(messageId))
 
         var results: [[String: Any]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try forEachRow(stmt, "Attachment list") {
             results.append([
                 "name": columnText(stmt, 0),
                 "attachment_id": columnText(stmt, 1)
@@ -730,7 +730,7 @@ public final class EnvelopeIndexReader {
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int64(stmt, 1, Int64(messageId))
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
+        guard try stepFirstRow(stmt, "Metadata query") else {
             throw MailSQLiteError.queryFailed("Message \(messageId) not found")
         }
 
@@ -777,7 +777,7 @@ public final class EnvelopeIndexReader {
         }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int64(stmt, 1, Int64(id))
-        if sqlite3_step(stmt) == SQLITE_ROW {
+        if try stepFirstRow(stmt, "Mailbox lookup") {
             return columnText(stmt, 0)
         }
         return nil
@@ -837,7 +837,7 @@ public final class EnvelopeIndexReader {
 
         // Execute and collect results
         var results: [SearchResult] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try forEachRow(stmt, "Search") {
             let rowId = Int(sqlite3_column_int64(stmt, 0))
             let subject = columnText(stmt, 1)
             let senderAddr = columnText(stmt, 2)
@@ -853,7 +853,7 @@ public final class EnvelopeIndexReader {
             let mbPath = parsed?.mailboxPath ?? mailboxUrl
 
             // Fetch To recipients for this message
-            let toAddrs = fetchRecipients(messageId: rowId, type: 0)
+            let toAddrs = try fetchRecipients(messageId: rowId, type: 0)
 
             results.append(SearchResult(
                 id: rowId,
@@ -925,7 +925,7 @@ public final class EnvelopeIndexReader {
         sqlite3_bind_int(stmt, idx, Int32(fetchLimit))
 
         var results: [SearchResult] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try forEachRow(stmt, "Search") {
             let rowId = Int(sqlite3_column_int64(stmt, 0))
             let subject = columnText(stmt, 1)
             let senderAddr = columnText(stmt, 2)
@@ -1129,15 +1129,15 @@ public final class EnvelopeIndexReader {
         defer { sqlite3_finalize(stmt) }
         var ids: [Int64] = []
         var nearMisses: [String] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let urlC = sqlite3_column_text(stmt, 1) else { continue }
-            guard let decoded = MailboxURL.decode(String(cString: urlC)) else { continue }
+        try forEachRow(stmt, "Mailbox lookup") {
+            guard let urlC = sqlite3_column_text(stmt, 1) else { return }
+            guard let decoded = MailboxURL.decode(String(cString: urlC)) else { return }
             // #344 (B) — a UUID is hex, so its case carries no meaning and
             // folding it cannot over-match onto a different account. Comparing
             // the PARSED authority also beats the old `url.contains("://uuid/")`,
             // which the same text appearing inside a mailbox path could satisfy.
             if let uuid = accountUUID,
-               !Self.asciiCaseInsensitiveEqual(decoded.accountUUID, uuid) { continue }
+               !Self.asciiCaseInsensitiveEqual(decoded.accountUUID, uuid) { return }
             if Self.mailboxPathMatches(query: query, mailbox: decoded, lax: false) {
                 ids.append(sqlite3_column_int64(stmt, 0))
             } else if Self.mailboxPathMatches(query: query, mailbox: decoded, lax: true) {
@@ -1288,7 +1288,7 @@ public final class EnvelopeIndexReader {
         sqlite3_bind_int(stmt, idx, Int32(fetchLimit))
 
         var ids: [Int] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try forEachRow(stmt, "Search") {
             ids.append(Int(sqlite3_column_int64(stmt, 0)))
         }
 
@@ -1345,7 +1345,7 @@ public final class EnvelopeIndexReader {
             idx += 1
         }
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
+        guard try stepFirstRow(stmt, "Search count") else {
             return 0
         }
         return Int(sqlite3_column_int64(stmt, 0))
@@ -1353,13 +1353,47 @@ public final class EnvelopeIndexReader {
 
     // MARK: - Private Helpers
 
+    /// Step `statement` through its result set, calling `body` once per row,
+    /// and throw unless SQLite reports the end of the results (#549).
+    ///
+    /// `while sqlite3_step(stmt) == SQLITE_ROW` treated every other result
+    /// (`SQLITE_BUSY` after the busy timeout, `SQLITE_IOERR`, `SQLITE_CORRUPT`,
+    /// an interrupt) as "no more rows", so a read that stopped part-way returned
+    /// its partial result as if it were complete, with nothing on stderr. The
+    /// throw reaches the caller's hybrid fallback instead (r-must-direct-db).
+    private func forEachRow(_ statement: OpaquePointer?, _ what: String,
+                            _ body: () throws -> Void) throws {
+        var status = sqlite3_step(statement)
+        while status == SQLITE_ROW {
+            try body()
+            status = sqlite3_step(statement)
+        }
+        guard status == SQLITE_DONE else { throw stepFailure(what, status) }
+    }
+
+    /// One-row queries: `true` when there is a row, `false` when the result
+    /// set is empty, and a throw for anything else, which used to read as
+    /// "no row" (#549).
+    private func stepFirstRow(_ statement: OpaquePointer?, _ what: String) throws -> Bool {
+        let status = sqlite3_step(statement)
+        if status == SQLITE_ROW { return true }
+        if status == SQLITE_DONE { return false }
+        throw stepFailure(what, status)
+    }
+
+    private func stepFailure(_ what: String, _ status: Int32) -> MailSQLiteError {
+        let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
+        let code = db.map { sqlite3_extended_errcode($0) } ?? status
+        return .queryFailed("\(what) stopped before the end of its results: \(message) (SQLite result code \(code))")
+    }
+
     private func columnText(_ stmt: OpaquePointer?, _ col: Int32) -> String {
         guard let cStr = sqlite3_column_text(stmt, col) else { return "" }
         return String(cString: cStr)
     }
 
-    private func fetchRecipients(messageId: Int, type: Int) -> [String] {
-        guard let db = db else { return [] }
+    private func fetchRecipients(messageId: Int, type: Int) throws -> [String] {
+        guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
         let sql = """
             SELECT a.address FROM recipients r
             JOIN addresses a ON r.address = a.ROWID
@@ -1367,14 +1401,16 @@ public final class EnvelopeIndexReader {
             ORDER BY r.position
             """
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw MailSQLiteError.queryFailed("Prepare failed: \(String(cString: sqlite3_errmsg(db)))")
+        }
         defer { sqlite3_finalize(stmt) }
 
         sqlite3_bind_int64(stmt, 1, Int64(messageId))
         sqlite3_bind_int(stmt, 2, Int32(type))
 
         var addrs: [String] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try forEachRow(stmt, "Recipient list") {
             addrs.append(columnText(stmt, 0))
         }
         return addrs

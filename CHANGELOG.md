@@ -65,6 +65,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   results until some lookup misses, and the old name keeps resolving to it until
   then. The names are the account emails taken from AccountsMap.plist, so
   renaming an account's description in Mail does not change them.
+- **A read that the Envelope Index stops part-way through is an error, not a
+  shorter answer** ([#549](https://github.com/PsychQuant/che-apple-mail-mcp/issues/549)).
+  Every SQLite read stepped through its rows with
+  `while sqlite3_step(stmt) == SQLITE_ROW`, so any result other than a row
+  (`SQLITE_BUSY` after the busy timeout, `SQLITE_IOERR`, `SQLITE_CORRUPT`)
+  read as "no more rows": a truncated mailbox list, search page or recipient
+  list came back as if complete, and an unread count or search count as `0`,
+  with nothing on stderr. Every multi-row read now checks that SQLite reported
+  the end of the results, and every one-row read tells "no row" from a failure;
+  a failure throws `queryFailed` naming SQLite's message and result code.
+  `list_mailboxes`, `get_unread_count`, `list_attachments` and `search_emails`
+  (`projection: "full"`) used to pass index errors to the caller; on a failed
+  read they now log it to stderr and use the AppleScript path, like the other
+  read tools. The SQLite-only `search_emails` projections (`ids`, `count`,
+  `summary`) report the failure. Account and mailbox resolution errors are
+  answers, not failures, and still come back unchanged. The direct-write
+  `create_draft` path names a failed mailbox read as the reason it was not
+  attempted, where it used to report "no Drafts mailbox path"; it still uses
+  the GUI path in that case. More AppleScript fallbacks may now run when the
+  index is busy or damaged, which is slower but no longer wrong.
 
 ## [4.0.0] - 2026-10-29
 
