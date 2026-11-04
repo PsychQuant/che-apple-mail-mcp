@@ -106,6 +106,9 @@ public final class EnvelopeIndexReader {
     private let clock: () -> TimeInterval
     /// When `mappingSource` was last read; `nil` if it never was.
     private var lastMappingRead: TimeInterval?
+    /// Bumped whenever a mapping is installed, so a refresh that read the
+    /// source while another install happened does not overwrite the newer one.
+    private var mappingGeneration = 0
     private let mappingLock = NSLock()
 
     // MARK: - Initialization
@@ -122,7 +125,9 @@ public final class EnvelopeIndexReader {
     ///     `AccountMapper.buildMapping()` when `accountMapping` is `nil`, and to
     ///     no source (the injected mapping is never replaced) when it is given.
     ///   - mappingRefreshCooldown: Minimum seconds between two reads of the
-    ///     source. The read at init counts.
+    ///     source. When the initial mapping is read from the source (no
+    ///     `accountMapping` given), that read starts the cooldown; an injected
+    ///     mapping does not, so the first miss reads the source at once.
     ///   - clock: Monotonic seconds, injected for tests.
     /// - Throws: `MailSQLiteError.databaseNotAccessible` if the file
     ///   does not exist or cannot be opened (e.g., missing Full Disk Access).
@@ -382,6 +387,7 @@ public final class EnvelopeIndexReader {
         withMappingLock {
             accountMap = mapping
             reverseAccountMap = Self.buildReverseMap(from: mapping)
+            mappingGeneration += 1
         }
     }
 
@@ -391,22 +397,33 @@ public final class EnvelopeIndexReader {
         return body()
     }
 
-    /// Re-read the mapping after a lookup missed (#554). Concurrent misses
-    /// share one read: the lock is held across it, and the ones that waited
-    /// find the cooldown running. An empty result is what
+    /// Re-read the mapping after a lookup missed (#554).
+    ///
+    /// The cooldown is checked and claimed under the lock, so concurrent misses
+    /// cause one read per interval; a miss that arrives while that read runs
+    /// sees the mapping it had. The source itself is read outside the lock: a
+    /// source that calls back into the reader cannot deadlock, and lookups that
+    /// hit do not wait for the plist read. A read is installed only if no other
+    /// mapping was installed meanwhile. An empty result is what
     /// `AccountMapper.buildMapping()` returns when the plist cannot be read, so
     /// it keeps the mapping already known instead of forgetting every account.
     private func refreshMappingAfterMiss() {
-        mappingLock.lock()
-        defer { mappingLock.unlock() }
         guard let source = mappingSource else { return }
-        let now = clock()
-        if let last = lastMappingRead, now - last < mappingRefreshCooldown { return }
-        lastMappingRead = now
+        let claimed: Int? = withMappingLock {
+            let now = clock()
+            if let last = lastMappingRead, now - last < mappingRefreshCooldown { return nil }
+            lastMappingRead = now
+            return mappingGeneration
+        }
+        guard let generation = claimed else { return }
         let fresh = source()
         guard !fresh.isEmpty else { return }
-        accountMap = fresh
-        reverseAccountMap = Self.buildReverseMap(from: fresh)
+        withMappingLock {
+            guard mappingGeneration == generation else { return }
+            accountMap = fresh
+            reverseAccountMap = Self.buildReverseMap(from: fresh)
+            mappingGeneration += 1
+        }
     }
 
     /// Reverse lookup: display name → list of UUIDs that map to it.

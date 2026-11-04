@@ -59,7 +59,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolves costs one plist read per interval rather than one per call. A read
   that returns no accounts (an unreadable plist) keeps the accounts already
   known. The mapping is now guarded by a lock, because the reader is shared by
-  concurrent request handlers. Lookups by `account_id` were not affected.
+  concurrent request handlers; the plist itself is read outside the lock.
+  Lookups by `account_id` were not affected. A lookup that finds what it asked
+  for does not re-read: an account whose email changed keeps its old name in
+  results until some lookup misses, and the old name keeps resolving to it until
+  then. The names are the account emails taken from AccountsMap.plist, so
+  renaming an account's description in Mail does not change them.
 
 ## [4.0.0] - 2026-10-29
 

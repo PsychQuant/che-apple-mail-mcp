@@ -327,4 +327,69 @@ final class EnvelopeIndexReaderTests: XCTestCase {
         }
         XCTAssertEqual(reader.accountUUIDs(forName: "Bob"), ["UUID-B"])
     }
+
+    func testASourceThatCallsBackIntoTheReaderDoesNotDeadlock() throws {
+        // The source is read outside the mapping lock (#554 verify), so a
+        // source that looks something up on the same reader cannot deadlock.
+        var reader: EnvelopeIndexReader?
+        reader = try EnvelopeIndexReader(
+            databasePath: try makeEmptyTestDB(),
+            accountMapping: ["UUID-A": "Alice"],
+            accountMappingSource: {
+                _ = reader?.accountName(for: "UUID-A")
+                return ["UUID-A": "Alice", "UUID-B": "Bob"]
+            },
+            mappingRefreshCooldown: 60
+        )
+        let done = DispatchSemaphore(value: 0)
+        var resolved: [String] = []
+        DispatchQueue.global().async {
+            resolved = reader?.accountUUIDs(forName: "Bob") ?? []
+            done.signal()
+        }
+        XCTAssertEqual(done.wait(timeout: .now() + 5), .success, "lookup deadlocked")
+        XCTAssertEqual(resolved, ["UUID-B"])
+    }
+
+    func testARefreshDoesNotOverwriteAMappingInstalledWhileItRead() throws {
+        var reader: EnvelopeIndexReader?
+        reader = try EnvelopeIndexReader(
+            databasePath: try makeEmptyTestDB(),
+            accountMapping: ["UUID-A": "Alice"],
+            accountMappingSource: {
+                // Another install lands while the source is being read.
+                reader?.updateAccountMapping(["UUID-C": "Carol"])
+                return ["UUID-A": "Alice", "UUID-B": "Bob"]
+            },
+            mappingRefreshCooldown: 60
+        )
+        XCTAssertEqual(reader?.accountUUIDs(forName: "Bob"), [])
+        XCTAssertEqual(reader?.accountUUIDs(forName: "Carol"), ["UUID-C"],
+                       "the newer mapping wins over the read that started before it")
+    }
+
+    func testNameScopedListMailboxesResolvesAnAccountAddedAfterStartup() throws {
+        let path = try makeEmptyTestDB()
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, """
+            CREATE TABLE mailboxes (ROWID INTEGER PRIMARY KEY, url TEXT, total_count INTEGER, unread_count INTEGER);
+            INSERT INTO mailboxes VALUES (1, 'imap://UUID-A/INBOX', 3, 1);
+            INSERT INTO mailboxes VALUES (2, 'imap://UUID-B/INBOX', 5, 2);
+            """, nil, nil, nil), SQLITE_OK)
+        sqlite3_close(db)
+
+        let source = MappingSource(["UUID-A": "Alice"])
+        let reader = try EnvelopeIndexReader(
+            databasePath: path,
+            accountMapping: ["UUID-A": "Alice"],
+            accountMappingSource: { source.read() }
+        )
+        source.mapping = ["UUID-A": "Alice", "UUID-B": "Bob"]
+
+        let mailboxes = try reader.listMailboxes(accountName: "Bob")
+        XCTAssertEqual(mailboxes.count, 1)
+        XCTAssertEqual(mailboxes.first?["account_name"] as? String, "Bob")
+        XCTAssertEqual(mailboxes.first?["total_count"] as? Int, 5)
+    }
 }
