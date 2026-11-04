@@ -55,8 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   annotations, so such a client behaves the same; the change makes them explicit
   and keeps them if a client or SDK default changes. Annotations are static, so
   `reply_email` declares the send case even when it is called with
-  `save_as_draft: true`. Whether any client prompts on these hints was not
-  verified. The other tools are unchanged (most still carry no annotations).
+  `save_as_draft: true`, so a client that asks before destructive tools will ask
+  before a draft-only reply too. Whether any client prompts on these hints was
+  not verified. The other tools are unchanged (most still carry no annotations;
+  #621 tracks the rest).
 
 ### Fixed
 
