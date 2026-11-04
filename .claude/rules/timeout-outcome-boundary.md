@@ -72,7 +72,7 @@ hint 改為叫呼叫端讀結果裡的 `date_received`。
 - 寄出類 hint 不含 `Do not resend automatically`、`Full Disk Access`、`date_received`，或含 `date_from`；
 - 草稿刪除逾時的訊息含 `GUI` 或 `read-only`，或不含 `deletion outcome is unknown`；
 - `.subprocess` 逾時描述不含 draft-save 的 hint；
-- reply / forward 的訊息措辭在 hint 之前有任何改動，或 `MailController.swift` 又出現內嵌的那段措辭；
+- reply / forward 的非逾時（post-dispatch）訊息措辭在 hint 之前有任何改動；逾時訊息缺 `may or may not have fired`、`UNKNOWN`、`NOT retrying` 或 `any leftover compose window`，或含 `already dispatched`、`left untouched`（#550）；或 `MailController.swift` 又出現內嵌的那段措辭；
 - README 的「After a timeout」一節不存在，或沒提到 `search_emails`、`list_drafts`、`UNKNOWN`。
 
 抓不到的：`isTimeoutError` / `isPostDispatchError` 本身被改（由既有的 `GuiScriptTimeoutTests` 與
@@ -89,7 +89,7 @@ Apple Event。Mail 端那個 Apple Event 最後有沒有完成，沒有可靠的
 
 ## 相關
 
-- #522（本規則的出處）、#415（residue 來源）、#550（reply / forward 逾時措辭的過度宣稱，另案修）
+- #522（本規則的出處）、#415（residue 來源）、#550（reply / forward 逾時時曾說「already dispatched」，現改用與 compose 相同的「may or may not have fired」）
 - `r-must-direct-db.md`（`get_mail_log_events` 不是狀態來源）
 - `deferred-live-verification.md`：選項 A 不宣稱延遲、不保證有寄件備份，因此沒有 KNOWN GATE 要記
 
