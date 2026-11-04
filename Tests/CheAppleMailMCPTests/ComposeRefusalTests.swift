@@ -35,6 +35,8 @@ final class ComposeRefusalTests: XCTestCase {
         // #388: both message branches (body over the budget; headers alone over it).
         .mailtoURLTooLong(encodedLength: 9100, bodyEncodedLength: 9000, limit: 8000),
         .mailtoURLTooLong(encodedLength: 9100, bodyEncodedLength: 100, limit: 8000),
+        // #534: temporary reason 9, reply_email only, removed when #608 lands.
+        .replyAttachmentsUnsupported,
     ]
 
     func testEveryRefusal_namesAReasonAndAnAlternative() {
@@ -189,6 +191,50 @@ final class ComposeRefusalTests: XCTestCase {
         XCTAssertNil(replyForwardRefusal(format: .plain, accessibilityTrusted: true))
     }
 
+    // MARK: #534 — temporary reason 9: reply_email with attachments
+
+    /// The reply script's object-model attach wiped the pasted body and Mail's
+    /// quote while reporting success (#534). Until #608 attaches through Mail's
+    /// editor, the call is refused, and the message must say why, what to do
+    /// instead, and where the real fix is tracked.
+    func testReplyAttachments_namesReasonRecipeAndFollowUp() {
+        let msg = ComposeRefusal.replyAttachmentsUnsupported.message
+        XCTAssertFalse(msg.contains("\n"), "single-line error message: \(msg)")
+        for needle in ["#534", "#608", "save_as_draft", "WITHOUT the attachments", "drag"] {
+            XCTAssertTrue(msg.contains(needle), "must contain '\(needle)': \(msg)")
+        }
+    }
+
+    /// Reason 9 is decided by the arguments alone and is checked first, so its
+    /// outcome does not depend on the format or on this machine's grant.
+    ///
+    /// This pins the pure `replyForwardRefusal` only. At the `reply_email` tool
+    /// boundary the handler parses `format` first, so markdown or html with
+    /// attachments reports reason 1 there; that order is pinned by
+    /// `ReplyEmailToolBoundaryTests.testReplyEmailTool_markdownWithAttachments_reportsFormatFirst`.
+    func testReplyForwardRefusal_attachmentsRefuseFirst_whateverElseHolds() {
+        for format in [BodyFormat.plain, .markdown, .html] {
+            for trusted in [true, false] {
+                XCTAssertEqual(
+                    replyForwardRefusal(format: format, accessibilityTrusted: trusted,
+                                        hasAttachments: true),
+                    .replyAttachmentsUnsupported,
+                    "format=\(format), trusted=\(trusted)")
+            }
+        }
+    }
+
+    func testReplyForwardRefusal_withoutAttachments_keepsTheTwoOldReasons() {
+        XCTAssertEqual(replyForwardRefusal(format: .html, accessibilityTrusted: true,
+                                           hasAttachments: false),
+                       .richTextFormat(.html))
+        XCTAssertEqual(replyForwardRefusal(format: .plain, accessibilityTrusted: false,
+                                           hasAttachments: false),
+                       .accessibilityNotGranted)
+        XCTAssertNil(replyForwardRefusal(format: .plain, accessibilityTrusted: true,
+                                         hasAttachments: false))
+    }
+
     // MARK: zero side effects at the production sites
 
     func testComposeRefused_throwsNamedReason_neverRunsAnyScript() async throws {
@@ -246,7 +292,76 @@ final class ComposeRefusalTests: XCTestCase {
             refusal: { .accessibilityNotGranted })
         await XCTAssertThrowsErrorAsync(
             try await MailController.shared.replyEmail(
-                id: "1", mailbox: "INBOX", accountName: "a@b.c", body: "b"))
+                id: "1", mailbox: "INBOX", accountName: "a@b.c", body: "b",
+                attachments: nil))
+    }
+
+    /// #534: the production site refuses reply attachments before it resolves
+    /// anything in Mail or runs a script — draft and send alike. No `refusal`
+    /// seam is set: the real derivation runs, and reason 9 does not depend on
+    /// this machine's Accessibility grant because it is checked first.
+    func testReplyWithAttachments_refusedBeforeAnyScript_draftAndSend() async throws {
+        var calls = 0
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in calls += 1; return "Reply saved as draft (paste path)" },
+            refusal: nil)
+        for saveAsDraft in [true, false] {
+            do {
+                _ = try await MailController.shared.replyEmail(
+                    id: "1", mailbox: "INBOX", accountName: "a@b.c", body: "b",
+                    attachments: ["/tmp/che-mail-534-does-not-exist.pdf"],
+                    saveAsDraft: saveAsDraft)
+                XCTFail("a reply with attachments must be refused (save_as_draft=\(saveAsDraft))")
+            } catch MailError.invalidParameter(let message) {
+                XCTAssertTrue(message.contains("#608"), message)
+            } catch {
+                XCTFail("expected a named invalidParameter refusal, got \(error)")
+            }
+        }
+        XCTAssertEqual(calls, 0, "no script may run — nothing saved, nothing sent")
+    }
+
+    /// #534: an empty or omitted `attachments` is not reason 9. The production
+    /// site maps `attachments` to `hasAttachments` (`[]` and `nil` both mean
+    /// none); a caller that serializes an empty list must not be refused. The
+    /// real derivation runs, so the call may still be refused for this
+    /// machine's Accessibility grant, or reach the fake script runner; either
+    /// outcome is fine as long as it is not reason 9.
+    func testReplyWithoutAttachments_isNotReasonNine() async throws {
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in "Reply saved as draft (paste path)" },
+            refusal: nil)
+        for attachments in [[String](), nil] as [[String]?] {
+            do {
+                _ = try await MailController.shared.replyEmail(
+                    id: "1", mailbox: "INBOX", accountName: "a@b.c", body: "b",
+                    attachments: attachments, saveAsDraft: true)
+            } catch {
+                XCTAssertFalse("\(error)".contains("#608"),
+                               "attachments=\(String(describing: attachments)) must not be refused as reason 9: \(error)")
+            }
+        }
+    }
+
+    /// #534 moved the `cc_additional` check into the clean path, after the
+    /// pre-flight refusal. It must still run there: an invalid address fails by
+    /// name and no script runs.
+    func testReplyInvalidCc_failsByName_afterThePreflight_noScript() async throws {
+        var calls = 0
+        await MailController.shared.setTestSeams(
+            scriptRunner: { _ in calls += 1; return "Reply saved as draft (paste path)" },
+            refusal: { nil })
+        do {
+            _ = try await MailController.shared.replyEmail(
+                id: "1", mailbox: "INBOX", accountName: "a@b.c", body: "b",
+                ccAdditional: ["not an address"], attachments: nil, saveAsDraft: true)
+            XCTFail("an invalid cc_additional must be refused")
+        } catch MailError.invalidParameter(let message) {
+            XCTAssertTrue(message.contains("cc_additional"), message)
+        } catch {
+            XCTFail("expected invalidParameter naming cc_additional, got \(error)")
+        }
+        XCTAssertEqual(calls, 0, "no script may run")
     }
 
     func testForwardWithBodyRefused_throws_neverRunsAnyScript() async throws {

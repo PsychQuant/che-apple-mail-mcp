@@ -92,7 +92,8 @@ final class ReplyForwardUnknownStateTests: XCTestCase {
                 scriptRunner: { _ in calls += 1; throw failure }, refusal: { nil })
             do {
                 _ = try await MailController.shared.replyEmail(
-                    id: "123", mailbox: "INBOX", accountName: "me@example.invalid", body: "text")
+                    id: "123", mailbox: "INBOX", accountName: "me@example.invalid", body: "text",
+                    attachments: nil)
                 XCTFail("reply must throw")
             } catch {
                 XCTAssertTrue(error.localizedDescription.contains("UNKNOWN"), error.localizedDescription)

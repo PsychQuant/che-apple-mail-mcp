@@ -1,4 +1,5 @@
 import XCTest
+@testable import CheAppleMailMCP
 
 /// #229/#304 — source-invariant guard: the reply_email / forward_email tool
 /// schemas must state the conditions under which the call is REFUSED, so a
@@ -38,10 +39,45 @@ final class ReplyForwardDisclosureGuardTests: XCTestCase {
                 XCTAssertTrue(window.contains(condition),
                     "\(tool) description must state refusal condition '\(condition)': \(window.prefix(240))")
             }
-            XCTAssertTrue(window.contains("Two reasons"),
-                "\(tool) description must state that exactly two reasons apply here: \(window.prefix(240))")
+            // #534: reply_email gains a temporary third reason (attachments,
+            // removed when #608 lands); forward_email has no attachments.
+            let count = tool == "reply_email" ? "Three reasons" : "Two reasons"
+            XCTAssertTrue(window.contains(count),
+                "\(tool) description must state that '\(count)' apply here: \(window.prefix(240))")
             XCTAssertFalse(window.contains("CHE_MAIL_DISABLE_PASTE_REPLY"),
                 "#304: the env hatch is gone: \(window.prefix(240))")
+        }
+    }
+
+    /// #534: reply_email keeps its `attachments` parameter so a call is refused
+    /// by name instead of failing on the schema, and both the tool description
+    /// and the parameter description must say the parameter is refused for now,
+    /// why, and where the fix is tracked. Otherwise a calling agent learns it
+    /// only from the error, after it has already planned the call around it.
+    func testReplyDescription_statesTheAttachmentRefusal() throws {
+        let source = try serverSwiftSource()
+        let lines = source.components(separatedBy: "\n")
+        guard let nameIdx = lines.firstIndex(where: { $0.contains("name: \"reply_email\"") }) else {
+            XCTFail("reply_email not found"); return
+        }
+        let window = lines[nameIdx..<min(nameIdx + 3, lines.count)].joined(separator: "\n")
+        for needle in ["attachments", "#534", "#608"] {
+            XCTAssertTrue(window.contains(needle),
+                "reply_email description must state the attachment refusal ('\(needle)'): \(window.prefix(240))")
+        }
+        XCTAssertFalse(window.contains("attach files"),
+            "reply_email must no longer advertise attaching files: \(window.prefix(240))")
+
+        let tool = try XCTUnwrap(CheAppleMailMCPServer.defineTools().first { $0.name == "reply_email" })
+        guard case .object(let schema) = tool.inputSchema,
+              case .object(let props)? = schema["properties"],
+              case .object(let attachments)? = props["attachments"],
+              case .string(let description)? = attachments["description"] else {
+            return XCTFail("reply_email must keep an attachments property with a description")
+        }
+        for needle in ["refused", "#608", "save_as_draft"] {
+            XCTAssertTrue(description.contains(needle),
+                "attachments description must state the refusal ('\(needle)'): \(description)")
         }
     }
 

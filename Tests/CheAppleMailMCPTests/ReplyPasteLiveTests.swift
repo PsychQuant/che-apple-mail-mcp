@@ -169,6 +169,7 @@ final class ReplyPasteLiveTests: XCTestCase {
             mailbox: src.mailbox,
             accountName: src.account,
             body: "新本文第一行 \(marker)\n第二行：應在引用之上、不被 cite 包住",
+            attachments: nil,
             saveAsDraft: true
         )
 

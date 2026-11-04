@@ -41,11 +41,16 @@ We do NOT defend against:
 
 ## Attachment Path Policy (since #38)
 
-`compose_email`, `create_draft`, and `reply_email` accept an `attachments`
-parameter — a list of POSIX file paths to attach to the outgoing message.
-Without input validation, a malicious / hallucinated MCP caller could pass
+`compose_email` and `create_draft` accept an `attachments` parameter — a list
+of POSIX file paths to attach to the outgoing message. Without input
+validation, a malicious / hallucinated MCP caller could pass
 `attachments=["~/.ssh/id_ed25519"]` and have it silently attached to a draft
 (combined with `save_as_draft=true`, the user never sees the popup).
+
+`reply_email` also has an `attachments` parameter, but since #534 any non-empty
+list is refused before a file is read, so no reply attaches a file and the
+checks below do not run on that path. When #608 restores reply attachments, it
+must run the reply's paths through the same checks (`validateAttachmentPaths`).
 
 The server defends against this with three layers, applied in order:
 
