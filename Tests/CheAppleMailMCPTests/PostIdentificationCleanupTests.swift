@@ -70,9 +70,10 @@ final class PostIdentificationCleanupTests: XCTestCase {
             "set _titleMatches to 1\nset my axCalls to my axCalls + 1\nset my fixtureState to \"\(afterAX)\""
         }
         body = body.replacingOccurrences(of: "delay 0.4", with: "delay 0")
-        guard !body.contains("tell application"), !body.contains("click ") else {
+        guard !body.contains("click ") else {
             throw NSError(domain: "CleanupFixture", code: 1)
         }
+        try OsascriptFixtureGuard.check(body)   // #572: any form of addressing an application, not one literal
         let source = """
         property fixtureState : "\(initial)"
         property closeCalls : 0
@@ -159,9 +160,10 @@ final class PostIdentificationCleanupTests: XCTestCase {
             .replacingOccurrences(of: "(title of _b as text)", with: "(my fixtureButton(contents of _b))")
             .replacingOccurrences(of: "click _b", with: "my fixtureClick(contents of _b)")
             .replacingOccurrences(of: "delay 0.1", with: "delay 0")
-        guard !block.contains("tell application"), !block.contains("perform action"), !block.contains("click _b") else {
+        guard !block.contains("perform action"), !block.contains("click _b") else {
             throw NSError(domain: "AXCleanupFixture", code: 1)
         }
+        try OsascriptFixtureGuard.check(block)   // #572: any form of addressing an application, not one literal
         let source = """
         property mode : "\(mode)"
         property ownerState : "\(mode == "absent" ? "absent" : "owned")"

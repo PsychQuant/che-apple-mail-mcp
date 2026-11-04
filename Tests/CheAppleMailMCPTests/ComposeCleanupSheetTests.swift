@@ -138,7 +138,7 @@ final class ComposeCleanupSheetTests: XCTestCase {
             return line.replacingOccurrences(of: "id of every window", with: "{1}")
                 .replacingOccurrences(of: "name of every window", with: "{\"S\"}")
         }.joined(separator: "\n")
-        guard !fragment.contains("tell application") else { throw BoundaryViolation.malformed("unexpected application call") }
+        try OsascriptFixtureGuard.check(fragment)   // #572: any form of addressing an application, not one literal
         return fragment
     }
 
@@ -205,9 +205,7 @@ final class ComposeCleanupSheetTests: XCTestCase {
             .replacingOccurrences(of: "repeat with _cw in windows", with: "repeat with _cw in _testWindows")
             .replacingOccurrences(of: "id of _cw", with: "item 1 of _cw")
             .replacingOccurrences(of: "name of _cw", with: "item 2 of _cw")
-        guard !fragment.contains("tell application") else {
-            throw BoundaryViolation.malformed("unexpected application call in fixture fragment")
-        }
+        try OsascriptFixtureGuard.check(fragment)   // #572: the Mail tell lines were removed, so check what is left
         let source = "set _beforeIds to {1}\nset _beforeTitles to {\"Other\"}\nset _testWindows to "
             + windows + "\n" + fragment + "\nreturn _ourId as text"
         let process = Process()
