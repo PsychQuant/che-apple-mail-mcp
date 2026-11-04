@@ -72,7 +72,7 @@ hint 改為叫呼叫端讀結果裡的 `date_received`。
 - 寄出類 hint 不含 `Do not resend automatically`、`Full Disk Access`、`date_received`，或含 `date_from`；
 - 草稿刪除逾時的訊息含 `GUI` 或 `read-only`，或不含 `deletion outcome is unknown`；
 - `.subprocess` 逾時描述不含 draft-save 的 hint；
-- reply / forward 的非逾時（post-dispatch）訊息措辭在 hint 之前有任何改動；逾時訊息缺 `may or may not have fired`、`UNKNOWN`、`NOT retrying` 或 `any leftover compose window`，或含 `already dispatched`、`left untouched`（#550）；或 `MailController.swift` 又出現內嵌的那段措辭；
+- reply / forward 的非逾時（post-dispatch）訊息措辭在 hint 之前有任何改動（兩個 noun 都逐字比對）；逾時訊息缺 `may or may not have fired`、`UNKNOWN`、`NOT retrying`、`the <noun> may already be on the wire`、`the original thread` 或 `any leftover compose window`，或含 `already dispatched`、`left untouched`，或產生的錯誤被分類成逾時或 post-dispatch（#550）；或 `MailController.swift` 又出現內嵌的那段措辭；
 - README 的「After a timeout」一節不存在，或沒提到 `search_emails`、`list_drafts`、`UNKNOWN`。
 
 抓不到的：`isTimeoutError` / `isPostDispatchError` 本身被改（由既有的 `GuiScriptTimeoutTests` 與

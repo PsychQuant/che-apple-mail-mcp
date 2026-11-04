@@ -61,15 +61,18 @@ final class ReplyForwardUnknownStateTests: XCTestCase {
     func testWording_nonTimeout_isTheInlineTextPlusTheSendFlowHintBeforeTheEcho() {
         let input = MailError.scriptFailed(message: "boom", code: -1)
         XCTAssertFalse(isTimeoutError(input), "this test pins the non-timeout branch")
-        let text = message(unknownReplyForwardSendStateError(noun: "forward", error: input))
-        XCTAssertEqual(
-            text,
-            "the send keystroke was already dispatched but a GUI step failed afterwards — "
-                + "the send state is UNKNOWN and the forward may already be on the wire. "
-                + "Check Mail's Sent mailbox / Outbox and the original thread before re-sending. "
-                + "The compose window (if still open) was left untouched for inspection. "
-                + timeoutVerificationHint(.sendFlow)
-                + " Original error: AppleScript error (-1): boom")
+        // Both nouns the production sites pass (#550 verify).
+        for noun in ["reply/forward", "forward"] {
+            let text = message(unknownReplyForwardSendStateError(noun: noun, error: input))
+            XCTAssertEqual(
+                text,
+                "the send keystroke was already dispatched but a GUI step failed afterwards — "
+                    + "the send state is UNKNOWN and the \(noun) may already be on the wire. "
+                    + "Check Mail's Sent mailbox / Outbox and the original thread before re-sending. "
+                    + "The compose window (if still open) was left untouched for inspection. "
+                    + timeoutVerificationHint(.sendFlow)
+                    + " Original error: AppleScript error (-1): boom")
+        }
     }
 
     /// #550 — a timeout does not claim the keystroke fired.
