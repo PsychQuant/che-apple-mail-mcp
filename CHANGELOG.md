@@ -72,9 +72,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`SQLITE_BUSY` after the busy timeout, `SQLITE_IOERR`, `SQLITE_CORRUPT`)
   read as "no more rows": a truncated mailbox list, search page or recipient
   list came back as if complete, and an unread count or search count as `0`,
-  with nothing on stderr. Every multi-row read now checks that SQLite reported
-  the end of the results, and every one-row read tells "no row" from a failure;
-  a failure throws `queryFailed` naming SQLite's message and result code.
+  with nothing on stderr. Every multi-row read in the reader now checks that
+  SQLite reported the end of the results, and the one-row reads (unread count,
+  search count, message lookup, metadata, draft status) tell "no row" from a
+  failure; a failure throws `queryFailed` naming SQLite's message and result
+  code. A recipient read that fails now fails its search page, where it used to
+  leave the recipients empty.
   `list_mailboxes`, `get_unread_count`, `list_attachments` and `search_emails`
   (`projection: "full"`) used to pass index errors to the caller; on a failed
   read they now log it to stderr and use the AppleScript path, like the other

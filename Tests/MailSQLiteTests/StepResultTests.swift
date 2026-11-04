@@ -15,7 +15,7 @@ final class StepResultTests: XCTestCase {
 
     private static let rowCount = 3000
 
-    private enum LargeTable { case mailboxes, messages }
+    private enum LargeTable { case mailboxes, messages, attachments, recipients }
 
     private func makeFixture(large: LargeTable, corrupt: Bool) throws -> String {
         let fm = FileManager.default
@@ -62,6 +62,26 @@ final class StepResultTests: XCTestCase {
             try exec(messages)
             for i in 1...Self.rowCount {
                 try exec("INSERT INTO messages VALUES (\(i), 1, 1, 1, 1700000000, 0, 0, 0, 10, 0, '\(String(repeating: "y", count: 60))')")
+            }
+        case .attachments, .recipients:
+            try exec(mailboxes)
+            try exec("INSERT INTO mailboxes VALUES (1, 'imap://UUID-A/INBOX', 1, 1)")
+            try exec(messages)
+            try exec("INSERT INTO messages VALUES (1, 1, 1, 1, 1700000000, 0, 0, 0, 10, 0, 'z')")
+            if large == .attachments {
+                try exec("CREATE TABLE attachments (ROWID INTEGER PRIMARY KEY, message INTEGER, name TEXT, attachment_id TEXT)")
+                for i in 1...Self.rowCount {
+                    try exec("INSERT INTO attachments VALUES (\(i), 1, 'file-\(i)-\(String(repeating: "a", count: 60)).pdf', '\(i)')")
+                }
+            } else {
+                for i in 1...Self.rowCount {
+                    try exec("INSERT INTO addresses VALUES (\(i + 1), 'to\(i)-\(String(repeating: "r", count: 40))@example.com', '')")
+                }
+                try exec("DROP TABLE recipients")
+                try exec("CREATE TABLE recipients (ROWID INTEGER PRIMARY KEY, message INTEGER, address INTEGER, type INTEGER, position INTEGER, padding TEXT)")
+                for i in 1...Self.rowCount {
+                    try exec("INSERT INTO recipients VALUES (\(i), 1, \(i + 1), 0, \(i), '\(String(repeating: "p", count: 60))')")
+                }
             }
         }
         try exec("COMMIT")
@@ -149,5 +169,58 @@ final class StepResultTests: XCTestCase {
             XCTAssertTrue(message.contains("not found"), message)
         }
         XCTAssertEqual(try reader.searchCount(SearchParameters(query: "")), Self.rowCount)
+    }
+
+    // MARK: - the fixture really fails part-way (#549 verify)
+
+    /// Steps the raw fixture outside the reader: rows first, then a failure.
+    /// Without this, a fixture whose corruption surfaced on the first step would
+    /// prove only that errors propagate, not that partial results are dropped.
+    func testCorruptFixtureReturnsRowsBeforeFailing() throws {
+        for (large, sql) in [(LargeTable.mailboxes, "SELECT url FROM mailboxes"),
+                             (.messages, "SELECT ROWID FROM messages"),
+                             (.attachments, "SELECT name FROM attachments"),
+                             (.recipients, "SELECT address FROM recipients")] {
+            let path = try makeFixture(large: large, corrupt: true)
+            var db: OpaquePointer?
+            XCTAssertEqual(sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
+            var stmt: OpaquePointer?
+            XCTAssertEqual(sqlite3_prepare_v2(db, sql, -1, &stmt, nil), SQLITE_OK)
+            var rows = 0
+            var status = sqlite3_step(stmt)
+            while status == SQLITE_ROW { rows += 1; status = sqlite3_step(stmt) }
+            sqlite3_finalize(stmt)
+            sqlite3_close(db)
+            XCTAssertGreaterThan(rows, 0, "\(large): rows before the failure")
+            XCTAssertLessThan(rows, Self.rowCount, "\(large): not every row")
+            XCTAssertNotEqual(status, SQLITE_DONE, "\(large): the scan must end in a failure")
+        }
+    }
+
+    // MARK: - the remaining converted sites (#549 verify)
+
+    func testEmailListThrowsWhenTheMessageScanFails() throws {
+        let reader = try reader(try makeFixture(large: .messages, corrupt: true))
+        assertStepFailure(try reader.listEmailsPage(mailbox: "INBOX", accountName: "Alice", limit: Self.rowCount + 10))
+    }
+
+    func testAttachmentListThrowsInsteadOfReturningAPartialList() throws {
+        let reader = try reader(try makeFixture(large: .attachments, corrupt: true))
+        assertStepFailure(try reader.listAttachments(messageId: 1))
+    }
+
+    func testIntactAttachmentListReadsEveryRow() throws {
+        let reader = try reader(try makeFixture(large: .attachments, corrupt: false))
+        XCTAssertEqual(try reader.listAttachments(messageId: 1).count, Self.rowCount)
+    }
+
+    func testRecipientReadFailureFailsTheSearchPage() throws {
+        let reader = try reader(try makeFixture(large: .recipients, corrupt: true))
+        assertStepFailure(try reader.searchPage(SearchParameters(query: "")))
+    }
+
+    func testDraftStatusOnACorruptPageIsAFailure() throws {
+        let reader = try reader(try makeFixture(large: .messages, corrupt: true))
+        assertStepFailure(try reader.messageIsDraft(messageId: Self.rowCount))
     }
 }

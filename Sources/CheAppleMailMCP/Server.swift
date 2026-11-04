@@ -2210,9 +2210,15 @@ class CheAppleMailMCPServer {
                     // Fail CLOSED: anything we cannot resolve to a known
                     // address-bearing account is "cannot tell" → disclosed,
                     // never silently resolved to `received` (#351).
-                    guard let rowId = Int(id),
-                          let url = try? exportReader.mailboxURL(forMessageId: rowId),
-                          let mailbox = MailboxURL.decode(url) else { return false }
+                    guard let rowId = Int(id) else { return false }
+                    let url: String?
+                    do { url = try exportReader.mailboxURL(forMessageId: rowId) } catch {
+                        // Still "cannot tell" (#549): logged, never a silent nil.
+                        Diagnostics.emit("SQLite batch_export identity lookup failed for rowId=\(rowId): "
+                            + "\(error.localizedDescription); reporting the direction as not inferred\n")
+                        return false
+                    }
+                    guard let url, let mailbox = MailboxURL.decode(url) else { return false }
                     // Hex case carries no meaning in a UUID, and the rest of
                     // the reader already folds it (#343 verify) — a store that
                     // reports one case in the account map and the other in the
