@@ -68,6 +68,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at the same nesting depth as the attachment walk (8), where it used to recurse
   without a limit at quadratic cost. Well-formed UTF-8 mail returns the same
   bodies as before, trailing line break included.
+- **A multipart preamble ending in a blank line no longer empties the text body**
+  ([#560](https://github.com/PsychQuant/che-apple-mail-mcp/issues/560)).
+  The text before the first boundary (often `This is a multi-part message in
+  MIME format.`) was walked as a part. When a blank line followed it, it parsed
+  as an empty `text/plain`, and the real plain part was then skipped, so
+  `get_email` returned `text_body: ""` and the exported Markdown body was empty
+  even though the message had a plain and an html part. The preamble is now
+  skipped, as the attachment walk already did.
 
 ## [4.0.0] - 2026-10-29
 

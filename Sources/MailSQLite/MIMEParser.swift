@@ -800,7 +800,7 @@ public enum MIMEParser {
     /// between two delimiters, including the line break before the next
     /// delimiter, so the bodies of well-formed UTF-8 mail do not change. That
     /// is why this does not reuse `splitMultipart`, which strips that line
-    /// break.
+    /// break. Like `splitMultipart`, it skips the preamble (#560).
     private static func parseMultipart(
         _ data: Data,
         boundary: String,
@@ -809,7 +809,11 @@ public enum MIMEParser {
         var textBody: String?
         var htmlBody: String?
 
-        for partData in multipartChunks(data, boundary: boundary) {
+        // The chunk before the first delimiter is the preamble, which is not a
+        // part (RFC 2046 §5.1.1), as `splitMultipart` already treats it. Walked
+        // as a part, a preamble ending in a blank line parsed as an empty
+        // text/plain, and "first text wins" then rejected the real one (#560).
+        for partData in multipartChunks(data, boundary: boundary).dropFirst() {
             if isBlankOrClosingChunk(partData) { continue }
 
             // Each part has its own headers + body
