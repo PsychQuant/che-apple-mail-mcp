@@ -36,7 +36,7 @@ public enum MIMEParser {
         let contentType = headers["content-type"] ?? "text/plain"
         let cte = headers["content-transfer-encoding"] ?? "7bit"
 
-        return parsePart(bodyData, contentType: contentType, encoding: cte)
+        return parsePart(bodyData, contentType: contentType, encoding: cte, depth: 0)
     }
 
     /// Parse the body portion of an RFC 822 message into **every** MIME
@@ -706,15 +706,23 @@ public enum MIMEParser {
     private static func parsePart(
         _ data: Data,
         contentType: String,
-        encoding: String
+        encoding: String,
+        depth: Int
     ) -> ParsedEmailContent {
+        // Same depth guard as `collectParts`, so `parseBody` and
+        // `parseAllParts` stop at the same part (#546). Without it a message
+        // nested thousands deep was walked in full, at quadratic cost.
+        guard depth < maxMultipartDepth else {
+            return ParsedEmailContent(textBody: nil, htmlBody: nil)
+        }
+
         let (mimeType, params) = parseContentType(contentType)
 
         if mimeType.hasPrefix("multipart/") {
             guard let boundary = params["boundary"] else {
                 return ParsedEmailContent(textBody: nil, htmlBody: nil)
             }
-            return parseMultipart(data, boundary: boundary)
+            return parseMultipart(data, boundary: boundary, depth: depth)
         }
 
         // Decode transfer encoding
@@ -781,29 +789,30 @@ public enum MIMEParser {
 
     // MARK: - Multipart
 
+    /// Walk one multipart level for the first text/plain and text/html.
+    ///
+    /// The body is split at the byte level and each part is decoded on its
+    /// own (#546). It used to be turned into one `String` first, so a single
+    /// byte that is neither UTF-8 nor ASCII (raw 8bit Big5, a lone `0xE9`)
+    /// returned no text and no html for the whole message, siblings included.
+    ///
+    /// The chunking matches the old string split exactly: a part is the bytes
+    /// between two delimiters, including the line break before the next
+    /// delimiter, so the bodies of well-formed UTF-8 mail do not change. That
+    /// is why this does not reuse `splitMultipart`, which strips that line
+    /// break.
     private static func parseMultipart(
         _ data: Data,
-        boundary: String
+        boundary: String,
+        depth: Int
     ) -> ParsedEmailContent {
-        let boundaryMarker = "--\(boundary)"
-        let endMarker = "--\(boundary)--"
-
-        guard let text = String(data: data, encoding: .utf8)
-                ?? String(data: data, encoding: .ascii) else {
-            return ParsedEmailContent(textBody: nil, htmlBody: nil)
-        }
-
         var textBody: String?
         var htmlBody: String?
 
-        let parts = text.components(separatedBy: boundaryMarker)
-
-        for part in parts {
-            let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty || trimmed.hasPrefix("--") { continue }
+        for partData in multipartChunks(data, boundary: boundary) {
+            if isBlankOrClosingChunk(partData) { continue }
 
             // Each part has its own headers + body
-            let partData = Data(part.utf8)
             guard let splitOffset = RFC822Parser.headerBodySplitOffset(in: partData) else {
                 continue
             }
@@ -814,7 +823,7 @@ public enum MIMEParser {
             let partCT = partHeaders["content-type"] ?? "text/plain"
             let partCTE = partHeaders["content-transfer-encoding"] ?? "7bit"
 
-            let result = parsePart(Data(partBody), contentType: partCT, encoding: partCTE)
+            let result = parsePart(Data(partBody), contentType: partCT, encoding: partCTE, depth: depth + 1)
 
             if let t = result.textBody, textBody == nil {
                 textBody = t
@@ -825,6 +834,33 @@ public enum MIMEParser {
         }
 
         return ParsedEmailContent(textBody: textBody, htmlBody: htmlBody)
+    }
+
+    /// The bytes between successive `--boundary` delimiters, in order,
+    /// including the chunk before the first delimiter and the one after the
+    /// last: the byte-level equivalent of `String.components(separatedBy:)`.
+    static func multipartChunks(_ data: Data, boundary: String) -> [Data] {
+        let delimiter = Data("--\(boundary)".utf8)
+        var chunks: [Data] = []
+        var cursor = data.startIndex
+        while let range = data.range(of: delimiter, in: cursor..<data.endIndex) {
+            chunks.append(Data(data[cursor..<range.lowerBound]))
+            cursor = range.upperBound
+        }
+        chunks.append(Data(data[cursor..<data.endIndex]))
+        return chunks
+    }
+
+    /// True for a chunk that is only ASCII whitespace, or whose first
+    /// non-whitespace bytes are `--` (the tail of a closing delimiter and the
+    /// epilogue after it).
+    private static func isBlankOrClosingChunk(_ chunk: Data) -> Bool {
+        let whitespace: Set<UInt8> = [0x20, 0x09, 0x0A, 0x0B, 0x0C, 0x0D]
+        guard let first = chunk.firstIndex(where: { !whitespace.contains($0) }) else {
+            return true
+        }
+        let next = chunk.index(after: first)
+        return chunk[first] == 0x2D && next < chunk.endIndex && chunk[next] == 0x2D
     }
 
     // MARK: - Content-Type Parsing

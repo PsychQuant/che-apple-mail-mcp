@@ -58,6 +58,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only at CR or LF (a bare CR still ends a line, as before), and those
   characters stay in the value. Archives exported earlier with a forged
   `message_id` are not repaired.
+- **One non-UTF-8 part no longer blanks a multipart message's text and html**
+  ([#546](https://github.com/PsychQuant/che-apple-mail-mcp/issues/546)).
+  The text/html walk behind `get_email`, `get_emails_batch` and both export
+  tools turned the whole multipart body into one `String`, so a single byte that
+  is neither UTF-8 nor ASCII (a raw 8bit Big5 part, a lone `0xE9`) returned no
+  text and no html, the valid sibling part included. Parts are now split at the
+  byte level and decoded one by one under their own charset. The walk also stops
+  at the same nesting depth as the attachment walk (8), where it used to recurse
+  without a limit at quadratic cost. Well-formed UTF-8 mail returns the same
+  bodies as before, trailing line break included.
 
 ## [4.0.0] - 2026-10-29
 

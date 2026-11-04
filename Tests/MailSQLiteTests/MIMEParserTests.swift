@@ -268,8 +268,9 @@ final class MIMEParserTests: XCTestCase {
         XCTAssertNotNil(firstText)
         XCTAssertNotNil(firstHTML)
 
-        // parseBody uses String-based components split and keeps trailing CRLFs
-        // in text bodies; parseAllParts uses byte-level split and strips them.
+        // parseBody splits at delimiters and keeps the CRLF before the next one
+        // in text bodies; parseAllParts (splitMultipart) strips it. Both split
+        // bytes, not a String, since #546.
         // Both are semantically equivalent — compare after trimming whitespace.
         let lossyTextTrim = lossy.textBody?.trimmingCharacters(in: .whitespacesAndNewlines)
         let allPartsTextTrim = firstText
