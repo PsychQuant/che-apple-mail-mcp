@@ -111,9 +111,14 @@ final class ExportHandlerTests: XCTestCase {
             else { unsetenv("CHE_MAIL_EXPORT_ALLOWED_ROOTS") }
         }
 
+        // The list runner has its own override and no #362 XCTest guard, so it is
+        // stubbed too: if an export path ever calls it, it fails here instead of
+        // reaching Mail (#581 verify).
         await MailController.shared.setTestSeams(scriptRunner: { _ in
             throw MailError.operationFailed("ExportHandlerTests: no Mail in this test")
-        }, refusal: nil, automationGranted: false)
+        }, refusal: nil, scriptListRunner: { _ in
+            throw MailError.operationFailed("ExportHandlerTests: no Mail in this test")
+        }, automationGranted: false)
         addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
 
         let server = try await CheAppleMailMCPServer(
@@ -182,14 +187,19 @@ final class ExportHandlerTests: XCTestCase {
     /// comes from option parsing, not from a missing index.
     func testHandlerRejectsMalformedDraftOptions() async throws {
         let (server, root) = try await makeServer()
+        // The expected text is the message each guard throws, so a call that
+        // fails for some other reason that merely mentions the option still fails.
+        let notBoolean = "opts.skip_drafts must be a boolean"
+        let misplaced = "skip_drafts belongs inside opts"
+        let notObject = "opts must be an object"
         let cases: [(String, [String: Value], String)] = [
-            ("string skip_drafts", ["opts": .object(["skip_drafts": .string("true")])], "skip_drafts"),
-            ("integer skip_drafts", ["opts": .object(["skip_drafts": .int(1)])], "skip_drafts"),
-            ("null skip_drafts", ["opts": .object(["skip_drafts": .null])], "skip_drafts"),
-            ("top-level skip_drafts", ["skip_drafts": .bool(true)], "skip_drafts"),
-            ("boolean opts", ["opts": .bool(true)], "opts"),
-            ("string opts", ["opts": .string("x")], "opts"),
-            ("array opts", ["opts": .array([])], "opts"),
+            ("string skip_drafts", ["opts": .object(["skip_drafts": .string("true")])], notBoolean),
+            ("integer skip_drafts", ["opts": .object(["skip_drafts": .int(1)])], notBoolean),
+            ("null skip_drafts", ["opts": .object(["skip_drafts": .null])], notBoolean),
+            ("top-level skip_drafts", ["skip_drafts": .bool(true)], misplaced),
+            ("boolean opts", ["opts": .bool(true)], notObject),
+            ("string opts", ["opts": .string("x")], notObject),
+            ("array opts", ["opts": .array([])], notObject),
         ]
         for (label, extra, named) in cases {
             do {
@@ -203,9 +213,15 @@ final class ExportHandlerTests: XCTestCase {
         }
     }
 
-    func testHandlerTreatsNullOptsAsAbsent() async throws {
+    /// A null opts means absent, and an explicit `skip_drafts: false` is the default.
+    func testHandlerTreatsNullOptsAndFalseAsTheDefault() async throws {
         let (server, root) = try await makeServer()
-        for (label, extra) in [("null opts", ["opts": Value.null]), ("absent opts", [:])] {
+        let variants: [(String, [String: Value])] = [
+            ("null opts", ["opts": .null]),
+            ("absent opts", [:]),
+            ("skip_drafts false", ["opts": .object(["skip_drafts": .bool(false)])]),
+        ]
+        for (label, extra) in variants {
             let manifest = try await export(server, ids: ["1"], outputDir: root.appendingPathComponent("out-\(label)"),
                                             extra: extra)
             XCTAssertEqual(manifest["drafts_skipped"] as? Int, 0, label)
