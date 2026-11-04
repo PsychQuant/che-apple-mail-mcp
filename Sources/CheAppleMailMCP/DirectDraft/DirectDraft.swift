@@ -87,11 +87,15 @@ enum DirectDraft {
         var size: Int { mime.count }
     }
 
+    /// The longest line RFC 5322 §2.1.1 allows, in octets, line ending excluded.
+    static let maxLineOctets = 998
+
     /// The draft in the layout Mail writes for drafts it saves (#472 design):
     /// `multipart/alternative` with an empty `text/plain` part and the body in
     /// `text/html`, LF line endings, `X-Uniform-Type-Identifier: com.apple.mail-draft`.
     /// Non-ASCII goes out as UTF-8: RFC 2047 encoded words in headers,
-    /// quoted-printable in the body.
+    /// quoted-printable in the body. An ASCII body with a line over
+    /// `maxLineOctets` goes out as quoted-printable too (#588).
     static func buildMessage(fromName: String?, fromAddress: String, to: [String], subject: String, body: String,
                              date: Date, documentUUID: UUID, messageIdLocalPart: UUID, boundary: UUID,
                              mailVersion: String, timeZone: TimeZone = .current) -> Message {
@@ -122,7 +126,14 @@ enum DirectDraft {
             + body.components(separatedBy: "\n").map(escapeHTML).joined(separator: "<br>\n")
             + "\n</body></html>"
         let ascii = html.unicodeScalars.allSatisfy { $0.isASCII }
-        let htmlPart = ascii
+        // RFC 5322 §2.1.1 limits a line to 998 octets (line ending excluded),
+        // and a 7bit part does not fold. An ASCII html part with a longer line
+        // goes out as quoted-printable, which soft-wraps at 76 (#588). Short
+        // ASCII bodies keep the 7bit layout Mail itself writes (#472).
+        let sevenBitSafe = ascii
+            && !html.utf8.split(separator: 0x0A, omittingEmptySubsequences: false)
+                .contains { $0.count > maxLineOctets }
+        let htmlPart = sevenBitSafe
             ? "Content-Transfer-Encoding: 7bit\nContent-Type: text/html;\n\tcharset=us-ascii\n\n\(html)"
             : "Content-Transfer-Encoding: quoted-printable\nContent-Type: text/html;\n\tcharset=utf-8\n\n"
                 + quotedPrintable(Data(html.utf8))

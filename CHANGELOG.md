@@ -76,6 +76,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_email` returned `text_body: ""` and the exported Markdown body was empty
   even though the message had a plain and an html part. The preamble is now
   skipped, as the attachment walk already did.
+- **The opt-in direct write no longer writes lines over 998 octets**
+  ([#588](https://github.com/PsychQuant/che-apple-mail-mcp/issues/588)).
+  With `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, an ASCII-only body went out as a
+  `7bit` html part without folding, so a body line longer than 998 octets (the
+  RFC 5322 §2.1.1 limit) made the draft an invalid message that servers or
+  clients may rewrite or reject. Such a body now goes out as quoted-printable,
+  which soft-wraps at 76 characters, like non-ASCII bodies already did. Bodies
+  whose lines all fit keep the `7bit` layout Mail itself writes. The
+  `create_draft` description no longer lists this as a known limitation. Long
+  header lines (a long recipient list or ASCII subject) are not folded yet.
 
 ## [4.0.0] - 2026-10-29
 

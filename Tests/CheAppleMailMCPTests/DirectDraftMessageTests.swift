@@ -91,6 +91,48 @@ final class DirectDraftMessageTests: XCTestCase {
         XCTAssertTrue(s.contains("Content-Transfer-Encoding: 7bit\nContent-Type: text/html;\n\tcharset=us-ascii"))
     }
 
+    // MARK: - Line length (#588)
+
+    /// RFC 5322 §2.1.1: a line is at most 998 octets, line ending excluded.
+    private func longestLine(_ m: DirectDraft.Message) -> Int {
+        m.mime.split(separator: 0x0A, omittingEmptySubsequences: false).map(\.count).max() ?? 0
+    }
+
+    private func htmlPart(_ s: String) throws -> String {
+        try XCTUnwrap(s.components(separatedBy: "charset=utf-8\n\n").last?
+            .components(separatedBy: "\n--Apple-Mail=").first)
+    }
+
+    func testALongAsciiLineIsQuotedPrintableAndNoLineExceeds998Octets() throws {
+        let line = String(repeating: "abcdefghij", count: 200)   // 2,000 ASCII characters
+        let m = build(body: "short\n" + line)
+        let s = text(m)
+        XCTAssertLessThanOrEqual(longestLine(m), 998, "RFC 5322 §2.1.1")
+        XCTAssertTrue(s.contains("Content-Transfer-Encoding: quoted-printable\nContent-Type: text/html;\n\tcharset=utf-8"))
+        let decoded = try XCTUnwrap(RFC822Parser.decodeQuotedPrintableBytes(try htmlPart(s)))
+        XCTAssertTrue(String(decoding: decoded, as: UTF8.self).contains("short<br>\n" + line), "the body decodes back unchanged")
+    }
+
+    func testAnHtmlLineOfExactly998OctetsStaysSevenBit() {
+        // The last body line has no `<br>`, so the html line is the body line itself.
+        let m = build(body: "first\n" + String(repeating: "x", count: 998))
+        XCTAssertEqual(longestLine(m), 998)
+        XCTAssertTrue(text(m).contains("Content-Transfer-Encoding: 7bit\nContent-Type: text/html;\n\tcharset=us-ascii"))
+    }
+
+    func testAnHtmlLineOf999OctetsIsQuotedPrintable() {
+        let m = build(body: "first\n" + String(repeating: "x", count: 999))
+        XCTAssertLessThanOrEqual(longestLine(m), 998)
+        XCTAssertTrue(text(m).contains("Content-Transfer-Encoding: quoted-printable\nContent-Type: text/html;\n\tcharset=utf-8"))
+    }
+
+    func testEscapingCountsTowardTheLineLength() {
+        // 300 `&` become 1,500 octets of `&amp;` in the html.
+        let m = build(body: String(repeating: "&", count: 300))
+        XCTAssertLessThanOrEqual(longestLine(m), 998)
+        XCTAssertTrue(text(m).contains("Content-Transfer-Encoding: quoted-printable"))
+    }
+
     func testNonAsciiSubjectAndBodyRoundTripThroughTheRepoDecoders() throws {
         let subject = "測試草稿：直接寫入 — 這是一個比較長的主旨，用來確認會被拆成多個 encoded word"
         let body = "第一行 café\n第二行，含 = 等號與 很長的中文句子會被軟換行切開但解碼後必須完全一樣。"
