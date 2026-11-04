@@ -1,0 +1,215 @@
+import Darwin
+import MCP
+import SQLite3
+import XCTest
+@testable import CheAppleMailMCP
+@testable import MailSQLite
+
+/// #581: the export handler's option parsing and draft lookup, driven through
+/// `executeToolCall` against a fixture Envelope Index.
+///
+/// `ExportDraftStatusTests` covers the helpers (`ExportEmailsMarkdown.run` with
+/// an injected `draftStatusFor`, `parseSkipDraftsOption`, `exportOptions(from:)`)
+/// one at a time. These tests pin the wiring between them in the handler: if
+/// the handler went back to `exportOpts["skip_drafts"]?.boolValue ?? false`,
+/// stopped calling `exportOptions(from:)`, or dropped `draftStatusFor:` (whose
+/// default reports every message as unknown), the helper tests would stay green
+/// and these would not.
+///
+/// Nothing here reaches Mail: the script-runner seam throws, so the identity
+/// refresh fails at once and the handler falls back to the SQLite account list.
+/// The only files read are the ones each test creates.
+final class ExportHandlerTests: XCTestCase {
+    private static let toolNames = ["batch_export_emails_markdown", "export_emails_markdown"]
+
+    // MARK: - Harness
+
+    /// A test-owned root under the canonical temp path, so the output_dir
+    /// policy compares like with like (`/var` is a link to `/private/var`).
+    private func makeRoot() throws -> URL {
+        let pointer = realpath(FileManager.default.temporaryDirectory.path, nil)!
+        defer { free(pointer) }
+        let root = URL(fileURLWithPath: String(cString: pointer)).appendingPathComponent("export581-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        return root
+    }
+
+    /// Rows copied from `DraftStatusTests.fixture()`: id 1 is a known draft
+    /// (type 5 in Gmail's drafts folder), id 7 a known non-draft (type 0 in All
+    /// Mail), id 4 unknown (type 6).
+    private func writeIndex(at path: String) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open(path, &db) == SQLITE_OK else { throw NSError(domain: "ExportHandlerFixture", code: 1) }
+        defer { sqlite3_close(db) }
+        var sql = """
+        CREATE TABLE subjects (ROWID INTEGER PRIMARY KEY, subject TEXT);
+        CREATE TABLE addresses (ROWID INTEGER PRIMARY KEY, address TEXT, comment TEXT);
+        CREATE TABLE mailboxes (ROWID INTEGER PRIMARY KEY, url TEXT);
+        CREATE TABLE recipients (message INTEGER, address INTEGER, type INTEGER, position INTEGER);
+        CREATE TABLE messages (ROWID INTEGER PRIMARY KEY, subject INTEGER, sender INTEGER, mailbox INTEGER,
+          date_received INTEGER, read INTEGER DEFAULT 0, flagged INTEGER DEFAULT 0, deleted INTEGER DEFAULT 0,
+          size INTEGER DEFAULT 10, conversation_id INTEGER DEFAULT 1, flags INTEGER DEFAULT 0, global_message_id INTEGER, type);
+        INSERT INTO addresses VALUES (1, 'sender@example.test', 'Fixture');
+        INSERT INTO mailboxes VALUES (1, 'imap://UUID-A/%5BGmail%5D/%E8%8D%89%E7%A8%BF');
+        INSERT INTO mailboxes VALUES (2, 'imap://UUID-A/%5BGmail%5D/All%20Mail');
+        """
+        for (id, mailbox, type) in [(1, 1, 5), (4, 2, 6), (7, 2, 0)] {
+            sql += "INSERT INTO subjects VALUES (\(id), 'match \(id)');\n"
+            sql += "INSERT INTO messages (ROWID,subject,sender,mailbox,date_received,global_message_id,type) "
+                + "VALUES (\(id),\(id),1,\(mailbox),\(1000 + id),\(id),\(type));\n"
+        }
+        guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else {
+            throw NSError(domain: "ExportHandlerFixture", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))])
+        }
+    }
+
+    /// The .emlx of the known non-draft, so strict mode has a message to write.
+    private func plantNonDraftMessage(under storage: URL) throws {
+        let messages = storage.appendingPathComponent("UUID-A/[Gmail].mbox/All Mail.mbox")
+            .appendingPathComponent("5FCC6F13-2CE3-48B1-907D-686244C0229A/Data/Messages", isDirectory: true)
+        try FileManager.default.createDirectory(at: messages, withIntermediateDirectories: true)
+        let message = Data("""
+        From: Fixture <sender@example.test>
+        To: owner@example.test
+        Subject: match 7
+        Date: Tue, 30 Jun 2026 12:00:00 +0000
+        Message-ID: <seven@fixture.test>
+        Content-Type: text/plain; charset=utf-8
+
+        body seven
+
+        """.utf8)
+        try (Data("\(message.count)\n".utf8) + message).write(to: messages.appendingPathComponent("7.emlx"))
+    }
+
+    /// A server over the fixture index, with every piece of process-global
+    /// state it reads set for this test and restored afterwards.
+    private func makeServer() async throws -> (server: CheAppleMailMCPServer, root: URL) {
+        let root = try makeRoot()
+        let indexPath = root.appendingPathComponent("Envelope Index").path
+        try writeIndex(at: indexPath)
+        let storage = root.appendingPathComponent("Mail", isDirectory: true)
+        try plantNonDraftMessage(under: storage)
+
+        // The fixture's statuses are the premise of every assertion below; if
+        // the reader's draft SQL changes, fail here rather than in the handler.
+        let reader = try EnvelopeIndexReader(databasePath: indexPath, accountMapping: ["UUID-A": "Fixture"])
+        XCTAssertEqual(try reader.messageIsDraft(messageId: 1), true)
+        XCTAssertEqual(try reader.messageIsDraft(messageId: 7), false)
+        XCTAssertNil(try reader.messageIsDraft(messageId: 4))
+
+        let previousStorage = EnvelopeIndexReader.mailStoragePathOverride
+        EnvelopeIndexReader.mailStoragePathOverride = storage.path
+        addTeardownBlock { EnvelopeIndexReader.mailStoragePathOverride = previousStorage }
+
+        let previousRoots = getenv("CHE_MAIL_EXPORT_ALLOWED_ROOTS").map { String(cString: $0) }
+        setenv("CHE_MAIL_EXPORT_ALLOWED_ROOTS", root.path, 1)
+        addTeardownBlock {
+            if let previousRoots { setenv("CHE_MAIL_EXPORT_ALLOWED_ROOTS", previousRoots, 1) }
+            else { unsetenv("CHE_MAIL_EXPORT_ALLOWED_ROOTS") }
+        }
+
+        await MailController.shared.setTestSeams(scriptRunner: { _ in
+            throw MailError.operationFailed("ExportHandlerTests: no Mail in this test")
+        }, refusal: nil, automationGranted: false)
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
+
+        let server = try await CheAppleMailMCPServer(
+            databasePath: indexPath, initialSync: false,
+            classificationDirectory: root.appendingPathComponent("classification", isDirectory: true))
+        return (server, root)
+    }
+
+    private func export(_ server: CheAppleMailMCPServer, tool: String = "batch_export_emails_markdown",
+                        ids: [String], outputDir: URL, extra: [String: Value] = [:]) async throws -> [String: Any] {
+        var arguments: [String: Value] = ["ids": .array(ids.map { .string($0) }), "output_dir": .string(outputDir.path)]
+        arguments.merge(extra) { _, new in new }
+        let raw = try await server.executeToolCall(name: tool, arguments: arguments)
+        return try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any], raw)
+    }
+
+    private func items(_ manifest: [String: Any]) throws -> [String: [String: Any]] {
+        let list = try XCTUnwrap(manifest["items"] as? [[String: Any]])
+        return Dictionary(uniqueKeysWithValues: list.map { ($0["id"] as? String ?? "", $0) })
+    }
+
+    // MARK: - Draft lookup
+
+    /// Pins `draftStatusFor:`: its default `{ _ in nil }` would make all three null.
+    func testDefaultExportReportsTheReadersDraftStatus() async throws {
+        let (server, root) = try await makeServer()
+        let manifest = try await export(server, ids: ["1", "7", "4"], outputDir: root.appendingPathComponent("out"))
+        let byID = try items(manifest)
+        XCTAssertEqual(byID["1"]?["is_draft"] as? Bool, true)
+        XCTAssertEqual(byID["7"]?["is_draft"] as? Bool, false)
+        XCTAssertTrue(byID["4"]?["is_draft"] is NSNull)
+        XCTAssertEqual(manifest["drafts_skipped"] as? Int, 0, "default mode excludes nothing")
+    }
+
+    func testStrictExportSkipsTheDraftAndRefusesTheUnknownUnderBothToolNames() async throws {
+        let (server, root) = try await makeServer()
+        for tool in Self.toolNames {
+            let manifest = try await export(server, tool: tool, ids: ["1", "7", "4"],
+                                            outputDir: root.appendingPathComponent("out-\(tool)"),
+                                            extra: ["opts": .object(["skip_drafts": .bool(true)])])
+            let byID = try items(manifest)
+            XCTAssertEqual(byID["1"]?["status"] as? String, "draft_skipped", tool)
+            XCTAssertEqual(byID["1"]?["skip_reason"] as? String, "draft", tool)
+            XCTAssertEqual(byID["4"]?["status"] as? String, "error", tool)
+            XCTAssertTrue((byID["4"]?["error"] as? String)?.contains("draft_status_unknown") == true, tool)
+            XCTAssertEqual(byID["7"]?["status"] as? String, "written", "\(tool): \(byID["7"] ?? [:])")
+            XCTAssertEqual(manifest["drafts_skipped"] as? Int, 1, tool)
+            XCTAssertEqual(manifest["written"] as? Int, 1, tool)
+            XCTAssertEqual(manifest["errors"] as? Int, 1, tool)
+        }
+    }
+
+    /// The closure's own `Int(id)` guard, not the default: the item names the failed lookup.
+    func testStrictExportReportsAFailedLookupForANonNumericId() async throws {
+        let (server, root) = try await makeServer()
+        let manifest = try await export(server, ids: ["not-a-row"], outputDir: root.appendingPathComponent("out"),
+                                        extra: ["opts": .object(["skip_drafts": .bool(true)])])
+        let error = try XCTUnwrap(try items(manifest)["not-a-row"]?["error"] as? String)
+        XCTAssertTrue(error.contains("draft_status_unknown"), error)
+        XCTAssertTrue(error.contains("lookup failed"), error)
+    }
+
+    // MARK: - Option parsing
+
+    /// Each call would otherwise succeed (the index exists), so a throw here
+    /// comes from option parsing, not from a missing index.
+    func testHandlerRejectsMalformedDraftOptions() async throws {
+        let (server, root) = try await makeServer()
+        let cases: [(String, [String: Value], String)] = [
+            ("string skip_drafts", ["opts": .object(["skip_drafts": .string("true")])], "skip_drafts"),
+            ("integer skip_drafts", ["opts": .object(["skip_drafts": .int(1)])], "skip_drafts"),
+            ("null skip_drafts", ["opts": .object(["skip_drafts": .null])], "skip_drafts"),
+            ("top-level skip_drafts", ["skip_drafts": .bool(true)], "skip_drafts"),
+            ("boolean opts", ["opts": .bool(true)], "opts"),
+            ("string opts", ["opts": .string("x")], "opts"),
+            ("array opts", ["opts": .array([])], "opts"),
+        ]
+        for (label, extra, named) in cases {
+            do {
+                _ = try await export(server, ids: ["7"], outputDir: root.appendingPathComponent("out"), extra: extra)
+                XCTFail("\(label): accepted")
+            } catch {
+                let message = error.localizedDescription
+                XCTAssertTrue(message.contains(named), "\(label): \(message)")
+                XCTAssertFalse(message.contains("envelope index"), "\(label): failed for the wrong reason: \(message)")
+            }
+        }
+    }
+
+    func testHandlerTreatsNullOptsAsAbsent() async throws {
+        let (server, root) = try await makeServer()
+        for (label, extra) in [("null opts", ["opts": Value.null]), ("absent opts", [:])] {
+            let manifest = try await export(server, ids: ["1"], outputDir: root.appendingPathComponent("out-\(label)"),
+                                            extra: extra)
+            XCTAssertEqual(manifest["drafts_skipped"] as? Int, 0, label)
+            XCTAssertEqual(try items(manifest)["1"]?["is_draft"] as? Bool, true, label)
+        }
+    }
+}
