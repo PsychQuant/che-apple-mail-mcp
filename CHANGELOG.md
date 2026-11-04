@@ -61,10 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#468](https://github.com/PsychQuant/che-apple-mail-mcp/issues/468)).
   The tests time the real spawn/read/terminate/reap path with a monotonic
   clock instead of the wall clock. The grandchild-holds-the-pipe test was the
-  tight one: a 3 s hold against a 2.5 s ceiling left about 1.2 s between the
-  healthy path (about 1.3 s) and the broken read-until-EOF design. The
-  grandchild now holds the pipe 20 s and the ceiling is 10 s, so the two
-  outcomes are far apart; the orphaned `sleep` is killed when the test ends.
+  tight one: with a 3 s hold against a 2.5 s ceiling, the healthy path (about
+  1.3 s) had about 1.2 s of headroom, and the broken read-until-EOF design
+  (3 s) was only 1.7 s away from it. The grandchild now holds the pipe 20 s
+  and the ceiling is 10 s, so the two outcomes are far apart; the orphaned
+  `sleep` is killed when the test ends.
   The two endless children are `exec yes <line>` instead of a shell
   `while true; do echo ...; done` loop, so they block on a full pipe instead of
   spinning a core. Test-only change.

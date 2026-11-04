@@ -16,9 +16,9 @@ final class LogShowRunnerTests: XCTestCase {
                       makeArguments: { _ in ["-c", script] })
     }
 
-    /// #468: timed with a monotonic clock. Every ceiling below is a multiple of the bound it guards,
-    /// far from the time the broken design would take, so machine load cannot push the healthy path
-    /// over it while a real regression still lands well past it.
+    /// #468: timed with a monotonic clock, so a clock step cannot fail a test. Each ceiling sits well
+    /// above the healthy path and below the time the broken design it guards would take; that makes a
+    /// load-induced failure unlikely, not impossible.
     private func collect(_ runner: LogShowRunner, stopAfter: Int = .max) -> ([String], LogReadEnd, Duration) {
         var lines: [String] = []
         var end: LogReadEnd = .spawnFailed("not run")
@@ -145,9 +145,11 @@ final class LogShowRunnerTests: XCTestCase {
         // shell does NOT produce EOF, so a read-until-EOF design would sit here
         // until the grandchild exits (#301 hit this with osascript).
         // #468: the grandchild holds the pipe 20 s, so the broken design takes 20 s while the
-        // healthy one takes about 1.3 s (1 s deadline, a 250 ms poll slice, the terminate grace);
-        // a 10 s ceiling sits far from both. The old 3 s hold against a 2.5 s ceiling left 1.2 s
-        // of headroom under load. The fractional part makes the orphaned `sleep` findable.
+        // healthy one takes about 1.1-1.3 s (the 1 s deadline plus terminating the shell); a 10 s
+        // ceiling sits far from both. The old 3 s hold against a 2.5 s ceiling left about 1.2 s of
+        // headroom under load. This test guards "the deadline does not wait for EOF", not a deadline
+        // that is honoured a few seconds late; the stalled-child test above bounds that at 6 s.
+        // The fractional part of the hold makes the orphaned `sleep` findable.
         let hold = "20.\(Int.random(in: 100_000_000...999_999_999))"
         defer { Self.run("/usr/bin/pkill", ["-f", "sleep \(hold)"]) }
         let (_, end, secs) = collect(shRunner("echo a; sleep \(hold)", deadline: 1))
