@@ -45,6 +45,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CHE_MAIL_ATTACHMENT_DELAY_TRAILING` are no longer read: they only paced that
   code, and compose attachments have gone through ⇧⌘A with the
   `CHE_MAIL_MAILTO_*` delays since #304.
+- **The four tools that can send mail declare it in their MCP annotations**
+  ([#601](https://github.com/PsychQuant/che-apple-mail-mcp/issues/601)).
+  `compose_email`, `reply_email`, `forward_email` and `redirect_email` now carry
+  `readOnlyHint: false`, `destructiveHint: true` (a sent message cannot be
+  recalled), `idempotentHint: false` (a retry sends a second message, #242) and
+  `openWorldHint: true` (mail leaves for third parties). These are the values a
+  client conforming to the MCP spec already assumes for a tool without
+  annotations, so such a client behaves the same; the change makes them explicit
+  and keeps them if a client or SDK default changes. Annotations are static, so
+  `reply_email` declares the send case even when it is called with
+  `save_as_draft: true`. Whether any client prompts on these hints was not
+  verified. The other tools are unchanged (most still carry no annotations).
 
 ### Fixed
 

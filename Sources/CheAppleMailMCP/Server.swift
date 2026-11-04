@@ -104,7 +104,27 @@ class CheAppleMailMCPServer {
 
     // MARK: - Tool Definitions
 
+    /// The tools that can send mail (#601). Kept by name, like the
+    /// classification tools, so the long `Tool(...)` bodies stay untouched.
+    static let sendingToolNames = ["compose_email", "reply_email", "forward_email", "redirect_email"]
+
+    /// #601: worst-case hints for a tool that can send. `reply_email` also has a
+    /// draft mode, but annotations are static and it can send; a sent message
+    /// cannot be recalled (destructive), a retry sends a second one (not
+    /// idempotent, #242), and mail leaves for third parties (open world).
+    static let sendingToolAnnotations = Tool.Annotations(
+        readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true)
+
     static func defineTools() -> [Tool] {
+        definedTools().map { tool in
+            guard sendingToolNames.contains(tool.name) else { return tool }
+            var annotated = tool
+            annotated.annotations = sendingToolAnnotations
+            return annotated
+        }
+    }
+
+    private static func definedTools() -> [Tool] {
         [
             // Account Tools
             Tool(
