@@ -16,14 +16,19 @@ final class LogShowRunnerTests: XCTestCase {
                       makeArguments: { _ in ["-c", script] })
     }
 
-    private func collect(_ runner: LogShowRunner, stopAfter: Int = .max) -> ([String], LogReadEnd, TimeInterval) {
+    /// #468: timed with a monotonic clock. Every ceiling below is a multiple of the bound it guards,
+    /// far from the time the broken design would take, so machine load cannot push the healthy path
+    /// over it while a real regression still lands well past it.
+    private func collect(_ runner: LogShowRunner, stopAfter: Int = .max) -> ([String], LogReadEnd, Duration) {
         var lines: [String] = []
-        let t0 = Date()
-        let end = runner.read(request()) { data in
-            lines.append(String(decoding: data, as: UTF8.self))
-            return lines.count < stopAfter
+        var end: LogReadEnd = .spawnFailed("not run")
+        let elapsed = ContinuousClock().measure {
+            end = runner.read(request()) { data in
+                lines.append(String(decoding: data, as: UTF8.self))
+                return lines.count < stopAfter
+            }
         }
-        return (lines, end, Date().timeIntervalSince(t0))
+        return (lines, end, elapsed)
     }
 
     // MARK: argument construction
@@ -84,7 +89,7 @@ final class LogShowRunnerTests: XCTestCase {
         // `cat` with an inherited terminal/pipe stdin would block until the deadline.
         let (_, end, secs) = collect(shRunner("cat", deadline: 8))
         XCTAssertEqual(end, .exhausted(exitStatus: 0, stderrTail: ""))
-        XCTAssertLessThan(secs, 5)
+        XCTAssertLessThan(secs, .seconds(5), "cat took \(secs) against an 8 s deadline")
     }
 
     // MARK: bounds
@@ -99,14 +104,17 @@ final class LogShowRunnerTests: XCTestCase {
 
     func testHandlerStop_terminatesAndReapsAnEndlessChild_within5Seconds() {
         let marker = "idd465-endless-\(UUID().uuidString)"
-        let (lines, end, secs) = collect(shRunner("# \(marker)\nwhile true; do echo '{\"x\":1}'; done"), stopAfter: 3)
+        // `yes` is endless but blocks on a full pipe instead of spinning a core the way a shell
+        // `while true; do echo ...; done` loop did (#468). `exec` keeps the marker in its argv.
+        let (lines, end, secs) = collect(shRunner("exec yes \(marker)"), stopAfter: 3)
         XCTAssertEqual(lines.count, 3)
         XCTAssertEqual(end, .stoppedByHandler)
-        XCTAssertLessThan(secs, 5)
+        XCTAssertLessThan(secs, .seconds(5), "handler stop took \(secs)")
         // The child must actually be gone, not merely abandoned.
-        let deadline = Date().addingTimeInterval(3)
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(3))
         var alive = true
-        while Date() < deadline {
+        while clock.now < deadline {
             let p = Process()
             p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
             p.arguments = ["-f", marker]
@@ -119,26 +127,41 @@ final class LogShowRunnerTests: XCTestCase {
     }
 
     func testScanCap_stopsAnEndlessChild() {
-        let (lines, end, secs) = collect(shRunner("while true; do echo '{\"x\":1}'; done", cap: 4096))
+        let (lines, end, secs) = collect(shRunner("exec yes '{\"x\":1}'", cap: 4096))
         XCTAssertEqual(end, .scanCap)
         XCTAssertFalse(lines.isEmpty)
-        XCTAssertLessThan(secs, 5)
+        XCTAssertLessThan(secs, .seconds(5), "the scan cap took \(secs) to stop the child")
     }
 
     func testDeadline_returnsWhatWasReadThenReportsDeadline() {
         let (lines, end, secs) = collect(shRunner("echo a; exec sleep 30", deadline: 1))
         XCTAssertEqual(lines, ["a"])
         XCTAssertEqual(end, .deadline)
-        XCTAssertLessThan(secs, 6, "a stalled child must be killed at the deadline, not waited on")
+        XCTAssertLessThan(secs, .seconds(6), "a stalled child must be killed at the deadline, not waited on (took \(secs))")
     }
 
     func testDeadline_isEnforcedEvenWhenAGrandchildHoldsThePipeOpen() {
         // Not `exec`: the shell forks `sleep`, which inherits stdout. Killing the
         // shell does NOT produce EOF, so a read-until-EOF design would sit here
-        // for the full 3 seconds (#301 hit this with osascript).
-        let (_, end, secs) = collect(shRunner("echo a; sleep 3", deadline: 1))
+        // until the grandchild exits (#301 hit this with osascript).
+        // #468: the grandchild holds the pipe 20 s, so the broken design takes 20 s while the
+        // healthy one takes about 1.3 s (1 s deadline, a 250 ms poll slice, the terminate grace);
+        // a 10 s ceiling sits far from both. The old 3 s hold against a 2.5 s ceiling left 1.2 s
+        // of headroom under load. The fractional part makes the orphaned `sleep` findable.
+        let hold = "20.\(Int.random(in: 100_000_000...999_999_999))"
+        defer { Self.run("/usr/bin/pkill", ["-f", "sleep \(hold)"]) }
+        let (_, end, secs) = collect(shRunner("echo a; sleep \(hold)", deadline: 1))
         XCTAssertEqual(end, .deadline)
-        XCTAssertLessThan(secs, 2.5, "deadline must not depend on the pipe reaching EOF")
+        XCTAssertLessThan(secs, .seconds(10), "deadline must not depend on the pipe reaching EOF (took \(secs))")
+    }
+
+    private static func run(_ path: String, _ arguments: [String]) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: path)
+        p.arguments = arguments
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        try? p.run(); p.waitUntilExit()
     }
 
     /// Verify round 3, findings 3/5/11: `log show --start T --end T` returns nothing (measured), and
