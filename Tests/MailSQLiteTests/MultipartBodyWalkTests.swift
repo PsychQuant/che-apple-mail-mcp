@@ -93,6 +93,14 @@ final class MultipartBodyWalkTests: XCTestCase {
         XCTAssertEqual(result.htmlBody, "<p>html</p>\r\n")
     }
 
+    func testLFOnlyPartsKeepTheirTrailingLineBreak() {
+        let body = "--B\nContent-Type: text/plain; charset=utf-8\n\nplain\n"
+            + "--B\nContent-Type: text/html; charset=utf-8\n\n<p>html</p>\n--B--\n"
+        let result = MIMEParser.parseBody(Data(body.utf8), headers: ["content-type": "multipart/alternative; boundary=B"])
+        XCTAssertEqual(result.textBody, "plain\n")
+        XCTAssertEqual(result.htmlBody, "<p>html</p>\n")
+    }
+
     // MARK: - Depth limit
 
     /// `levels` nested multiparts with one text/plain leaf at the bottom.
@@ -123,6 +131,26 @@ final class MultipartBodyWalkTests: XCTestCase {
         XCTAssertNil(MIMEParser.parseBody(body, headers: headers).textBody)
         XCTAssertEqual(MIMEParser.parseAllParts(body, headers: headers).count, 0,
                        "parseBody and parseAllParts must stop at the same depth")
+    }
+
+    func testATruncatedBranchKeepsItsShallowSibling() {
+        // A branch nested past the limit is dropped, but what the walk found
+        // beside it is still returned.
+        let (deep, _) = nested(levels: MIMEParser.maxMultipartDepth)
+        let body = data([
+            "--TOPZ\r\n",
+            "Content-Type: multipart/alternative; boundary=B0Z\r\n",
+            "\r\n",
+            String(decoding: deep, as: UTF8.self),
+            "\r\n--TOPZ\r\n",
+            "Content-Type: text/html; charset=utf-8\r\n",
+            "\r\n",
+            "<p>sibling</p>\r\n",
+            "--TOPZ--\r\n"
+        ])
+        let result = MIMEParser.parseBody(body, headers: ["content-type": "multipart/mixed; boundary=TOPZ"])
+        XCTAssertNil(result.textBody)
+        XCTAssertEqual(trimmed(result.htmlBody), "<p>sibling</p>")
     }
 
     func testDeepNestingReturnsPromptly() {
