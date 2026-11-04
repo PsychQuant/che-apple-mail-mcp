@@ -46,6 +46,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code, and compose attachments have gone through ⇧⌘A with the
   `CHE_MAIL_MAILTO_*` delays since #304.
 
+### Fixed
+
+- **Accounts added or renamed while the server runs resolve without a restart**
+  ([#554](https://github.com/PsychQuant/che-apple-mail-mcp/issues/554)). The
+  SQLite reader built its account mapping from AccountsMap.plist once, when it
+  opened, so a name-scoped read (`list_mailboxes`, `list_emails`,
+  `search_emails` with `account_name`) for an account added later failed with
+  `accountNotResolvable`, results named that account by its UUID, and a renamed
+  account resolved only under its old name. A lookup that misses now re-reads
+  the plist once and retries, at most once every 5 seconds, so a name that never
+  resolves costs one plist read per interval rather than one per call. A read
+  that returns no accounts (an unreadable plist) keeps the accounts already
+  known. The mapping is now guarded by a lock, because the reader is shared by
+  concurrent request handlers. Lookups by `account_id` were not affected.
+
 ## [4.0.0] - 2026-10-29
 
 ### Added

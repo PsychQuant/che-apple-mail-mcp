@@ -14,7 +14,8 @@ import SQLite3
 /// behaviour under `NOMUTEX` (observed as crashes in synthetic runs and as a
 /// CPU-bound livelock in the field). Every method below prepares, steps and
 /// finalizes inside its own call, so serialized mode is sufficient and no
-/// actor or lock is needed on top of it.
+/// actor or lock is needed on top of it for SQLite. The account mapping is
+/// separate state that a lookup can replace (#554), so it has its own lock.
 public final class EnvelopeIndexReader {
 
     // Built once during initialization from the schema, which does not change
@@ -80,13 +81,32 @@ public final class EnvelopeIndexReader {
 
     private var db: OpaquePointer?
 
-    /// Mapping from account UUID to human-readable account name.
+    /// Mapping from account UUID to human-readable account name. Guarded by
+    /// `mappingLock`: the server shares one reader between concurrent request
+    /// handlers, and a lookup that misses can replace the mapping (#554).
     private var accountMap: [String: String]
 
     /// Reverse index: display_name → list of UUIDs. Rebuilt whenever
     /// `accountMap` is set. List form (not single value) surfaces
     /// multi-account-same-display-name collisions to callers — see #101.
+    /// Guarded by `mappingLock`.
     private var reverseAccountMap: [String: [String]]
+
+    /// Seconds a lookup miss waits after the last read of the mapping source
+    /// before it reads it again (#554). A name that never resolves therefore
+    /// costs at most one AccountsMap.plist read per interval, not one per call.
+    public static let defaultMappingRefreshCooldown: TimeInterval = 5
+
+    /// Where the mapping is re-read from when a lookup misses (#554): an
+    /// account added or renamed while the server runs is in AccountsMap.plist
+    /// but not in the mapping built at init. `nil` when the caller injected a
+    /// fixed mapping without a source, so fixtures never read the user's plist.
+    private let mappingSource: (() -> [String: String])?
+    private let mappingRefreshCooldown: TimeInterval
+    private let clock: () -> TimeInterval
+    /// When `mappingSource` was last read; `nil` if it never was.
+    private var lastMappingRead: TimeInterval?
+    private let mappingLock = NSLock()
 
     // MARK: - Initialization
 
@@ -95,10 +115,22 @@ public final class EnvelopeIndexReader {
     /// - Parameters:
     ///   - databasePath: Path to the Envelope Index SQLite file.
     ///   - accountMapping: UUID → account name mapping. Defaults to reading
-    ///     AccountsMap.plist via `AccountMapper.buildMapping()` (no AppleScript).
+    ///     `accountMappingSource`, which defaults to AccountsMap.plist via
+    ///     `AccountMapper.buildMapping()` (no AppleScript).
+    ///   - accountMappingSource: Re-read when a name or UUID lookup misses, at
+    ///     most once per `mappingRefreshCooldown` (#554). Defaults to
+    ///     `AccountMapper.buildMapping()` when `accountMapping` is `nil`, and to
+    ///     no source (the injected mapping is never replaced) when it is given.
+    ///   - mappingRefreshCooldown: Minimum seconds between two reads of the
+    ///     source. The read at init counts.
+    ///   - clock: Monotonic seconds, injected for tests.
     /// - Throws: `MailSQLiteError.databaseNotAccessible` if the file
     ///   does not exist or cannot be opened (e.g., missing Full Disk Access).
-    public init(databasePath: String, accountMapping: [String: String]? = nil) throws {
+    public init(databasePath: String,
+                accountMapping: [String: String]? = nil,
+                accountMappingSource: (() -> [String: String])? = nil,
+                mappingRefreshCooldown: TimeInterval = EnvelopeIndexReader.defaultMappingRefreshCooldown,
+                clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
         // Checked before the account mapping, so an absent path (a test-owned
         // fixture, #329) never reads the user's AccountsMap.plist.
         guard FileManager.default.fileExists(atPath: databasePath) else {
@@ -109,7 +141,18 @@ public final class EnvelopeIndexReader {
             )
         }
 
-        let mapping = accountMapping ?? AccountMapper.buildMapping()
+        let source: (() -> [String: String])? = accountMappingSource
+            ?? (accountMapping == nil ? { AccountMapper.buildMapping() } : nil)
+        self.mappingSource = source
+        self.mappingRefreshCooldown = mappingRefreshCooldown
+        self.clock = clock
+        let mapping: [String: String]
+        if let accountMapping = accountMapping {
+            mapping = accountMapping
+        } else {
+            mapping = source?() ?? [:]
+            self.lastMappingRead = clock()
+        }
         self.accountMap = mapping
         self.reverseAccountMap = Self.buildReverseMap(from: mapping)
 
@@ -326,15 +369,44 @@ public final class EnvelopeIndexReader {
     // MARK: - Account Mapping
 
     /// Resolve an account UUID to a human-readable name.
-    /// Falls back to the UUID itself if no mapping exists.
+    /// Falls back to the UUID itself if no mapping exists. A miss re-reads the
+    /// mapping source once (subject to the cooldown) before falling back (#554).
     public func accountName(for uuid: String) -> String {
-        accountMap[uuid] ?? uuid
+        if let name = withMappingLock({ accountMap[uuid] }) { return name }
+        refreshMappingAfterMiss()
+        return withMappingLock { accountMap[uuid] } ?? uuid
     }
 
     /// Update the account mapping (e.g., after querying AppleScript).
     public func updateAccountMapping(_ mapping: [String: String]) {
-        accountMap = mapping
-        reverseAccountMap = Self.buildReverseMap(from: mapping)
+        withMappingLock {
+            accountMap = mapping
+            reverseAccountMap = Self.buildReverseMap(from: mapping)
+        }
+    }
+
+    private func withMappingLock<T>(_ body: () -> T) -> T {
+        mappingLock.lock()
+        defer { mappingLock.unlock() }
+        return body()
+    }
+
+    /// Re-read the mapping after a lookup missed (#554). Concurrent misses
+    /// share one read: the lock is held across it, and the ones that waited
+    /// find the cooldown running. An empty result is what
+    /// `AccountMapper.buildMapping()` returns when the plist cannot be read, so
+    /// it keeps the mapping already known instead of forgetting every account.
+    private func refreshMappingAfterMiss() {
+        mappingLock.lock()
+        defer { mappingLock.unlock() }
+        guard let source = mappingSource else { return }
+        let now = clock()
+        if let last = lastMappingRead, now - last < mappingRefreshCooldown { return }
+        lastMappingRead = now
+        let fresh = source()
+        guard !fresh.isEmpty else { return }
+        accountMap = fresh
+        reverseAccountMap = Self.buildReverseMap(from: fresh)
     }
 
     /// Reverse lookup: display name → list of UUIDs that map to it.
@@ -347,8 +419,14 @@ public final class EnvelopeIndexReader {
     /// Backs the 4 previously-duplicated O(n) reverse-lookup callsites
     /// inside this file. Externally, sets up the collision-aware path for
     /// the `#101` `account_id` fix.
+    ///
+    /// A miss re-reads the mapping source once (subject to the cooldown), so an
+    /// account added or renamed while the server runs resolves without a
+    /// restart (#554).
     public func accountUUIDs(forName name: String) -> [String] {
-        reverseAccountMap[name] ?? []
+        if let uuids = withMappingLock({ reverseAccountMap[name] }), !uuids.isEmpty { return uuids }
+        refreshMappingAfterMiss()
+        return withMappingLock { reverseAccountMap[name] } ?? []
     }
 
     /// Build the reverse index in O(n). Called from `init` and

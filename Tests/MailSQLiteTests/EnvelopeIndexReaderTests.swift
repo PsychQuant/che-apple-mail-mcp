@@ -183,4 +183,148 @@ final class EnvelopeIndexReaderTests: XCTestCase {
                        "After updateAccountMapping, old name 'Alice' must not resolve to any UUID")
         XCTAssertEqual(reader.accountUUIDs(forName: "Bob"), ["UUID-Z"])
     }
+
+    // MARK: - Account mapping refresh (#554)
+
+    /// Stands in for AccountsMap.plist: what the next read returns, and how
+    /// many times it was read.
+    private final class MappingSource {
+        var mapping: [String: String]
+        var reads = 0
+        init(_ mapping: [String: String]) { self.mapping = mapping }
+        func read() -> [String: String] { reads += 1; return mapping }
+    }
+
+    private final class FakeClock {
+        var now: TimeInterval = 1_000
+    }
+
+    private func makeReader(initial: [String: String]?, source: MappingSource,
+                            cooldown: TimeInterval = 5, clock: FakeClock = FakeClock()) throws -> EnvelopeIndexReader {
+        try EnvelopeIndexReader(
+            databasePath: try makeEmptyTestDB(),
+            accountMapping: initial,
+            accountMappingSource: { source.read() },
+            mappingRefreshCooldown: cooldown,
+            clock: { clock.now }
+        )
+    }
+
+    func testAccountAddedAfterStartupResolvesByNameAndUUID() throws {
+        let source = MappingSource(["UUID-A": "Alice"])
+        let reader = try makeReader(initial: ["UUID-A": "Alice"], source: source)
+        source.mapping = ["UUID-A": "Alice", "UUID-B": "Bob"]   // account added while the server runs
+
+        XCTAssertEqual(reader.accountUUIDs(forName: "Bob"), ["UUID-B"])
+        XCTAssertEqual(reader.accountName(for: "UUID-B"), "Bob")
+        XCTAssertEqual(source.reads, 1, "one miss re-reads the mapping once")
+    }
+
+    func testUnknownUUIDRefreshesTheMapping() throws {
+        let source = MappingSource(["UUID-A": "Alice"])
+        let reader = try makeReader(initial: ["UUID-A": "Alice"], source: source)
+        source.mapping = ["UUID-A": "Alice", "UUID-B": "Bob"]
+
+        XCTAssertEqual(reader.accountName(for: "UUID-B"), "Bob")
+        XCTAssertEqual(reader.accountUUIDs(forName: "Bob"), ["UUID-B"])
+    }
+
+    func testRenamedAccountResolvesUnderTheNewNameOnly() throws {
+        let source = MappingSource(["UUID-A": "Alice"])
+        let reader = try makeReader(initial: ["UUID-A": "Alice"], source: source)
+        source.mapping = ["UUID-A": "Alicia"]
+
+        XCTAssertEqual(reader.accountUUIDs(forName: "Alicia"), ["UUID-A"])
+        XCTAssertEqual(reader.accountName(for: "UUID-A"), "Alicia")
+        XCTAssertEqual(reader.accountUUIDs(forName: "Alice"), [],
+                       "once the mapping is re-read, the old name no longer resolves")
+    }
+
+    func testHitsNeverReadTheSource() throws {
+        let source = MappingSource(["UUID-A": "Alice"])
+        let reader = try makeReader(initial: ["UUID-A": "Alice"], source: source)
+        for _ in 0..<50 {
+            XCTAssertEqual(reader.accountUUIDs(forName: "Alice"), ["UUID-A"])
+            XCTAssertEqual(reader.accountName(for: "UUID-A"), "Alice")
+        }
+        XCTAssertEqual(source.reads, 0)
+    }
+
+    func testMissesWithinTheCooldownReadTheSourceOnce() throws {
+        let clock = FakeClock()
+        let source = MappingSource(["UUID-A": "Alice"])
+        let reader = try makeReader(initial: ["UUID-A": "Alice"], source: source, cooldown: 5, clock: clock)
+
+        for _ in 0..<20 { XCTAssertEqual(reader.accountUUIDs(forName: "Nobody"), []) }
+        XCTAssertEqual(source.reads, 1, "a name that never resolves must not cause a read per call")
+
+        clock.now += 4.9
+        XCTAssertEqual(reader.accountName(for: "UUID-X"), "UUID-X")
+        XCTAssertEqual(source.reads, 1)
+
+        clock.now += 0.2
+        source.mapping = ["UUID-A": "Alice", "UUID-B": "Bob"]
+        XCTAssertEqual(reader.accountUUIDs(forName: "Bob"), ["UUID-B"], "after the cooldown a miss reads again")
+        XCTAssertEqual(source.reads, 2)
+    }
+
+    func testMappingReadAtStartupStartsTheCooldown() throws {
+        let clock = FakeClock()
+        let source = MappingSource(["UUID-A": "Alice"])
+        let reader = try makeReader(initial: nil, source: source, cooldown: 5, clock: clock)
+        XCTAssertEqual(source.reads, 1, "no injected mapping: init reads the source")
+        XCTAssertEqual(reader.accountUUIDs(forName: "Alice"), ["UUID-A"])
+
+        source.mapping = ["UUID-A": "Alice", "UUID-B": "Bob"]
+        XCTAssertEqual(reader.accountUUIDs(forName: "Bob"), [], "the mapping read at init is still fresh")
+        XCTAssertEqual(source.reads, 1)
+
+        clock.now += 5
+        XCTAssertEqual(reader.accountUUIDs(forName: "Bob"), ["UUID-B"])
+        XCTAssertEqual(source.reads, 2)
+    }
+
+    func testAnUnreadableMappingKeepsTheAccountsAlreadyKnown() throws {
+        let source = MappingSource(["UUID-A": "Alice"])
+        let reader = try makeReader(initial: ["UUID-A": "Alice"], source: source)
+        source.mapping = [:]   // what AccountMapper returns when the plist cannot be read
+
+        XCTAssertEqual(reader.accountUUIDs(forName: "Bob"), [])
+        XCTAssertEqual(source.reads, 1)
+        XCTAssertEqual(reader.accountUUIDs(forName: "Alice"), ["UUID-A"])
+        XCTAssertEqual(reader.accountName(for: "UUID-A"), "Alice")
+    }
+
+    func testAnInjectedMappingWithoutASourceIsNeverReplaced() throws {
+        // Fixtures inject a mapping and must stay hermetic: a miss may not read
+        // the user's AccountsMap.plist.
+        let reader = try EnvelopeIndexReader(
+            databasePath: try makeEmptyTestDB(),
+            accountMapping: ["UUID-A": "Alice"]
+        )
+        XCTAssertEqual(reader.accountUUIDs(forName: "Bob"), [])
+        XCTAssertEqual(reader.accountName(for: "UUID-B"), "UUID-B")
+        XCTAssertEqual(reader.accountUUIDs(forName: "Alice"), ["UUID-A"])
+    }
+
+    func testConcurrentLookupsAndRefreshesStayConsistent() throws {
+        let source = MappingSource(["UUID-A": "Alice"])
+        let lock = NSLock()
+        let reader = try EnvelopeIndexReader(
+            databasePath: try makeEmptyTestDB(),
+            accountMapping: ["UUID-A": "Alice"],
+            accountMappingSource: { lock.lock(); defer { lock.unlock() }; return source.read() },
+            mappingRefreshCooldown: 0
+        )
+        source.mapping = ["UUID-A": "Alice", "UUID-B": "Bob"]
+        DispatchQueue.concurrentPerform(iterations: 2_000) { i in
+            switch i % 4 {
+            case 0: XCTAssertEqual(reader.accountUUIDs(forName: "Alice"), ["UUID-A"])
+            case 1: _ = reader.accountUUIDs(forName: "Nobody-\(i)")
+            case 2: XCTAssertEqual(reader.accountName(for: "UUID-A"), "Alice")
+            default: reader.updateAccountMapping(["UUID-A": "Alice", "UUID-B": "Bob"])
+            }
+        }
+        XCTAssertEqual(reader.accountUUIDs(forName: "Bob"), ["UUID-B"])
+    }
 }
