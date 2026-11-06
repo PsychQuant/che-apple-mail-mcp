@@ -29,6 +29,8 @@ The new probe performs no real Mail operation. Existing broader tests retain the
 
 The executor design follows [Swift SE-0392](https://github.com/swiftlang/swift-evolution/blob/main/proposals/0392-custom-actor-executors.md), using the compatible UnownedJob entry point and actor-owned executor lifetime.
 
+The guarantee covers `MailController` only (#577). `get_mail_log_events` stays off the pool by another mechanism: `MailLogTool.handle` runs `service.run` on its own thread, so the semaphore waits in `LogShowRunner` never occupy a cooperative worker. Two kinds of blocking work still run on the cooperative pool: the synchronous `EnvelopeIndexReader` and `EmlxParser` reads in the `Server.swift` read handlers, and `IndexReaderProvider.current()`, which holds its lock across an open. A SQLite wait is bounded by the 5 s `busy_timeout`; the file reads and the open have no bound of their own. None of this was measured under this change's probe, so a stdin EOF that arrives during one of them may be delayed by that much. Moving them off the pool is a separate change that would need its own probe.
+
 ## Landing (2026-10-28)
 
 - The probe builder also reads the Swift Build layout, which the current toolchain

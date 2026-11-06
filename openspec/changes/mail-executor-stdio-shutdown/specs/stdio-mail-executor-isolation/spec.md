@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Isolate blocking Mail work from stdio progress
-MailController SHALL execute actor jobs on a stable serial executor separate from Swift's cooperative executor pool. Blocking startup sync SHALL NOT occupy the cooperative worker needed by the SDK receive loop.
+MailController SHALL execute actor jobs on a stable serial executor separate from Swift's cooperative executor pool. Blocking startup sync SHALL NOT occupy the cooperative worker needed by the SDK receive loop. This requirement covers `MailController` only; it promises nothing about blocking work that runs outside that actor, such as the synchronous index reads in the read-tool handlers (see the Limits in `verification.md`, #577).
 
 #### Scenario: Handshake during blocked startup
 - **WHEN** the controlled probe constrains the cooperative pool and blocks the fake startup script for six seconds
