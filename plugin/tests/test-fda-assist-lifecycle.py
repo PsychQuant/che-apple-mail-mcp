@@ -13,6 +13,14 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 
+# Two kinds of budget live in this file (#624). A poll on a fixture reaching a known point uses
+# POLL_SECONDS: a slow start only costs time, and a real failure still fails the assertion after it.
+# `assertLess(elapsed, ...)`, `run_hook(timeout=5)` and `communicate(timeout=2)` measure the 2.0 s
+# probe deadline in fda-assist.pl, so they assume an idle machine and stay as they are; that deadline
+# does not change for test convenience. They can still fail under heavy CPU load, as can a hook whose
+# first probe times out before it reaches a barrier.
+POLL_SECONDS = 10
+
 class FDALifecycleTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix='fda422-')
@@ -35,6 +43,7 @@ with (r/'calls').open('a') as f:f.write(flag+'\\n')
 if flag=='--setup':
  with (r/'setups').open('a') as f:f.write('setup\\n')
  sys.exit(0)
+if mode.get('slow_start')==flag:time.sleep(30)
 if mode.get('hang')==flag or mode.get('orphan')==flag:
  signal.signal(signal.SIGTERM,signal.SIG_IGN)
  child=os.fork()
@@ -61,6 +70,22 @@ sys.exit(mode.get('status',1))
             for value in (self.root/'pids').read_text().splitlines():
                 try: os.kill(int(value),signal.SIGKILL)
                 except ProcessLookupError: pass
+
+    def recorded_pids(self,grace):
+        path=self.root/'pids'
+        deadline=time.monotonic()+grace
+        while True:
+            pids=path.read_text().split() if path.exists() else []
+            if pids or time.monotonic()>=deadline:return pids
+            time.sleep(.01)
+
+    def assert_fixture_group_gone(self,grace=1):
+        pids=self.recorded_pids(grace)
+        if not pids:print('note: the probe timed out before the fixture recorded a pid, so there is no group to check (#624)',file=sys.stderr)
+        for pid in pids:
+            status=subprocess.run(['/bin/ps','-o','stat=','-p',pid],capture_output=True,text=True).stdout.strip()
+            self.assertTrue(not status or status.startswith('Z'),status)
+        (self.root/'pids').unlink(missing_ok=True)
 
     def configure(self,**kwargs): (self.root/'mode.json').write_text(json.dumps(kwargs))
     def run_hook(self,timeout=5):
@@ -89,11 +114,23 @@ sys.exit(mode.get('status',1))
                 self.assertIn('timeout',p.stderr)
                 self.assertFalse(self.marker.exists())
                 self.assertEqual(self.count_setups(),0)
-                for pid in (self.root/'pids').read_text().splitlines():
-                    status=subprocess.run(['/bin/ps','-o','stat=','-p',pid],capture_output=True,text=True).stdout.strip()
-                    self.assertTrue(not status or status.startswith('Z'),status)
-                (self.root/'pids').unlink()
+                self.assert_fixture_group_gone()
         self.assert_retry()
+
+    # #624: under load the 2.0 s deadline can expire before the fixture records a pid. The group is
+    # killed and `pids` never appears, which the product does correctly and the tests must accept.
+    def test_probe_timeout_before_the_fixture_records_a_pid(self):
+        self.configure(slow_start='--version')
+        p,_=self.run_hook()
+        self.assertIn('timeout',p.stderr)
+        self.assert_fixture_group_gone()
+
+    def test_a_pid_recorded_late_is_still_checked(self):
+        survivor=subprocess.Popen(['/bin/sh','-c','sleep .2; echo $$ >"$1"; exec sleep 30','sh',str(self.root/'pids')])
+        self.addCleanup(survivor.wait)
+        self.addCleanup(survivor.kill)
+        with self.assertRaises(AssertionError):
+            self.assert_fixture_group_gone(grace=POLL_SECONDS)
 
     def test_exited_leader_with_stdout_descendant_times_out(self):
         for flag in ['--version','--check-fda']:
@@ -102,10 +139,7 @@ sys.exit(mode.get('status',1))
             self.assertLess(elapsed,3.5)
             self.assertIn('timeout',p.stderr)
             self.assertFalse(self.marker.exists())
-            for pid in (self.root/'pids').read_text().splitlines():
-                status=subprocess.run(['/bin/ps','-o','stat=','-p',pid],capture_output=True,text=True).stdout.strip()
-                self.assertTrue(not status or status.startswith('Z'),status)
-            (self.root/'pids').unlink()
+            self.assert_fixture_group_gone()
         self.assert_retry()
 
     def test_malformed_version_never_runs_quiet(self):
@@ -145,11 +179,11 @@ sub fixture_pause {
                 helper.write_text(source)
                 process=subprocess.Popen(['/usr/bin/perl',str(helper),str(self.binary),str(self.marker.parent)],env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
                 try:
-                    deadline=time.monotonic()+2
+                    deadline=time.monotonic()+POLL_SECONDS
                     while not (self.root/'transition').exists() and time.monotonic()<deadline:time.sleep(.01)
                     self.assertEqual((self.root/'transition').read_text(),'1')
                     if transition=='register':
-                        deadline=time.monotonic()+1
+                        deadline=time.monotonic()+POLL_SECONDS
                         while (not (self.root/'pids').exists() or len((self.root/'pids').read_text().splitlines())<2) and time.monotonic()<deadline:time.sleep(.01)
                     process.send_signal(signal.SIGTERM)
                     (self.root/'release-transition').touch()
@@ -188,7 +222,7 @@ sub fixture_pause {
         self.configure(barrier=True,status=1)
         processes=[subprocess.Popen(['/bin/bash',str(self.root/'plugin/hooks/session-start.sh')],env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for _ in range(12)]
         try:
-            deadline=time.monotonic()+1.5
+            deadline=time.monotonic()+POLL_SECONDS
             while len(list(self.root.glob('ready-*')))<12 and time.monotonic()<deadline:time.sleep(.01)
             self.assertEqual(len(list(self.root.glob('ready-*'))),12)
             (self.root/'release').touch()
