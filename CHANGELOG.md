@@ -90,10 +90,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marks a script sends back were kept in one process-wide buffer. The upload
   trigger's marks wait there across an `await`, so a second `create_draft` run, or
   a `compose_email` taking the whole buffer, could take them and write them under
-  the wrong `run_id`. Inside a run the marks now stay with that run; the shared
-  buffer is left for calls outside a run, which capture and take in one actor
-  job. This only touches diagnostics, and only with
-  `CHE_MAIL_COMPOSE_TIMING_CSV` set.
+  the wrong `run_id`. Inside a run the marks now stay with that run, and marks
+  the run does not take are dropped with it. The shared buffer is left for calls
+  outside a run, where the only script that sends marks is `compose_email`'s,
+  which captures and takes them in one actor job. This only touches diagnostics,
+  and only with `CHE_MAIL_COMPOSE_TIMING_CSV` set.
 - **The osascript fixtures in four more test files use the shared guard**
   ([#617](https://github.com/PsychQuant/che-apple-mail-mcp/issues/617)). Every
   osascript run in `ClassificationTrashScriptTests`, `ComposeSignatureScriptTests`,
