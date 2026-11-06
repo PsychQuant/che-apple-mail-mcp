@@ -543,11 +543,9 @@ class ArchiveSkipDraftsSopTests(unittest.TestCase):
         for name in ("archive-mail-rebuild-threads.md", "archive-mail-view.md"):
             body = (DOCUMENT.parent / name).read_text()
             with self.subTest(name=name):
-                self.assertIn("所以無人值守時不會停在權限提示上", body)
-                self.assertIn("立刻停止，不卡住", body)
+                self.assertIn("無人值守時不等待授權", body)
                 self.assertIn("`mktemp -d`", body)
-                self.assertIn("Bash(python3:*)", body.split("---")[1])   # the frontmatter declares what the command needs
-                self.assertIn("宣告了 `Bash(python3:*)`", body)
+                self.assertIn("不擴大 `allowed-tools`", body)   # maintainer decision D3 of #556
 
     def test_the_8b_denominator_is_subtracted_per_thread_only(self):
         text = DOCUMENT.read_text()
