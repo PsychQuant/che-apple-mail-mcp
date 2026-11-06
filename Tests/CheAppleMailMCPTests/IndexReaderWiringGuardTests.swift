@@ -28,6 +28,22 @@ final class IndexReaderWiringGuardTests: XCTestCase {
         return String(rest[..<end])
     }
 
+    /// #633: handlers resolve an address through the server's wrapper, so a test's mapping reaches
+    /// them. The wrapper holds the only calls to the free function: one with the injected mapping,
+    /// and one, without it, that is the plain call every handler made before. This is a structural
+    /// check: it cannot run the nil path, because that path reads the machine's AccountsMap.plist.
+    func testHandlersResolveAddressesThroughTheServersMapping() throws {
+        let code = try serverSource().split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .filter { $0.contains("resolveAccountIdForTool(") }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        XCTAssertEqual(code, [
+            "return try resolveAccountIdForTool(accountId: accountId, accountName: accountName, tool: tool)",
+            "return try resolveAccountIdForTool(accountId: accountId, accountName: accountName, tool: tool,",
+            "func resolveAccountIdForTool(",
+        ])
+    }
+
     func testCheckFdaRetriesTheReaderAndReportsItsState() throws {
         let branch = try checkFdaBranch(try serverSource())
         XCTAssertTrue(branch.contains("indexProvider.forceRetry()"),

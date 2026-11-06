@@ -98,8 +98,14 @@ public enum AccountMapper {
     /// - Parameter path: Override path for testing. Defaults to the standard location.
     /// - Returns: Sorted array of matching account UUIDs (empty when none).
     public static func uuids(forEmail email: String, path: String? = nil) -> [String] {
+        uuids(forEmail: email, in: buildMapping(path: path))
+    }
+
+    /// The same lookup over a mapping the caller already holds, so a server
+    /// built with one reads no file (#633).
+    public static func uuids(forEmail email: String, in mapping: [String: String]) -> [String] {
         let needle = email.lowercased()
-        return buildMapping(path: path)
+        return mapping
             .filter { $0.value.contains("@") && $0.value.lowercased() == needle }
             .map(\.key)
             .sorted()

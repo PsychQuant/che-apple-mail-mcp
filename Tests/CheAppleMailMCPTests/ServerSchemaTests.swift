@@ -715,7 +715,7 @@ final class ServerSchemaTests: XCTestCase {
         let tail = source[caseStart.upperBound...]
         let caseBody = tail.range(of: "\n        case \"").map { String(tail[..<$0.lowerBound]) }
             ?? String(tail)
-        XCTAssertTrue(caseBody.contains("resolveAccountIdForTool("),
+        XCTAssertTrue(caseBody.contains("resolveAccountId("),
                       "handler must call the resolver before Tier 2")
         XCTAssertTrue(caseBody.contains("accountId: resolvedAccountId"),
                       "handler must thread the resolver's result into saveAttachment")
@@ -753,7 +753,7 @@ final class ServerSchemaTests: XCTestCase {
                 XCTFail("\(tool) case not found in Server.swift"); continue
             }
             XCTAssertTrue(
-                body.contains("try resolveAccountIdForTool(accountId: decodeAccountId"),
+                body.contains("try resolveAccountId(accountId: decodeAccountId"),
                 "\(tool) handler must thread resolveAccountIdForTool over decodeAccountId (#176); "
                 + "a raw decodeAccountId re-opens the -1728 email→description gap")
         }
@@ -779,7 +779,7 @@ final class ServerSchemaTests: XCTestCase {
                 XCTFail("\(tool) case not found in Server.swift"); continue
             }
             XCTAssertTrue(
-                body.contains("try resolveAccountIdForTool(accountId: decodeAccountId"),
+                body.contains("try resolveAccountId(accountId: decodeAccountId"),
                 "\(tool) handler must thread resolveAccountIdForTool over decodeAccountId (#202)")
         }
     }
@@ -811,7 +811,7 @@ final class ServerSchemaTests: XCTestCase {
             guard let body = caseBody(tool) else {
                 XCTFail("\(tool) case body not bounded in Server.swift (missing next-case sentinel)"); continue
             }
-            XCTAssertTrue(body.contains("resolveAccountIdForTool("),
+            XCTAssertTrue(body.contains("resolveAccountId("),
                           "\(tool) handler must thread resolveAccountIdForTool (#191); a raw "
                           + "decodeAccountId / bare account_name re-opens the -1728 email→description gap")
             XCTAssertTrue(body.contains("accountId:"),
@@ -1554,7 +1554,7 @@ final class ServerSchemaTests: XCTestCase {
         }
         let tail = source[start.upperBound...]
         let body = tail.range(of: "\n        case \"").map { String(tail[..<$0.lowerBound]) } ?? String(tail)
-        XCTAssertTrue(body.contains("resolveAccountIdForTool("),
+        XCTAssertTrue(body.contains("resolveAccountId("),
                       "handler must resolve the account selector via resolveAccountIdForTool (#179)")
         XCTAssertTrue(body.contains("getSpecialMailboxes(accountId:"),
                       "handler must thread the resolved selector into getSpecialMailboxes (#179)")
