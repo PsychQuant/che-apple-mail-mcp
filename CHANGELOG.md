@@ -112,8 +112,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Foundation bridge pass through an explicit allowance: `use framework
   "Foundation"`, `use scripting additions`, `current application's` followed by a
   closed list of the names these handlers use, and three piped words. `NSPredicate`
-  passes only with the one format string they use, because a format string can run
-  code. Any other class-shaped name, selectors by name, and the ways to name a class
+  passes only with the one format string they use, as the whole argument, because a
+  format string can run code. Any other class-shaped name, selectors by name, and the ways to name a class
   in a string are refused. Handlers a test does not call lose their `tell
   application` blocks before the script runs. The list bounds which classes run, not
   what the methods of those classes do: they can read and write files and fetch

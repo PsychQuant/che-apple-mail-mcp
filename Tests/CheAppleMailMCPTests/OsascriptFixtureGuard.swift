@@ -57,8 +57,9 @@ enum OsascriptFixtureGuard {
     static let bridgeRefusals = #"Selector|valueForKey|\bclass\b(?!\s+of\b)"#
 
     /// `NSPredicate` evaluates `FUNCTION` and `CAST` in its format string, so it is let through only
-    /// for the one format the handlers use.
-    static let bridgePredicate = #"NSPredicate's predicateWithFormat:"SELF MATCHES %@""#
+    /// for the one format the handlers use, as the whole argument: the next label has to follow the
+    /// literal, or `"SELF MATCHES %@" & x` would pass with its tail unread (#617 verify).
+    static let bridgePredicate = #"NSPredicate's predicateWithFormat:"SELF MATCHES %@" argumentArray:"#
 
     /// Throws `ApplicationReference` if the fragment could address an application.
     ///

@@ -88,6 +88,11 @@ final class OsascriptFixtureGuardTests: XCTestCase {
             "return current application's NSPredicate's predicateWithFormat:\"FUNCTION(CAST('NSTask', 'Class'), 'x') == 1\" argumentArray:{}",
             "return current application's NSPredicate's predicateWithFormat:aFormat argumentArray:{}",
             "set p to current application's NSPredicate\nreturn p's predicateWithFormat:\"SELF MATCHES %@\" argumentArray:{}",
+            // The allowed text has to be the whole format argument, not its start.
+            "return current application's NSPredicate's predicateWithFormat:\"SELF MATCHES %@\" & aSuffix argumentArray:{\"x\"}",
+            "return current application's NSPredicate's predicateWithFormat:\"SELF MATCHES %@\" & \" OR x\" argumentArray:{\"x\"}",
+            "return current application's NSPredicate's predicateWithFormat:\"SELF MATCHES %@\" ¬\n& aSuffix argumentArray:{\"x\"}",
+            "return current application's NSPredicate's predicateWithFormat:\"SELF MATCHES %@\"",
             // A closed list: Foundation or not, loaded or not.
             "return current application's NSSharingService",
             "return its NSFileManager's defaultManager()",
