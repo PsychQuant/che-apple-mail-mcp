@@ -1041,7 +1041,7 @@ class CheAppleMailMCPServer {
         case "list_mailboxes":
             let accountName = arguments["account_name"]?.stringValue
             // #202: resolve account_id; an unresolvable name throws (in the reader
-            // / resolveAccountIdForTool) instead of returning every account's boxes.
+            // / resolveAccountId) instead of returning every account's boxes.
             let accountId = try resolveAccountId(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName ?? "", tool: invokedTool)
             if let reader = indexReader {
                 do {
@@ -1618,7 +1618,7 @@ class CheAppleMailMCPServer {
             // that produces -1728 / -1719 errors. When absent, Tier 2 falls back
             // to the legacy `account "<display_name>"` form for backward compat.
             // Tier 1 fast path is unaffected (never touches account_name).
-            // (#176: not wrapped here — save_attachment feeds resolveAccountIdForTool
+            // (#176: not wrapped here — save_attachment feeds resolveAccountId
             // explicitly below at the Tier 2 boundary.)
             let accountId = decodeAccountId(arguments, tool: invokedTool)
             // #272: opt-in best-effort recovery for a server-side-only attachment

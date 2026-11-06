@@ -754,7 +754,7 @@ final class ServerSchemaTests: XCTestCase {
             }
             XCTAssertTrue(
                 body.contains("try resolveAccountId(accountId: decodeAccountId"),
-                "\(tool) handler must thread resolveAccountIdForTool over decodeAccountId (#176); "
+                "\(tool) handler must thread resolveAccountId over decodeAccountId (#176); "
                 + "a raw decodeAccountId re-opens the -1728 email→description gap")
         }
     }
@@ -780,11 +780,11 @@ final class ServerSchemaTests: XCTestCase {
             }
             XCTAssertTrue(
                 body.contains("try resolveAccountId(accountId: decodeAccountId"),
-                "\(tool) handler must thread resolveAccountIdForTool over decodeAccountId (#202)")
+                "\(tool) handler must thread resolveAccountId over decodeAccountId (#202)")
         }
     }
 
-    /// #191: the two action handlers must thread resolveAccountIdForTool too (structural
+    /// #191: the two action handlers must thread resolveAccountId too (structural
     /// pin, same discipline — they use gated forms not matched by the #176 literal above).
     /// Locks the email→UUID wiring so a future edit can't silently revert to a bare
     /// description selector. (Handler behaviour isn't actor-unit-testable; resolveAccountIdForTool
@@ -812,7 +812,7 @@ final class ServerSchemaTests: XCTestCase {
                 XCTFail("\(tool) case body not bounded in Server.swift (missing next-case sentinel)"); continue
             }
             XCTAssertTrue(body.contains("resolveAccountId("),
-                          "\(tool) handler must thread resolveAccountIdForTool (#191); a raw "
+                          "\(tool) handler must thread resolveAccountId (#191); a raw "
                           + "decodeAccountId / bare account_name re-opens the -1728 email→description gap")
             XCTAssertTrue(body.contains("accountId:"),
                           "\(tool) handler must pass the resolved accountId into the controller method (#191)")

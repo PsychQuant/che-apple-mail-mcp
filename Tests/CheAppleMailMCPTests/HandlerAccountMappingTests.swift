@@ -3,8 +3,9 @@ import XCTest
 @testable import CheAppleMailMCP
 
 /// #633: a handler given an address as `account_name` resolves it from the mapping the test passed
-/// to `init`. The addresses end in `.invalid`, so no machine's AccountsMap.plist can hold them: a
-/// pass here cannot come from the developer's accounts.
+/// to `init`. The addresses end in `.invalid`, which no real account uses, so the two positive tests
+/// do not pass because of the developer's accounts. They do not prove the plist went unread: nothing
+/// here observes file reads, and the tripwire in `IndexReaderWiringGuardTests` pins that part.
 ///
 /// Nothing reaches Mail: the script seam records the script and throws.
 final class HandlerAccountMappingTests: XCTestCase {
@@ -64,6 +65,7 @@ final class HandlerAccountMappingTests: XCTestCase {
         XCTAssertTrue(scripts.all.isEmpty, "no script may run for an ambiguous address: \(scripts.all)")
     }
 
+    /// A control: this also passes if the mapping is ignored. It pins what a miss turns into.
     func testAnAddressTheMappingDoesNotHoldStaysAnAccountName() async throws {
         let (server, scripts) = try await makeServer(mapping: ["UUID-A": "a@example.invalid"])
         _ = try? await markRead(server, accountName: "nobody@example.invalid")

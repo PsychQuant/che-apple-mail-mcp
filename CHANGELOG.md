@@ -32,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accounts** ([#633](https://github.com/PsychQuant/che-apple-mail-mcp/issues/633)).
   A server built with `accountMapping` now resolves an address from that mapping.
   Without one, nothing changes: the server still reads AccountsMap.plist on each call.
+  This covers `account_name`; the direct-write path still reads the plist for
+  `from_address` ([#654](https://github.com/PsychQuant/che-apple-mail-mcp/issues/654)).
 - **BREAKING: `reply_email` refuses `attachments` for now**
   ([#534](https://github.com/PsychQuant/che-apple-mail-mcp/issues/534)).
   With a non-empty `attachments`, the reply script pasted the new body through

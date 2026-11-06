@@ -42,6 +42,8 @@ final class IndexReaderWiringGuardTests: XCTestCase {
             "return try resolveAccountIdForTool(accountId: accountId, accountName: accountName, tool: tool,",
             "func resolveAccountIdForTool(",
         ])
+        // The injected lookup uses the mapping alone: no fallback to, or merge with, the machine's plist.
+        XCTAssertTrue(try serverSource().contains("uuidsForEmail: { AccountMapper.uuids(forEmail: $0, in: accountMapping) })"))
     }
 
     func testCheckFdaRetriesTheReaderAndReportsItsState() throws {
