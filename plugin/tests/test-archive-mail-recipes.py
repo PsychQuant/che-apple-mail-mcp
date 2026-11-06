@@ -1052,6 +1052,14 @@ class ArchiveWatermarkTests(unittest.TestCase):
         self.assertNotIn("validated in Step 1 ", unreleased)
         self.assertNotIn("validated in Step 1)", unreleased)
 
+    def test_the_older_changelog_entry_no_longer_describes_the_string_comparison(self):
+        changelog = (DOCUMENT.parents[1] / "CHANGELOG.md").read_text()
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [", changelog.index("## [Unreleased]") + 5)]
+        self.assertNotIn("compares `last_archived` as a string", unreleased)
+        self.assertNotIn("timestamped on or before the value", unreleased)
+        entry = next(line for line in unreleased.split("\n") if "[#545]" in line)
+        self.assertIn("dated before 00:00 local on that day is skipped", entry)
+
     def test_sop_reads_date_received_and_no_longer_compares_strings(self):
         text = DOCUMENT.read_text()
         self.assertIn('email.get("date_received") or email.get("date")', text)
