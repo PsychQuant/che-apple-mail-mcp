@@ -19,9 +19,9 @@ enum ToolAccess: CaseIterable {
     case readLocal
     /// Returns message content or metadata, which third parties wrote: open
     /// world, as `classify_emails` already is. `list_vip_senders` returns the
-    /// senders of messages, and `get_mail_log_events` an unmatched log line as
-    /// it stands, so both take this class. A read can make Mail fetch a body
-    /// from the server (#274); that changes no mailbox.
+    /// senders of messages, and log text derives partly from mail content (a
+    /// subject can land in it), so `get_mail_log_events` is here too. A read can
+    /// make Mail fetch a body from the server (#274); that changes no mailbox.
     case readMail
     /// Creates something inside Mail and changes nothing that exists. A repeat
     /// adds another.
