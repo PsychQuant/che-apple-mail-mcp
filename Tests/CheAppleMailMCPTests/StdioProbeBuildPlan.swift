@@ -64,7 +64,10 @@ struct StdioProbeBuildPlan {
             if lhs.modified == rhs.modified { return lhs.url.path < rhs.url.path }
             return lhs.modified > rhs.modified
         }
-        let expectedOutput = products.appendingPathComponent("CheAppleMailMCP").standardizedFileURL.path
+        // #578: Foundation reports a checkout under /tmp as /tmp/... while Swift Build records
+        // /private/tmp/..., and `standardizedFileURL` does not resolve that link. Both sides go
+        // through the same symlink resolution so the two spellings compare equal.
+        let expectedOutput = canonicalPath(products.appendingPathComponent("CheAppleMailMCP"))
         for (manifest, _) in manifests {
             let data = try Data(contentsOf: manifest)
             let document = try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -76,7 +79,7 @@ struct StdioProbeBuildPlan {
                       let args = command["args"] as? [String],
                       args.first?.hasSuffix("/swiftc") == true,
                       let output = try? argument("-o", in: args) else { return false }
-                return URL(fileURLWithPath: output).standardizedFileURL.path == expectedOutput
+                return canonicalPath(URL(fileURLWithPath: output)) == expectedOutput
             }
             if matches.isEmpty { continue }
             guard matches.count == 1, let command = matches.first,
@@ -97,5 +100,23 @@ struct StdioProbeBuildPlan {
                         objects: objects, responseContents: nil)
         }
         throw invalid("No SwiftBuild link metadata matches the current app output")
+    }
+
+    /// `realpath` of the deepest existing ancestor, with the rest of the path appended. The output
+    /// binary may not exist yet, and `resolvingSymlinksInPath` leaves a path alone when its last
+    /// component is missing (measured), so it cannot be used here.
+    static func canonicalPath(_ url: URL) -> String {
+        var head = url.standardizedFileURL.path
+        var tail: [String] = []
+        while true {
+            if let resolved = realpath(head, nil) {
+                defer { free(resolved) }
+                return tail.reversed().reduce(String(cString: resolved)) { ($0 as NSString).appendingPathComponent($1) }
+            }
+            let parent = (head as NSString).deletingLastPathComponent
+            if parent == head || parent.isEmpty { return url.standardizedFileURL.path }
+            tail.append((head as NSString).lastPathComponent)
+            head = parent
+        }
     }
 }

@@ -6,7 +6,7 @@ import XCTest
 /// weakens it turns the suite red instead of shipping silently.
 ///
 /// These are STRUCTURAL checks of the trigger script and of the Swift source,
-/// not behavioural tests (those need the controller/writer seam of #484). The
+/// not behavioural tests (those are in `DirectDraftPathOutcomeTests`, #484). The
 /// rule lists exactly which edits they catch; anything outside that list is not
 /// guarded, however similar it looks.
 ///
@@ -28,7 +28,7 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
                    encoding: .utf8)
     }
 
-    private static let hint = " (if a refactor moved this, replace the check with a behavioural test once #484 adds the seam)"
+    private static let hint = " (if a refactor moved this, replace the check with a behavioural test in DirectDraftPathOutcomeTests)"
 
     // MARK: - Item 8: the gap between the read toggles
 
@@ -93,6 +93,17 @@ final class DirectWriteSafetyGuardTests: XCTestCase {
                 XCTFail("rule item 8 (timing: \(timing)): the trigger script's read-toggle gap cannot be verified: \(why)")
             }
         }
+    }
+
+    /// #492, evasion 6: a parallel path that skips `attemptSteps` still has to open the writer and insert,
+    /// so each happens in one place. A path that reuses the opened writer under another name, or writes
+    /// the store some other way, is not caught.
+    func testTheStoreIsOpenedAndWrittenInOnePlace() throws {
+        let files = try Self.sourceFiles()
+        let opened = Self.uses(of: "DraftStoreWriter(", in: files).filter { !$0.hasPrefix("DraftStoreWriter.swift|") }
+        XCTAssertEqual(opened, ["DirectDraftPath.swift|do { writer = try DraftStoreWriter(databasePath: databasePath) }"],
+                       "the direct write has one path" + Self.hint)
+        XCTAssertEqual(Self.uses(of: "writer.insert(", in: files).count, 1, "the direct write has one path" + Self.hint)
     }
 
     /// The parser reads what it claims to: each counter-example is a script

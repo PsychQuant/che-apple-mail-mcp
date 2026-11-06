@@ -2,8 +2,11 @@ import XCTest
 import Foundation
 @testable import CheAppleMailMCP
 
-/// Link the actual app objects into an async-main probe. Only its database path
-/// and existing script runner seam differ from production; SDK/stdio are real.
+/// Link the actual app objects into an async-main probe. Only its database path,
+/// its existing script runner seam and its environment differ from production;
+/// SDK/stdio are real. `openURL`, the Automation probe, `/usr/bin/log` and the
+/// direct-write path stay real too, which is safe only while the probe is sent
+/// nothing past `initialize` (#578, tracked in #623).
 final class StdioShutdownTests: XCTestCase {
     private static var probeDirectory: URL?
 
@@ -31,10 +34,29 @@ final class StdioShutdownTests: XCTestCase {
             import Foundation
             @testable import CheAppleMailMCP
 
+            /// #578 canary: how many cooperative-pool threads run blocking work at once.
+            final class Width: @unchecked Sendable {
+                private let lock = NSLock()
+                private var active = 0, maximum = 0
+                func enter() { lock.lock(); active += 1; maximum = max(maximum, active); lock.unlock() }
+                func leave() { lock.lock(); active -= 1; lock.unlock() }
+                var widest: Int { lock.lock(); defer { lock.unlock() }; return maximum }
+            }
+
             @main enum Probe {
                 static func main() async throws {
                     // Match production main: EPIPE must be handled, not kill us.
                     signal(SIGPIPE, SIG_IGN)
+                    if CommandLine.arguments[1] == "canary" {
+                        let width = Width()
+                        await withTaskGroup(of: Void.self) { group in
+                            for _ in 0..<4 {
+                                group.addTask { width.enter(); Thread.sleep(forTimeInterval: 0.3); width.leave() }
+                            }
+                        }
+                        FileHandle.standardError.write(Data("PROBE_POOL_WIDTH \(width.widest)\n".utf8))
+                        return
+                    }
                     let blocked = CommandLine.arguments[1] == "blocked"
                     await MailController.shared.setTestSeams(scriptRunner: { _ in
                         FileHandle.standardError.write(Data("PROBE_SYNC_BEGIN\n".utf8))
@@ -93,10 +115,7 @@ final class StdioShutdownTests: XCTestCase {
         let process = Process(), stdin = Pipe()
         process.executableURL = executable
         process.arguments = [blocked ? "blocked" : "idle", directory.appendingPathComponent("absent-index").path]
-        var environment = ProcessInfo.processInfo.environment
-        if strict { environment["LIBDISPATCH_COOPERATIVE_POOL_STRICT"] = "1" }
-        else { environment.removeValue(forKey: "LIBDISPATCH_COOPERATIVE_POOL_STRICT") }
-        process.environment = environment
+        process.environment = Self.probeEnvironment(from: ProcessInfo.processInfo.environment, strict: strict)
         process.standardInput = stdin
         process.standardError = stderr
         let outputPipe = brokenStdout ? Pipe() : nil
@@ -120,7 +139,11 @@ final class StdioShutdownTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.01)
         }
         let ready = try String(contentsOf: stderrURL)
-        XCTAssertTrue(ready.contains("PROBE_SYNC_BEGIN"), "startup fixture never began: \(ready)")
+        // #578: stop here when the probe never started. Writing the handshake to a probe that has
+        // already exited is a write to a closed pipe.
+        guard ready.contains("PROBE_SYNC_BEGIN") else {
+            return XCTFail("startup fixture never began: \(ready)")
+        }
         if blocked { XCTAssertFalse(ready.contains("PROBE_SYNC_END")) }
         if handshake || brokenStdout {
             let request = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}"# + "\n"
@@ -162,6 +185,70 @@ final class StdioShutdownTests: XCTestCase {
             XCTAssertTrue(trace.contains("PROBE_SERVER_RETURNED"))
             if blocked { XCTAssertFalse(trace.contains("PROBE_SYNC_END"), "must exit before startup work finishes") }
         }
+    }
+
+    /// #578: the probe gets a minimal environment, not the test runner's. A switch such as
+    /// `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT` or `MAIL_APP_INTEGRATION_TESTS` must not reach it.
+    /// `DYLD_*` stays so the probe loads the same runtime the build used.
+    static func probeEnvironment(from inherited: [String: String], strict: Bool) -> [String: String] {
+        var environment = inherited.filter { key, _ in
+            ["PATH", "HOME", "TMPDIR", "USER", "LOGNAME"].contains(key) || key.hasPrefix("DYLD_")
+        }
+        if strict { environment["LIBDISPATCH_COOPERATIVE_POOL_STRICT"] = "1" }
+        return environment
+    }
+
+    func testProbeEnvironmentIsAMinimalAllowList() {
+        let inherited = ["PATH": "/usr/bin", "HOME": "/h", "TMPDIR": "/t", "USER": "u", "LOGNAME": "l",
+                         "DYLD_LIBRARY_PATH": "/d", "CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT": "1",
+                         "MAIL_APP_INTEGRATION_TESTS": "1", "LIBDISPATCH_COOPERATIVE_POOL_STRICT": "1",
+                         "XCTestConfigurationFilePath": "/x"]
+        XCTAssertEqual(Self.probeEnvironment(from: inherited, strict: false),
+                       ["PATH": "/usr/bin", "HOME": "/h", "TMPDIR": "/t", "USER": "u", "LOGNAME": "l",
+                        "DYLD_LIBRARY_PATH": "/d"])
+        XCTAssertEqual(Self.probeEnvironment(from: inherited, strict: true)["LIBDISPATCH_COOPERATIVE_POOL_STRICT"], "1")
+    }
+
+    /// #578: the two strict tests discriminate only if `LIBDISPATCH_COOPERATIVE_POOL_STRICT=1` really
+    /// narrows the pool to one thread. The variable is undocumented; if a macOS release ignores it,
+    /// those tests would pass without the fix. Fail rather than skip, so that loss is visible.
+    func testStrictCooperativePoolIsOneThreadWide() throws {
+        XCTAssertEqual(try poolWidth(strict: true), 1,
+                       "LIBDISPATCH_COOPERATIVE_POOL_STRICT no longer narrows the pool; the strict shutdown tests lost their meaning")
+        // The canary must be able to see a wider pool, or a broken canary would always say 1.
+        // The ordinary pool is one thread per CPU, so this half needs two of them.
+        if ProcessInfo.processInfo.activeProcessorCount > 1 {
+            XCTAssertGreaterThan(try poolWidth(strict: false), 1, "the canary cannot tell a wide pool from a narrow one")
+        }
+    }
+
+    private func poolWidth(strict: Bool) throws -> Int {
+        let executable = try probe()
+        let stderrURL = executable.deletingLastPathComponent().appendingPathComponent("canary-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
+        defer { try? FileManager.default.removeItem(at: stderrURL) }
+        let stderr = try FileHandle(forWritingTo: stderrURL)
+        defer { try? stderr.close() }
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = ["canary", "unused"]
+        process.environment = Self.probeEnvironment(from: ProcessInfo.processInfo.environment, strict: strict)
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = stderr
+        try process.run()
+        // The same bounded wait as the compile step: a stalled canary fails, it does not hang the suite.
+        let deadline = ProcessInfo.processInfo.systemUptime + 30
+        while process.isRunning && ProcessInfo.processInfo.systemUptime < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        process.waitUntilExit()
+        let text = try String(contentsOf: stderrURL)
+        XCTAssertEqual(process.terminationReason, .exit, "the canary did not finish: \(text)")
+        XCTAssertEqual(process.terminationStatus, 0, text)
+        let line = try XCTUnwrap(text.split(separator: "\n").first { $0.hasPrefix("PROBE_POOL_WIDTH ") }, text)
+        return try XCTUnwrap(Int(line.dropFirst("PROBE_POOL_WIDTH ".count)), text)
     }
 
     func testEOFWithBlockedStartupAndStrictCooperativePool() throws {

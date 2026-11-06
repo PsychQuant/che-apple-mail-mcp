@@ -48,7 +48,17 @@ func buildDirectDraftMarkReadScript(rowId: Int64) -> String {
     """
 }
 
-extension MailController {
+/// #484 — what the direct-write path asks of Mail. `MailController` is the real
+/// one; tests give `DirectDraftPath` a stand-in, so every outcome after the write
+/// can be exercised without Mail, against a real `DraftStoreWriter` on a test store.
+protocol DirectDraftMailControl: Sendable {
+    func getSpecialMailboxes(accountId: String?, accountName: String?) async throws -> [String: Any]
+    func confirmSpecialMailboxPaths(accountId: String, candidates: [SpecialMailboxPathCandidate]) async throws -> SpecialMailboxPathProof
+    func triggerDirectDraftUpload(rowId: Int64, timing: Bool) async throws -> String
+    func markDirectDraftRead(rowId: Int64) async throws -> String
+}
+
+extension MailController: DirectDraftMailControl {
     /// Runs the trigger through the cancellable `osascript` transport (#406).
     func triggerDirectDraftUpload(rowId: Int64, timing: Bool) throws -> String {
         try runDraftScanScript(buildDirectDraftTriggerScript(rowId: rowId, timing: timing), timeout: 20)
@@ -63,12 +73,18 @@ extension MailController {
 /// upload it. Every step that could go wrong before the trigger falls back to the
 /// GUI path; after the trigger there is no fallback (it would duplicate the draft).
 struct DirectDraftPath {
-    let controller: MailController
+    let controller: any DirectDraftMailControl
     let reader: EnvelopeIndexReader?
     var enabled: Bool = DirectDraft.isEnabled
     var databasePath: String = EnvelopeIndexReader.defaultDatabasePath
     var mailInfoPlist: String = "/System/Applications/Mail.app/Contents/Info.plist"
     var uploadDeadline: TimeInterval = 10
+    /// #484: the rest of what the gates read from the host, so a test store does
+    /// not depend on this machine's OS version or its Mail accounts. The defaults
+    /// are what the gates always read; a gate still runs on every call (rule item 4).
+    var macOSMajorVersion: Int = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+    var accountUUIDs: @Sendable (String) -> [String] = { AccountMapper.uuids(forEmail: $0) }
+    var accountSignatureIDs: @Sendable (String) -> [String]? = { AccountMapper.localSignatureIDs(forAccount: $0) }
 
     /// How often the wait after the upload request re-reads the store (#497).
     /// An upload is noticed up to one interval late, about half an interval on
@@ -205,16 +221,15 @@ struct DirectDraftPath {
         }
         timer.mark("eligibility")
         let from = fromAddress!
-        guard let version = mailVersion(), version.short.hasPrefix("16."),
-              ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 27 else {
+        guard let version = mailVersion(), version.short.hasPrefix("16."), macOSMajorVersion == 27 else {
             return .notAttempted(.version)
         }
         timer.mark("version_gate")
-        let uuids = AccountMapper.uuids(forEmail: from)
+        let uuids = accountUUIDs(from)
         guard uuids.count == 1, let account = uuids.first else {
             return .notAttempted(.account(count: uuids.count))
         }
-        guard DirectDraft.signatureAllowsDirectWrite(signature, accountSignatureIDs: AccountMapper.localSignatureIDs(forAccount: account)) else {
+        guard DirectDraft.signatureAllowsDirectWrite(signature, accountSignatureIDs: accountSignatureIDs(account)) else {
             return .notAttempted(.accountSignature)
         }
         guard let reader else { return .notAttempted(.index) }
@@ -222,7 +237,7 @@ struct DirectDraftPath {
         // Drafts mailbox: the sanctioned identification (r-must-direct-db #186),
         // then a native-confirmed path (#376), then exactly one row.
         let special: [String: Any]
-        do { special = try await controller.getSpecialMailboxes(accountId: account) }
+        do { special = try await controller.getSpecialMailboxes(accountId: account, accountName: nil) }
         catch { return .notAttempted(.draftsUnidentified(error.localizedDescription)) }
         // #549: a read that fails is a reason not to attempt the direct write,
         // named as such; it used to read as "no mailboxes" and surface as an
@@ -424,9 +439,9 @@ final class DirectDraftTimer: @unchecked Sendable {
     /// True when the marks have a run to go to.
     var isRecording: Bool { run != nil }
 
-    /// #489 — moves the upload trigger's script marks (`trigger_*`) out of the
-    /// process-wide capture buffer into this segment, leaving any other marks
-    /// there. Without a run nothing is taken.
+    /// #489 — moves the upload trigger's script marks (`trigger_*`) out of this
+    /// run's capture buffer into this segment, leaving any other marks there.
+    /// Without a run nothing is taken.
     func absorbScriptMarks() {
         guard run != nil else { return }
         let taken = ComposeTiming.takeCapturedMarks(where: { $0.source == "script" && $0.label.hasPrefix("trigger_") })

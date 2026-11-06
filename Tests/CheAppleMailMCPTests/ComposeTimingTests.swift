@@ -346,6 +346,110 @@ final class ComposeTimingTests: XCTestCase {
         XCTAssertTrue(thrown.map { "\($0)".contains("flock") } ?? false, String(describing: thrown))
     }
 
+    // MARK: - #483: script marks stay with their run
+
+    private func marks(_ label: String) -> String { "\(ComposeTiming.logPrefix)\(label)|1.0\n" }
+
+    /// The shape of the real overlap: run A's script has finished, and before A takes its marks
+    /// another call runs to the end.
+    func testAMarkWaitingInOneRunIsNotTakenByAnother() async throws {
+        let csv = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: csv) }
+        try await ComposeTiming.withRun(csvPath: csv) {
+            ComposeTiming.captureStderr(marks("trigger_a"))
+            await ComposeTiming.withRun(csvPath: csv) {
+                ComposeTiming.captureStderr(marks("trigger_b"))
+                XCTAssertEqual(ComposeTiming.takeCapturedMarks(where: { $0.label.hasPrefix("trigger_") }).map(\.label), ["trigger_b"])
+                XCTAssertEqual(ComposeTiming.takeCapturedMarks().count, 0, "a run sees none of the other run's marks")
+            }
+            XCTAssertEqual(ComposeTiming.takeCapturedMarks().map(\.label), ["trigger_a"])
+        }
+    }
+
+    func testAPlainCallOutsideARunDoesNotSweepARunsMarks() async throws {
+        let csv = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: csv) }
+        _ = ComposeTiming.takeCapturedMarks()
+        let run = ComposeTiming.Run()
+        ComposeTiming.$currentRun.withValue(run) { ComposeTiming.captureStderr(marks("trigger_a")) }
+        XCTAssertEqual(ComposeTiming.takeCapturedMarks().count, 0, "compose_email has no run and must not take a run's marks")
+        ComposeTiming.$currentRun.withValue(run) {
+            XCTAssertEqual(ComposeTiming.takeCapturedMarks().map(\.label), ["trigger_a"])
+        }
+    }
+
+    func testConcurrentRunsEachGetOnlyTheirOwnMarks() async throws {
+        let csv = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: csv) }
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<16 {
+                group.addTask {
+                    await ComposeTiming.withRun(csvPath: csv) {
+                        ComposeTiming.captureStderr("\(ComposeTiming.logPrefix)trigger_\(index)|1.0\n")
+                        await Task.yield()
+                        XCTAssertEqual(ComposeTiming.takeCapturedMarks().map(\.label), ["trigger_\(index)"])
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - #484: the lock across processes
+
+    /// Starts a perl child that takes the same `flock`, says so, and then runs `afterLock`.
+    /// A second descriptor in this process (the tests above) shows the lock is per open file
+    /// description; only another process shows it works between two servers.
+    private func lockHolder(on path: String, afterLock: String) throws -> Process {
+        let child = Process()
+        let ready = path + ".locked"
+        defer { try? FileManager.default.removeItem(atPath: ready) }
+        child.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+        child.arguments = ["-e", """
+            use Fcntl qw(:flock); $| = 1;
+            open(my $f, '>>', $ARGV[0]) or die $!;
+            flock($f, LOCK_EX) or die $!;
+            open(my $m, '>', $ARGV[2]) or die $!; close($m);
+            \(afterLock)
+            flock($f, LOCK_UN);
+            """, path, ComposeTiming.csvHeader, ready]
+        try child.run()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while !FileManager.default.fileExists(atPath: ready) {
+            guard child.isRunning, ContinuousClock.now < deadline else {
+                if child.isRunning { child.terminate() }
+                child.waitUntilExit()
+                throw NSError(domain: "ComposeTimingTests", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "the child never took the lock"])
+            }
+            usleep(10_000)
+        }
+        return child
+    }
+
+    func testAWriterInAnotherProcessIsWaitedForAndNotTruncated() throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let child = try lockHolder(on: path, afterLock: """
+            select(undef, undef, undef, 0.3);
+            syswrite($f, "$ARGV[1]\\nCHILD_ROW\\n");
+            """)
+        defer { if child.isRunning { child.terminate() }; child.waitUntilExit() }
+        try ComposeTiming.append(rows: ["PARENT_ROW"], toCSVAt: path)
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8),
+                       ComposeTiming.csvHeader + "\nCHILD_ROW\nPARENT_ROW\n",
+                       "the write waited for the other process and kept what it wrote")
+    }
+
+    func testAWriterInAnotherProcessThatKeepsTheLockMakesThisOneGiveUp() throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let child = try lockHolder(on: path, afterLock: "sleep 30;")
+        defer { child.terminate(); child.waitUntilExit() }
+        XCTAssertThrowsError(try ComposeTiming.append(rows: ["r"], toCSVAt: path)) { error in
+            XCTAssertTrue("\(error)".contains("flock"), String(describing: error))
+        }
+    }
+
     func testMarksWithEqualTimestampsKeepTheirInputOrder() {
         let rows = ComposeTiming.csvRows(runId: "R", segments: [
             ComposeTiming.Segment(path: "direct", outcome: "created", config: [:], marks: [

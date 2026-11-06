@@ -53,8 +53,9 @@ final class DirectDraftMessageTests: XCTestCase {
     private let local = UUID(uuidString: "0E5F3C1A-1111-4222-8333-944455556666")!
     private let boundary = UUID(uuidString: "9685C001-8FB1-45DF-BCD1-AD7AB5F8542C")!
 
-    private func build(subject: String = "Hello", body: String = "Line one", name: String? = "Me Example") -> DirectDraft.Message {
-        DirectDraft.buildMessage(fromName: name, fromAddress: "me@example.org", to: ["a@example.org", "b@example.org"],
+    private func build(subject: String = "Hello", body: String = "Line one", name: String? = "Me Example",
+                       to: [String] = ["a@example.org", "b@example.org"]) -> DirectDraft.Message {
+        DirectDraft.buildMessage(fromName: name, fromAddress: "me@example.org", to: to,
                                  subject: subject, body: body, date: date, documentUUID: doc,
                                  messageIdLocalPart: local, boundary: boundary,
                                  mailVersion: "16.0 (3901.200.41)",
@@ -89,6 +90,153 @@ final class DirectDraftMessageTests: XCTestCase {
         XCTAssertTrue(s.contains("Content-Type: text/plain;\n\tcharset=us-ascii\n\n\n--"), "empty plain part, as Mail stores drafts")
         XCTAssertTrue(s.contains("a &lt; b &amp; c<br>\nsecond"), "escaped, newlines as <br>")
         XCTAssertTrue(s.contains("Content-Transfer-Encoding: 7bit\nContent-Type: text/html;\n\tcharset=us-ascii"))
+    }
+
+    // MARK: - Line length (#588)
+
+    /// RFC 5322 §2.1.1: a line is at most 998 octets, line ending excluded.
+    private func longestLine(_ m: DirectDraft.Message) -> Int {
+        m.mime.split(separator: 0x0A, omittingEmptySubsequences: false).map(\.count).max() ?? 0
+    }
+
+    private func htmlPart(_ s: String) throws -> String {
+        try XCTUnwrap(s.components(separatedBy: "charset=utf-8\n\n").last?
+            .components(separatedBy: "\n--Apple-Mail=").first)
+    }
+
+    func testALongAsciiLineIsQuotedPrintableAndNoLineExceeds998Octets() throws {
+        let line = String(repeating: "abcdefghij", count: 200)   // 2,000 ASCII characters
+        let m = build(body: "short\n" + line)
+        let s = text(m)
+        XCTAssertLessThanOrEqual(longestLine(m), 998, "RFC 5322 §2.1.1")
+        XCTAssertTrue(s.contains("Content-Transfer-Encoding: quoted-printable\nContent-Type: text/html;\n\tcharset=utf-8"))
+        let decoded = try XCTUnwrap(RFC822Parser.decodeQuotedPrintableBytes(try htmlPart(s)))
+        XCTAssertTrue(String(decoding: decoded, as: UTF8.self).contains("short<br>\n" + line), "the body decodes back unchanged")
+    }
+
+    func testALongLineDraftKeepsTheEmlxByteCountOfItsMime() throws {
+        let m = build(body: String(repeating: "abcdefghij", count: 200))
+        let emlx = DirectDraft.emlx(mime: m.mime, flags: DirectDraft.draftFlags, date: date)
+        let firstLine = emlx.prefix { $0 != 0x0A }
+        XCTAssertEqual(String(decoding: firstLine, as: UTF8.self).trimmingCharacters(in: .whitespaces), String(m.mime.count))
+        XCTAssertEqual(m.size, m.mime.count)
+        XCTAssertEqual(try EmlxFormat.extractMessageData(from: emlx), m.mime)
+    }
+
+    func testAnHtmlLineOfExactly998OctetsStaysSevenBit() {
+        // The last body line has no `<br>`, so the html line is the body line itself.
+        let m = build(body: "first\n" + String(repeating: "x", count: 998))
+        XCTAssertEqual(longestLine(m), 998)
+        XCTAssertTrue(text(m).contains("Content-Transfer-Encoding: 7bit\nContent-Type: text/html;\n\tcharset=us-ascii"))
+    }
+
+    func testAnHtmlLineOf999OctetsIsQuotedPrintable() {
+        let m = build(body: "first\n" + String(repeating: "x", count: 999))
+        XCTAssertLessThanOrEqual(longestLine(m), 998)
+        XCTAssertTrue(text(m).contains("Content-Transfer-Encoding: quoted-printable\nContent-Type: text/html;\n\tcharset=utf-8"))
+    }
+
+    func testEscapingCountsTowardTheLineLength() {
+        // 300 `&` become 1,500 octets of `&amp;` in the html.
+        let m = build(body: String(repeating: "&", count: 300))
+        XCTAssertLessThanOrEqual(longestLine(m), 998)
+        XCTAssertTrue(text(m).contains("Content-Transfer-Encoding: quoted-printable"))
+    }
+
+    // MARK: - Long header lines (#622)
+
+    private func header(_ m: DirectDraft.Message) -> String {
+        let s = text(m)
+        return String(s[..<s.range(of: "\n\n")!.lowerBound])
+    }
+
+    func testALongRecipientListFoldsAfterCommasAndRoundTrips() {
+        let recipients = (0..<300).map { "user\($0)@example.org" }
+        let m = build(to: recipients)
+        XCTAssertLessThanOrEqual(longestLine(m), DirectDraft.maxLineOctets)
+        XCTAssertTrue(header(m).contains(",\n "), "folded after a comma")
+        XCTAssertEqual(RFC822Parser.parseHeaders(from: m.mime)["to"], recipients.joined(separator: ", "))
+    }
+
+    func testARecipientLineThatFitsStaysOnOneLine() {
+        // "To: " plus 994 octets of list is exactly 998.
+        var list = ["a@example.org"]
+        while list.joined(separator: ", ").utf8.count < 960 { list.append("b@example.org") }
+        let padding = 994 - list.joined(separator: ", ").utf8.count - 2 - "@example.org".utf8.count
+        list.append(String(repeating: "c", count: padding) + "@example.org")
+        let line = "To: " + list.joined(separator: ", ")
+        XCTAssertEqual(line.utf8.count, 998)
+        XCTAssertTrue(header(build(to: list)).contains(line))
+        XCTAssertFalse(header(build(to: list + ["d@example.org"])).contains(line + ", d@example.org"), "one more address folds")
+    }
+
+    func testALongAsciiSubjectFoldsAtSpacesAndRoundTrips() {
+        let subject = Array(repeating: "word", count: 500).joined(separator: " ")
+        let m = build(subject: subject)
+        XCTAssertLessThanOrEqual(longestLine(m), DirectDraft.maxLineOctets)
+        XCTAssertFalse(header(m).contains("=?utf-8?"), "plain text while a space can fold it")
+        XCTAssertEqual(RFC822Parser.parseHeaders(from: m.mime)["subject"], subject)
+    }
+
+    func testASubjectWithNoUsableSpaceGoesOutAsEncodedWords() {
+        let subject = String(repeating: "x", count: 2000)
+        let m = build(subject: subject)
+        XCTAssertLessThanOrEqual(longestLine(m), DirectDraft.maxLineOctets)
+        XCTAssertTrue(header(m).contains("=?utf-8?B?"))
+        XCTAssertEqual(RFC822Parser.parseHeaders(from: m.mime)["subject"], subject)
+    }
+
+    func testRepeatedSpacesInALongSubjectSurviveAndNoLineIsOnlySpaces() {
+        let subject = Array(repeating: "word  word", count: 200).joined(separator: "  ")
+        let m = build(subject: subject)
+        XCTAssertLessThanOrEqual(longestLine(m), DirectDraft.maxLineOctets)
+        XCTAssertEqual(RFC822Parser.parseHeaders(from: m.mime)["subject"], subject)
+        XCTAssertFalse(header(m).components(separatedBy: "\n").contains { !$0.isEmpty && $0.allSatisfy { $0 == " " } })
+    }
+
+    /// The verify's regression: encoded words already hold line breaks, and
+    /// folding them again put a blank line inside the header block.
+    func testALongNonASCIISubjectKeepsItsHeaderBlockIntact() {
+        for subject in [String(repeating: "測", count: 300), String(repeating: "é ", count: 500) + "x"] {
+            let m = build(subject: subject)
+            XCTAssertLessThanOrEqual(longestLine(m), DirectDraft.maxLineOctets)
+            let h = header(m)
+            XCTAssertTrue(h.hasPrefix("Subject: =?utf-8?B?"))
+            XCTAssertTrue(h.hasSuffix("To: a@example.org, b@example.org"), "the rest of the headers stay in the block")
+            XCTAssertEqual(RFC822Parser.parseHeaders(from: m.mime)["subject"], subject)
+        }
+    }
+
+    func testLongRunsOfSpacesInAnAsciiSubjectStayUnderTheLimit() {
+        for subject in ["a" + String(repeating: " ", count: 1100) + "b",
+                        "a" + String(repeating: " ", count: 1100),
+                        String(repeating: " ", count: 1100)] {
+            let m = build(subject: subject)
+            XCTAssertLessThanOrEqual(longestLine(m), DirectDraft.maxLineOctets)
+            XCTAssertTrue(header(m).hasSuffix("To: a@example.org, b@example.org"))
+        }
+    }
+
+    func testAnAddressLongerThanAPathTakesTheGUIPath() {
+        let long = String(repeating: "x", count: 243) + "@example.org"   // 255 octets
+        XCTAssertEqual(long.utf8.count, 255)
+        XCTAssertEqual(check(to: [long]), .unsupportedAddress)
+        XCTAssertNil(check(to: [String(long.dropFirst())]), "254 octets is a legal path")
+    }
+
+    func testSpacesAroundARecipientAreNotWritten() {
+        // Eligibility compares the trimmed address, so the raw entry can be longer.
+        let raw = String(repeating: " ", count: 1100) + "a@example.org"
+        XCTAssertNil(check(to: [raw]))
+        let m = build(to: [raw, "b@example.org "])
+        XCTAssertLessThanOrEqual(longestLine(m), DirectDraft.maxLineOctets)
+        XCTAssertTrue(header(m).hasSuffix("To: a@example.org, b@example.org"))
+    }
+
+    func testAShortSubjectAndRecipientAreUnchanged() {
+        let h = header(build(subject: "Hello there", to: ["a@example.org", "b@example.org"]))
+        XCTAssertTrue(h.hasPrefix("Subject: Hello there\n"))
+        XCTAssertTrue(h.hasSuffix("To: a@example.org, b@example.org"))
     }
 
     func testNonAsciiSubjectAndBodyRoundTripThroughTheRepoDecoders() throws {

@@ -230,9 +230,22 @@ enum ComposeTiming {
         let id = UUID().uuidString
         private let lock = NSLock()
         private var segments: [Segment] = []
+        private var scriptMarks: [Mark] = []
 
         func add(_ segment: Segment) {
             lock.lock(); segments.append(segment); lock.unlock()
+        }
+
+        /// #483 — the marks of this run's scripts, waiting for the step that adds them to a segment.
+        func capture(_ marks: [Mark]) {
+            lock.lock(); scriptMarks.append(contentsOf: marks); lock.unlock()
+        }
+
+        func takeScriptMarks(where predicate: (Mark) -> Bool) -> [Mark] {
+            lock.lock(); defer { lock.unlock() }
+            let taken = scriptMarks.filter(predicate)
+            scriptMarks.removeAll(where: predicate)
+            return taken
         }
 
         var collected: [Segment] {
@@ -276,6 +289,10 @@ enum ComposeTiming {
 
     // MARK: - Hand-off from the osascript transport to composeViaMailto
 
+    // #483: a suspension sits between the upload trigger's script and the caller taking its marks
+    // (`try await controller.triggerDirectDraftUpload`), so a shared buffer let another run take them.
+    // Inside a run the marks stay with that run. The buffer below is only for calls outside a run
+    // (`compose_email`), which capture and take in one actor job.
     private static let lock = NSLock()
     private static var captured: [Mark] = []
 
@@ -283,19 +300,18 @@ enum ComposeTiming {
     static func captureStderr(_ text: String) {
         let marks = parseMarks(fromStderr: text)
         guard !marks.isEmpty else { return }
+        if let run = currentRun { run.capture(marks); return }
         lock.lock(); captured.append(contentsOf: marks); lock.unlock()
     }
 
     static func takeCapturedMarks() -> [Mark] {
-        lock.lock(); defer { lock.unlock() }
-        let marks = captured
-        captured = []
-        return marks
+        takeCapturedMarks(where: { _ in true })
     }
 
     /// #489 — takes only the marks `predicate` selects, under the same lock,
     /// and leaves the rest for the caller they belong to.
     static func takeCapturedMarks(where predicate: (Mark) -> Bool) -> [Mark] {
+        if let run = currentRun { return run.takeScriptMarks(where: predicate) }
         lock.lock(); defer { lock.unlock() }
         let taken = captured.filter(predicate)
         captured.removeAll(where: predicate)

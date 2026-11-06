@@ -60,15 +60,22 @@ final class RedactionTests: XCTestCase {
     /// finding #26/#34: the email pattern started a scan at every position of a long run of
     /// local-part characters and walked it to the end — quadratic. Bounded now.
     func testALongRunWithoutAnAtSignStaysLinear() {
+        // #611: a 5 s ceiling, as in TemplateExtractorTests, on inputs large enough that it still
+        // catches the regression. With the lookbehind removed the pattern took 0.6 s on 8,192
+        // characters, 9.4 s on 32,768 and about four times that on 65,536 (measured), so the old
+        // sizes could not reach this ceiling and the old ceilings were close to machine load.
         var r = IdentifierRedactor()
-        let hostile = String(repeating: "a", count: 8192)
-        let t0 = Date()
-        XCTAssertEqual(r.redact(hostile), hostile)
-        XCTAssertLessThan(Date().timeIntervalSince(t0), 0.5)
-        let dotted = String(repeating: "a.", count: 4096)
-        let t1 = Date()
-        _ = r.redact(dotted + "@" + dotted)
-        XCTAssertLessThan(Date().timeIntervalSince(t1), 1.0)
+        let clock = ContinuousClock()
+        let hostile = String(repeating: "a", count: 65_536)
+        var plain = ""
+        let plainElapsed = clock.measure { plain = r.redact(hostile) }
+        XCTAssertEqual(plain, hostile)
+        XCTAssertLessThan(plainElapsed, .seconds(5), "a run without @ took \(plainElapsed)")
+        let dotted = String(repeating: "a.", count: 8_192)
+        var mixed = ""
+        let dottedElapsed = clock.measure { mixed = r.redact(dotted + "@" + dotted) }
+        XCTAssertFalse(mixed.isEmpty)
+        XCTAssertLessThan(dottedElapsed, .seconds(5), "a dotted run around @ took \(dottedElapsed)")
     }
 
     func testPatternNamesAreTheDocumentedClosedList() {

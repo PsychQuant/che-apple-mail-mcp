@@ -47,6 +47,24 @@ final class StdioProbeBuildPlanTests: XCTestCase {
         }
     }
 
+    /// #578: a checkout reached through a symlink (/tmp is one, to /private/tmp) must still find
+    /// its link command when Swift Build recorded the resolved path.
+    func testSwiftBuildMatchesTheOutputThroughASymlinkedCheckout() throws {
+        try fixture { root, products in
+            let command = try link(products: products)
+            try write(["commands": ["app": command]],
+                      to: root.appendingPathComponent("Intermediates.noindex/XCBuildData/good.xcbuilddata/manifest.json"))
+            let alias = FileManager.default.temporaryDirectory.appendingPathComponent("stdio plan alias \(UUID().uuidString)")
+            try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: root)
+            defer { try? FileManager.default.removeItem(at: alias) }
+            let plan = try StdioProbeBuildPlan.load(products: alias.appendingPathComponent("Products/Debug"))
+            XCTAssertEqual(plan.compiler, "/fixture/toolchain/swiftc")
+            XCTAssertEqual(plan.objects.count, 2)
+        }
+        XCTAssertEqual(StdioProbeBuildPlan.canonicalPath(URL(fileURLWithPath: "/tmp/x/../y")),
+                       StdioProbeBuildPlan.canonicalPath(URL(fileURLWithPath: "/private/tmp/y")))
+    }
+
     func testSwiftBuildRejectsAmbiguousLinkCommandsAndMissingSDK() throws {
         try fixture { root, products in
             var command = try link(products: products)

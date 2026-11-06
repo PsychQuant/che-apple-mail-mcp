@@ -33,6 +33,7 @@ final class RecipientReceiptMetadataFailureTests: XCTestCase {
 
     private func execute(_ script: String) throws -> String {
         let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        try OsascriptFixtureGuard.check(script)   // #617: the exact text osascript runs
         process.arguments = ["-e", script]
         let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
         try process.run(); process.waitUntilExit()

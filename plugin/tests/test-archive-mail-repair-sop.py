@@ -33,7 +33,7 @@ STOP_STATUSES = ("environment-unavailable", "lookup-unavailable", "apply-unavail
 
 # Expected vocabulary at this point of the cluster. Each later commit that adds a word edits these two sets.
 EXPECTED_STATUS = {
-    "completed", "completed-with-residue", "environment-unavailable", "lookup-unavailable", "apply-unavailable", "apply-incomplete",
+    "completed", "completed-with-residue", "completed-residue-unknown", "environment-unavailable", "lookup-unavailable", "apply-unavailable", "apply-incomplete",
 }
 EXPECTED_REASONS = {
     "subject-unavailable", "sender-unavailable", "date-offset-missing", "date-unparseable",
@@ -190,6 +190,8 @@ REQUIRED_FIELDS = {
     "apply-unavailable": ("status", "stage", "repaired", "still-unparseable", "pending", "duplicates", "error"),
     "apply-incomplete": ("status", "stage", "still-unparseable", "repaired", "completed_operations", "pending_operations",
                          "residual_index_keys", "duplicates", "automatic_rerun_recovery", "error"),
+    "completed-residue-unknown": ("status", "scanned", "repaired", "still-unparseable", "pending", "completed_operations",
+                                  "residue-report", "duplicates quarantined this run", "duplicates awaiting manual review", "error"),
     "completed": ("status", "scanned", "excluded-path", "repaired", "still-unparseable", "pending", "residual_synthetic_index_keys",
                   "index_file_mismatches", "duplicates quarantined this run", "duplicates awaiting manual review"),
 }
@@ -499,7 +501,7 @@ class SopPinsCatchNamedChanges(unittest.TestCase):
             ("code tables", "a status word follows still-unparseable:", lambda t: replaced(t, "still-unparseable: <停止前已具名判定的檔案 basename 與原因碼；未評估者不列入此欄>", "still-unparseable: environment-unavailable"), "environment-unavailable"),
             ("code tables", "a reason code outside the table", lambda t: replaced(t, "記 `still-unparseable: subject-unavailable`，不發空查詢", "記 `still-unparseable: other-failure`，不發空查詢"), "other-failure"),
             ("code tables", "the closed count disagrees with the rows", lambda t: replaced(t, "只有這 19 類", "只有這 20 類"), "closed count"),
-            ("code tables", "the closing phrase is removed from a heading", lambda t: replaced(t, "（只有這 6 類，不得依性質相似類推）", "（只有這 6 類）"), "closed count"),
+            ("code tables", "the closing phrase is removed from a heading", lambda t: replaced(t, "（只有這 7 類，不得依性質相似類推）", "（只有這 7 類）"), "closed count"),
             ("code tables", "a row is added to the status table for a word nothing uses", lambda t: replaced(t, "| `apply-incomplete` | Step 2.5、Step 3、Step 4 |", "| `never-used-state` | Step 9 | x | y |\n| `apply-incomplete` | Step 2.5、Step 3、Step 4 |"), "never-used-state"),
             ("code tables", "a word sits in both tables", lambda t: replaced(t, "| `subject-unavailable` | Step 2 階段 1 |", "| `completed` | Step 2 階段 1 |\n| `subject-unavailable` | Step 2 階段 1 |"), "both tables"),
             ("code tables", "the table markers are removed", lambda t: replaced(t, "<!-- archive-mail-repair-codes:start -->", ""), "exactly one"),
@@ -509,6 +511,9 @@ class SopPinsCatchNamedChanges(unittest.TestCase):
             ("report templates", "automatic_rerun_recovery is dropped from the apply-incomplete report", lambda t: drop_line(t, "automatic_rerun_recovery:"), "automatic_rerun_recovery"),
             ("report templates", "the lookup report loses its status line", lambda t: replaced(t, "\nstatus: lookup-unavailable\nstage: rekey-lookup", "\nstate: lookup-unavailable\nstage: rekey-lookup"), "lookup-unavailable"),
             ("report templates", "the preflight report loses its error field", lambda t: drop_line(t, "error: <錯誤類別與說明；沒有有效 envelope"), "environment-unavailable lacks the field error"),
+            ("report templates", "the residue-unknown report loses its residue-report line", lambda t: drop_line(t, "residue-report: not computed"), "completed-residue-unknown lacks the field residue-report"),
+            ("report templates", "the residue-unknown report loses its error field", lambda t: drop_line(t, "error: <residue-report 無法執行的類別與說明"), "completed-residue-unknown lacks the field error"),
+            ("code tables", "the residue-unknown row is removed from the status table", lambda t: drop_line(t, "| `completed-residue-unknown` |"), "closed count"),
             ("report templates", "a sixth template appears", lambda t: replaced(t, "### 停止報告的 duplicates 欄位", "```text\nstatus: surprise-state\nrepaired: 0\n```\n\n### 停止報告的 duplicates 欄位"), "surprise-state"),
             ("preflight", "the probe call is deleted", lambda t: replaced(t, PROBE, ""), "probe call must appear exactly once"),
             ("preflight", "another search_emails( call comes first", lambda t: replaced(t, "## 用法", "先呼叫 search_emails(field: \"sender\") 看看。\n\n## 用法"), "first search_emails"),

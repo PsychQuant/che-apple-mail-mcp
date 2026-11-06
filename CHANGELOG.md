@@ -215,6 +215,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A header value no longer ends at a Unicode line character**
+  ([#555](https://github.com/PsychQuant/che-apple-mail-mcp/issues/555)).
+  The header parser split lines with `CharacterSet.newlines`, which besides CR
+  and LF holds U+000B, U+000C, U+0085, U+2028 and U+2029. A value containing
+  one of them was cut there, and a tail shaped like `Name: value` was stored as
+  another header, so a sender could forge `Message-ID`, `From` or `Date` (and a
+  MIME part's `Content-Type`) from inside their own `Subject`. Lines now end
+  only at CR or LF (a bare CR still ends a line, as before), and those
+  characters stay in the value. Archives exported earlier with a forged
+  `message_id` are not repaired.
+- **One non-UTF-8 part no longer blanks a multipart message's text and html**
+  ([#546](https://github.com/PsychQuant/che-apple-mail-mcp/issues/546)).
+  The text/html walk behind `get_email`, `get_emails_batch` and both export
+  tools turned the whole multipart body into one `String`, so a single byte that
+  is neither UTF-8 nor ASCII (a raw 8bit Big5 part, a lone `0xE9`) returned no
+  text and no html, the valid sibling part included. Parts are now split at the
+  byte level and decoded one by one under their own charset. The walk also stops
+  at the same nesting depth as the attachment walk (8), where it used to recurse
+  without a limit at quadratic cost. Well-formed UTF-8 mail returns the same
+  bodies as before, trailing line break included.
+- **A multipart preamble ending in a blank line no longer empties the text body**
+  ([#560](https://github.com/PsychQuant/che-apple-mail-mcp/issues/560)).
+  The text before the first boundary (often `This is a multi-part message in
+  MIME format.`) was walked as a part. When a blank line followed it, it parsed
+  as an empty `text/plain`, and the real plain part was then skipped, so
+  `get_email` returned `text_body: ""` and the exported Markdown body was empty
+  even though the message had a plain and an html part. The preamble is now
+  skipped, as the attachment walk already did.
+- **The opt-in direct write no longer writes lines over 998 octets**
+  ([#588](https://github.com/PsychQuant/che-apple-mail-mcp/issues/588)).
+  With `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, an ASCII-only body went out as a
+  `7bit` html part without folding, so a body line longer than 998 octets (the
+  RFC 5322 §2.1.1 limit) made the draft an invalid message that servers or
+  clients may rewrite or reject. Such a body now goes out as quoted-printable,
+  which soft-wraps at 76 characters, like non-ASCII bodies already did. Bodies
+  whose lines all fit keep the `7bit` layout Mail itself writes, and the
+  `create_draft` description now states this behaviour.
+- **Decoding no longer depends on how Foundation treats `.ascii`**
+  ([#561](https://github.com/PsychQuant/che-apple-mail-mcp/issues/561)).
+  `String(data:encoding: .ascii)` succeeds on non-ASCII bytes in the shipped
+  binary (stamped sdk 13.0) and fails under `swift test`, so code that used it
+  did something different from what the tests saw. Every call site now says
+  what it means, and the results are the same under both stamps. What changes
+  for the shipped binary: a 7bit/8bit text part with non-ASCII bytes is no
+  longer taken for mislabelled quoted-printable; a quoted-printable part with
+  raw 8-bit bytes keeps those bytes instead of re-encoding each one as UTF-8
+  (`caf\xC3\xA9=20x` is `café x`, not mojibake); an encoded-word or RFC 2231
+  filename labelled `us-ascii` that carries valid UTF-8 now reads as UTF-8, the
+  rule bodies follow since #538. Non-UTF-8 bytes under an ASCII label still read
+  as Latin-1.
+- **Batch export dates now match the SOP recipe for old years and a bare `CST`**
+  ([#547](https://github.com/PsychQuant/che-apple-mail-mcp/issues/547)).
+  The frontmatter `date` of `Tue, 30 Jun 55 10:00:00 +0800` was
+  `0055-06-30T10:00:00+08:00`; two- and three-digit years now follow RFC 5322
+  §4.3 (`55` is 1955, `49` is 2049, `126` is 2026), as the recipe does. A bare
+  `CST`, which names both US Central and China Standard Time, was silently read
+  as US Central and could move the calendar day; a date ending in `CST` or any
+  other zone name the recipe refuses now stays as written in `date`, and its
+  default filename uses `unknown-date`. Files already exported are not repaired.
+- **`skip_message_ids_path` no longer splits a Message-ID at a Unicode line
+  character** ([#613](https://github.com/PsychQuant/che-apple-mail-mcp/issues/613)).
+  The skip file was read with `CharacterSet.newlines`, so an ID holding U+2028
+  or a similar character (kept by the header parser since #555) became two
+  entries that matched nothing, and the mail was exported again. Lines now end
+  only at CR or LF.
+- **Frontmatter values can no longer start another line**
+  ([#616](https://github.com/PsychQuant/che-apple-mail-mcp/issues/616)). YAML 1.1
+  readers and Python's `str.splitlines()` end a line at U+0085, U+2028 and U+2029,
+  which survived into the frontmatter, including the unquoted `sender` and
+  `date`. These and the other C1 controls are now flattened to a space, like the
+  ASCII controls. A Message-ID holding one of them is spelled with a space in
+  the frontmatter, as VT and FF already were.
+- **The opt-in direct write folds long `Subject:` and `To:` lines**
+  ([#622](https://github.com/PsychQuant/che-apple-mail-mcp/issues/622)). A long
+  recipient list or ASCII subject could pass the 998-octet line limit. `To:`
+  folds after a comma, `Subject:` at a space, and a subject folding cannot bring
+  under the limit goes out as encoded words. Headers that fit are unchanged byte
+  for byte. A `to` address over 254 octets, the SMTP path limit, takes the GUI
+  path, because folding cannot split an address.
 - **`reply_email` and `forward_email` no longer say the send keystroke fired
   when the GUI flow timed out**
   ([#550](https://github.com/PsychQuant/che-apple-mail-mcp/issues/550)). After
@@ -226,6 +305,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any leftover compose window. A failure after the keystroke (POSTDISPATCH) keeps
   its wording unchanged. Neither tool retries, and the error's classification is
   unchanged.
+- **`TemplateExtractorTests` no longer fails on a loaded machine**
+  ([#502](https://github.com/PsychQuant/che-apple-mail-mcp/issues/502)).
+  `testTheDataShapeBackstopIsBoundedAndSharesTheRedactionPattern` timed two
+  1,024-byte `looksLikeData` scans with the wall clock and required them to
+  finish within 0.2 s; at a load of about 160 they took 0.32 s and the suite
+  failed, although the healthy cost is 5–6 ms. The timing now uses a monotonic
+  clock and the 5 s ceiling of the adversarial test in the same file, with the
+  elapsed time in the failure message. The deterministic guard (nothing over
+  1,024 bytes is scanned) is unchanged. Test-only change.
+- **`LogShowRunnerTests` keeps its timing checks clear of machine load**
+  ([#468](https://github.com/PsychQuant/che-apple-mail-mcp/issues/468)).
+  The tests time the real spawn/read/terminate/reap path with a monotonic
+  clock instead of the wall clock. The grandchild-holds-the-pipe test was the
+  tight one: with a 3 s hold against a 2.5 s ceiling, the healthy path (about
+  1.3 s) had about 1.2 s of headroom, and the broken read-until-EOF design
+  (3 s) was only 1.7 s away from it. The grandchild now holds the pipe 20 s
+  and the ceiling is 10 s, so the two outcomes are far apart; the orphaned
+  `sleep` is killed when the test ends.
+  The two endless children are `exec yes <line>` instead of a shell
+  `while true; do echo ...; done` loop, so they block on a full pipe instead of
+  spinning a core. Test-only change.
+- **The osascript fixtures in two test files refuse the known ways of addressing an application**
+  ([#572](https://github.com/PsychQuant/che-apple-mail-mcp/issues/572)).
+  `ComposeCleanupSheetTests` and `PostIdentificationCleanupTests` run fragments
+  cut out of production scripts through `/usr/bin/osascript`, and at most a check
+  for the literal `tell application` kept them away from Mail; `tell app "Mail"`,
+  `… of application "Mail"` and `activate application "Mail"` passed it. Every
+  osascript run in those two files now checks the exact text it executes with
+  `OsascriptFixtureGuard`, which removes comments and empties string literals
+  (reading Unicode scalars and `¬` continuations) and then refuses the words
+  `app`, `application`, `process` in any case, raw `«…»` codes, `|…|` identifiers, `run script`,
+  `do shell script`, `load script`, `store script`, `open location` and `use`
+  statements. It is a deny list, not a proof; a false positive only fails a test.
+  Test-only change.
+- **Timing CSV: script marks stay with the run that produced them**
+  ([#483](https://github.com/PsychQuant/che-apple-mail-mcp/issues/483)). The
+  marks a script sends back were kept in one process-wide buffer. The upload
+  trigger's marks wait there across an `await`, so a second `create_draft` run, or
+  a `compose_email` taking the whole buffer, could take them and write them under
+  the wrong `run_id`. Inside a run the marks now stay with that run, and marks
+  the run does not take are dropped with it. The shared buffer is left for calls
+  outside a run, where the only script that sends marks is `compose_email`'s,
+  which captures and takes them in one actor job. This only touches diagnostics,
+  and only with `CHE_MAIL_COMPOSE_TIMING_CSV` set.
+- **The osascript fixtures in four more test files use the shared guard**
+  ([#617](https://github.com/PsychQuant/che-apple-mail-mcp/issues/617)). Every
+  osascript run in `ClassificationTrashScriptTests`, `ComposeSignatureScriptTests`,
+  `DraftIDBaselineTests` and `RecipientReceiptMetadataFailureTests` now checks
+  the text it executes with `OsascriptFixtureGuard`. Handlers that really use the
+  Foundation bridge pass through an explicit allowance: `use framework
+  "Foundation"`, `use scripting additions`, `current application's` followed by a
+  closed list of the names these handlers use, and three piped words. `NSPredicate`
+  passes only with the one format string they use, as the whole argument, because a
+  format string can run code. Any other class-shaped name, selectors by name, and the ways to name a class
+  in a string are refused. Handlers a test does not call lose their `tell
+  application` blocks before the script runs, and a block that never closes is
+  refused instead of dropping the rest of the script. The list bounds the class names a fixture
+  can write, not what the methods of those classes do: they can read and write
+  files and fetch URLs. `OsascriptFixtureGuardScanTests` scans `Tests/`, so a new osascript run that
+  skips the guard fails a test; the two helpers gated by `CHE_MAIL_LIVE_TEST` are
+  listed by name with their reason. Test-only change.
+- **A server built in a test can take an account mapping**
+  ([#612](https://github.com/PsychQuant/che-apple-mail-mcp/issues/612)).
+  `CheAppleMailMCPServer.init` gained an optional `accountMapping`, passed to
+  `EnvelopeIndexReader`, so a handler test over a fixture index no longer reads
+  the developer's AccountsMap.plist. Without it the server behaves as before.
+- **The six ways around the direct-write guard tests now fail a test**
+  ([#492](https://github.com/PsychQuant/che-apple-mail-mcp/issues/492)). A new
+  outcome test has Mail apply the read repair 0.6 s later, so looks that do not
+  wait, as with a declared `Task` that turns the sleeps into nothing, use up their
+  tries. The timed trigger script has to equal the pinned untimed one plus its
+  marks, and the store is opened and written in one place. Each evasion was made
+  in the source and turned a test red. Test-only change; the frozen text is
+  untouched.
+- **More timing assertions kept clear of machine load**
+  ([#611](https://github.com/PsychQuant/che-apple-mail-mcp/issues/611)). The
+  four assertions left over from #502 use a monotonic clock and a 5 s ceiling.
+  `RedactionTests` also grew its inputs so that the ceiling can still catch a
+  quadratic scan: with the pattern's lookbehind removed, a scan took 0.6 s on
+  8,192 characters, which a 5 s ceiling would miss, and 9.4 s on 32,768.
+  Test-only change.
+- **The direct-write path's outcomes after the write are tested without Mail**
+  ([#484](https://github.com/PsychQuant/che-apple-mail-mcp/issues/484)).
+  `DirectDraftPath` now reaches Mail through a small protocol, and takes the OS
+  version and the account lookups as settable values. No behaviour changes, and
+  the code after the write is untouched. `DirectDraftPathOutcomeTests` runs the
+  real path and the real `DraftStoreWriter` against a test SQLite store with a
+  stand-in for Mail: upload confirmed, upload not confirmed in time, failed
+  trigger rolled back, failed trigger after Mail already uploaded, failed trigger
+  that cannot be rolled back, and the read repair, each with its outcome code and
+  `direct` step sequence. Two new tests take the timing CSV's `flock` from a
+  separate process. These show the branches, not what the real Mail does.
+- **The stdio shutdown probe starts with an allow-listed environment and checks its own assumptions**
+  ([#578](https://github.com/PsychQuant/che-apple-mail-mcp/issues/578)). The
+  probe now starts with a small allow-listed environment (`PATH`, `HOME`,
+  `TMPDIR`, `USER`, `LOGNAME`, `DYLD_*`), so switches such as
+  `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT` or `MAIL_APP_INTEGRATION_TESTS` no longer
+  reach it. A probe that never started is reported without writing to its stdin.
+  A new canary fails when `LIBDISPATCH_COOPERATIVE_POOL_STRICT` stops narrowing
+  the cooperative pool to one thread, which would silently turn the strict
+  shutdown tests into ordinary-pool tests. `StdioProbeBuildPlan` compares
+  resolved paths, so a checkout reached through a symlink (`/tmp` is one) finds
+  its link command. Test-only change. The probe still fakes only `scriptRunner`
+  and `refusal`, because it sends nothing past `initialize`
+  ([#623](https://github.com/PsychQuant/che-apple-mail-mcp/issues/623) tracks the
+  rest).
+
+### Documentation
+
+- **`r-must-direct-db.md` no longer teaches the banned stderr call**
+  ([#553](https://github.com/PsychQuant/che-apple-mail-mcp/issues/553)). Both
+  Hybrid pattern examples used the non-throwing `FileHandle.write(_:)`, which
+  `NoNonThrowingStderrWriteGuardTests` forbids because it aborts the process on
+  a bad descriptor; they now use `Diagnostics.emit`. Stale `file:line`
+  references became symbol names.
 
 ## [4.0.0] - 2026-10-29
 
