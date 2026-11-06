@@ -1008,6 +1008,18 @@ class ArchiveWatermarkTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertIsNotNone(self.dates["watermark_instant"](text, self.utc8).tzinfo)
 
+    def test_only_the_forms_the_server_reads_are_accepted(self):
+        # Server.parseDate takes an internet date-time with a zone or yyyy-MM-dd and silently ignores anything else,
+        # so a value the mail-date parser can read would leave Step 3 with no boundary (round 3, #600).
+        for text in ("Tue, 30 Jun 2026 10:00:00 +0800", "2026-01-01 00:00:00+08:00", "2026-01-01T00:00:00.5Z",
+                     "2026-01-01T00:00:00+0800", "20260101", "2026/01/01"):
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError):
+                    self.dates["watermark_instant"](text, self.utc8)
+        for text in ("2026-01-01", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00+08:00", "2026-01-01T00:00:00-05:30"):
+            with self.subTest(text=text):
+                self.assertIsNotNone(self.dates["watermark_instant"](text, self.utc8).tzinfo)
+
     def test_out_of_range_boundaries_raise_the_documented_error(self):
         for text in ("0001-01-01", "9999-12-31"):
             with self.subTest(text=text):
@@ -2608,7 +2620,8 @@ class ArchiveLastArchivedGateTests(unittest.TestCase):
         _, branch = self.read_only_branch()
         bullet = next(line for line in branch.split("\n") if line.startswith("- **推進 `last_archived` 的參考值**"))
         for word in ["min(last_updated, 本 run 開始時的 UTC 日期)", "只有日期", "#600", "偽造", "由使用者決定",
-                     "再抓一次", "下一輪會被略過"]:   # round 2: the skip direction next to the re-fetch one
+                     "再抓一次", "下一輪會被略過",   # round 2: the skip direction next to the re-fetch one
+                     "草稿狀態不明"]:                 # round 3: an unknown-draft mail falls behind a moved boundary
             with self.subTest(word=word):
                 self.assertIn(word, bullet)
         self.assertNotIn("還沒收到的信之後", bullet)   # the cap does not protect mail not yet received (finding 28)

@@ -2037,7 +2037,7 @@ Thread 覆蓋: 3 threads, 3 complete ✓
 - **資料怎麼進 `reconcile_dates`**:用下方「目錄掃描 recipe」的 `scan_report(output_dir)`(#604),它是頂層 md 盤點與 `unparseable`/`synthetic_placeholder`/`duplicate_message_id` 三份清單的**唯一來源**,本分支的日期稽核也由它提供:本分支與 `index`／`both` 分支都呼叫它,agent 不另寫掃描程式,也不在記憶體裡另做一次分類。
 - **不寫任何 index 檔**：不寫 `${INDEX_FILE}`，也不寫 `${INDEX_FILE}.tmp`；不跑 `/archive-mail-rebuild-threads`（`${THREADS_FILE}` 照 Step 5.7 維護，本 gate 不碰）。
 - **`synthetic_placeholder` 的修復**：`/archive-mail-repair-synthetic-ids` 需要可用的 SQLite envelope index（通常要替實際執行 MCP server 的宿主授予 Full Disk Access），也需要 `${INDEX_FILE}`：它不把缺少的 index 當成空的，會以 `index-missing` 停止。這個策略沒有 index（或只有沒維護的舊檔），所以路線是：先把舊的 `${INDEX_FILE}`（若存在）移開，把 `dedup_strategy` 暫時改成 `index`／`both` 跑一次 `/archive-mail`，讓 Step 2 的復原從 Markdown 建好 index（那次復原會跑 `/archive-mail-rebuild-threads`，只出現在 To／Cc 的參與者會消失，在意就先備份 `${THREADS_FILE}`），再跑修復指令；之後改回 `last_archived`，那份 index 又會停止維護（見上方「不讀」一項）。
-- **推進 `last_archived` 的參考值**：摘要顯示 `last_updated`（可解析日期的最大值），另外顯示參考值 `min(last_updated, 本 run 開始時的 UTC 日期)`，供使用者手動推進 `${CONFIG_FILE}` 的 `last_archived`。上限取 UTC 日期，因為 Step 4.1 比較的是時刻（#600；date-only 的界線讀成本機時區當天的 00:00，與伺服器的 `date_from` 規則一致，不再是字串比較），而 `last_updated` 是寄件人那邊的日曆日，可以晚到今天加一天（下方第 2 項），寄件人的 Date 也可能偏差或偽造。參考值只有日期，兩個方向都要注意：參考值當天的信會被當成新信再抓一次；本 run 之後才收到（或才同步進 Mail）、但日期早於參考值當天本機 00:00 的信，下一輪會被略過，這個策略沒有 index，不會有任何提示。`last_updated` 是空字串（`no-valid-dates` 或 `empty-index`）時沒有參考值：不顯示，也不拿本 run 的日期代替。要不要推進、推進到哪一天，由使用者決定；本 gate 不寫回設定檔，也不自動推進。
+- **推進 `last_archived` 的參考值**：摘要顯示 `last_updated`（可解析日期的最大值），另外顯示參考值 `min(last_updated, 本 run 開始時的 UTC 日期)`，供使用者手動推進 `${CONFIG_FILE}` 的 `last_archived`。上限取 UTC 日期，因為 Step 4.1 比較的是時刻（#600；date-only 的界線讀成本機時區當天的 00:00，與伺服器的 `date_from` 規則一致，不再是字串比較），而 `last_updated` 是寄件人那邊的日曆日，可以晚到今天加一天（下方第 2 項），寄件人的 Date 也可能偏差或偽造。參考值只有日期，兩個方向都要注意：參考值當天的信會被當成新信再抓一次；本 run 之後才收到（或才同步進 Mail）、但日期早於參考值當天本機 00:00 的信，下一輪會被略過，這個策略沒有 index，不會有任何提示。本輪 Step 7 有「草稿狀態不明」的信時，不要把界線推過它們的日期：這些信沒有歸檔，界線越過之後就不會再抓。`last_updated` 是空字串（`no-valid-dates` 或 `empty-index`）時沒有參考值：不顯示，也不拿本 run 的日期代替。要不要推進、推進到哪一天，由使用者決定；本 gate 不寫回設定檔，也不自動推進。
 - **摘要不用 index 的詞**：不說 verified、repaired 或孤兒。列出頂層 md 數、`unparseable`、`synthetic_placeholder`、`duplicate_message_id` 與日期稽核，以及 `last_updated` 與上一項的參考值：
 
 ```
@@ -2543,13 +2543,15 @@ def thread_bounds(messages):
 
 
 LAST_ARCHIVED_FORMS = "a date (YYYY-MM-DD), or a date and time with Z or an offset"
+LAST_ARCHIVED_SHAPE = re.compile(r"\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(Z|[+-]\d{2}:\d{2}))?")   # what Server.parseDate reads
 
 
 def watermark_instant(text, local_tz=None):
     """The `last_archived` boundary as an aware datetime (#600). A date-only value is read as 00:00 in the machine's
     local zone, which is the rule the server applies to a date-only `date_from`. A datetime WITHOUT a zone is
-    refused: the server's parseDate drops it, so Step 3 would search with no boundary at all. Raises ValueError
-    when the text cannot be read or has a time but no zone; the caller stops and names `last_archived`."""
+    refused: the server's parseDate drops it, so Step 3 would search with no boundary at all. So is any other form
+    parseDate does not read, such as an RFC 822 date, even when the mail-date parser could read it. Raises ValueError
+    in each case; the caller stops and names `last_archived`."""
     if isinstance(text, str):              # the raw config line: drop a trailing ` # comment` and one pair of quotes
         text = re.sub(r"\s+#.*$", "", text.strip())
         if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
@@ -2560,6 +2562,9 @@ def watermark_instant(text, local_tz=None):
     if isinstance(parsed, datetime):
         if parsed.tzinfo is None:
             raise ValueError("last_archived has a time but no time zone: use " + LAST_ARCHIVED_FORMS)
+    if isinstance(text, str) and not LAST_ARCHIVED_SHAPE.fullmatch(text):
+        raise ValueError("last_archived is in a form the server ignores: use " + LAST_ARCHIVED_FORMS)
+    if isinstance(parsed, datetime):
         return parsed
     try:
         parsed = datetime(parsed.year, parsed.month, parsed.day)
