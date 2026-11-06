@@ -33,6 +33,15 @@ final class OsascriptFixtureGuardTests: XCTestCase {
             "set |a\\| (* | to 1\ntell app \"Mail\" to activate",
             "set |x\\\\\\|-- | to name of application \"Mail\"",
             "set |x\\\\\\|\"| to name of application \"Mail\"",
+            // #572 verify: each of these has only one check that catches it.
+            "-- x\ntell app \"Mail\" to activate",                         // so does a line feed
+            "-- x\rtell app \"Mail\" to activate",                         // a lone CR ends a comment
+            "# x\rtell app \"Mail\" to activate",
+            "set x to \"C:\\\\\" & (name of application \"Mail\")",        // `\\` does not escape the closing quote
+            "APPLICATION ID \"com.apple.mail\"",                          // the word checks ignore case
+            "tell process id 5 to activate",                              // `process` with no quote after it
+            "count processes",
+            "TELL PROCESS \"Mail\" TO ACTIVATE",
         ]
         for fragment in forms {
             XCTAssertThrowsError(try OsascriptFixtureGuard.check(fragment), "must refuse: \(fragment.debugDescription)")
@@ -108,6 +117,7 @@ final class OsascriptFixtureGuardTests: XCTestCase {
             "tell |application| \"Mail\" to activate",
             "return |process|",
             "return |NSString|",
+            "return |plain|",
         ]
         for fragment in refused {
             XCTAssertThrowsError(try OsascriptFixtureGuard.check(fragment, foundationBridge: true), "must refuse: \(fragment.debugDescription)")

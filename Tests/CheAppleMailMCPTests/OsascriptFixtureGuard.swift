@@ -17,10 +17,10 @@ enum OsascriptFixtureGuard {
         var description: String { "fixture fragment refers to an application or escapes the interpreter (\(pattern)); refusing to run it" }
     }
 
-    /// The list from #572's Expected (case-insensitive), matched against the code only.
-    static let textPatterns = ["application \"", "app \"", "system events", "process \""]
-
-    /// Word checks, also against the code only.
+    /// Word checks against the code only, ignoring case. #572 first listed the strings `application "`,
+    /// `app "`, `process "` and `System Events` too. They added nothing that compiles: the first three
+    /// are these words with a quote after them, and `System Events` is only ever a literal, which
+    /// `code(of:)` empties, so it was dropped (#572 verify).
     static let codePatterns: [(name: String, regex: String)] = [
         ("application / app", #"\bapp(lication)?\b"#),
         ("process", #"\bprocess(es)?\b"#),
@@ -63,7 +63,7 @@ enum OsascriptFixtureGuard {
 
     /// Throws `ApplicationReference` if the fragment could address an application.
     ///
-    /// Both lists run against `code(of:)`: comments removed and every string literal emptied. The
+    /// The word checks run against `code(of:)`: comments removed and every string literal emptied. The
     /// bridge's predicate and framework checks read the same lexer with literals kept.
     /// Production scripts mention System Events in comments and in error messages, which cannot
     /// address anything; `application "Mail"` becomes `application ""` and is still refused.
@@ -77,10 +77,6 @@ enum OsascriptFixtureGuard {
         var code = code(of: fragment)
         if foundationBridge {
             code = try removingFoundationBridge(from: code, fragment: fragment)
-        }
-        let lowered = code.lowercased()
-        for pattern in textPatterns where lowered.contains(pattern) {
-            throw ApplicationReference(pattern: pattern, fragment: fragment)
         }
         for (name, regex) in codePatterns
         where code.range(of: regex, options: [.regularExpression, .caseInsensitive]) != nil {

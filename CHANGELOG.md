@@ -88,9 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `… of application "Mail"` and `activate application "Mail"` passed it. Every
   osascript run in those two files now checks the exact text it executes with
   `OsascriptFixtureGuard`, which removes comments and empties string literals
-  (reading Unicode scalars and `¬` continuations) and then refuses
-  `application "`, `app "`, `System Events`, `process "` and the words `app`,
-  `application`, `process`, raw `«…»` codes, `|…|` identifiers, `run script`,
+  (reading Unicode scalars and `¬` continuations) and then refuses the words
+  `app`, `application`, `process` in any case, raw `«…»` codes, `|…|` identifiers, `run script`,
   `do shell script`, `load script`, `store script`, `open location` and `use`
   statements. It is a deny list, not a proof; a false positive only fails a test.
   Test-only change.
