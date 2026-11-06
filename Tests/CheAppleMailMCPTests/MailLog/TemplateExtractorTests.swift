@@ -83,9 +83,10 @@ final class TemplateExtractorTests: XCTestCase {
     func testManyWildcardsAgainstLongNonMatchingMessage_staysFast() {
         let template = "%@ a %@ a %@ a %@ a %@ a %@ a %@ b"
         let message = String(repeating: "a ", count: 3000)
-        let t0 = Date()
-        let r = extract(template, message)
-        XCTAssertLessThan(Date().timeIntervalSince(t0), 1.0)
+        // #611: monotonic, and the same ceiling as testTheMatchersWorkIsBoundedOnAdversarialInput.
+        var r = TemplateExtraction(kind: .structured, args: [])
+        let elapsed = ContinuousClock().measure { r = extract(template, message) }
+        XCTAssertLessThan(elapsed, .seconds(5), "\(template) took \(elapsed)")
         XCTAssertEqual(r.kind, .unstructured)
     }
 

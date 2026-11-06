@@ -94,6 +94,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   buffer is left for calls outside a run, which capture and take in one actor
   job. This only touches diagnostics, and only with
   `CHE_MAIL_COMPOSE_TIMING_CSV` set.
+- **More timing assertions kept clear of machine load**
+  ([#611](https://github.com/PsychQuant/che-apple-mail-mcp/issues/611)). The
+  four assertions left over from #502 use a monotonic clock and a 5 s ceiling.
+  `RedactionTests` also grew its inputs so that the ceiling can still catch a
+  quadratic scan: with the pattern's lookbehind removed, a scan took 0.6 s on
+  8,192 characters, which a 5 s ceiling would miss, and 9.4 s on 32,768.
+  Test-only change.
 - **The direct-write path's outcomes after the write are tested without Mail**
   ([#484](https://github.com/PsychQuant/che-apple-mail-mcp/issues/484)).
   `DirectDraftPath` now reaches Mail through a small protocol, and takes the OS
