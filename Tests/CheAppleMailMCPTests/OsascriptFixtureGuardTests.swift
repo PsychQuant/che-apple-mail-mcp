@@ -39,6 +39,59 @@ final class OsascriptFixtureGuardTests: XCTestCase {
         }
     }
 
+    /// #617: handlers that use the Objective-C bridge pass only with the allowance, and the bridge
+    /// is not a way around the check.
+    func testTheFoundationBridgeAllowanceLetsThroughOnlyTheBridge() throws {
+        let handler = """
+            use framework "Foundation"
+            use scripting additions
+            on normalized(s)
+                return (current application's NSString's stringWithString:s) as text
+            end normalized
+            """
+        XCTAssertThrowsError(try OsascriptFixtureGuard.check(handler), "without the allowance it is refused")
+        XCTAssertNoThrow(try OsascriptFixtureGuard.check(handler, foundationBridge: true))
+        XCTAssertNoThrow(try OsascriptFixtureGuard.check(
+            "return current application's NSJSONSerialization's dataWithJSONObject:x options:0 |error|:(missing value)",
+            foundationBridge: true), "a keyword label the bridge needs")
+        XCTAssertThrowsError(try OsascriptFixtureGuard.check("set |a\\| \" | to 1", foundationBridge: true), "any other |…| stays refused")
+        let refused = [
+            "use framework \"AppKit\"\nreturn 1",
+            "use framework \"Foundation\"\nreturn current application's NSWorkspace's sharedWorkspace()",
+            "return current application's NSAppleScript's alloc()",
+            "return current application's NSTask's launchedTaskWithLaunchPath:\"/bin/sh\" arguments:{}",
+            "return its NSRunningApplication's currentApplication()",
+            "use framework \"Foundation\"\ntell application \"Mail\" to activate",
+            "use framework \"Foundation\"\ntell app \"Mail\" to activate",
+            "use framework \"Foundation\"\nreturn current application's NSString's performSelector:\"x\"",
+        ]
+        for fragment in refused {
+            XCTAssertThrowsError(try OsascriptFixtureGuard.check(fragment, foundationBridge: true), "must refuse: \(fragment.debugDescription)")
+        }
+    }
+
+    func testNeutralisingDropsApplicationBlocksAndLeavesTheRest() throws {
+        let source = """
+            on pure(x)
+                return x + 1
+            end pure
+            on gui()
+                tell application "System Events"
+                    tell process "Mail"
+                        click button 1
+                    end tell
+                end tell
+                return 1
+            end gui
+            """
+        let out = OsascriptFixtureGuard.neutralisingApplicationBlocks(source)
+        XCTAssertNoThrow(try OsascriptFixtureGuard.check(out))
+        XCTAssertTrue(out.contains("return x + 1"))
+        XCTAssertTrue(out.contains("end gui"))
+        XCTAssertThrowsError(try OsascriptFixtureGuard.check(OsascriptFixtureGuard.neutralisingApplicationBlocks(
+            "on gui()\ntell application \"Mail\" to activate\nend gui")), "a one-line tell stays and is refused")
+    }
+
     func testAcceptsTheShapesTheFixturesActuallyRun() throws {
         let fixtures = [
             "set _activated to true\nset _launchCount to _launchCount + 1",

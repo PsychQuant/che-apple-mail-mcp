@@ -34,13 +34,24 @@ enum OsascriptFixtureGuard {
         ("|…| identifier", #"\|"#),
     ]
 
+    /// What `foundationBridge` still refuses by name: the classes that reach another application or
+    /// run other code. Any other Foundation class is data handling (#617).
+    static let bridgeRefusals = #"\bNS(Workspace|AppleScript|Task|Process|RunningApplication|UserScriptTask|UserAppleScriptTask|UserUnixTask|UserAutomatorTask|AppleEventDescriptor|AppleEventManager|Bundle|Pasteboard|DistributedNotificationCenter|ConnectionToApplication|XPCConnection)\b|\bperformSelector"#
+
     /// Throws `ApplicationReference` if the fragment could address an application.
     ///
     /// Both lists run against `code(of:)`: comments removed and every string literal emptied.
     /// Production scripts mention System Events in comments and in error messages, which cannot
     /// address anything; `application "Mail"` becomes `application ""` and is still refused.
-    static func check(_ fragment: String) throws {
-        let code = code(of: fragment)
+    ///
+    /// `foundationBridge` is for handlers that really use the AppleScript-Objective-C bridge. It lets
+    /// through exactly `use framework "Foundation"`, `use scripting additions` and
+    /// `current application`, and refuses the classes in `bridgeRefusals` instead (#617).
+    static func check(_ fragment: String, foundationBridge: Bool = false) throws {
+        var code = code(of: fragment)
+        if foundationBridge {
+            code = try removingFoundationBridge(from: code, fragment: fragment)
+        }
         let lowered = code.lowercased()
         for pattern in textPatterns where lowered.contains(pattern) {
             throw ApplicationReference(pattern: pattern, fragment: fragment)
@@ -49,6 +60,55 @@ enum OsascriptFixtureGuard {
         where code.range(of: regex, options: [.regularExpression, .caseInsensitive]) != nil {
             throw ApplicationReference(pattern: name, fragment: fragment)
         }
+    }
+
+    private static func removingFoundationBridge(from code: String, fragment: String) throws -> String {
+        if code.range(of: bridgeRefusals, options: .regularExpression) != nil {
+            throw ApplicationReference(pattern: "a Foundation class that reaches other code", fragment: fragment)
+        }
+        // Literals are emptied in `code`, so the framework's name is read from the fragment: every
+        // `use framework` there must name Foundation.
+        let lines = fragment.components(separatedBy: CharacterSet.newlines)
+        for line in lines where line.range(of: #"^\s*use\s+framework\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
+            guard line.range(of: #"^\s*use\s+framework\s+"Foundation"\s*$"#, options: .regularExpression) != nil else {
+                throw ApplicationReference(pattern: "a framework other than Foundation", fragment: fragment)
+            }
+        }
+        return code
+            // Bridge calls put keyword-like names in pipes (`… |error|:missing value`, `… |set|()`). A
+            // plain word between pipes has no escape, quote or comment marker for the lexer to misread.
+            .replacingOccurrences(of: #"\|[A-Za-z_][A-Za-z0-9_]*\|"#, with: "pipedName", options: .regularExpression)
+            .replacingOccurrences(of: #"(?m)^\s*use\s+framework\s+""\s*$"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(?m)^\s*use\s+scripting\s+additions\s*$"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\bcurrent\s+application\b"#, with: "currentBridge", options: .regularExpression)
+    }
+
+    /// For a test that replaced a GUI handler's statements with fixtures and calls that handler: its
+    /// `tell` lines stay as a structure, pointed at `me`.
+    static func pointingTellsAtMe(_ source: String) -> String {
+        source
+            .replacingOccurrences(of: #"tell application "[^"]*""#, with: "tell me", options: .regularExpression)
+            .replacingOccurrences(of: #"tell process "[^"]*""#, with: "tell me", options: .regularExpression)
+    }
+
+    /// For a test that calls one pure handler of a file that also holds handlers it never calls: drops
+    /// each `tell application …` block, so the text that runs has no way to reach an application and
+    /// `check` can read all of it. A called handler that needed such a block fails its own test.
+    /// A one-line `tell application "X" to …` stays, and `check` refuses it.
+    static func neutralisingApplicationBlocks(_ source: String) -> String {
+        var kept: [String] = []
+        var depth = 0
+        for line in source.components(separatedBy: "\n") {
+            let code = line.trimmingCharacters(in: .whitespaces)
+            if depth == 0 {
+                if code.hasPrefix("tell application "), !code.contains(" to ") { depth = 1; continue }
+                kept.append(line)
+                continue
+            }
+            if code.hasPrefix("tell "), !code.contains(" to ") { depth += 1 }
+            if code == "end tell" { depth -= 1 }
+        }
+        return kept.joined(separator: "\n")
     }
 
     /// The fragment with `--` and `#` line comments and `(* … *)` block comments (nested) removed,

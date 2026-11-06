@@ -94,6 +94,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   buffer is left for calls outside a run, which capture and take in one actor
   job. This only touches diagnostics, and only with
   `CHE_MAIL_COMPOSE_TIMING_CSV` set.
+- **The osascript fixtures in four more test files use the shared guard**
+  ([#617](https://github.com/PsychQuant/che-apple-mail-mcp/issues/617)). Every
+  osascript run in `ClassificationTrashScriptTests`, `ComposeSignatureScriptTests`,
+  `DraftIDBaselineTests` and `RecipientReceiptMetadataFailureTests` now checks
+  the text it executes with `OsascriptFixtureGuard`. Handlers that really use the
+  Foundation bridge pass through an explicit allowance: `use framework
+  "Foundation"`, `use scripting additions`, `current application` and plain piped
+  names only, with the classes that reach other applications or run other code
+  (`NSWorkspace`, `NSAppleScript`, `NSTask` and others) refused by name. Handlers
+  a test does not call lose their `tell application` blocks before the script
+  runs. It is still a deny list. Test-only change.
 - **More timing assertions kept clear of machine load**
   ([#611](https://github.com/PsychQuant/che-apple-mail-mcp/issues/611)). The
   four assertions left over from #502 use a monotonic clock and a 5 s ceiling.
