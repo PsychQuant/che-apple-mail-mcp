@@ -113,6 +113,15 @@ final class DirectDraftMessageTests: XCTestCase {
         XCTAssertTrue(String(decoding: decoded, as: UTF8.self).contains("short<br>\n" + line), "the body decodes back unchanged")
     }
 
+    func testALongLineDraftKeepsTheEmlxByteCountOfItsMime() throws {
+        let m = build(body: String(repeating: "abcdefghij", count: 200))
+        let emlx = DirectDraft.emlx(mime: m.mime, flags: DirectDraft.draftFlags, date: date)
+        let firstLine = emlx.prefix { $0 != 0x0A }
+        XCTAssertEqual(String(decoding: firstLine, as: UTF8.self).trimmingCharacters(in: .whitespaces), String(m.mime.count))
+        XCTAssertEqual(m.size, m.mime.count)
+        XCTAssertEqual(try EmlxFormat.extractMessageData(from: emlx), m.mime)
+    }
+
     func testAnHtmlLineOfExactly998OctetsStaysSevenBit() {
         // The last body line has no `<br>`, so the html line is the body line itself.
         let m = build(body: "first\n" + String(repeating: "x", count: 998))

@@ -83,9 +83,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   RFC 5322 §2.1.1 limit) made the draft an invalid message that servers or
   clients may rewrite or reject. Such a body now goes out as quoted-printable,
   which soft-wraps at 76 characters, like non-ASCII bodies already did. Bodies
-  whose lines all fit keep the `7bit` layout Mail itself writes. The
-  `create_draft` description no longer lists this as a known limitation. Long
-  header lines (a long recipient list or ASCII subject) are not folded yet.
+  whose lines all fit keep the `7bit` layout Mail itself writes, and the
+  `create_draft` description now states this behaviour. Long header lines (a
+  long recipient list or ASCII subject) are not folded yet
+  ([#622](https://github.com/PsychQuant/che-apple-mail-mcp/issues/622)).
 
 ## [4.0.0] - 2026-10-29
 
