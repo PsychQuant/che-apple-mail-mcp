@@ -2053,7 +2053,7 @@ Index Reconcile（read-only, dedup_strategy=last_archived）: Phase 0 skipped（
 **目錄掃描 recipe(#604;Step 8.5 兩個分支與 Step 2 的 index 覆蓋檢查共用)**:頂層 `*.md` 的盤點與分類只由這支固定程式決定,agent 不另寫掃描程式、不在記憶體裡另做一次分類,所以計數與清單不會因為兩個 parser 的差異而對不上。使用方式:把日期 recipe 與下面的區塊貼進同一個程序(`bounded_text` 取自日期 recipe),`output_dir` 走 argv(引數陣列或 `shlex.quote`),程式印出一行 JSON(含 `reconcile_dates` 的結果與下列清單),agent 用 `Read` 讀回;frontmatter 的字串(`message_id`、`date` 都出自寄件人)不得放進 `python3 -c` 文字、heredoc 或 shell 原始碼,也不由 agent 抄成 dict literal。
 
 - 只掃 `output_dir` 頂層的 `*.md`,不深入子目錄;用 `os.lstat` 判定,symlink 與非一般檔案**不讀**,以 `excluded_paths` 列出(basename 與原因),不計入 `scanned`。
-- frontmatter 用只認三個鍵(`message_id`、`message_id_missing`、`date`)的逐行 parser,**不使用 YAML loader**(沒有 `yaml.load`,沒有 `eval`),所以標籤(`!!python/object`)只是無意義的字串。讀不懂的行、非 UTF-8、沒有 frontmatter、沒有 `message_id` 或 `message_id_missing: true`,一律歸 `unparseable`,**不猜**。
+- frontmatter 用只認三個鍵(`message_id`、`message_id_missing`、`date`)的逐行 parser,**不使用 YAML loader**(沒有 `yaml.load`,沒有 `eval`),所以標籤(`!!python/object`)只是無意義的字串。讀不懂的行、frontmatter 區塊非 UTF-8、沒有 frontmatter、沒有 `message_id` 或 `message_id_missing: true`,一律歸 `unparseable`,**不猜**。只讀到 frontmatter 的結束標記為止,本文不讀也不解碼,所以信再長、本文有壞位元組都不影響判定;64 KiB 上限量的是 frontmatter 區塊,只有上限內找不到結束標記才是 `frontmatter-too-large`。
 - **排除順序固定**:先 `unparseable`,再 `synthetic_placeholder`(`message_id` 以 `synthetic:` 開頭),最後才在**剩下的**檔案裡找 `duplicate_message_id`。保留的是檔名依 Unicode code point 排序的第一個,其餘列為重複並寫出保留的那一個。所以一個檔案只會落在一個清單裡,兩個共用同一個 `synthetic:` id 的檔案都是 `synthetic_placeholder`,不會再被算成重複。
 - 恆等式:`scanned` = 可用檔數 + `unparseable` + `synthetic_placeholder` + `duplicate_message_id`;有效日期數加排除數 = 可用檔數。
 
@@ -2062,6 +2062,8 @@ Index Reconcile（read-only, dedup_strategy=last_archived）: Phase 0 skipped（
 import json
 import os
 import stat
+
+HEADER_CAP = 65536   # bytes of frontmatter, through its closing marker; a larger header is not trusted
 
 
 def _frontmatter_value(raw):
@@ -2080,6 +2082,25 @@ def _frontmatter_value(raw):
     return value or None
 
 
+def _read_header(handle):
+    """The bytes between the opening and closing markers, line by line: nothing past the closing marker is read
+    or decoded, so a long body or a bad byte in the body has no effect. -> (bytes or None, reason). The cap counts
+    the header through its closing marker; only a header with no closing marker inside the cap is too large."""
+    opening = handle.readline(HEADER_CAP + 1)
+    if opening.rstrip(b"\r\n") != b"---":
+        return None, "no-frontmatter"
+    lines, size = [], len(opening)
+    while size <= HEADER_CAP:
+        line = handle.readline(HEADER_CAP + 1 - size)
+        if not line:
+            return None, "no-frontmatter"
+        size += len(line)
+        if size <= HEADER_CAP and line.rstrip(b"\r\n") == b"---":
+            return b"".join(lines), None
+        lines.append(line)
+    return None, "frontmatter-too-large"
+
+
 def read_frontmatter(path):
     """-> ({"message_id", "message_id_missing", "date"} each str or None, reason). reason is None when the file
     has a readable frontmatter block; a bad value in one key never hides the others."""
@@ -2091,28 +2112,23 @@ def read_frontmatter(path):
                 return {}, "not-readable"
             with os.fdopen(descriptor, "rb") as handle:
                 descriptor = None
-                raw = handle.read(65537)       # frontmatter is small; a larger header is not trusted
+                header, reason = _read_header(handle)
         finally:
             if descriptor is not None:
                 os.close(descriptor)
-        if len(raw) > 65536:
-            return {}, "frontmatter-too-large"
-        text = raw.decode("utf-8")
+        if reason:
+            return {}, reason
+        text = header.decode("utf-8")
     except (OSError, UnicodeDecodeError):
         return {}, "not-readable"
-    lines = text.split("\n")
-    if not lines or lines[0].rstrip("\r") != "---":
-        return {}, "no-frontmatter"
     fields = {}
-    for line in lines[1:]:
+    for line in text.split("\n"):
         line = line.rstrip("\r")
-        if line == "---":
-            return fields, None
         for key in ("message_id_missing", "message_id", "date"):
             if line.startswith(key + ":"):
                 fields[key] = _frontmatter_value(line[len(key) + 1:])
                 break
-    return {}, "no-frontmatter"
+    return fields, None
 
 
 def scan_top_level(output_dir):

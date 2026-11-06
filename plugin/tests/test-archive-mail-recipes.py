@@ -1029,6 +1029,51 @@ class ArchiveScanRecipeTests(unittest.TestCase):
     def test_an_oversized_header_is_not_trusted(self):
         directory = self.make({"big.md": '---\nmessage_id: "<a>"\n' + "x: y\n" * 20000})
         self.assertEqual(self.ns["scan_report"](directory)["unparseable"], ["big.md"])
+        fields, reason = self.ns["read_frontmatter"](str(Path(directory) / "big.md"))
+        self.assertEqual((fields, reason), ({}, "frontmatter-too-large"))
+
+    def test_a_closing_marker_past_the_cap_is_still_too_large(self):
+        directory = self.make({"late.md": '---\nmessage_id: "<a>"\n' + "x: y\n" * 20000 + "---\nbody\n"})
+        fields, reason = self.ns["read_frontmatter"](str(Path(directory) / "late.md"))
+        self.assertEqual((fields, reason), ({}, "frontmatter-too-large"))
+
+    def test_the_cap_applies_to_the_header_up_to_its_closing_marker(self):
+        head = '---\nmessage_id: "<a>"\n'
+        closing = "---\n"
+        filler = 65536 - len(head) - len(closing) - len("x: \n")
+        fits = head + "x: " + "y" * filler + "\n" + closing
+        over = head + "x: " + "y" * (filler + 1) + "\n" + closing
+        self.assertEqual(len(fits.encode()), 65536)
+        directory = self.make({"fits.md": fits + "body\n", "over.md": over + "body\n"})
+        self.assertEqual(self.ns["read_frontmatter"](str(Path(directory) / "fits.md")), ({"message_id": "<a>"}, None))
+        self.assertEqual(self.ns["read_frontmatter"](str(Path(directory) / "over.md")), ({}, "frontmatter-too-large"))
+
+    def test_a_long_body_is_not_header_size(self):
+        out = self.report({"long.md": self.md("<long>") + "body line\n" * 20000})
+        self.assertEqual(out["unparseable"], [])
+        self.assertEqual([u["message_id"] for u in out["usable"]], ["<long>"])
+        self.assertEqual(out["date_audit"]["valid_date_count"], 1)
+
+    def test_invalid_utf8_in_the_body_cannot_affect_the_header(self):
+        out = self.report({"bad-body.md": self.md("<b>").encode() + b"\xff\xfe\xfd not text\n"})
+        self.assertEqual(out["unparseable"], [])
+        self.assertEqual([u["message_id"] for u in out["usable"]], ["<b>"])
+
+    def test_invalid_utf8_inside_the_header_is_still_unparseable(self):
+        directory = self.make({"bad-head.md": b'---\nmessage_id: "<c>"\nnote: \xff\n---\nbody\n'})
+        self.assertEqual(self.ns["read_frontmatter"](str(Path(directory) / "bad-head.md")), ({}, "not-readable"))
+
+    def test_a_long_file_without_a_frontmatter_opening_is_not_too_large(self):
+        directory = self.make({"plain.md": "no frontmatter here\n" * 10000})
+        self.assertEqual(self.ns["read_frontmatter"](str(Path(directory) / "plain.md")), ({}, "no-frontmatter"))
+
+    def test_a_short_file_with_no_closing_marker_stays_no_frontmatter(self):
+        directory = self.make({"open.md": '---\nmessage_id: "<a>"\n'})
+        self.assertEqual(self.ns["read_frontmatter"](str(Path(directory) / "open.md")), ({}, "no-frontmatter"))
+
+    def test_a_closing_marker_without_a_final_newline_still_closes(self):
+        directory = self.make({"tail.md": '---\nmessage_id: "<a>"\r\n---'})
+        self.assertEqual(self.ns["read_frontmatter"](str(Path(directory) / "tail.md")), ({"message_id": "<a>"}, None))
 
     def test_scan_report_emits_the_usable_inventory(self):
         out = self.report({"a.md": self.md("<a>"), "b.md": self.md("synthetic:x")})
