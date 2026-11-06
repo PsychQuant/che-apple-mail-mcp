@@ -1151,6 +1151,15 @@ def _thread_passes_refinement(thread_messages, config):
     return True, None
 
 
+def _safe_is_new(is_new, email):
+    """An is_new that raises must not hide the refinement report: count the mail as not yet archived, which puts
+    the thread in the visible tier (the conservative side)."""
+    try:
+        return bool(is_new(email))
+    except Exception:
+        return True
+
+
 def apply_refinement(fetched, config, is_new=lambda email: False):
     """Group fetched by thread key (bare subject); drop threads per the per-thread coherence rule.
 
@@ -1174,7 +1183,7 @@ def apply_refinement(fetched, config, is_new=lambda email: False):
         stats['dropped_includes_filter' if reason.endswith('_includes') else 'dropped_' + reason] += 1
         dropped.append({'thread_key': _bare_subject(thread[0].get('subject')),   # for the Step 8b lookup
                         'subject': thread[0].get('subject') or '', 'count': len(thread),
-                        'new_count': sum(1 for e in thread if is_new(e)), 'reason': reason})
+                        'new_count': sum(1 for e in thread if _safe_is_new(is_new, e)), 'reason': reason})
     return refined, stats, dropped
 
 
@@ -1203,7 +1212,7 @@ def refinement_report(config, stats, dropped, limit=LIST_LIMIT):
 ```
 <!-- archive-mail-refinement-recipe:end -->
 
-呼叫(在 Step 4.1 的 `known_ids` 與 `is_new` 定義之後;`is_new` 只讀 `known_ids` 與日期界線,不依賴 refinement 結果,所以 Step 4.1 的 dedup 仍吃 refinement 之後的 `refined`):
+呼叫順序(沒有循環):先定義 Step 4.1 的 `known_ids` 與 `is_new`(它們只讀 `known_ids` 與 Step 1 已算好的界線,不依賴 refinement 結果;`last_archived` 讀不出來的情況在 Step 1 就停止了,所以 `is_new` 不會因界線而在這裡 raise),再呼叫下面兩行,最後 Step 4.1 的 dedup 吃 refinement 之後的 `refined`。萬一 `is_new` 仍 raise,recipe 把該信算作「尚未歸檔」(出現在清單上,不讓 refinement 輸出消失):
 
 ```python
 refined, refinement_stats, refinement_dropped = apply_refinement(fetched, config, is_new)
@@ -1801,7 +1810,7 @@ User 看到註記知道 inline 圖存在但需手動 export from Mail.app。File
 3. 在 `messages` 陣列**尾端** append 新 message（只 append，不重排：`messages` 維持到達順序，**不保證時序**；時序排序一律由 `/archive-mail-rebuild-threads` 與 `/archive-mail-view` 用 `thread_order` 建立，不在這裡插入位置，也不對 `date` 字串排序）
 4. 更新 `participants` 集合（加入 sender + to + cc 的 email，去重）
    > **來源（batch 與 per-email 皆同）**：`sender` 取自 md frontmatter；`to`／`cc` 取自 md **本文的 `To:`／`Cc:` header 行**（frontmatter 只帶 `sender`，不帶 to/cc）。batch 工具（Step 5.0）與 per-email（Step 5.1）都寫出相同的 `To:`／`Cc:` body header，故本步 file-driven、source-agnostic，兩路徑一致——不需針對 batch 另設 participant 來源。
-5. 更新 `first_message`／`last_message`（#556）：**不可**對 `date` 字串做 `min`／`max`（RFC822 文字排在所有 ISO 值之後，跨 offset 的 ISO 也會排錯）。把這個 thread 的 `messages`（含剛 append 的這封）交給日期 recipe 的 `thread_bounds`，取回傳的 `first_message`／`last_message`：它們是最早／最晚那封**可讀**日期的信的**原始 `date` 字串**（不另做正規化），沒有任何可讀日期時是 `null`，不可讀的信不參與、也不被丟掉。執行方式與日期 recipe 其他函式相同（固定程式、輸入走 JSON 檔、不把郵件欄位放進指令字串）。`messages` 陣列維持 append 的到達順序（不保證時序）；時序排序由 `/archive-mail-rebuild-threads` 與 `/archive-mail-view` 用 `thread_order` 建立
+5. 更新 `first_message`／`last_message`（#556）：**不可**對 `date` 字串做 `min`／`max`（RFC822 文字排在所有 ISO 值之後，跨 offset 的 ISO 也會排錯）。把這個 thread 的 `messages`（含剛 append 的這封）交給日期 recipe 的 `thread_bounds`，取回傳的 `first_message`／`last_message`（這一步要執行 Python；執行不了——宿主不放行、`python3` 不存在、recipe 報錯——**不中止歸檔**：本封信照常 append 到 `messages`，`first_message`／`last_message` 維持原值，Step 7 報告列出 `thread bounds 未更新: N 個 thread`，之後 `/archive-mail-rebuild-threads` 會重算，不手動比較字串補上）：它們是最早／最晚那封**可讀**日期的信的**原始 `date` 字串**（不另做正規化），沒有任何可讀日期時是 `null`，不可讀的信不參與、也不被丟掉。執行方式與日期 recipe 其他函式相同（固定程式、輸入走 JSON 檔、不把郵件欄位放進指令字串）。`messages` 陣列維持 append 的到達順序（不保證時序）；時序排序由 `/archive-mail-rebuild-threads` 與 `/archive-mail-view` 用 `thread_order` 建立
 6. `message_count += 1`
 7. 更新頂層 `last_updated` 為目前時間
 

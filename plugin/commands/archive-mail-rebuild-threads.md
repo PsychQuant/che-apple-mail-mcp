@@ -79,7 +79,7 @@ fi
 
 ### Step 4: 聚合成 threads 結構
 
-**排序怎麼執行（#556）**：`thread_order`／`thread_bounds` 是 `archive-mail.md` 日期 recipe（標記 `archive-mail-date-recipe`）裡的純函式，這個指令不另寫一份。把該 recipe 存成固定腳本，輸入（每封信的 `date` 與 `file`）用 `Write` 寫成固定的 JSON 檔，由腳本讀入後當函式引數，輸出寫成 JSON 檔再用 `Read` 讀回；信件衍生的字串只經 JSON 檔傳遞，不放進指令字串。本指令的 `allowed-tools` 沒有 python，執行 Python 時由宿主提示權限，不擴大 `allowed-tools`。**拿不到執行能力（宿主不放行、`python3` 不存在、recipe 執行失敗）就停止**，報 `status: order-unavailable` 與原因，不寫任何輸出、不改 `.threads.json`；**不得**退回手動比較字串或心算排序（那正是 #556 要消除的不確定性）。
+**排序怎麼執行（#556）**：`thread_order`／`thread_bounds` 是 `archive-mail.md` 日期 recipe（標記 `archive-mail-date-recipe`）裡的純函式，這個指令不另寫一份。把該 recipe 存成固定腳本，腳本與輸入輸出檔都放在這次叫用用 `mktemp -d` 建的私有目錄（不用共用的固定路徑），輸入（每封信的 `date` 與 `file`）用 `Write` 寫成 JSON 檔，由腳本讀入後當函式引數，輸出寫成 JSON 檔再用 `Read` 讀回；信件衍生的字串只經 JSON 檔傳遞，不放進指令字串。本指令的 `allowed-tools` 沒有 python，執行 Python 時由宿主提示權限，不擴大 `allowed-tools`。**無人值守時不等待授權**：宿主沒有放行 Python（沒有人可以按允許）就視同拿不到執行能力，立刻停止，不卡住。**拿不到執行能力（宿主不放行、`python3` 不存在、recipe 執行失敗）就停止**，報 `status: order-unavailable` 與原因，不寫任何輸出、不改 `.threads.json`；**不得**退回手動比較字串或心算排序（那正是 #556 要消除的不確定性）。
 
 建立新的 threads 物件：
 

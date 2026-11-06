@@ -530,6 +530,17 @@ class ArchiveSkipDraftsSopTests(unittest.TestCase):
         self.assertNotIn("部分 item `status:\"error\"` → 該 id 走 Step 5.1 補抓，其餘", self.text)
         self.assertIn("**不是**以 `draft_status_unknown:` 開頭", self.text)
 
+    def test_step_5_7_and_the_thread_commands_define_what_happens_without_python(self):
+        text = DOCUMENT.read_text()
+        self.assertIn("**不中止歸檔**", text)
+        self.assertIn("thread bounds 未更新", text)
+        for name in ("archive-mail-rebuild-threads.md", "archive-mail-view.md"):
+            body = (DOCUMENT.parent / name).read_text()
+            with self.subTest(name=name):
+                self.assertIn("無人值守時不等待授權", body)
+                self.assertIn("`mktemp -d`", body)
+                self.assertIn("不擴大 `allowed-tools`", body)   # maintainer decision D3 of #556
+
     def test_the_8b_denominator_is_subtracted_per_thread_only(self):
         text = DOCUMENT.read_text()
         note = text[text.index("**草稿與分母（#580）**"):]
@@ -715,6 +726,15 @@ class ArchiveRefinementRecipeTests(unittest.TestCase):
         self.assertNotIn("`", row)
         self.assertLess(len(row), 200)
 
+    def test_an_is_new_that_raises_cannot_hide_the_report(self):
+        def broken(email):
+            raise RuntimeError("boom")
+        config = {"subject_includes": ["zzz"]}
+        _, stats, dropped = self.run_refine([self.mail("Hello")], config, new=broken)
+        lines = self.ns["refinement_report"](config, stats, dropped)
+        self.assertEqual(dropped[0]["new_count"], 1)
+        self.assertTrue(any("Hello" in line for line in lines))
+
     def test_kept_threads_are_unchanged(self):
         fetched = [self.mail("Hello"), self.mail("Other")]
         refined, stats, _ = self.run_refine(fetched, {"subject_includes": ["hello"]})
@@ -728,6 +748,12 @@ class ArchiveRefinementSopTests(unittest.TestCase):
         self.assertIn("`Refinement` 區塊（#509）", text)
         self.assertIn("不論待歸檔幾封、不論 `--no-confirm`", text)
         self.assertIn("refinement_dropped", text)
+        self.assertIn("任一 refinement 欄位非空時**一律顯示**", text)           # T2: a '>= 5 only' rewrite must turn red
+        step8b = text[text.index("`truncated: false` 時比對已歸檔的 count"):][:700]   # T3: the 8b suffix
+        self.assertIn("refinement_dropped", step8b)
+        self.assertIn("該 thread 被 refinement 丟棄", step8b)
+        self.assertIn("`thread_key`", step8b)
+        self.assertIn("呼叫順序(沒有循環)", text)
         self.assertNotIn("refined, refinement_stats = apply_refinement(fetched, config)\n", text)
 
 
