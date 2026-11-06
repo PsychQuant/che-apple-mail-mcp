@@ -238,6 +238,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that cannot be rolled back, and the read repair, each with its outcome code and
   `direct` step sequence. Two new tests take the timing CSV's `flock` from a
   separate process. These show the branches, not what the real Mail does.
+- **The stdio probe is pinned to `initialize`**
+  ([#623](https://github.com/PsychQuant/che-apple-mail-mcp/issues/623)). The
+  probe keeps `HOME` on its environment allow list, so a tool call through it
+  could reach the real Mail data. A new test scans its own source and fails if
+  any JSON-RPC method other than `initialize` is written there, and its message
+  lists what to inject first. The scan is textual, so a frame assembled from a
+  variable gets past it. The injection points stay deferred until a test needs
+  them; this is test code only.
+
 - **The stdio shutdown probe starts with an allow-listed environment and checks its own assumptions**
   ([#578](https://github.com/PsychQuant/che-apple-mail-mcp/issues/578)). The
   probe now starts with a small allow-listed environment (`PATH`, `HOME`,
