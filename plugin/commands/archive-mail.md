@@ -2019,21 +2019,24 @@ import stat
 
 
 def _frontmatter_value(raw):
+    """The value as the writers store it. The batch writer (EmailMarkdownRenderer.yamlQuoted) wraps the text in
+    double quotes after turning every inner double quote into a single quote and flattening control characters,
+    and does NOT escape backslashes, so the value is read literally: strip the outer pair, never decode escapes.
+    Returns None for an empty, null, or unterminated value; that makes this one field unusable, never the file."""
     value = raw.strip()
     if value in ("", "null", "~"):
-        raise ValueError("empty value")
-    if value[:1] == '"':
-        decoded = json.loads(value)         # the writers serialize strings as JSON-quoted scalars
-        return decoded.strip() if isinstance(decoded, str) else str(decoded)
-    if value[:1] == "'":
-        if len(value) < 2 or value[-1] != "'":
-            raise ValueError("unterminated single quote")
-        return value[1:-1].replace("''", "'")
-    return value
+        return None
+    if value[:1] in ('"', "'"):
+        if len(value) < 2 or value[-1] != value[0]:
+            return None
+        value = value[1:-1]
+    value = value.strip()
+    return value or None
 
 
 def read_frontmatter(path):
-    """-> ({"message_id", "message_id_missing", "date"} subset, reason). reason is None when readable."""
+    """-> ({"message_id", "message_id_missing", "date"} each str or None, reason). reason is None when the file
+    has a readable frontmatter block; a bad value in one key never hides the others."""
     try:
         # O_NOFOLLOW + fstat on the descriptor: a file swapped for a symlink or FIFO after the lstat is not followed
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -2061,10 +2064,7 @@ def read_frontmatter(path):
             return fields, None
         for key in ("message_id_missing", "message_id", "date"):
             if line.startswith(key + ":"):
-                try:
-                    fields[key] = _frontmatter_value(line[len(key) + 1:])
-                except ValueError:
-                    return {}, "unreadable-line"
+                fields[key] = _frontmatter_value(line[len(key) + 1:])
                 break
     return {}, "no-frontmatter"
 
@@ -2100,7 +2100,7 @@ def classify_scan(records):
         fields = record["fields"]
         message_id = fields.get("message_id")
         if (record["reason"] or not isinstance(message_id, str) or not message_id.strip()
-                or str(fields.get("message_id_missing", "")).strip().lower() == "true"):
+                or str(fields.get("message_id_missing") or "").strip().lower() == "true"):
             unparseable.append(record["file"])
         elif message_id.startswith("synthetic:"):
             synthetic.append(record["file"])
@@ -2118,13 +2118,16 @@ def classify_scan(records):
 
 
 def scan_report(output_dir):
+    """The single source for Step 8.5 (both branches). `usable` and `files` are raw and for the program only
+    (Phase 1's verified/orphan decision, reverse_inventory's `scanned` input); the other lists are for display."""
     records, excluded = scan_top_level(output_dir)
     classified = classify_scan(records)
     audit = reconcile_dates(classified["emails"])
-    inventory = [{"file": entry["file"], "message_id": message_id}
-                 for message_id, entry in sorted(classified["emails"].items(), key=lambda kv: kv[1]["file"])]
+    by_name = {record["file"]: record["fields"].get("message_id") if not record["reason"] else None for record in records}
     return {"scanned": classified["scanned"], "excluded_paths": excluded,
-            "usable": inventory,   # {file, message_id} of every usable file: Phase 1 and reverse_inventory read this, not a second scan
+            "usable": [{"file": entry["file"], "message_id": message_id, "date": entry["date"]}
+                       for message_id, entry in sorted(classified["emails"].items(), key=lambda kv: kv[1]["file"])],
+            "files": [{"file": name, "message_id": by_name[name]} for name in sorted(by_name)],
             "unparseable": [bounded_text(n) for n in classified["unparseable"]],
             "synthetic_placeholder": [bounded_text(n) for n in classified["synthetic_placeholder"]],
             "duplicate_message_id": [{"file": bounded_text(d["file"]), "kept": bounded_text(d["kept"])}
@@ -2151,7 +2154,7 @@ def scan_report(output_dir):
 **Phase 1：full-scan fallback（歷史孤兒 + 非 manifest 來源）**
 
 1. 對每個 `${output_dir}/*.md`（**僅頂層 glob**，不深入子目錄、不追 Step 2.1 的 symlink 兄弟歸檔——那些只是 read-only 去重來源，絕不寫進本 index）：讀 frontmatter `message_id`。
-   > 盤點與分類(哪些檔是 `unparseable`、`synthetic_placeholder`、重複)取自「目錄掃描 recipe」的結果(#604),下列各項是這份結果的處置規則,不是第二套判定。
+   > **本分支（`index`／`both`）也呼叫 `scan_report(output_dir)`(#604),用它的結果,不另掃、不另分類**:`usable`(逐檔 `{file, message_id, date}`)對 index 的 key 做「verified／孤兒」判定;`unparseable`、`synthetic_placeholder` 與 `duplicate_message_id` 三份清單直接進摘要(重複件在兩個分支都要回報:列出檔名與保留的那一個,不補寫 index,保留的是檔名依 code point 排序的第一個);`date_audit` 取代下面第 2 項另算的日期稽核輸入。`date` 壞掉的檔案仍是 `usable`(`message_id` 有效),只會被日期稽核列入 `date_excluded`,不會變成 `unparseable`。下列各項是這份結果的處置規則,不是第二套判定。
    - message_id 已在 Phase 0 set 或 `${INDEX_FILE}` keys → `verified` +1（不重複補寫）。
    - **`message_id` 匹配 `^synthetic:`（mail#319）→ 記入獨立的 `synthetic_placeholder` 清單**（列檔名報告，不 `verified` 不 `repaired` 不補寫 index）——synthetic key 是過去 session 發明的佔位符，不是真 Message-ID；即使內容衍生格式在本 target 內穩定，也無法可靠對齊真 ID 且可能碰撞，不能當合法 key 收進 index。修復走 `/archive-mail-repair-synthetic-ids`——該指令需要可用的 SQLite envelope index（通常要替實際執行 MCP server 的宿主授予 Full Disk Access），一般歸檔的 AppleScript fallback 不能代替；缺少時它會以 `environment-unavailable`／`apply-unavailable` 具名停止、不改任何檔（白跑一趟，不損資料）。
    - 無 frontmatter / 無 `message_id` / `message_id_missing: true` → 記入 `unparseable` 清單（列檔名報告，不修改該檔）。
@@ -2516,7 +2519,7 @@ def is_after_watermark(email_date, watermark):
 
    **寫回 `${INDEX_FILE}` 走 temp+rename 原子寫入**（見 Step 6 的原子寫入 note）——本 gate 一次補多筆，中斷不得留半寫 index。
 3. `${THREADS_FILE}` **不在本 gate 內逐孤兒補寫**（frontmatter 沒有 to/cc，無法重建 Step 5.7 要求的 `participants`；threads.json 的規則在 Step 5.7、不是 Step 6）。**Phase 0 新增任一 entry OR Phase 1 `repaired > 0`** 時，改跑 `/archive-mail-rebuild-threads` 從 md 全量重建 threads.json——Phase 0 的機械化補齊同樣是 index 新增，若只看 Phase 1 的 `repaired` 會漏掉「Phase 0 補了 entry 但 Step 5.7 那步被中斷」的 thread-view 過時（happy path 下 Step 5.7 已為 batch md 更新 threads.json，此僅防雙重中斷）。
-3b. **反向盤點(#559,index → 檔案,唯讀、只報告)**:步驟 1 的 Phase 1 只走「頂層 md → index」。這一項反過來走 index 的每個 entry,回答「index 說有的檔,頂層真的有嗎、對得上嗎」。**它不修改 index、不改任何檔,也不改變 gate 的通過條件**(先揭露;要不要升級成 gate 失敗另案決定)。只在本 gate 載入並寫回 index 時執行:`index_error` 不為 `None` 時(寫入屏障)略過;未登錄 target 的 `last_archived` 唯讀稽核沒有 index,也略過。輸入是步驟 1 掃描時已經讀過的 `{file, message_id}`(`unparseable` 與 `synthetic_placeholder` 的檔也算「頂層有這個檔」,但不提供可比對的 `message_id`),不另讀檔,也不拿 index 提供的路徑去查檔案系統:比對只是對頂層 glob 得到的檔名集合做成員檢查。函式與日期 recipe 貼進同一個程序(`bounded_text` 取自那裡):
+3b. **反向盤點(#559,index → 檔案,唯讀、只報告)**:步驟 1 的 Phase 1 只走「頂層 md → index」。這一項反過來走 index 的每個 entry,回答「index 說有的檔,頂層真的有嗎、對得上嗎」。**它不修改 index、不改任何檔,也不改變 gate 的通過條件**(先揭露;要不要升級成 gate 失敗另案決定)。只在本 gate 載入並寫回 index 時執行:`index_error` 不為 `None` 時(寫入屏障)略過;未登錄 target 的 `last_archived` 唯讀稽核沒有 index,也略過。輸入是 `scan_report` 的 `files`(頂層每個 `*.md` 的 `{file, message_id}`;`unparseable` 的檔 `message_id` 是 `null`,仍算「頂層有這個檔」),就是上面步驟 1 同一次掃描的結果,不另讀檔,也不拿 index 提供的路徑去查檔案系統:比對只是對頂層 glob 得到的檔名集合做成員檢查。函式與日期 recipe 貼進同一個程序(`bounded_text` 取自那裡):
 
 <!-- archive-mail-reverse-recipe:start -->
 ```python

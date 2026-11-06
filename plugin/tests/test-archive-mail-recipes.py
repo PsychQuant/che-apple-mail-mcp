@@ -865,9 +865,27 @@ class ArchiveScanRecipeTests(unittest.TestCase):
         self.assertEqual(out["unparseable"], ["b.md"])
         self.assertEqual(out["scanned"], 2)   # a.md is read as plain text and never executed
 
-    def test_an_unreadable_quoted_value_is_unparseable_not_guessed(self):
-        out = self.report({"a.md": '---\nmessage_id: "unterminated\ndate: "2026-06-30"\n---\n'})
+
+    def test_a_bad_date_never_hides_a_valid_message_id(self):
+        out = self.report({"a.md": '---\nmessage_id: "<a>"\ndate: null\n---\n',
+                           "b.md": '---\nmessage_id: "<b>"\ndate: "unterminated\n---\n',
+                           "c.md": '---\nmessage_id: "<c>"\ndate:\n---\n'})
+        self.assertEqual(out["unparseable"], [])
+        self.assertEqual(sorted(u["message_id"] for u in out["usable"]), ["<a>", "<b>", "<c>"])
+        self.assertEqual(out["date_audit"]["date_excluded_count"], 3)       # excluded by date only
+        self.assertEqual(out["date_audit"]["valid_date_count"], 0)
+
+    def test_message_id_is_read_literally_the_way_the_batch_writer_stores_it(self):
+        # EmailMarkdownRenderer.yamlQuoted: outer double quotes, inner double quotes become single quotes,
+        # backslashes are NOT escaped. So no escape decoding.
+        out = self.report({"a.md": '---\nmessage_id: "<a\\n\\q@x>"\ndate: "2026-06-30"\n---\n'})
+        self.assertEqual(out["unparseable"], [])
+        self.assertEqual(out["usable"][0]["message_id"], "<a\\n\\q@x>")
+
+    def test_an_unterminated_message_id_makes_only_that_file_unparseable(self):
+        out = self.report({"a.md": '---\nmessage_id: "<a>\ndate: "2026-06-30"\n---\n', "b.md": self.md("<b>")})
         self.assertEqual(out["unparseable"], ["a.md"])
+        self.assertEqual([u["file"] for u in out["usable"]], ["b.md"])
 
     def test_dotfiles_are_not_archive_files(self):
         out = self.report({"a.md": self.md("<a>"), "._a.md": b"\x00\x05junk"})
@@ -896,10 +914,18 @@ class ArchiveScanRecipeTests(unittest.TestCase):
 
     def test_scan_report_emits_the_usable_inventory(self):
         out = self.report({"a.md": self.md("<a>"), "b.md": self.md("synthetic:x")})
-        self.assertEqual(out["usable"], [{"file": "a.md", "message_id": "<a>"}])
+        self.assertEqual([(u["file"], u["message_id"]) for u in out["usable"]], [("a.md", "<a>")])
+        self.assertEqual(out["files"], [{"file": "a.md", "message_id": "<a>"}, {"file": "b.md", "message_id": "synthetic:x"}])
 
 
 class ArchiveScanSopTests(unittest.TestCase):
+    def test_both_branches_use_scan_report_and_3b_reads_its_files(self):
+        text = DOCUMENT.read_text()
+        self.assertIn("本分支（`index`／`both`）也呼叫 `scan_report(output_dir)`", text)
+        self.assertIn("重複件在兩個分支都要回報", text)
+        self.assertIn("輸入是 `scan_report` 的 `files`", text)
+        self.assertIn("`date` 壞掉的檔案仍是 `usable`", text)
+
     def test_the_stale_index_stop_is_not_part_of_this_batch(self):
         text = DOCUMENT.read_text()
         self.assertNotIn("index_stale: N top-level files", text)   # #603 is a maintainer decision (stop vs recovery)
