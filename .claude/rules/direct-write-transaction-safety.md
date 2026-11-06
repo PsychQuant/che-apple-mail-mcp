@@ -68,10 +68,9 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 `readOutcome`、`outcomeAfterFailedTrigger`、`buildDirectDraftMarkReadScript`、`buildDirectDraftTriggerScript`
 （`DirectDraftPathTests`）、`triggerDirectDraftUpload`（`DirectDraftTriggerTimingTests`，#489：斷言它送出的
 就是 `buildDirectDraftTriggerScript` 在同一個 `timing` 下的輸出）與 `uploadState`（`DraftStoreWriterTests`），
-`readFlag`、`createdText`、`markDirectDraftRead` 沒有任何測試。
+`readFlag` 與 `createdText` 由 `DirectDraftPathOutcomeTests` 走過（#484），`markDirectDraftRead` 在那裡是替身，真的那個沒有測試。
 
-結構檢查擋不住所有削弱方式。#490 第 4 輪驗證找到下列六種寫法，這兩條守門測試都不會轉紅（#492；根治要靠
-#484 的行為測試）：
+結構檢查擋不住所有削弱方式。#490 第 4 輪驗證找到下列六種寫法，這兩條守門測試都不會轉紅（#492）：
 
 1. 在 `timer.mark("inserted")` 之前提早回報；
 2. 讓 `triggerDirectDraftUpload` 送出 `buildDirectDraftTriggerScript` 以外的 script，或在送出前改寫它
@@ -92,7 +91,7 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 - **第 2、3、6、7 項**：`DirectDraftPathOutcomeTests`（#484）走真的 `attemptSteps` 與真的 `DraftStoreWriter`，只有 Mail 是替身，store 是測試自己建的 SQLite 檔（有 writer 驗證的表與欄位，沒有 Mail 的 trigger）。替身照 Mail 改真 store 的方式改那個檔。這批測試斷言結果代碼與 `direct` 步驟序列：
   - 上傳確認 → `created`，步驟走到 `uploaded`、`read_ensured`；
   - 上傳期限內沒有確認 → `created:upload_pending`，不走 GUI 路徑，不回報已上傳；
-  - 觸發失敗 → 先精確還原（資料列與 `.emlx` 都不留）才走 GUI 路徑一次；
+  - 觸發失敗 → 先還原才走 GUI 路徑一次，還原的結果在 GUI 路徑裡檢查（`rollback()` 涵蓋的資料列與 `.emlx` 都不留；它不還原的列見 #628）；
   - 觸發失敗但 Mail 已上傳 → 還原被拒，回 `created`，不走 GUI 路徑；
   - 觸發失敗且還原因其他原因失敗 → `created:upload_pending`，回報上傳未確認；
   - 上傳後仍未讀 → 補設已讀一次；補設無效 → 帶 note，沒有 `read_ensured`。

@@ -18,6 +18,11 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
         store = try FixtureDraftStore()
         originalMailRoot = EnvelopeIndexReader.mailStoragePathOverride
         EnvelopeIndexReader.mailStoragePathOverride = store.mailRoot.path
+        // Nothing below may reach the real Mail folder; a run with the override lost must not start.
+        guard EnvelopeIndexReader.mailStoragePath == store.mailRoot.path else {
+            throw NSError(domain: "DirectDraftPathOutcomeTests", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "the mail root override did not take effect"])
+        }
     }
 
     override func tearDown() {
@@ -38,9 +43,13 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
         return path
     }
 
+    private static let steps = ["enter", "eligibility", "version_gate", "drafts_resolved", "writer_opened",
+                                "inserted", "trigger_spawn"]
+
     /// Runs one `create_draft` through the same entry the server uses, with a timing CSV, and
-    /// returns the result and the `direct` rows (label, outcome).
-    private func run(_ path: DirectDraftPath) async throws -> (text: String, gui: Int, rows: [TimingRow]) {
+    /// returns the result and the `direct` rows (label, outcome). `onGUI` runs inside the GUI path.
+    private func run(_ path: DirectDraftPath, onGUI: @escaping () throws -> Void = {}) async throws
+        -> (text: String, gui: Int, rows: [TimingRow]) {
         let csv = store.mailRoot.deletingLastPathComponent().appendingPathComponent("timing-\(UUID().uuidString).csv").path
         var guiCalls = 0
         let text = try await DirectDraftPath.createDraft(
@@ -50,7 +59,7 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
                                    cc: nil, bcc: nil, attachments: nil, format: .plain,
                                    fromAddress: FixtureDraftStore.sender)
             },
-            gui: { guiCalls += 1; return "GUI" })
+            gui: { guiCalls += 1; try onGUI(); return "GUI" })
         return (text, guiCalls, try TimingRow.read(csv))
     }
 
@@ -60,9 +69,7 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
         XCTAssertEqual(gui, 0, "a created draft must not also go down the GUI path")
         XCTAssertTrue(text.hasPrefix("Draft created successfully"), text)
         XCTAssertTrue(text.contains("uploaded"), text)
-        XCTAssertEqual(rows.direct.map { $0.label }, ["enter", "eligibility", "version_gate", "drafts_resolved", "writer_opened",
-                                                  "inserted", "trigger_spawn", "trigger_sent", "uploaded", "read_ensured",
-                                                  "returned"])
+        XCTAssertEqual(rows.direct.map { $0.label }, Self.steps + ["trigger_sent", "uploaded", "read_ensured", "returned"])
         XCTAssertEqual(Set(rows.direct.map { $0.outcome }), ["created"])
         XCTAssertEqual(mail.triggers, 1)
         XCTAssertEqual(mail.markReads, 0, "the row already reads 1: no repair")
@@ -80,8 +87,7 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
         XCTAssertTrue(text.contains("upload pending"), text)
         XCTAssertTrue(text.contains("not confirmed"), text)
         XCTAssertFalse(text.contains("uploaded "), text)
-        XCTAssertEqual(rows.direct.map { $0.label }, ["enter", "eligibility", "version_gate", "drafts_resolved", "writer_opened",
-                                                  "inserted", "trigger_spawn", "trigger_sent", "returned"])
+        XCTAssertEqual(rows.direct.map { $0.label }, Self.steps + ["trigger_sent", "returned"])
         XCTAssertEqual(Set(rows.direct.map { $0.outcome }), ["created:upload_pending"])
     }
 
@@ -89,15 +95,17 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
     func testFailedTriggerRollsBackThenFallsBack() async throws {
         let before = try store.rowCounts()
         let mail = FakeDirectDraftMail { _ in throw MailError.scriptFailed(message: "fixture: Mail did not answer", code: -1) }
-        let (text, gui, rows) = try await run(path(mail))
-        XCTAssertEqual(gui, 1, "the GUI path runs once, after the rollback")
+        let (text, gui, rows) = try await run(path(mail), onGUI: {
+            // Inside the GUI path, so a rollback that ran after it would fail here.
+            XCTAssertEqual(try self.store.rowCounts(), before, "the rows the rollback owns are gone before the GUI path starts")
+            XCTAssertEqual(self.store.emlxFiles(), [], "so is the message file")
+        })
+        XCTAssertEqual(gui, 1, "the GUI path runs once")
         XCTAssertTrue(text.hasPrefix("GUI"), text)
         XCTAssertTrue(text.contains("experimental direct-write not used"), text)
         XCTAssertTrue(text.contains("the write was rolled back"), text)
-        XCTAssertEqual(try store.rowCounts(), before, "nothing of the attempt may remain in the store")
-        XCTAssertEqual(store.emlxFiles(), [], "the message file is gone")
         XCTAssertEqual(Set(rows.direct.map { $0.outcome }), ["fell_back:trigger"])
-        XCTAssertFalse(rows.direct.map { $0.label }.contains("uploaded"))
+        XCTAssertEqual(rows.direct.map { $0.label }, Self.steps + ["returned"])
     }
 
     /// Rule item 3: the trigger reported an error, but Mail already has the draft. Falling back
@@ -111,6 +119,7 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
         XCTAssertEqual(gui, 0, "a second draft is the failure this branch exists to prevent")
         XCTAssertTrue(text.contains("Mail had already uploaded the draft"), text)
         XCTAssertEqual(Set(rows.direct.map { $0.outcome }), ["created"])
+        XCTAssertEqual(rows.direct.map { $0.label }, Self.steps + ["returned"])
         XCTAssertEqual(store.emlxFiles().count, 1, "the draft stays")
     }
 
@@ -125,6 +134,7 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
         XCTAssertTrue(text.contains("could not be reversed"), text)
         XCTAssertTrue(text.contains("not confirmed"), text)
         XCTAssertEqual(Set(rows.direct.map { $0.outcome }), ["created:upload_pending"])
+        XCTAssertEqual(rows.direct.map { $0.label }, Self.steps + ["returned"])
     }
 
     /// Rule item 7: after a confirmed upload the local copy is read, and repaired if it is unread.
@@ -136,7 +146,8 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
         let (text, _, rows) = try await run(path(mail))
         XCTAssertEqual(mail.markReads, 1)
         XCTAssertFalse(text.contains("[note:"), text)
-        XCTAssertTrue(rows.direct.map { $0.label }.contains("read_ensured"))
+        XCTAssertEqual(rows.direct.map { $0.label }, Self.steps + ["trigger_sent", "uploaded", "read_ensured", "returned"])
+        XCTAssertEqual(Set(rows.direct.map { $0.outcome }), ["created"])
     }
 
     func testUploadedAndStillUnreadSaysSoAndIsNotReadEnsured() async throws {
@@ -147,7 +158,7 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
         let (text, _, rows) = try await run(path(mail))
         XCTAssertEqual(mail.markReads, 1)
         XCTAssertTrue(text.contains(DirectDraftPath.ReadOutcome.stillUnread.note), text)
-        XCTAssertFalse(rows.direct.map { $0.label }.contains("read_ensured"))
+        XCTAssertEqual(rows.direct.map { $0.label }, Self.steps + ["trigger_sent", "uploaded", "returned"])
         XCTAssertEqual(Set(rows.direct.map { $0.outcome }), ["created"])
     }
 
@@ -318,8 +329,8 @@ final class FixtureDraftStore: @unchecked Sendable {
         return Int(sqlite3_column_int64(statement, 0))
     }
 
-    /// The tables a rollback must restore. `addresses`, `subjects` and `message_global_data` are not
-    /// here: `DraftStoreWriter.rollback` leaves those rows in place, and the real writer does too.
+    /// The tables `DraftStoreWriter.rollback` restores. `addresses`, `subjects`, `message_global_data`
+    /// and the `WriteTransactionGeneration` bump are not here: the rollback leaves them (#628).
     func rowCounts() throws -> [String: Int] {
         var counts: [String: Int] = [:]
         for table in ["messages", "conversations", "conversation_id_message_id", "recipients",

@@ -352,20 +352,29 @@ final class ComposeTimingTests: XCTestCase {
     /// A second descriptor in this process (the tests above) shows the lock is per open file
     /// description; only another process shows it works between two servers.
     private func lockHolder(on path: String, afterLock: String) throws -> Process {
-        let child = Process(), output = Pipe()
+        let child = Process()
+        let ready = path + ".locked"
+        defer { try? FileManager.default.removeItem(atPath: ready) }
         child.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
         child.arguments = ["-e", """
             use Fcntl qw(:flock); $| = 1;
             open(my $f, '>>', $ARGV[0]) or die $!;
             flock($f, LOCK_EX) or die $!;
-            print "locked\\n";
+            open(my $m, '>', $ARGV[2]) or die $!; close($m);
             \(afterLock)
             flock($f, LOCK_UN);
-            """, path, ComposeTiming.csvHeader]
-        child.standardOutput = output
+            """, path, ComposeTiming.csvHeader, ready]
         try child.run()
-        let line = output.fileHandleForReading.readData(ofLength: 7)
-        XCTAssertEqual(String(decoding: line, as: UTF8.self), "locked\n", "the child never took the lock")
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while !FileManager.default.fileExists(atPath: ready) {
+            guard child.isRunning, ContinuousClock.now < deadline else {
+                if child.isRunning { child.terminate() }
+                child.waitUntilExit()
+                throw NSError(domain: "ComposeTimingTests", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "the child never took the lock"])
+            }
+            usleep(10_000)
+        }
         return child
     }
 
