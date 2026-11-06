@@ -130,19 +130,29 @@ enum OsascriptFixtureGuard {
     /// For a test that calls one pure handler of a file that also holds handlers it never calls: drops
     /// each `tell application …` block, so the text that runs has no way to reach an application and
     /// `check` can read all of it. A called handler that needed such a block fails its own test.
-    /// A one-line `tell application "X" to …` stays, and `check` refuses it.
-    static func neutralisingApplicationBlocks(_ source: String) -> String {
+    /// A one-line `tell application "X" to …` stays, and `check` refuses it. So does a `tell` line
+    /// with a `¬`, which may be a one-line tell carried over.
+    ///
+    /// It reads line by line, each through `code(of:)`, so a trailing comment or a literal does not
+    /// change what a line is. A block that never closes throws instead of dropping the rest of the
+    /// text: that used to run a truncated script with nothing refused, and the handler under test
+    /// never ran (#617 verify). A comment or literal spanning lines is not followed; a miscount there
+    /// leaves a block open or a stray `end tell`, which throws or does not compile.
+    static func neutralisingApplicationBlocks(_ source: String) throws -> String {
         var kept: [String] = []
         var depth = 0
         for line in source.components(separatedBy: "\n") {
-            let code = line.trimmingCharacters(in: .whitespaces)
+            let code = code(of: line).trimmingCharacters(in: .whitespaces)
             if depth == 0 {
-                if code.hasPrefix("tell application "), !code.contains(" to ") { depth = 1; continue }
+                if code.hasPrefix("tell application "), !code.contains(" to "), !line.contains("¬") { depth = 1; continue }
                 kept.append(line)
                 continue
             }
             if code.hasPrefix("tell "), !code.contains(" to ") { depth += 1 }
             if code == "end tell" { depth -= 1 }
+        }
+        guard depth == 0 else {
+            throw ApplicationReference(pattern: "a tell block that never closes", fragment: source)
         }
         return kept.joined(separator: "\n")
     }

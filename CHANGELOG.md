@@ -114,7 +114,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   passes only with the one format string they use, as the whole argument, because a
   format string can run code. Any other class-shaped name, selectors by name, and the ways to name a class
   in a string are refused. Handlers a test does not call lose their `tell
-  application` blocks before the script runs. The list bounds which classes run, not
+  application` blocks before the script runs, and a block that never closes is
+  refused instead of dropping the rest of the script. The list bounds which classes run, not
   what the methods of those classes do: they can read and write files and fetch
   URLs. `OsascriptFixtureGuardScanTests` scans `Tests/`, so a new osascript run that
   skips the guard fails a test; the two helpers gated by `CHE_MAIL_LIVE_TEST` are

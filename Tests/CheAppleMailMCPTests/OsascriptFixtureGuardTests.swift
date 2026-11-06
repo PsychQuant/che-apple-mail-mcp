@@ -138,12 +138,42 @@ final class OsascriptFixtureGuardTests: XCTestCase {
                 return 1
             end gui
             """
-        let out = OsascriptFixtureGuard.neutralisingApplicationBlocks(source)
+        let out = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)
         XCTAssertNoThrow(try OsascriptFixtureGuard.check(out))
         XCTAssertTrue(out.contains("return x + 1"))
         XCTAssertTrue(out.contains("end gui"))
-        XCTAssertThrowsError(try OsascriptFixtureGuard.check(OsascriptFixtureGuard.neutralisingApplicationBlocks(
-            "on gui()\ntell application \"Mail\" to activate\nend gui")), "a one-line tell stays and is refused")
+        let oneLine = "on gui()\ntell application \"Mail\" to activate\nend gui"
+        XCTAssertEqual(try OsascriptFixtureGuard.neutralisingApplicationBlocks(oneLine), oneLine, "a one-line tell stays")
+        XCTAssertThrowsError(try OsascriptFixtureGuard.check(oneLine), "and is refused")
+    }
+
+    /// #617 verify: an `end tell` with a comment used to leave the block open, and everything after it
+    /// was dropped with nothing refused, so the handler under test never ran.
+    func testNeutralisingReadsLinesAsCodeAndRefusesABlockItCannotClose() throws {
+        let tail = "return my pure(1)"
+        let readable = [
+            "tell application \"Mail\"\nactivate\nend tell -- done",
+            "tell application \"Mail\" -- talk to it\nactivate\nend tell",
+            "tell application \"a to b\"\nactivate\nend tell",
+            "tell application \"Mail\"\ntell window 1 -- talk to it\nclose\nend tell\nend tell",
+            "tell application \"Mail\"\n\ttell window 1\n\t\tclose\n\tend tell\nend tell",
+            "tell application \"Mail\"\ntell window 1 to close\nend tell",
+        ]
+        for block in readable {
+            XCTAssertEqual(try OsascriptFixtureGuard.neutralisingApplicationBlocks(block + "\n" + tail), tail, block)
+        }
+        let unclosed = [
+            "tell application \"Mail\"\nactivate\n" + tail,
+            "tell application \"Mail\"\rend tell\r" + tail,
+            "tell application \"Mail\"\ntell window 1 ¬\nto close\nend tell\n" + tail,
+        ]
+        for block in unclosed {
+            XCTAssertThrowsError(try OsascriptFixtureGuard.neutralisingApplicationBlocks(block), block)
+        }
+        // A `tell` continued onto the next line may be a one-line tell, so it stays and `check` refuses it.
+        let continued = "tell application \"Mail\" ¬\nto activate\n" + tail
+        XCTAssertEqual(try OsascriptFixtureGuard.neutralisingApplicationBlocks(continued), continued)
+        XCTAssertThrowsError(try OsascriptFixtureGuard.check(continued))
     }
 
     func testAcceptsTheShapesTheFixturesActuallyRun() throws {

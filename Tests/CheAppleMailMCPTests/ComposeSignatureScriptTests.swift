@@ -43,7 +43,7 @@ final class ComposeSignatureScriptTests: XCTestCase {
         let source = "use framework \"Foundation\"\nuse scripting additions\n" + composeSignatureHandlers
             + "\nreturn my signatureReceipt(\"named\", \"簽名 ] [bcc-field-revealed]\", true, true)"
         let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        let guarded = OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
+        let guarded = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
         try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
         process.arguments = ["-e", guarded]
         let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
@@ -68,7 +68,7 @@ final class ComposeSignatureScriptTests: XCTestCase {
         for (marks, mode, name, expected) in fixtures {
             let source = helpers + "\nreturn my signatureChoiceIndex(" + labels + ", " + enabled + ", " + marks + ", \"" + mode + "\", \"" + name + "\")"
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            let guarded = OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
+            let guarded = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
             try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
             process.arguments = ["-e", guarded]
             let output = Pipe(); process.standardOutput = output
@@ -99,7 +99,7 @@ final class ComposeSignatureScriptTests: XCTestCase {
             let source = helpers + "\nreturn my signatureChoiceIndex(" + labels + ", " + enabled + ", " + marks
                 + ", \"named\", \"" + wanted + "\")"
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            let guarded = OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
+            let guarded = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
             try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
             process.arguments = ["-e", guarded]
             let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
@@ -115,7 +115,7 @@ final class ComposeSignatureScriptTests: XCTestCase {
         for (label, expected) in [("missing value", "false"), ("\"missing value\"", "true")] {
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
             let source = helpers + "\nreturn my signatureNameMatches(" + label + ", true, \"missing value\")"
-            let guarded = OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
+            let guarded = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
             try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
             process.arguments = ["-e", guarded]
             let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
@@ -175,7 +175,7 @@ final class ComposeSignatureScriptTests: XCTestCase {
         for (actual, result) in cases {
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
             let source = helpers + "\nreturn my signatureAXOwnerMatches(" + actual + ", " + expected + ")"
-            let guarded = OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
+            let guarded = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
             try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
             process.arguments = ["-e", guarded]
             let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
@@ -251,7 +251,7 @@ final class ComposeSignatureScriptTests: XCTestCase {
             return my nativeCalls
             """
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            let guarded = OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
+            let guarded = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
             try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
             process.arguments = ["-e", guarded]
             let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
@@ -273,7 +273,7 @@ final class ComposeSignatureScriptTests: XCTestCase {
         for (ids, names, front, expected) in fixtures {
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
             let source = helpers + "\nreturn my composeWindowMatches(" + ids + ", " + names + ", " + front + ", 42, \"Title\", true)"
-            let guarded = OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
+            let guarded = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
             try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
             process.arguments = ["-e", guarded]
             let output = Pipe(); process.standardOutput = output
