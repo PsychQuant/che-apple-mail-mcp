@@ -21,8 +21,10 @@ ROOT = Path(__file__).resolve().parents[2]
 #
 # The concurrent test rests on the same deadline. Twelve hooks have to reach the barrier inside the
 # 2.0 s each probe allows, and no poll changes that: measured under load, every `--version` probe
-# expired before Python started, and the hooks exited with nothing raced. That run is a skip. A hook
-# that times out at the barrier has already written `ready-*`, so a slow run can race fewer than twelve.
+# expired before Python started, and the hooks exited with nothing raced. Only that run is a skip. Once
+# any hook has reached the barrier the run is a failure, because a deadlock between hooks looks the
+# same from here. A hook that times out at the barrier has already written `ready-*`, so a slow run can
+# still pass with fewer than twelve contenders.
 POLL_SECONDS = 10
 
 class FDALifecycleTests(unittest.TestCase):
@@ -86,9 +88,11 @@ sys.exit(mode.get('status',1))
     def fixture_processes(self,wait):
         # The path holds this test's temporary directory, so this finds the fixture and nothing else.
         # A killed process takes a moment to go, hence the poll: free on success, slow only on a survivor.
+        # ps and not pgrep: the path is matched literally, and a failed listing raises instead of reading as none.
         deadline=time.monotonic()+wait
         while True:
-            found=subprocess.run(['/usr/bin/pgrep','-f',str(self.binary)],capture_output=True,text=True).stdout.split()
+            listing=subprocess.run(['/bin/ps','-axww','-o','pid=,command='],capture_output=True,text=True,check=True).stdout
+            found=[line.split()[0] for line in listing.splitlines() if str(self.binary) in line]
             if not found or time.monotonic()>=deadline:return found
             time.sleep(.05)
 
@@ -104,7 +108,7 @@ sys.exit(mode.get('status',1))
         (self.root/'pids').unlink(missing_ok=True)
 
     def assert_every_hook_timed_out(self,errors,wall):
-        self.assertEqual([e for e in errors if 'timeout (2 seconds)' not in e],[],'a hook left the race without a probe timeout')
+        self.assertEqual([e for e in errors if 'version timeout (2 seconds)' not in e],[],'a hook left the race without a --version timeout')
         self.assertGreaterEqual(wall,2.0,'hooks reported a probe timeout before the 2.0 s deadline')
 
     def configure(self,**kwargs): (self.root/'mode.json').write_text(json.dumps(kwargs))
@@ -178,6 +182,31 @@ sys.exit(mode.get('status',1))
             self.assert_every_hook_timed_out([timed_out]*11+['version exited 3\n'],2.0)
         with self.assertRaises(AssertionError):
             self.assert_every_hook_timed_out([timed_out]*12,1.9)
+        quiet='che-apple-mail-mcp: FDA assist quiet timeout (2 seconds); preserving offer\n'
+        with self.assertRaises(AssertionError):
+            self.assert_every_hook_timed_out([timed_out]*11+[quiet],2.0)
+
+    def test_a_hook_that_reached_the_barrier_is_never_a_skip(self):
+        self.configure(barrier=True,status=1,slow_start='--version')
+        (self.root/'ready-other').touch()
+        try:
+            self.run_concurrent_hooks()
+        except AssertionError:
+            return
+        except unittest.SkipTest:
+            pass
+        self.fail('a run in which a hook reached the barrier was excused')
+
+    def test_the_fixture_path_is_matched_literally(self):
+        directory=self.root/'with[bracket'
+        directory.mkdir()
+        self.binary=directory/'CheAppleMailMCP'
+        shutil.copy2(self.root/'bin/CheAppleMailMCP',self.binary)
+        self.configure(slow_start='--version')
+        survivor=subprocess.Popen([str(self.binary),'--version'],env=self.env)
+        self.addCleanup(survivor.wait)
+        self.addCleanup(survivor.kill)
+        self.assertEqual(self.fixture_processes(0),[str(survivor.pid)])
 
     def test_exited_leader_with_stdout_descendant_times_out(self):
         for flag in ['--version','--check-fda']:
@@ -277,8 +306,10 @@ sub fixture_pause {
             while len(list(self.root.glob('ready-*')))<12 and time.monotonic()<deadline and any(p.poll() is None for p in processes):time.sleep(.01)
             # The barrier holds a hook until `release`, so a hook that has gone left by another way.
             if all(p.poll() is not None for p in processes):
-                self.assert_every_hook_timed_out([p.communicate(timeout=5)[1] for p in processes],time.monotonic()-started)
-                self.skipTest('every hook hit the 2.0 s probe deadline before the barrier opened, so nothing raced')
+                errors=[p.communicate(timeout=5)[1] for p in processes]
+                self.assertEqual(len(list(self.root.glob('ready-*'))),0,errors)
+                self.assert_every_hook_timed_out(errors,time.monotonic()-started)
+                self.skipTest('every --version probe hit the 2.0 s deadline, so no hook reached the barrier')
             self.assertEqual(len(list(self.root.glob('ready-*'))),12)
             (self.root/'release').touch()
             outputs=[p.communicate(timeout=5) for p in processes]
