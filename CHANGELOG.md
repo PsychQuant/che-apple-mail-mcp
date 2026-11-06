@@ -175,9 +175,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     age alone. A folder that cannot be listed is left alone.
   - A saved file no longer keeps an ACL inherited from its folder: a folder's
     inheritable read entry made the 0600 temporary, and so the published file,
-    readable through it. **Behaviour change:** a file saved into a folder that
-    shares through an inherited ACL, or over a file with its own ACL, ends up
-    with no ACL.
+    readable through it. A save fails if the ACL cannot be read on a volume that
+    may hold ACLs, or will not clear. **Behaviour change:** a file saved into a
+    folder that shares through an inherited ACL, or over a file with its own ACL,
+    ends up with no ACL.
 
 ## [4.0.0] - 2026-10-29
 

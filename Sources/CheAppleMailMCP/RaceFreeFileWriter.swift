@@ -255,28 +255,57 @@ enum RaceFreeFileWriter {
         }
     }
 
+    enum ACLReadFailure: Equatable {
+        /// The file has no extended ACL, so there is nothing to clear.
+        case noACL
+        /// The read failed: an inherited entry may still be on the file.
+        case unreadable
+    }
+
+    /// What a failed `acl_get_fd_np` established.
+    ///
+    /// Measured 2026-11-06 on macOS 27.3, on a new file on each volume:
+    ///
+    /// | Volume        | `_PC_EXTENDED_SECURITY_NP` | read, no ACL | set, empty ACL |
+    /// |---------------|----------------------------|--------------|----------------|
+    /// | APFS, HFS+    | 1                          | `ENOENT`     | succeeds       |
+    /// | MS-DOS, exFAT | 0                          | `ENOENT`     | `ENOTSUP`      |
+    ///
+    /// So `ENOENT` is what "no ACL" looks like, with or without ACL support. No
+    /// measured volume answered `ENOTSUP`, `EOPNOTSUPP` or `EINVAL`; network and
+    /// FUSE volumes were not measured. Those three say only that the read failed,
+    /// so they pass only when the volume itself reports no extended security (0;
+    /// -1 is "would not say"). Any other error fails the save.
+    static func aclReadFailure(errno readErrno: Int32, extendedSecurity: () -> Int) -> ACLReadFailure {
+        if readErrno == ENOENT { return .noACL }
+        guard [ENOTSUP, EOPNOTSUPP, EINVAL].contains(readErrno) else { return .unreadable }
+        return extendedSecurity() == 0 ? .noACL : .unreadable
+    }
+
     /// Removes the extended ACL a new file inherited from its folder (#576). A
     /// POSIX mode does not remove ACL entries, so a folder with an inheritable
     /// read entry would make the 0600 temporary, and the published file,
-    /// readable through it. Runs before any byte is written. A filesystem
-    /// without ACLs has nothing to clear; one that has an ACL it will not clear
-    /// fails the save rather than publishing a file others may read.
+    /// readable through it. Runs before any byte is written. A file with no ACL
+    /// has nothing to clear; a read that fails on a volume that may hold ACLs, or
+    /// an ACL that will not clear, fails the save rather than publishing a file
+    /// others may read.
     private static func clearInheritedACL(fd: Int32, name: String) throws {
         guard let inherited = acl_get_fd_np(fd, ACL_TYPE_EXTENDED) else {
-            // No ACL, or a filesystem with no ACLs to read; which errno that
-            // gives varies by filesystem.
-            guard [ENOENT, ENOTSUP, EOPNOTSUPP, EINVAL].contains(errno) else {
-                throw RaceFreeWriteError.writeFailed(name: name, errno: errno)
+            let readErrno = errno
+            switch aclReadFailure(errno: readErrno, extendedSecurity: { fpathconf(fd, _PC_EXTENDED_SECURITY_NP) }) {
+            case .noACL: return
+            case .unreadable: throw RaceFreeWriteError.writeFailed(name: name, errno: readErrno)
             }
-            return
         }
         acl_free(UnsafeMutableRawPointer(inherited))
         guard let empty = acl_init(0) else {
-            throw RaceFreeWriteError.writeFailed(name: name, errno: errno)
+            let initErrno = errno
+            throw RaceFreeWriteError.writeFailed(name: name, errno: initErrno)
         }
         defer { acl_free(UnsafeMutableRawPointer(empty)) }
         guard acl_set_fd_np(fd, empty, ACL_TYPE_EXTENDED) == 0 else {
-            throw RaceFreeWriteError.writeFailed(name: name, errno: errno)
+            let setErrno = errno
+            throw RaceFreeWriteError.writeFailed(name: name, errno: setErrno)
         }
     }
 

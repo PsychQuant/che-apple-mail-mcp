@@ -317,6 +317,53 @@ final class AttachmentPublisherHardeningTests: XCTestCase {
         XCTAssertFalse(hasExtendedACL(path))
     }
 
+    // What a failed ACL read means (#576 review). Only `ENOENT` says "no ACL";
+    // the other errors say the read failed, so an inherited entry may still be
+    // on the file, and only a volume that reports no extended security can
+    // excuse them. `.unreadable` fails the save.
+
+    private func disposition(_ error: Int32, volume: Int) -> RaceFreeFileWriter.ACLReadFailure {
+        RaceFreeFileWriter.aclReadFailure(errno: error, extendedSecurity: { volume })
+    }
+
+    func testENOENTMeansNoACLAndNeedsNoVolumeCheck() {
+        var asked = false
+        let result = RaceFreeFileWriter.aclReadFailure(errno: ENOENT, extendedSecurity: { asked = true; return 1 })
+        XCTAssertEqual(result, .noACL)
+        XCTAssertFalse(asked, "the common path costs no extra call")
+        XCTAssertEqual(disposition(ENOENT, volume: 0), .noACL)
+    }
+
+    func testNotSupportedIsExcusedOnlyByAVolumeWithoutACLs() {
+        for code in [ENOTSUP, EOPNOTSUPP] {
+            XCTAssertEqual(disposition(code, volume: 0), .noACL, "\(code)")
+            XCTAssertEqual(disposition(code, volume: 1), .unreadable, "\(code): this volume has ACLs")
+            XCTAssertEqual(disposition(code, volume: -1), .unreadable, "\(code): the volume would not say")
+        }
+    }
+
+    func testEINVALFailsClosedUnlessTheVolumeHasNoACLs() {
+        XCTAssertEqual(disposition(EINVAL, volume: 1), .unreadable)
+        XCTAssertEqual(disposition(EINVAL, volume: -1), .unreadable)
+        XCTAssertEqual(disposition(EINVAL, volume: 0), .noACL)
+    }
+
+    func testAnyOtherErrorIsUnreadableWhateverTheVolumeSays() {
+        for code in [EIO, EACCES, EBADF, ENOMEM] {
+            XCTAssertEqual(disposition(code, volume: 0), .unreadable, "\(code)")
+            XCTAssertEqual(disposition(code, volume: 1), .unreadable, "\(code)")
+        }
+    }
+
+    func testThisVolumeReportsExtendedSecurity() throws {
+        // The measurement the disposition rests on: APFS answers 1.
+        let root = try fixtureRoot()
+        let fd = open(root.path, O_RDONLY | O_DIRECTORY)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        defer { close(fd) }
+        XCTAssertEqual(fpathconf(fd, _PC_EXTENDED_SECURITY_NP), 1)
+    }
+
     func testAFolderWithoutACLsIsUnaffected() throws {
         let root = try fixtureRoot()
         let path = root.appendingPathComponent("report.pdf").path
