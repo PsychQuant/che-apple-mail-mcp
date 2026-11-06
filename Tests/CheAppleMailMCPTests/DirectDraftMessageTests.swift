@@ -53,8 +53,9 @@ final class DirectDraftMessageTests: XCTestCase {
     private let local = UUID(uuidString: "0E5F3C1A-1111-4222-8333-944455556666")!
     private let boundary = UUID(uuidString: "9685C001-8FB1-45DF-BCD1-AD7AB5F8542C")!
 
-    private func build(subject: String = "Hello", body: String = "Line one", name: String? = "Me Example") -> DirectDraft.Message {
-        DirectDraft.buildMessage(fromName: name, fromAddress: "me@example.org", to: ["a@example.org", "b@example.org"],
+    private func build(subject: String = "Hello", body: String = "Line one", name: String? = "Me Example",
+                       to: [String] = ["a@example.org", "b@example.org"]) -> DirectDraft.Message {
+        DirectDraft.buildMessage(fromName: name, fromAddress: "me@example.org", to: to,
                                  subject: subject, body: body, date: date, documentUUID: doc,
                                  messageIdLocalPart: local, boundary: boundary,
                                  mailVersion: "16.0 (3901.200.41)",
@@ -140,6 +141,63 @@ final class DirectDraftMessageTests: XCTestCase {
         let m = build(body: String(repeating: "&", count: 300))
         XCTAssertLessThanOrEqual(longestLine(m), 998)
         XCTAssertTrue(text(m).contains("Content-Transfer-Encoding: quoted-printable"))
+    }
+
+    // MARK: - Long header lines (#622)
+
+    private func header(_ m: DirectDraft.Message) -> String {
+        let s = text(m)
+        return String(s[..<s.range(of: "\n\n")!.lowerBound])
+    }
+
+    func testALongRecipientListFoldsAfterCommasAndRoundTrips() {
+        let recipients = (0..<300).map { "user\($0)@example.org" }
+        let m = build(to: recipients)
+        XCTAssertLessThanOrEqual(longestLine(m), DirectDraft.maxLineOctets)
+        XCTAssertTrue(header(m).contains(",\n "), "folded after a comma")
+        XCTAssertEqual(RFC822Parser.parseHeaders(from: m.mime)["to"], recipients.joined(separator: ", "))
+    }
+
+    func testARecipientLineThatFitsStaysOnOneLine() {
+        // "To: " plus 994 octets of list is exactly 998.
+        var list = ["a@example.org"]
+        while list.joined(separator: ", ").utf8.count < 960 { list.append("b@example.org") }
+        let padding = 994 - list.joined(separator: ", ").utf8.count - 2 - "@example.org".utf8.count
+        list.append(String(repeating: "c", count: padding) + "@example.org")
+        let line = "To: " + list.joined(separator: ", ")
+        XCTAssertEqual(line.utf8.count, 998)
+        XCTAssertTrue(header(build(to: list)).contains(line))
+        XCTAssertFalse(header(build(to: list + ["d@example.org"])).contains(line + ", d@example.org"), "one more address folds")
+    }
+
+    func testALongAsciiSubjectFoldsAtSpacesAndRoundTrips() {
+        let subject = Array(repeating: "word", count: 500).joined(separator: " ")
+        let m = build(subject: subject)
+        XCTAssertLessThanOrEqual(longestLine(m), DirectDraft.maxLineOctets)
+        XCTAssertFalse(header(m).contains("=?utf-8?"), "plain text while a space can fold it")
+        XCTAssertEqual(RFC822Parser.parseHeaders(from: m.mime)["subject"], subject)
+    }
+
+    func testASubjectWithNoUsableSpaceGoesOutAsEncodedWords() {
+        let subject = String(repeating: "x", count: 2000)
+        let m = build(subject: subject)
+        XCTAssertLessThanOrEqual(longestLine(m), DirectDraft.maxLineOctets)
+        XCTAssertTrue(header(m).contains("=?utf-8?B?"))
+        XCTAssertEqual(RFC822Parser.parseHeaders(from: m.mime)["subject"], subject)
+    }
+
+    func testRepeatedSpacesInALongSubjectSurviveAndNoLineIsOnlySpaces() {
+        let subject = Array(repeating: "word  word", count: 200).joined(separator: "  ")
+        let m = build(subject: subject)
+        XCTAssertLessThanOrEqual(longestLine(m), DirectDraft.maxLineOctets)
+        XCTAssertEqual(RFC822Parser.parseHeaders(from: m.mime)["subject"], subject)
+        XCTAssertFalse(header(m).components(separatedBy: "\n").contains { !$0.isEmpty && $0.allSatisfy { $0 == " " } })
+    }
+
+    func testAShortSubjectAndRecipientAreUnchanged() {
+        let h = header(build(subject: "Hello there", to: ["a@example.org", "b@example.org"]))
+        XCTAssertTrue(h.hasPrefix("Subject: Hello there\n"))
+        XCTAssertTrue(h.hasSuffix("To: a@example.org, b@example.org"))
     }
 
     func testNonAsciiSubjectAndBodyRoundTripThroughTheRepoDecoders() throws {

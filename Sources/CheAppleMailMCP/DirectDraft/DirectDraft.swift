@@ -106,7 +106,7 @@ enum DirectDraft {
             .replacingOccurrences(of: "(", with: "\\(").replacingOccurrences(of: ")", with: "\\)")
 
         let headers = [
-            "Subject: \(encodeHeaderText(subject))",
+            subjectHeader(subject),
             "Mime-Version: 1.0 (Mac OS X Mail \(versionComment))",
             "Content-Type: multipart/alternative;\n\tboundary=\"\(marker)\"",
             "X-Apple-Base-Url: x-msg://16/",
@@ -118,7 +118,7 @@ enum DirectDraft {
             "X-Apple-Mail-Signature: ",
             "Message-Id: <\(messageId)>",
             "X-Uniform-Type-Identifier: com.apple.mail-draft",
-            "To: \(to.joined(separator: ", "))",
+            foldedHeaderLine("To: \(to.joined(separator: ", "))"),
         ]
 
         let html = "<html><head></head><body dir=\"auto\" style=\"overflow-wrap: break-word; "
@@ -182,6 +182,39 @@ enum DirectDraft {
     }
 
     // MARK: - Encoders
+
+    /// The `Subject:` line. A long ASCII subject folds at its spaces; one with a
+    /// run too long to fit any line goes out as encoded words, which fold (#622).
+    static func subjectHeader(_ subject: String) -> String {
+        let line = "Subject: \(encodeHeaderText(subject))"
+        guard line.utf8.count > maxLineOctets else { return line }
+        let longestRun = subject.split(separator: " ").map(\.utf8.count).max() ?? 0
+        return longestRun < maxLineOctets ? foldedHeaderLine(line) : "Subject: \(encodedWords(subject))"
+    }
+
+    /// Fold a header line at its spaces so no physical line passes
+    /// `maxLineOctets` (RFC 5322 §2.1.1). A line that fits comes back unchanged,
+    /// so every message that was already legal keeps Mail's layout (#622). The
+    /// break goes before a space, which unfolding turns back into that space,
+    /// and only before a word: a continuation line must not be all whitespace.
+    static func foldedHeaderLine(_ line: String) -> String {
+        guard line.utf8.count > maxLineOctets else { return line }
+        var lines: [String] = []
+        var current = ""
+        for (index, word) in line.components(separatedBy: " ").enumerated() {
+            if index == 0 {
+                current = word
+            } else if !word.isEmpty, current.utf8.count + 1 + word.utf8.count > maxLineOctets,
+                      current.contains(where: { $0 != " " }) {
+                lines.append(current)
+                current = " \(word)"
+            } else {
+                current += " \(word)"
+            }
+        }
+        lines.append(current)
+        return lines.joined(separator: "\n")
+    }
 
     static func encodeHeaderText(_ text: String) -> String {
         if text.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value < 0x7F }) { return text }

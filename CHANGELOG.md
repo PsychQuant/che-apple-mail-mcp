@@ -84,9 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   clients may rewrite or reject. Such a body now goes out as quoted-printable,
   which soft-wraps at 76 characters, like non-ASCII bodies already did. Bodies
   whose lines all fit keep the `7bit` layout Mail itself writes, and the
-  `create_draft` description now states this behaviour. Long header lines (a
-  long recipient list or ASCII subject) are not folded yet
-  ([#622](https://github.com/PsychQuant/che-apple-mail-mcp/issues/622)).
+  `create_draft` description now states this behaviour.
 - **Decoding no longer depends on how Foundation treats `.ascii`**
   ([#561](https://github.com/PsychQuant/che-apple-mail-mcp/issues/561)).
   `String(data:encoding: .ascii)` succeeds on non-ASCII bytes in the shipped
@@ -122,6 +120,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `date`. These and the other C1 controls are now flattened to a space, like the
   ASCII controls. A Message-ID holding one of them is spelled with a space in
   the frontmatter, as VT and FF already were.
+- **The opt-in direct write folds long `Subject:` and `To:` lines**
+  ([#622](https://github.com/PsychQuant/che-apple-mail-mcp/issues/622)). A long
+  recipient list or ASCII subject could pass the 998-octet line limit. `To:`
+  folds after a comma, `Subject:` at a space, and a subject with no usable space
+  goes out as encoded words. Headers that fit are unchanged byte for byte.
 
 ### Documentation
 
