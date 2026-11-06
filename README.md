@@ -726,11 +726,14 @@ case the value is read when the server starts, so restart the host after changin
 | Manual / binary | The `env` of the server entry in your MCP client's configuration, or the environment of the process that launches the binary. | `CHE_MAIL_EXPORT_ALLOWED_ROOTS=/Volumes/Archive/Mail` |
 
 The value is one string of absolute paths separated by `:`, so a path that
-contains `:` cannot be listed. An entry that is an unexpanded installer
-placeholder (`${...}`) is ignored with a note on stderr, so a host that passes an
-unset `.mcpb` setting through literally keeps the home default instead of
-denying every destination. Whether Claude Desktop passes an empty optional
-setting as an empty string has not been checked on a real install (#574).
+contains `:` cannot be listed. An entry that is not an absolute path matches
+nothing and is noted on stderr: it is not resolved against the server's working
+directory, and a value made only of such entries denies every destination rather
+than falling back to home. The one exception is a value that is exactly the
+manifest's own `${user_config.export_allowed_roots}`, which counts as unset, so a
+host that passes an unset `.mcpb` setting through literally keeps the home
+default. Whether Claude Desktop passes an empty optional setting as an empty
+string has not been checked on a real install (#574).
 
 `~/Library` is denied except for the cloud-sync folders macOS keeps inside it:
 paths inside an existing provider folder in `~/Library/CloudStorage` (Dropbox,

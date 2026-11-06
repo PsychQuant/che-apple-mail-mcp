@@ -66,27 +66,90 @@ final class ExportAllowedRootsConfigTests: XCTestCase {
         XCTAssertEqual(logs, [])
     }
 
-    func testAnUnexpandedPlaceholderIsIgnoredAndNoted() {
-        var logs: [String] = []
-        let roots = AllowedRootsValidator.configuredRoots(
-            from: "${user_config.export_allowed_roots}", log: { logs.append($0) })
-        XCTAssertEqual(roots, [])
-        XCTAssertEqual(logs.count, 1)
-        XCTAssertTrue(logs[0].contains("#574"))
-
-        XCTAssertEqual(AllowedRootsValidator.configuredRoots(from: "/a:${x}", log: { _ in }), ["/a"])
-        // Not a placeholder: a real directory name may contain `$` or braces.
-        XCTAssertEqual(AllowedRootsValidator.configuredRoots(from: "/a/${x", log: { _ in }), ["/a/${x"])
+    /// The home directory; no test here writes under it.
+    private var homeTarget: String {
+        FileManager.default.homeDirectoryForCurrentUser.path + "/che-mail-574-probe-\(UUID().uuidString)/out"
     }
 
-    func testAPlaceholderKeepsTheHomeDefault() throws {
-        let roots = AllowedRootsValidator.configuredRoots(from: "${user_config.export_allowed_roots}", log: { _ in })
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let target = home + "/che-mail-574-probe-\(UUID().uuidString)/out"
+    private func parse(_ raw: String?) -> [String] {
+        AllowedRootsValidator.configuredRoots(from: raw, log: { _ in })
+    }
+
+    func testOnlyTheWholeValueBeingTheManifestPlaceholderMeansUnset() throws {
+        var logs: [String] = []
+        let raw = "${user_config.export_allowed_roots}"
+        let roots = AllowedRootsValidator.configuredRoots(from: raw, log: { logs.append($0) })
+        XCTAssertEqual(roots, [], "a host that passes the unset setting through literally keeps the default")
+        XCTAssertEqual(logs.count, 1)
+        XCTAssertTrue(logs[0].contains("#574"))
         // Validation only canonicalizes; nothing is created.
-        XCTAssertNoThrow(try AllowedRootsValidator().validate(target, allowedRoots: roots))
-        XCTAssertThrowsError(try AllowedRootsValidator().validate(target, allowedRoots: ["${user_config.export_allowed_roots}"]),
-                             "without the guard the literal placeholder would replace home and deny it")
-        XCTAssertFalse(FileManager.default.fileExists(atPath: (target as NSString).deletingLastPathComponent))
+        XCTAssertNoThrow(try AllowedRootsValidator().validate(homeTarget, allowedRoots: roots))
+    }
+
+    /// Every one of these is a nonempty value that names no usable root. A
+    /// nonempty value is a restriction someone asked for, so it must not fall
+    /// back to all of home (#574 review: the first version filtered every
+    /// `${...}` entry, emptied the list, and silently widened it to home).
+    func testAnyOtherUnusableValueDeniesInsteadOfFallingBackToHome() throws {
+        let values = ["${OTHER}", "${user_config.other}", "${}", "${user_config.export_allowed_roots}:${OTHER}",
+                      " ${user_config.export_allowed_roots}", "undefined", "null", " ", "Mail"]
+        for raw in values {
+            let roots = parse(raw)
+            XCTAssertFalse(roots.isEmpty, "\(raw.debugDescription) must not read as unset")
+            XCTAssertThrowsError(try AllowedRootsValidator().validate(homeTarget, allowedRoots: roots),
+                                 "\(raw.debugDescription) fell back to home")
+        }
+    }
+
+    func testAPlaceholderBesideARealRootDoesNotBecomeUnset() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("che-mail-574-\(UUID().uuidString)").path
+        for raw in ["\(dir):${user_config.export_allowed_roots}", "\(dir):${OTHER}"] {
+            let roots = parse(raw)
+            XCTAssertNoThrow(try AllowedRootsValidator().validate(dir + "/out", allowedRoots: roots), raw)
+            XCTAssertThrowsError(try AllowedRootsValidator().validate(homeTarget, allowedRoots: roots), raw)
+        }
+    }
+
+    /// `canonicalize` runs a relative path through `URL(fileURLWithPath:)`, which
+    /// resolves it against the process's working directory, so a relative entry
+    /// left as written would authorize whatever sits under the server's cwd.
+    func testARelativeEntryIsNotResolvedAgainstTheWorkingDirectory() throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("che-mail-574-\(UUID().uuidString)")
+        try fm.createDirectory(at: dir.appendingPathComponent("exports"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: dir.appendingPathComponent("${OTHER}"), withIntermediateDirectories: true)
+        addTeardownBlock { try? fm.removeItem(at: dir) }
+        let previous = fm.currentDirectoryPath
+        XCTAssertTrue(fm.changeCurrentDirectoryPath(dir.path))
+        defer { fm.changeCurrentDirectoryPath(previous) }
+
+        for (raw, target) in [("exports", "exports/out"), ("${OTHER}", "${OTHER}/out")] {
+            let inCwd = dir.appendingPathComponent(target).path
+            XCTAssertThrowsError(try AllowedRootsValidator().validate(inCwd, allowedRoots: parse(raw)), raw)
+        }
+        XCTAssertThrowsError(
+            try AttachmentDestination(savePath: dir.appendingPathComponent("exports/file.txt").path,
+                                      allowedRoots: parse("exports"))) { error in
+            guard case AttachmentDestinationError.rejected = error else { return XCTFail("\(error)") }
+        }
+    }
+
+    func testAnUnusableEntryIsNoted() {
+        var logs: [String] = []
+        _ = AllowedRootsValidator.configuredRoots(from: "${OTHER}", log: { logs.append($0) })
+        XCTAssertEqual(logs.count, 1)
+        XCTAssertTrue(logs[0].contains("not an absolute path"), logs.first ?? "")
+    }
+
+    func testATildeRootStaysUsable() throws {
+        let roots = parse("~/che-mail-574-root")
+        XCTAssertEqual(roots, ["~/che-mail-574-root"])
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        XCTAssertNoThrow(try AllowedRootsValidator().validate(home + "/che-mail-574-root/out", allowedRoots: roots))
+    }
+
+    func testAPathContainingDollarBracesIsStillARoot() {
+        XCTAssertEqual(parse("/a/${x"), ["/a/${x"])
+        XCTAssertEqual(parse("/a/${x}"), ["/a/${x}"], "an absolute path is a root whatever it contains")
     }
 }

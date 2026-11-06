@@ -17,12 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Allowed save and export folders** setting that maps onto the variable; it
   takes the same colon-separated absolute paths and, when set, replaces the
   home default. The README lists where to set the variable for each install
-  method. An entry that is an unexpanded placeholder (`${...}`) is now ignored
-  with a note on stderr, so a host that passes an unset setting through
-  literally keeps the home default instead of denying every destination. How
-  Claude Desktop passes an empty setting was not checked on a real install; the
-  setting has an empty default, and the `save_attachment` and `output_dir`
-  descriptions state the limit.
+  method. A value that is exactly the manifest's placeholder counts as unset, so
+  a host that passes an unset setting through literally keeps the home default.
+  How Claude Desktop passes an empty setting was not checked on a real install;
+  the setting has an empty default, and the `save_attachment` and `output_dir`
+  descriptions state the limit. **Behaviour change:** any other entry that is not
+  an absolute path now matches nothing, with a note on stderr. A relative entry
+  used to be resolved against the server's working directory; a value made only
+  of such entries now denies every destination.
 
 ### Changed
 
