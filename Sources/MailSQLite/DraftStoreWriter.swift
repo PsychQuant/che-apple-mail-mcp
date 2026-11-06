@@ -125,6 +125,7 @@ public final class DraftStoreWriter {
             }
         } catch {
             // A scan that stopped early cannot say there is exactly one row (#618).
+            logReadFailure("mailboxes", error)
             return nil
         }
         return hits.count == 1 ? hits[0] : nil
@@ -146,6 +147,7 @@ public final class DraftStoreWriter {
                 result = (sqlite3_column_int64(st, 0), comment)
             }
         } catch {
+            logReadFailure("sender", error)
             return nil
         }
         return result
@@ -334,6 +336,13 @@ public final class DraftStoreWriter {
         while try stepHasRow(st) { row(st) }
     }
 
+    /// The gates answer nil or empty, which names no cause, so it goes to stderr.
+    private func logReadFailure(_ what: String, _ error: Error) {
+        // The throwing overload: a closed stderr must not abort the server (#346).
+        try? FileHandle.standardError.write(contentsOf: Data(
+            "DraftStoreWriter: \(what) read failed (\(error))\n".utf8))
+    }
+
     /// A row, the end of the results, or a throw (#618). A failed read must not
     /// look like an empty answer: to `rollback`, "no rows" means "not uploaded".
     private func stepHasRow(_ st: OpaquePointer?) throws -> Bool {
@@ -352,6 +361,7 @@ public final class DraftStoreWriter {
                 names.append(String(cString: sqlite3_column_text(st, 0)))
             }
         } catch {
+            logReadFailure("\(table) columns", error)
             return []   // reads as drift, never as a partial column list
         }
         return names

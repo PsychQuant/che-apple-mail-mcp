@@ -18,9 +18,11 @@ import SQLite3
 final class DraftStoreWriterReadFailureTests: XCTestCase {
 
     private static let rowCount = 3000
-    private static let inserted = DraftStoreWriter.Inserted(
-        messageRowId: 7, conversationId: 8, globalDataRowId: 9, actionRowId: 10,
-        messageIdHash: 11, emlxPath: "/nonexistent/7.emlx")
+    /// Every table `rollback` deletes from, each seeded with the draft's row.
+    private static let draftTables = [
+        "action_messages", "local_message_actions", "recipients", "searchable_messages",
+        "conversation_id_message_id", "messages", "conversations",
+    ]
 
     private enum ServerMessages { case empty, uploaded, failing }
 
@@ -51,9 +53,15 @@ final class DraftStoreWriterReadFailureTests: XCTestCase {
             CREATE TABLE conversation_id_message_id (conversation_id INTEGER, message_id INTEGER);
             CREATE TABLE conversations (conversation_id INTEGER);
             CREATE TABLE messages (ROWID INTEGER PRIMARY KEY, remote_id INTEGER);
+            INSERT INTO action_messages VALUES (7);
+            INSERT INTO local_message_actions VALUES (10);
+            INSERT INTO recipients VALUES (7);
+            INSERT INTO searchable_messages VALUES (7);
+            INSERT INTO conversation_id_message_id VALUES (8, 11);
             INSERT INTO messages VALUES (7, NULL);
             INSERT INTO conversations VALUES (8);
             """)
+        try Data("draft".utf8).write(to: URL(fileURLWithPath: emlxPath(beside: path)))
         switch serverMessages {
         case .failing:
             try exec("""
@@ -85,15 +93,29 @@ final class DraftStoreWriterReadFailureTests: XCTestCase {
         return path
     }
 
-    private func messageCount(_ path: String) throws -> Int {
+    private func emlxPath(beside path: String) -> String {
+        (path as NSString).deletingLastPathComponent + "/7.emlx"
+    }
+
+    private func inserted(beside path: String) -> DraftStoreWriter.Inserted {
+        .init(messageRowId: 7, conversationId: 8, globalDataRowId: 9, actionRowId: 10,
+              messageIdHash: 11, emlxPath: emlxPath(beside: path))
+    }
+
+    /// Rows left in each table the rollback touches, plus the file.
+    private func remaining(_ path: String) throws -> [Int] {
         var db: OpaquePointer?
         XCTAssertEqual(sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY, nil), SQLITE_OK)
         defer { sqlite3_close(db) }
-        var st: OpaquePointer?
-        XCTAssertEqual(sqlite3_prepare_v2(db, "SELECT count(*) FROM messages", -1, &st, nil), SQLITE_OK)
-        defer { sqlite3_finalize(st) }
-        XCTAssertEqual(sqlite3_step(st), SQLITE_ROW)
-        return Int(sqlite3_column_int64(st, 0))
+        var counts: [Int] = []
+        for table in Self.draftTables {
+            var st: OpaquePointer?
+            XCTAssertEqual(sqlite3_prepare_v2(db, "SELECT count(*) FROM \(table)", -1, &st, nil), SQLITE_OK)
+            defer { sqlite3_finalize(st) }
+            XCTAssertEqual(sqlite3_step(st), SQLITE_ROW)
+            counts.append(Int(sqlite3_column_int64(st, 0)))
+        }
+        return counts + [FileManager.default.fileExists(atPath: emlxPath(beside: path)) ? 1 : 0]
     }
 
     // MARK: - rollback
@@ -101,25 +123,25 @@ final class DraftStoreWriterReadFailureTests: XCTestCase {
     func testAFailedUploadCheckRefusesTheRollbackAndDeletesNothing() throws {
         let path = try makeStore(serverMessages: .failing)
         let writer = try DraftStoreWriter(databasePath: path)
-        XCTAssertThrowsError(try writer.rollback(Self.inserted)) { error in
+        XCTAssertThrowsError(try writer.rollback(inserted(beside: path))) { error in
             guard case DraftStoreWriter.WriteError.sql(let message) = error else { return XCTFail("\(error)") }
             XCTAssertTrue(message.contains("integer overflow"), message)
         }
-        XCTAssertEqual(try messageCount(path), 1, "an unknown upload state must leave the draft alone")
+        XCTAssertEqual(try remaining(path), [1, 1, 1, 1, 1, 1, 1, 1], "an unknown upload state leaves the draft alone")
     }
 
     func testAnUploadedDraftIsStillRefused() throws {
         let path = try makeStore(serverMessages: .uploaded)
-        XCTAssertThrowsError(try DraftStoreWriter(databasePath: path).rollback(Self.inserted)) { error in
+        XCTAssertThrowsError(try DraftStoreWriter(databasePath: path).rollback(inserted(beside: path))) { error in
             XCTAssertEqual(error as? DraftStoreWriter.WriteError, .alreadyUploaded)
         }
-        XCTAssertEqual(try messageCount(path), 1)
+        XCTAssertEqual(try remaining(path), [1, 1, 1, 1, 1, 1, 1, 1])
     }
 
     func testAnUnuploadedDraftStillRollsBack() throws {
         let path = try makeStore()
-        try DraftStoreWriter(databasePath: path).rollback(Self.inserted)
-        XCTAssertEqual(try messageCount(path), 0)
+        try DraftStoreWriter(databasePath: path).rollback(inserted(beside: path))
+        XCTAssertEqual(try remaining(path), [0, 0, 0, 0, 0, 0, 0, 0])
     }
 
     // MARK: - the mailbox gate
