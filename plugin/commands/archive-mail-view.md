@@ -1,7 +1,7 @@
 ---
 description: "從 .threads.json 生成指定 thread 的聚合視圖"
 argument-hint: "<thread-key-substring> [archive-dir]"
-allowed-tools: Read, Write, Glob, Bash(mkdir:*)
+allowed-tools: Read, Write, Glob, Bash(mkdir:*), Bash(python3:*)
 ---
 
 # Archive Mail — Thread View
@@ -66,7 +66,7 @@ fi
 
 ### Step 4: 讀取 messages 並依時序排序
 
-**排序怎麼執行（#556）**：`thread_order`／`thread_bounds` 是 `archive-mail.md` 日期 recipe（標記 `archive-mail-date-recipe`）裡的純函式，這個指令不另寫一份。把該 recipe 存成固定腳本，腳本與輸入輸出檔都放在這次叫用用 `mktemp -d` 建的私有目錄（不用共用的固定路徑），輸入（每封信的 `date` 與 `file`）用 `Write` 寫成 JSON 檔，由腳本讀入後當函式引數，輸出寫成 JSON 檔再用 `Read` 讀回；信件衍生的字串只經 JSON 檔傳遞，不放進指令字串。本指令的 `allowed-tools` 沒有 python，執行 Python 時由宿主提示權限，不擴大 `allowed-tools`。**無人值守時不等待授權**：宿主沒有放行 Python（沒有人可以按允許）就視同拿不到執行能力，立刻停止，不卡住。**拿不到執行能力（宿主不放行、`python3` 不存在、recipe 執行失敗）就停止**，報 `status: order-unavailable` 與原因，不寫任何輸出、不改 `.threads.json`；**不得**退回手動比較字串或心算排序（那正是 #556 要消除的不確定性）。
+**排序怎麼執行（#556）**：`thread_order`／`thread_bounds` 是 `archive-mail.md` 日期 recipe（標記 `archive-mail-date-recipe`）裡的純函式，這個指令不另寫一份。把該 recipe 存成固定腳本，腳本與輸入輸出檔都放在這次叫用用 `mktemp -d` 建的私有目錄（不用共用的固定路徑），輸入（每封信的 `date` 與 `file`）用 `Write` 寫成 JSON 檔，由腳本讀入後當函式引數，輸出寫成 JSON 檔再用 `Read` 讀回；信件衍生的字串只經 JSON 檔傳遞，不放進指令字串。本指令的 `allowed-tools` 宣告了 `Bash(python3:*)`（#556 verify 後加上；原本 D3 的決定是不擴大，改由 PR 審查者要求宣告），所以無人值守時不會停在權限提示上。宿主仍可能拒絕：被拒（沒有人可以按允許）就視同拿不到執行能力，立刻停止，不卡住。**拿不到執行能力（宿主不放行、`python3` 不存在、recipe 執行失敗）就停止**，報 `status: order-unavailable` 與原因，不寫任何輸出、不改 `.threads.json`；**不得**退回手動比較字串或心算排序（那正是 #556 要消除的不確定性）。
 
 對選定的 thread entry：
 

@@ -1006,6 +1006,12 @@ def unmatched_literals(entries, mailbox_lists):
             and not any(matches_special(m, e) for m in seen)]
 
 
+def is_dropped(mailbox, drop_names):
+    """True only for an exact full-path match. A last-segment-only match (Clients/Junk vs Junk) is never True:
+    classify_mailboxes returns it as `confirm` so the run stops and asks."""
+    return isinstance(mailbox, str) and mailbox in _entries(drop_names)
+
+
 def classify_mailboxes(mailboxes, drop_names):
     """Decide every distinct result mailbox against the drop-set, following the surrounding rule: a full path
     drops; a bare name drops only the top-level folder of that name; a mailbox that merely ENDS in '/name' is not

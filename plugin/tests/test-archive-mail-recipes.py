@@ -472,6 +472,12 @@ class ArchiveDropSetRecipeTests(unittest.TestCase):
                          {"drop": ["INBOX"], "keep": [], "confirm": []})
         self.assertEqual(self.classify(None, None), {"drop": [], "keep": [], "confirm": []})
 
+    def test_is_dropped_is_a_full_path_match_only(self):
+        self.assertFalse(self.drop["is_dropped"]("Clients/Junk", ["Junk"]))
+        self.assertTrue(self.drop["is_dropped"]("[Gmail]/Junk", ["Junk", "[Gmail]/Junk"]))
+        self.assertTrue(self.drop["is_dropped"]("Junk", ["Junk"]))
+        self.assertFalse(self.drop["is_dropped"](None, ["Junk"]))
+
     def test_unmatched_literals_ignore_roles_and_report_missing_folders(self):
         missing = self.drop["unmatched_literals"](
             ["Junk", "Old", "A/B"], [["INBOX", "X/B"], ["Old"]])
@@ -537,9 +543,11 @@ class ArchiveSkipDraftsSopTests(unittest.TestCase):
         for name in ("archive-mail-rebuild-threads.md", "archive-mail-view.md"):
             body = (DOCUMENT.parent / name).read_text()
             with self.subTest(name=name):
-                self.assertIn("無人值守時不等待授權", body)
+                self.assertIn("所以無人值守時不會停在權限提示上", body)
+                self.assertIn("立刻停止，不卡住", body)
                 self.assertIn("`mktemp -d`", body)
-                self.assertIn("不擴大 `allowed-tools`", body)   # maintainer decision D3 of #556
+                self.assertIn("Bash(python3:*)", body.split("---")[1])   # the frontmatter declares what the command needs
+                self.assertIn("宣告了 `Bash(python3:*)`", body)
 
     def test_the_8b_denominator_is_subtracted_per_thread_only(self):
         text = DOCUMENT.read_text()
@@ -976,6 +984,28 @@ class ArchiveScanRecipeTests(unittest.TestCase):
         out = self.report({"a.md": '---\nmessage_id: "<a>\ndate: "2026-06-30"\n---\n', "b.md": self.md("<b>")})
         self.assertEqual(out["unparseable"], ["a.md"])
         self.assertEqual([u["file"] for u in out["usable"]], ["b.md"])
+
+    def test_scan_report_output_feeds_reverse_inventory_directly(self):
+        out = self.report({"a.md": self.md("<a>"), "b.md": self.md("<b>"), "c.md": "no frontmatter"})
+        ns = dict(self.ns)
+        exec(compile(recipe_code("reverse"), "reverse", "exec"), ns)
+        index = {"<a>": {"file": "a.md"}, "<gone>": {"file": "gone.md"}, "<c>": {"file": "c.md"}}
+        inv = ns["reverse_inventory"](index, out["files"])
+        self.assertEqual(inv["counts"]["file-not-in-target-top-level"], 1)      # gone.md
+        self.assertEqual(inv["counts"]["key-differs-from-file-message-id"], 0)  # c.md exists but is unparseable: not a mismatch
+        self.assertEqual(inv["total"], 1)
+
+    def test_read_frontmatter_keeps_message_id_in_the_four_hostile_cases(self):
+        cases = {"a.md": ('---\nmessage_id: "<a@example.test>"\ndate: null\n---\n', "<a@example.test>"),
+                 "b.md": ('---\nmessage_id: "<a\\n@example.test>"\ndate: "2026-01-01"\n---\n', "<a\\n@example.test>"),
+                 "c.md": ('---\nmessage_id: "<a\\qb@example.test>"\ndate: "2026-01-01"\n---\n', "<a\\qb@example.test>"),
+                 "d.md": ('---\nmessage_id: "<d@example.test>"\ndate: "not closed\n---\n', "<d@example.test>")}
+        directory = self.make({name: body for name, (body, _) in cases.items()})
+        for name, (_, expected) in cases.items():
+            with self.subTest(name=name):
+                fields, reason = self.ns["read_frontmatter"](str(Path(directory) / name))
+                self.assertIsNone(reason)
+                self.assertEqual(fields["message_id"], expected)
 
     def test_dotfiles_are_not_archive_files(self):
         out = self.report({"a.md": self.md("<a>"), "._a.md": b"\x00\x05junk"})
