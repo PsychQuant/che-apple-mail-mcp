@@ -138,6 +138,112 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any leftover compose window. A failure after the keystroke (POSTDISPATCH) keeps
   its wording unchanged. Neither tool retries, and the error's classification is
   unchanged.
+- **`TemplateExtractorTests` no longer fails on a loaded machine**
+  ([#502](https://github.com/PsychQuant/che-apple-mail-mcp/issues/502)).
+  `testTheDataShapeBackstopIsBoundedAndSharesTheRedactionPattern` timed two
+  1,024-byte `looksLikeData` scans with the wall clock and required them to
+  finish within 0.2 s; at a load of about 160 they took 0.32 s and the suite
+  failed, although the healthy cost is 5–6 ms. The timing now uses a monotonic
+  clock and the 5 s ceiling of the adversarial test in the same file, with the
+  elapsed time in the failure message. The deterministic guard (nothing over
+  1,024 bytes is scanned) is unchanged. Test-only change.
+- **`LogShowRunnerTests` keeps its timing checks clear of machine load**
+  ([#468](https://github.com/PsychQuant/che-apple-mail-mcp/issues/468)).
+  The tests time the real spawn/read/terminate/reap path with a monotonic
+  clock instead of the wall clock. The grandchild-holds-the-pipe test was the
+  tight one: with a 3 s hold against a 2.5 s ceiling, the healthy path (about
+  1.3 s) had about 1.2 s of headroom, and the broken read-until-EOF design
+  (3 s) was only 1.7 s away from it. The grandchild now holds the pipe 20 s
+  and the ceiling is 10 s, so the two outcomes are far apart; the orphaned
+  `sleep` is killed when the test ends.
+  The two endless children are `exec yes <line>` instead of a shell
+  `while true; do echo ...; done` loop, so they block on a full pipe instead of
+  spinning a core. Test-only change.
+- **The osascript fixtures in two test files refuse the known ways of addressing an application**
+  ([#572](https://github.com/PsychQuant/che-apple-mail-mcp/issues/572)).
+  `ComposeCleanupSheetTests` and `PostIdentificationCleanupTests` run fragments
+  cut out of production scripts through `/usr/bin/osascript`, and at most a check
+  for the literal `tell application` kept them away from Mail; `tell app "Mail"`,
+  `… of application "Mail"` and `activate application "Mail"` passed it. Every
+  osascript run in those two files now checks the exact text it executes with
+  `OsascriptFixtureGuard`, which removes comments and empties string literals
+  (reading Unicode scalars and `¬` continuations) and then refuses the words
+  `app`, `application`, `process` in any case, raw `«…»` codes, `|…|` identifiers, `run script`,
+  `do shell script`, `load script`, `store script`, `open location` and `use`
+  statements. It is a deny list, not a proof; a false positive only fails a test.
+  Test-only change.
+- **Timing CSV: script marks stay with the run that produced them**
+  ([#483](https://github.com/PsychQuant/che-apple-mail-mcp/issues/483)). The
+  marks a script sends back were kept in one process-wide buffer. The upload
+  trigger's marks wait there across an `await`, so a second `create_draft` run, or
+  a `compose_email` taking the whole buffer, could take them and write them under
+  the wrong `run_id`. Inside a run the marks now stay with that run, and marks
+  the run does not take are dropped with it. The shared buffer is left for calls
+  outside a run, where the only script that sends marks is `compose_email`'s,
+  which captures and takes them in one actor job. This only touches diagnostics,
+  and only with `CHE_MAIL_COMPOSE_TIMING_CSV` set.
+- **The osascript fixtures in four more test files use the shared guard**
+  ([#617](https://github.com/PsychQuant/che-apple-mail-mcp/issues/617)). Every
+  osascript run in `ClassificationTrashScriptTests`, `ComposeSignatureScriptTests`,
+  `DraftIDBaselineTests` and `RecipientReceiptMetadataFailureTests` now checks
+  the text it executes with `OsascriptFixtureGuard`. Handlers that really use the
+  Foundation bridge pass through an explicit allowance: `use framework
+  "Foundation"`, `use scripting additions`, `current application's` followed by a
+  closed list of the names these handlers use, and three piped words. `NSPredicate`
+  passes only with the one format string they use, as the whole argument, because a
+  format string can run code. Any other class-shaped name, selectors by name, and the ways to name a class
+  in a string are refused. Handlers a test does not call lose their `tell
+  application` blocks before the script runs, and a block that never closes is
+  refused instead of dropping the rest of the script. The list bounds the class names a fixture
+  can write, not what the methods of those classes do: they can read and write
+  files and fetch URLs. `OsascriptFixtureGuardScanTests` scans `Tests/`, so a new osascript run that
+  skips the guard fails a test; the two helpers gated by `CHE_MAIL_LIVE_TEST` are
+  listed by name with their reason. Test-only change.
+- **A server built in a test can take an account mapping**
+  ([#612](https://github.com/PsychQuant/che-apple-mail-mcp/issues/612)).
+  `CheAppleMailMCPServer.init` gained an optional `accountMapping`, passed to
+  `EnvelopeIndexReader`, so a handler test over a fixture index no longer reads
+  the developer's AccountsMap.plist. Without it the server behaves as before.
+- **The six ways around the direct-write guard tests now fail a test**
+  ([#492](https://github.com/PsychQuant/che-apple-mail-mcp/issues/492)). A new
+  outcome test has Mail apply the read repair 0.6 s later, so looks that do not
+  wait, as with a declared `Task` that turns the sleeps into nothing, use up their
+  tries. The timed trigger script has to equal the pinned untimed one plus its
+  marks, and the store is opened and written in one place. Each evasion was made
+  in the source and turned a test red. Test-only change; the frozen text is
+  untouched.
+- **More timing assertions kept clear of machine load**
+  ([#611](https://github.com/PsychQuant/che-apple-mail-mcp/issues/611)). The
+  four assertions left over from #502 use a monotonic clock and a 5 s ceiling.
+  `RedactionTests` also grew its inputs so that the ceiling can still catch a
+  quadratic scan: with the pattern's lookbehind removed, a scan took 0.6 s on
+  8,192 characters, which a 5 s ceiling would miss, and 9.4 s on 32,768.
+  Test-only change.
+- **The direct-write path's outcomes after the write are tested without Mail**
+  ([#484](https://github.com/PsychQuant/che-apple-mail-mcp/issues/484)).
+  `DirectDraftPath` now reaches Mail through a small protocol, and takes the OS
+  version and the account lookups as settable values. No behaviour changes, and
+  the code after the write is untouched. `DirectDraftPathOutcomeTests` runs the
+  real path and the real `DraftStoreWriter` against a test SQLite store with a
+  stand-in for Mail: upload confirmed, upload not confirmed in time, failed
+  trigger rolled back, failed trigger after Mail already uploaded, failed trigger
+  that cannot be rolled back, and the read repair, each with its outcome code and
+  `direct` step sequence. Two new tests take the timing CSV's `flock` from a
+  separate process. These show the branches, not what the real Mail does.
+- **The stdio shutdown probe starts with an allow-listed environment and checks its own assumptions**
+  ([#578](https://github.com/PsychQuant/che-apple-mail-mcp/issues/578)). The
+  probe now starts with a small allow-listed environment (`PATH`, `HOME`,
+  `TMPDIR`, `USER`, `LOGNAME`, `DYLD_*`), so switches such as
+  `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT` or `MAIL_APP_INTEGRATION_TESTS` no longer
+  reach it. A probe that never started is reported without writing to its stdin.
+  A new canary fails when `LIBDISPATCH_COOPERATIVE_POOL_STRICT` stops narrowing
+  the cooperative pool to one thread, which would silently turn the strict
+  shutdown tests into ordinary-pool tests. `StdioProbeBuildPlan` compares
+  resolved paths, so a checkout reached through a symlink (`/tmp` is one) finds
+  its link command. Test-only change. The probe still fakes only `scriptRunner`
+  and `refusal`, because it sends nothing past `initialize`
+  ([#623](https://github.com/PsychQuant/che-apple-mail-mcp/issues/623) tracks the
+  rest).
 
 ### Documentation
 

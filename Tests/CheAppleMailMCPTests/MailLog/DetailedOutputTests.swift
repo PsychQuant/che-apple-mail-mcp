@@ -187,9 +187,11 @@ final class DetailedOutputTests: XCTestCase {
     func testAnOversizedMessageIsNotParsedInBrief() {
         let huge = "[acct - box] Received " + String(repeating: "1", count: 100_000) + " new local message actions"
         // (100,000 bytes is over every bound; the bounds themselves are pinned in testBriefParsingIsBoundedInEveryDimension)
-        let t0 = Date()
-        let r = run([Synthetic.line(offset: 0, message: huge)], Synthetic.query())
-        XCTAssertLessThan(Date().timeIntervalSince(t0), 1.0)
+        // #611: monotonic, and the same ceiling as the adversarial tests. The outcome below is the
+        // real check; this only catches an oversized message being parsed after all.
+        var r: [String: Any] = [:]
+        let elapsed = ContinuousClock().measure { r = run([Synthetic.line(offset: 0, message: huge)], Synthetic.query()) }
+        XCTAssertLessThan(elapsed, .seconds(5), "an oversized message took \(elapsed)")
         XCTAssertEqual(Synthetic.results(r).first?["kind"] as? String, "unstructured")
     }
 

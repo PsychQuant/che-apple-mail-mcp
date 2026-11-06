@@ -103,6 +103,7 @@ final class DraftIDBaselineTests: XCTestCase {
 
     private func executeFixture(_ source: String) throws -> String {
         let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        try OsascriptFixtureGuard.check(source, foundationBridge: true)   // #617: the exact text osascript runs
         process.arguments = ["-e", source]
         let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
         try process.run(); process.waitUntilExit()

@@ -43,7 +43,9 @@ final class ComposeSignatureScriptTests: XCTestCase {
         let source = "use framework \"Foundation\"\nuse scripting additions\n" + composeSignatureHandlers
             + "\nreturn my signatureReceipt(\"named\", \"簽名 ] [bcc-field-revealed]\", true, true)"
         let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", source]
+        let guarded = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
+        try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
+        process.arguments = ["-e", guarded]
         let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
         try process.run(); process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
@@ -66,7 +68,9 @@ final class ComposeSignatureScriptTests: XCTestCase {
         for (marks, mode, name, expected) in fixtures {
             let source = helpers + "\nreturn my signatureChoiceIndex(" + labels + ", " + enabled + ", " + marks + ", \"" + mode + "\", \"" + name + "\")"
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", source]
+            let guarded = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
+            try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
+            process.arguments = ["-e", guarded]
             let output = Pipe(); process.standardOutput = output
             try process.run(); process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0)
@@ -95,7 +99,9 @@ final class ComposeSignatureScriptTests: XCTestCase {
             let source = helpers + "\nreturn my signatureChoiceIndex(" + labels + ", " + enabled + ", " + marks
                 + ", \"named\", \"" + wanted + "\")"
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", source]
+            let guarded = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
+            try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
+            process.arguments = ["-e", guarded]
             let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
             try process.run(); process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
@@ -108,7 +114,10 @@ final class ComposeSignatureScriptTests: XCTestCase {
         let helpers = "use framework \"Foundation\"\nuse scripting additions\n" + composeSignatureHandlers
         for (label, expected) in [("missing value", "false"), ("\"missing value\"", "true")] {
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", helpers + "\nreturn my signatureNameMatches(" + label + ", true, \"missing value\")"]
+            let source = helpers + "\nreturn my signatureNameMatches(" + label + ", true, \"missing value\")"
+            let guarded = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
+            try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
+            process.arguments = ["-e", guarded]
             let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
             try process.run(); process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
@@ -136,9 +145,12 @@ final class ComposeSignatureScriptTests: XCTestCase {
                 .replacingOccurrences(of: "my assertComposeWindowOwner(_expectedId, _expectedTitle, true)", with: "set _ownerFixture to true")
                 .replacingOccurrences(of: "my assertSignatureMenuOwner(_signatureMenuState)", with: "set _ownerFixture to true")
                 .replacingOccurrences(of: "click menu item _index of _menu", with: "return \"incorrectly accepted\"")
+                .replacingOccurrences(of: "perform action \"AXCancel\" of _menu", with: "return \"incorrectly accepted\"")
             source += "\ntry\nmy verifySignatureMenuChoice(missing value, \"none\", \"\", 1, \"Title\")\nreturn \"incorrectly accepted\"\non error _message number _code\nreturn _code as text\nend try"
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", source]
+            let guarded = OsascriptFixtureGuard.pointingTellsAtMe(source)   // #617: every statement that ran in a tell is a fixture here
+            try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
+            process.arguments = ["-e", guarded]
             let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
             try process.run(); process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
@@ -162,7 +174,10 @@ final class ComposeSignatureScriptTests: XCTestCase {
             ("{44, missing value, \"Title\", true, missing value}", "false")]
         for (actual, result) in cases {
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", helpers + "\nreturn my signatureAXOwnerMatches(" + actual + ", " + expected + ")"]
+            let source = helpers + "\nreturn my signatureAXOwnerMatches(" + actual + ", " + expected + ")"
+            let guarded = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
+            try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
+            process.arguments = ["-e", guarded]
             let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
             try process.run(); process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
@@ -182,7 +197,10 @@ final class ComposeSignatureScriptTests: XCTestCase {
                 with: "if _i is 2 and my fixtureShouldFail then error \"fixture read failed\" number -9877\nset _identifier to \"other\"\nif _i is 1 then set _identifier to \"popup_signature\"\nif _identifier is \"popup_signature\" then")
         for (fault, expected) in [("false", "1"), ("true", "missing value")] {
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", "property fixtureShouldFail : " + fault + "\n" + handler + "\nreturn my signaturePopupFor(missing value)"]
+            let source = "property fixtureShouldFail : " + fault + "\n" + handler + "\nreturn my signaturePopupFor(missing value)"
+            let guarded = OsascriptFixtureGuard.pointingTellsAtMe(source)   // #617: every statement that ran in a tell is a fixture here
+            try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
+            process.arguments = ["-e", guarded]
             let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
             try process.run(); process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
@@ -233,7 +251,9 @@ final class ComposeSignatureScriptTests: XCTestCase {
             return my nativeCalls
             """
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", source]
+            let guarded = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
+            try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
+            process.arguments = ["-e", guarded]
             let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
             try process.run(); process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
@@ -252,7 +272,10 @@ final class ComposeSignatureScriptTests: XCTestCase {
             ("{42, 99}", "{\"Title\", \"Other\"}", "99", "false")]
         for (ids, names, front, expected) in fixtures {
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", helpers + "\nreturn my composeWindowMatches(" + ids + ", " + names + ", " + front + ", 42, \"Title\", true)"]
+            let source = helpers + "\nreturn my composeWindowMatches(" + ids + ", " + names + ", " + front + ", 42, \"Title\", true)"
+            let guarded = try OsascriptFixtureGuard.neutralisingApplicationBlocks(source)   // #617: uncalled handlers keep their tell blocks in production
+            try OsascriptFixtureGuard.check(guarded, foundationBridge: true)
+            process.arguments = ["-e", guarded]
             let output = Pipe(); process.standardOutput = output
             try process.run(); process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0)

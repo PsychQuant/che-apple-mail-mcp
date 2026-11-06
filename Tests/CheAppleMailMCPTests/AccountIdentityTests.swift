@@ -169,10 +169,13 @@ final class AccountIdentityTests: XCTestCase {
         let cache = AccountIdentityCache(waitTimeout: 0.02, loader: { try await loader.load() })
         let first = await cache.get()
         XCTAssertNil(first.snapshot)
-        let start = ProcessInfo.processInfo.systemUptime
-        let second = await cache.get(forceRefresh: true)
+        // #611: the loader stays blocked until the release below. A get that fell back to the default
+        // 5 s wait reaches this ceiling and fails; one that never returned would hang the test instead.
+        var second = first
+        let clock = ContinuousClock()
+        let elapsed = await clock.measure { second = await cache.get(forceRefresh: true) }
         XCTAssertNil(second.snapshot)
-        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - start, 0.5)
+        XCTAssertLessThan(elapsed, .seconds(5), "a refresh past its wait timeout took \(elapsed)")
         var calls = await loader.calls
         XCTAssertEqual(calls, 1)
         await loader.release()

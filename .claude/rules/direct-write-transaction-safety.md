@@ -42,7 +42,7 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 當理由，那正是這條規則要擋的判斷。
 
 第 7、8 項有守門測試（`Tests/CheAppleMailMCPTests/DirectWriteSafetyGuardTests.swift`，#490）。它們是
-觸發 script 與原始碼的**結構檢查**，不是行為測試（行為測試要等 #484 的測試入口）。這兩條守門測試會轉紅的
+觸發 script 與原始碼的**結構檢查**，不是行為測試（行為測試見下方第 2、3、6 項）。這兩條守門測試會轉紅的
 情況**只有以下這些，不得依性質相似推論其他改動也會被擋**：
 
 - **第 8 項**（解析觸發 script；比對前去掉 AppleScript 註解，字串內容清空，關鍵字不分大小寫）：
@@ -68,18 +68,27 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 `readOutcome`、`outcomeAfterFailedTrigger`、`buildDirectDraftMarkReadScript`、`buildDirectDraftTriggerScript`
 （`DirectDraftPathTests`）、`triggerDirectDraftUpload`（`DirectDraftTriggerTimingTests`，#489：斷言它送出的
 就是 `buildDirectDraftTriggerScript` 在同一個 `timing` 下的輸出）與 `uploadState`（`DraftStoreWriterTests`），
-`readFlag`、`createdText`、`markDirectDraftRead` 沒有任何測試。
+`readFlag` 與 `createdText` 由 `DirectDraftPathOutcomeTests` 走過（#484），`markDirectDraftRead` 在那裡是替身，真的那個沒有測試。
 
-結構檢查擋不住所有削弱方式。#490 第 4 輪驗證找到下列六種寫法，這兩條守門測試都不會轉紅（#492；根治要靠
-#484 的行為測試）：
+結構檢查擋不住所有削弱方式。#490 第 4 輪驗證找到下列六種寫法，這兩條守門測試都不會轉紅。#492 之後，每一種都有別的測試會轉紅，列在各項後面，都實際改過原始碼確認：
 
-1. 在 `timer.mark("inserted")` 之前提早回報；
-2. 讓 `triggerDirectDraftUpload` 送出 `buildDirectDraftTriggerScript` 以外的 script，或在送出前改寫它
-   （#489 之後由 `DirectDraftTriggerTimingTests` 擋下，但不屬於這兩條守門測試）；
-3. 在 `DirectDraftPath` 裡宣告與凍結段所用名稱同名的型別或函式（例如 `Task`）；
-4. 用 `set the read status of` 之類的寫法多加一次切換；
-5. 用 `if` 等控制流程包住兩次切換；
-6. 另寫一條名稱不同、不經 `attemptSteps` 的平行路徑。
+1. 在 `timer.mark("inserted")` 之前提早回報：`DirectDraftPathOutcomeTests` 的結果與步驟序列；
+2. 讓 `triggerDirectDraftUpload` 送出 `buildDirectDraftTriggerScript` 以外的 script，或在送出前改寫它：
+   `testTriggerSendsTheBuildersScriptForItsTimingFlag`；
+3. 在 `DirectDraftPath` 裡宣告與凍結段所用名稱同名的型別或函式（例如 `Task`）：
+   把 `Task.sleep` 變成空的，`testTheReadRepairGivesMailTimeBetweenItsLooks` 會轉紅；
+4. 用 `set the read status of` 之類的寫法多加一次切換：`testUntimedTriggerScriptIsUnchanged`；
+   只在計時時才多加的，`testTimedTriggerIsTheUntimedOnePlusItsMarks`；
+5. 用 `if` 等控制流程包住兩次切換：同第 4 項；
+6. 另寫一條名稱不同、不經 `attemptSteps` 的平行路徑：再開一次 `DraftStoreWriter(` 或再寫一次 `writer.insert(`，
+   `testTheStoreIsOpenedAndWrittenInOnePlace` 會轉紅。
+
+這些測試已知還抓不到下列寫法，不代表只有這些：
+
+- 第 1 項：條件只在測試情境以外成立的提早回報；
+- 第 3 項：只讓上傳輪詢不等待的宣告（補設已讀的等待照舊）；把等待縮短但沒有變成空的宣告（約 90 ms 以上，八次查看仍涵蓋 0.6 秒）；宣告 `Task` 以外的名稱，例如 `Date`；
+- 第 4 項：藏在 `ComposeTiming.prelude` 或 `markStatement` 裡、只在計時時執行的切換；
+- 第 6 項：用別的名字沿用已開的 writer；寫成 `DraftStoreWriter.init(` 或把 `.insert(` 換行；把平行路徑放進 `DraftStoreWriter.swift`；不經 `DraftStoreWriter` 寫入 store。
 
 測試轉紅時，先取得上面要求的證據並更新本規則，再改測試；不要只改門檻或凍結副本。
 
@@ -89,11 +98,16 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
   - 檔案寫不進去（`testInsertLeavesNothingBehindWhenTheFileCannotBeWritten`）；
   - `.emlx` 放好之後才失敗（`testInsertRemovesThePlacedFileWhenALaterStepFails`）：檢查放檔已執行、writer 的交易確實結束（另一條連線拿得到寫入鎖）、沒有留下任何資料列或檔案。拿掉 ROLLBACK、拿掉刪檔、或把失敗移到放檔之前，這條都會轉紅。
   - 缺口：交易一開始就拿寫入鎖（`BEGIN IMMEDIATE`）沒有測試，改成一般的 `BEGIN` 這兩條都不會轉紅；失敗後會留下空的 `Messages` 目錄（#503），上面那條測試目前正是靠這個目錄證明放檔已執行。
-- **第 2、3、6 項**：只有純函式的單元測試（`outcomeAfterFailedTrigger` 三條、`readOutcome`）、`createDraft` 層的一條（直接寫入回報已建立時不走 GUI 路徑，`testACreatedDirectDraftSkipsTheGuiPath`），以及 writer 端的兩條：提交後的 `rollback()` 會還原全部（`testInsertWritesEveryRowAndTheFileThenRollbackRestoresAll`）、Mail 已上傳就拒絕還原（`testRollbackRefusesOnceTheServerHasTheMessage`）。以下三件事在 `attemptSteps` 層都沒有行為測試，要等 #484 的測試入口：
-  - 觸發失敗時先還原，才改走 GUI 路徑；
-  - 觸發成功後不退回；
-  - 沒有確認上傳就不回報已上傳。
-- **第 4 項**：`DirectDraftPathTests` 有三種寫入前結果的行為測試：旗標關、一種不符條件（cc/bcc）、版本閘門（讀不到 Mail 版本）。其餘條件與閘門只測了結果代碼與文字，也沒有測試證明每次呼叫都依序跑完全部閘門。「cache 不能取代閘門」要等 cache 存在才有東西可測（#487）。
+- **第 2、3、6、7 項**：`DirectDraftPathOutcomeTests`（#484）走真的 `attemptSteps` 與真的 `DraftStoreWriter`，只有 Mail 是替身，store 是測試自己建的 SQLite 檔（有 writer 驗證的表與欄位，沒有 Mail 的 trigger）。替身照 Mail 改真 store 的方式改那個檔。這批測試斷言結果代碼與 `direct` 步驟序列：
+  - 上傳確認 → `created`，步驟走到 `uploaded`、`read_ensured`；
+  - 上傳期限內沒有確認 → `created:upload_pending`，不走 GUI 路徑，不回報已上傳；
+  - 觸發失敗 → 先還原才走 GUI 路徑一次，還原的結果在 GUI 路徑裡檢查（`rollback()` 涵蓋的資料列與 `.emlx` 都不留；它不還原的列見 #628）；
+  - 觸發失敗但 Mail 已上傳 → 還原被拒，回 `created`，不走 GUI 路徑；
+  - 觸發失敗且還原因其他原因失敗 → `created:upload_pending`，回報上傳未確認；
+  - 上傳後仍未讀 → 補設已讀一次；補設無效 → 帶 note，沒有 `read_ensured`。
+
+  另有純函式的單元測試（`outcomeAfterFailedTrigger` 三條、`readOutcome`）、`createDraft` 層的一條（`testACreatedDirectDraftSkipsTheGuiPath`），以及 writer 端的兩條：提交後的 `rollback()` 會還原它涵蓋的資料列與 `.emlx`（`testInsertWritesEveryRowAndTheFileThenRollbackRestoresAll`，不涵蓋的見 #628）、Mail 已上傳就拒絕還原（`testRollbackRefusesOnceTheServerHasTheMessage`）。這批測試證明的是 `attemptSteps` 的分支，不是 Mail 的真實行為；後者仍靠 live 驗證。
+- **第 4 項**：`DirectDraftPathTests` 有三種寫入前結果的行為測試：旗標關、一種不符條件（cc/bcc）、版本閘門（讀不到 Mail 版本）；`DirectDraftPathOutcomeTests` 另有三種（作業系統版本不符、帳號有簽名、store schema 漂移），都斷言 store 沒有被動過、沒有觸發。其餘條件與閘門只測了結果代碼與文字，也沒有測試證明每次呼叫都依序跑完全部閘門。「cache 不能取代閘門」要等 cache 存在才有東西可測（#487）。
 - **第 5 項**：沒有測試，見 #491。
 
 已評估過的提案（2026-10-05，live 計時：直接寫入 3.17 秒，其中寫入 14 ms、找草稿匣 470 ms、

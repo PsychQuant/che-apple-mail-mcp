@@ -10,7 +10,9 @@ final class PostIdentificationCleanupTests: XCTestCase {
             .replacingOccurrences(of: "name of _window", with: "missing value")
             .replacingOccurrences(of: "id of front window", with: "42")
         let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", helpers + "\nreturn my composeCleanupOwnerState(42, \"missing value\", false)"]
+        let source = helpers + "\nreturn my composeCleanupOwnerState(42, \"missing value\", false)"
+        try OsascriptFixtureGuard.check(source)   // #572: the exact text osascript runs
+        process.arguments = ["-e", source]
         let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
         try process.run(); process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
@@ -32,7 +34,12 @@ final class PostIdentificationCleanupTests: XCTestCase {
         ]
         for (arguments, expected) in cases {
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", composeCleanupIdentityHandlers + "\nreturn my classifyComposeCleanupOwner(" + arguments + ")"]
+            // #572: the classifier never touches Mail, but the handlers around it do; point their tell at
+            // `me` so the whole script passes the guard and nothing in it can address Mail.
+            let source = composeCleanupIdentityHandlers.replacingOccurrences(of: "tell application \"Mail\"", with: "tell me")
+                + "\nreturn my classifyComposeCleanupOwner(" + arguments + ")"
+            try OsascriptFixtureGuard.check(source)   // #572: the exact text osascript runs
+            process.arguments = ["-e", source]
             let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
             try process.run(); process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
@@ -70,9 +77,10 @@ final class PostIdentificationCleanupTests: XCTestCase {
             "set _titleMatches to 1\nset my axCalls to my axCalls + 1\nset my fixtureState to \"\(afterAX)\""
         }
         body = body.replacingOccurrences(of: "delay 0.4", with: "delay 0")
-        guard !body.contains("tell application"), !body.contains("click ") else {
+        guard !body.contains("click ") else {
             throw NSError(domain: "CleanupFixture", code: 1)
         }
+        try OsascriptFixtureGuard.check(body)   // #572: any form of addressing an application, not one literal
         let source = """
         property fixtureState : "\(initial)"
         property closeCalls : 0
@@ -99,6 +107,7 @@ final class PostIdentificationCleanupTests: XCTestCase {
         return (closeCalls as string) & "|" & (axCalls as string) & "|" & _mErr
         """
         let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        try OsascriptFixtureGuard.check(source)   // #572: the exact text osascript runs
         process.arguments = ["-e", source]
         let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
         try process.run(); process.waitUntilExit()
@@ -159,9 +168,10 @@ final class PostIdentificationCleanupTests: XCTestCase {
             .replacingOccurrences(of: "(title of _b as text)", with: "(my fixtureButton(contents of _b))")
             .replacingOccurrences(of: "click _b", with: "my fixtureClick(contents of _b)")
             .replacingOccurrences(of: "delay 0.1", with: "delay 0")
-        guard !block.contains("tell application"), !block.contains("perform action"), !block.contains("click _b") else {
+        guard !block.contains("perform action"), !block.contains("click _b") else {
             throw NSError(domain: "AXCleanupFixture", code: 1)
         }
+        try OsascriptFixtureGuard.check(block)   // #572: any form of addressing an application, not one literal
         let source = """
         property mode : "\(mode)"
         property ownerState : "\(mode == "absent" ? "absent" : "owned")"
@@ -217,6 +227,7 @@ final class PostIdentificationCleanupTests: XCTestCase {
         return (raises as string) & "|" & (clicks as string) & "|" & outcome
         """
         let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        try OsascriptFixtureGuard.check(source)   // #572: the exact text osascript runs
         process.arguments = ["-e", source]
         let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
         try process.run(); process.waitUntilExit()
@@ -287,6 +298,7 @@ final class PostIdentificationCleanupTests: XCTestCase {
             let script = "set fixtureIDs to " + ids + "\nset fixtureNames to " + names
                 + "\nset _ourId to 42\nset closedIDs to {}\n" + block + "\nreturn closedIDs as string"
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            try OsascriptFixtureGuard.check(script)   // #572: the exact text osascript runs
             process.arguments = ["-e", script]
             let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
             try process.run(); process.waitUntilExit()

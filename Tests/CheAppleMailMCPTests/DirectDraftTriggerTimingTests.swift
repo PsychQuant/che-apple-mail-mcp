@@ -85,6 +85,17 @@ final class DirectDraftTriggerTimingTests: XCTestCase {
         XCTAssertEqual(between, [ComposeTiming.markStatement("trigger_unread"), "delay 0.5"])
     }
 
+    /// #492, evasions 4 and 5 on the timed path: without the prelude and the marks, what is left is the
+    /// script pinned above, so a toggle or a branch cannot be added only when timing is on.
+    func testTimedTriggerIsTheUntimedOnePlusItsMarks() {
+        let timed = buildDirectDraftTriggerScript(rowId: 305619, timing: true)
+        let marks = Set(["trigger_script_start", "trigger_listed", "trigger_unread", "trigger_read"]
+            .map(ComposeTiming.markStatement))
+        let rest = timed.dropFirst(ComposeTiming.prelude.count).split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !marks.contains($0.trimmingCharacters(in: .whitespaces)) }
+        XCTAssertEqual(rest.joined(separator: "\n"), Self.untimedTrigger)
+    }
+
     // MARK: - Task 2.1: taking only some captured marks
 
     func testTakingMatchingMarksLeavesTheOthersInTheBuffer() {
@@ -104,11 +115,11 @@ final class DirectDraftTriggerTimingTests: XCTestCase {
             ComposeTiming.captureStderr("\(ComposeTiming.logPrefix)trigger_listed|1.0\n\(ComposeTiming.logPrefix)script_start|2.0\n")
             timer.absorbScriptMarks()
             timer.finish(.fellBack("r"))
+            XCTAssertEqual(ComposeTiming.takeCapturedMarks().map(\.label), ["script_start"], "other marks stay for their owner")
         }
         let marks = run.collected.first?.marks ?? []
         XCTAssertTrue(marks.contains { $0.label == "trigger_listed" && $0.source == "script" })
         XCTAssertFalse(marks.contains { $0.label == "script_start" })
-        XCTAssertEqual(ComposeTiming.takeCapturedMarks().map(\.label), ["script_start"], "other marks stay for their owner")
     }
 
     func testTimerWithoutARunTakesNothing() {

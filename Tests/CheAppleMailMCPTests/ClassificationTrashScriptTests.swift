@@ -61,7 +61,9 @@ final class ClassificationTrashScriptTests: XCTestCase {
         for (source, expected) in fixtures {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", handlers + "\nreturn my classifierListID(\"" + appleScriptEscape(source) + "\")"]
+            let source = handlers + "\nreturn my classifierListID(\"" + appleScriptEscape(source) + "\")"
+            try OsascriptFixtureGuard.check(source, foundationBridge: true)   // #617: the exact text osascript runs
+            process.arguments = ["-e", source]
             let output = Pipe(), errors = Pipe()
             process.standardOutput = output; process.standardError = errors
             try process.run(); process.waitUntilExit()
@@ -78,7 +80,9 @@ final class ClassificationTrashScriptTests: XCTestCase {
         for (actual, matches) in [(expected, "true"), (expected.replacingOccurrences(of: "\n", with: "\r\n"), "true"),
                                   ("Message-ID: <a@example.invalid>\n\nbody B", "false")] {
             let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-            process.arguments = ["-e", handlers + "\nreturn my classifierSourceEquals(\"" + appleScriptEscape(actual) + "\", \"" + Data(expected.utf8).base64EncodedString() + "\")"]
+            let source = handlers + "\nreturn my classifierSourceEquals(\"" + appleScriptEscape(actual) + "\", \"" + Data(expected.utf8).base64EncodedString() + "\")"
+            try OsascriptFixtureGuard.check(source, foundationBridge: true)   // #617: the exact text osascript runs
+            process.arguments = ["-e", source]
             let output = Pipe(); process.standardOutput = output
             try process.run(); process.waitUntilExit()
             XCTAssertEqual(process.terminationStatus, 0)
@@ -95,7 +99,9 @@ final class ClassificationTrashScriptTests: XCTestCase {
         let script = try buildClassificationTrashScript(message(), deadline: Date(timeIntervalSince1970: 1))
         let boundary = try XCTUnwrap(script.range(of: "\ntell application \"Mail\""))
         let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        process.arguments = ["-e", String(script[..<boundary.lowerBound]) + "\nreturn \"should not run\""]
+        let source = String(script[..<boundary.lowerBound]) + "\nreturn \"should not run\""
+        try OsascriptFixtureGuard.check(source, foundationBridge: true)   // #617: the exact text osascript runs
+        process.arguments = ["-e", source]
         let output = Pipe(); process.standardOutput = output
         try process.run(); process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0)
