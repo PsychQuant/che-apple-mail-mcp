@@ -605,14 +605,35 @@ class ArchiveSkipDraftsSopTests(unittest.TestCase):
                 self.assertIn("`mktemp -d`", body)
                 self.assertIn("不擴大 `allowed-tools`", body)   # maintainer decision D3 of #556
 
-    def test_the_8b_denominator_is_subtracted_per_thread_only(self):
+    def test_the_8b_denominator_is_never_reduced_by_drafts(self):
         text = DOCUMENT.read_text()
         note = text[text.index("**草稿與分母（#580）**"):]
         note = note[:note.index("\n")]
-        for word in ["**不可**拿全 run 的 `drafts_skipped`", "只能減「能對應到這個 thread」的", "`_bare_subject`",
-                     "就**不扣**", "無法判定（可能含草稿）", "揭露這個稽核限制"]:
+        for word in ["**`total` 一律照上面算出的值，不扣草稿**", "假警報可以接受，漏報不行", "`_bare_subject`"]:
             with self.subTest(word=word):
                 self.assertIn(word, note)
+        for word in ["從 total 扣", "就**不扣**", "無法判定（可能含草稿）", "只能減"]:
+            with self.subTest(gone=word):
+                self.assertNotIn(word, text)
+
+    def test_a_thread_with_skipped_draft_ids_names_the_possible_cause(self):
+        text = DOCUMENT.read_text()
+        note = text[text.index("**草稿與分母（#580）**"):]
+        note = note[:note.index("\n")]
+        self.assertIn("這個 thread 就算「有被排除的草稿」", note)
+        warning = text[text.index("`truncated: false` 時比對已歸檔的 count"):]
+        warning = warning[:warning.index("\n")]
+        self.assertIn("`(可能是草稿造成：本 run 排除了 {K} 封同主旨的草稿)`", warning)
+        self.assertIn("`{total}` 不變", warning)
+
+    def test_the_changelog_does_not_promise_a_subtraction(self):
+        changelog = (DOCUMENT.parents[1] / "CHANGELOG.md").read_text()
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [", changelog.index("## [Unreleased]") + 5)]
+        entry = next(line for line in unreleased.split("\n") if "[#580]" in line)
+        self.assertNotIn("subtract", entry.replace("subtracting skipped drafts can count one mail twice", ""))
+        self.assertNotIn("undecidable", entry)
+        self.assertIn("Step 8b keeps `total` as computed", entry)
+        self.assertIn("a false alarm that names its possible cause", entry)
 
     def test_the_call_block_is_not_an_unconditional_template(self):
         text = DOCUMENT.read_text()
