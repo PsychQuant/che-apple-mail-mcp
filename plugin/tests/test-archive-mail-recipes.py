@@ -563,14 +563,44 @@ class ArchiveSkipDraftsSopTests(unittest.TestCase):
         self.assertIn("依 tool schema 決定", block)
         self.assertIn("不是無條件照抄的範本", block)
 
-    def test_a_null_is_draft_is_looked_up_again_and_never_guessed(self):
-        text = DOCUMENT.read_text()
-        self.assertIn("缺席或 `null`", text)
-        self.assertIn("計入「草稿狀態不明」，不當成草稿也不當成非草稿", text)
-        self.assertIn("走 fallback 的小批次可能比以前少歸檔幾封", text)
+    def test_only_a_true_is_draft_excludes_on_the_per_email_path(self):
+        note = self.text[self.text.index("> **草稿檢查（#580）**"):]
+        note = note[:note.index("\n")]
+        self.assertIn("只有值恰為 `true` 才不歸檔", note)
+        self.assertNotIn("只有值恰為 `false` 才歸檔", self.text)
 
-    def test_per_email_path_requires_is_draft_false(self):
-        self.assertIn("只有值恰為 `false` 才歸檔", self.text)
+    def test_a_null_is_draft_goes_back_to_the_name_drop_set_and_is_still_archived(self):
+        note = self.text[self.text.index("> **草稿檢查（#580）**"):]
+        note = note[:note.index("\n")]
+        for word in ["缺席或 `null`", "回到 mailbox 名稱 drop-set 的判定", "所以照常歸檔，計入「草稿檢查不可用」",
+                     "不在 Drafts 名稱匣內的草稿可能被歸檔"]:
+            with self.subTest(word=word):
+                self.assertIn(word, note)
+
+    def test_the_metadata_re_read_is_gone(self):
+        self.assertNotIn("get_email_metadata", self.text)
+
+    def test_a_whole_batch_failure_still_archives(self):
+        paragraph = self.text[self.text.index("**批次失敗處理**"):]
+        paragraph = paragraph[:paragraph.index("\n")]
+        self.assertIn("整批失敗仍要歸檔", paragraph)
+        self.assertNotIn("逐信 `is_draft` 檢查負責", paragraph)
+
+    def test_step_7_discloses_the_unavailable_check_once_with_a_count(self):
+        self.assertEqual(self.text.count("草稿檢查不可用: 3 封"), 1)
+        rule = self.text[self.text.index("`草稿檢查不可用: N 封` 一行（#580）"):]
+        rule = rule[:rule.index("\n")]
+        self.assertIn("只印一行", rule)
+        self.assertIn("mailbox 名稱 drop-set", rule)
+
+    def test_the_changelog_states_the_fallback_residual(self):
+        changelog = (DOCUMENT.parents[1] / "CHANGELOG.md").read_text()
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [", changelog.index("## [Unreleased]") + 5)]
+        entry = next(line for line in unreleased.split("\n") if "[#580]" in line)
+        self.assertIn("a draft outside a Drafts-named mailbox can be archived, as it could before", entry)
+        self.assertIn("A whole-batch failure still archives mail", entry)
+        self.assertNotIn("get_email_metadata", entry)
+        self.assertNotIn("can archive fewer mails", entry)
 
 
 class ArchiveThreadOrderTests(unittest.TestCase):
