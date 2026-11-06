@@ -104,11 +104,11 @@ final class DirectDraftTriggerTimingTests: XCTestCase {
             ComposeTiming.captureStderr("\(ComposeTiming.logPrefix)trigger_listed|1.0\n\(ComposeTiming.logPrefix)script_start|2.0\n")
             timer.absorbScriptMarks()
             timer.finish(.fellBack("r"))
+            XCTAssertEqual(ComposeTiming.takeCapturedMarks().map(\.label), ["script_start"], "other marks stay for their owner")
         }
         let marks = run.collected.first?.marks ?? []
         XCTAssertTrue(marks.contains { $0.label == "trigger_listed" && $0.source == "script" })
         XCTAssertFalse(marks.contains { $0.label == "script_start" })
-        XCTAssertEqual(ComposeTiming.takeCapturedMarks().map(\.label), ["script_start"], "other marks stay for their owner")
     }
 
     func testTimerWithoutARunTakesNothing() {

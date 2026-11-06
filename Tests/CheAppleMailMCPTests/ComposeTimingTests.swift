@@ -346,6 +346,54 @@ final class ComposeTimingTests: XCTestCase {
         XCTAssertTrue(thrown.map { "\($0)".contains("flock") } ?? false, String(describing: thrown))
     }
 
+    // MARK: - #483: script marks stay with their run
+
+    private func marks(_ label: String) -> String { "\(ComposeTiming.logPrefix)\(label)|1.0\n" }
+
+    /// The shape of the real overlap: run A's script has finished, and before A takes its marks
+    /// another call runs to the end.
+    func testAMarkWaitingInOneRunIsNotTakenByAnother() async throws {
+        let csv = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: csv) }
+        try await ComposeTiming.withRun(csvPath: csv) {
+            ComposeTiming.captureStderr(marks("trigger_a"))
+            await ComposeTiming.withRun(csvPath: csv) {
+                ComposeTiming.captureStderr(marks("trigger_b"))
+                XCTAssertEqual(ComposeTiming.takeCapturedMarks(where: { $0.label.hasPrefix("trigger_") }).map(\.label), ["trigger_b"])
+                XCTAssertEqual(ComposeTiming.takeCapturedMarks().count, 0, "a run sees none of the other run's marks")
+            }
+            XCTAssertEqual(ComposeTiming.takeCapturedMarks().map(\.label), ["trigger_a"])
+        }
+    }
+
+    func testAPlainCallOutsideARunDoesNotSweepARunsMarks() async throws {
+        let csv = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: csv) }
+        _ = ComposeTiming.takeCapturedMarks()
+        let run = ComposeTiming.Run()
+        ComposeTiming.$currentRun.withValue(run) { ComposeTiming.captureStderr(marks("trigger_a")) }
+        XCTAssertEqual(ComposeTiming.takeCapturedMarks().count, 0, "compose_email has no run and must not take a run's marks")
+        ComposeTiming.$currentRun.withValue(run) {
+            XCTAssertEqual(ComposeTiming.takeCapturedMarks().map(\.label), ["trigger_a"])
+        }
+    }
+
+    func testConcurrentRunsEachGetOnlyTheirOwnMarks() async throws {
+        let csv = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: csv) }
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<16 {
+                group.addTask {
+                    await ComposeTiming.withRun(csvPath: csv) {
+                        ComposeTiming.captureStderr("\(ComposeTiming.logPrefix)trigger_\(index)|1.0\n")
+                        await Task.yield()
+                        XCTAssertEqual(ComposeTiming.takeCapturedMarks().map(\.label), ["trigger_\(index)"])
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - #484: the lock across processes
 
     /// Starts a perl child that takes the same `flock`, says so, and then runs `afterLock`.

@@ -433,9 +433,9 @@ final class DirectDraftTimer: @unchecked Sendable {
     /// True when the marks have a run to go to.
     var isRecording: Bool { run != nil }
 
-    /// #489 — moves the upload trigger's script marks (`trigger_*`) out of the
-    /// process-wide capture buffer into this segment, leaving any other marks
-    /// there. Without a run nothing is taken.
+    /// #489 — moves the upload trigger's script marks (`trigger_*`) out of this
+    /// run's capture buffer into this segment, leaving any other marks there.
+    /// Without a run nothing is taken.
     func absorbScriptMarks() {
         guard run != nil else { return }
         let taken = ComposeTiming.takeCapturedMarks(where: { $0.source == "script" && $0.label.hasPrefix("trigger_") })

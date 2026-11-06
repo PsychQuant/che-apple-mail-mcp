@@ -85,6 +85,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Four other test files still use literal checks
   ([#617](https://github.com/PsychQuant/che-apple-mail-mcp/issues/617)).
   Test-only change.
+- **Timing CSV: script marks stay with the run that produced them**
+  ([#483](https://github.com/PsychQuant/che-apple-mail-mcp/issues/483)). The
+  marks a script sends back were kept in one process-wide buffer. The upload
+  trigger's marks wait there across an `await`, so a second `create_draft` run, or
+  a `compose_email` taking the whole buffer, could take them and write them under
+  the wrong `run_id`. Inside a run the marks now stay with that run; the shared
+  buffer is left for calls outside a run, which capture and take in one actor
+  job. This only touches diagnostics, and only with
+  `CHE_MAIL_COMPOSE_TIMING_CSV` set.
 - **The direct-write path's outcomes after the write are tested without Mail**
   ([#484](https://github.com/PsychQuant/che-apple-mail-mcp/issues/484)).
   `DirectDraftPath` now reaches Mail through a small protocol, and takes the OS
