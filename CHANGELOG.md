@@ -83,9 +83,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Each call started its own `log show` child (237–350 MB) with no limit, and a
   cancelled call left the child running until its 30-second deadline. A third
   concurrent call now returns at once with `status: unavailable`,
-  `reason: busy` and starts nothing; a caller retries. A cancel stops the read
-  within one poll slice (250 ms), terminates and reaps the child, and returns
-  `reason: cancelled`. The slot stays taken until the child is gone. A descendant
+  `reason: busy` and starts nothing; a caller retries. A cancel stops reading
+  within one poll slice (250 ms), then terminates and reaps the child (at most
+  about 4 seconds for a child that ignores SIGTERM), and returns
+  `reason: cancelled`. The slot stays taken until then. A descendant
   that holds the stderr pipe can still outlive the call, as before; putting the
   child in its own process group is not part of this change.
 

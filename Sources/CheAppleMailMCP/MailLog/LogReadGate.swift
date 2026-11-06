@@ -27,8 +27,8 @@ final class LogReadGate: @unchecked Sendable {
 
     func release() {
         lock.lock(); defer { lock.unlock() }
-        precondition(running > 0, "LogReadGate released more often than acquired")
-        running -= 1
+        // Clamped, not a precondition: the server outlives a bookkeeping bug.
+        running = max(running - 1, 0)
     }
 
     var active: Int {

@@ -105,7 +105,8 @@ struct MailLogService {
             return unavailable(query, reason: "nonzero_exit", detail: stderrTail, skipped: skipped)
         case .cancelled:
             return unavailable(query, reason: "cancelled",
-                               detail: "the call was cancelled before the read finished", skipped: skipped)
+                               detail: "the call was cancelled before the read finished", skipped: skipped,
+                               notice: "The read was cancelled, so this says nothing about whether the action happened.")
         case .deadline: earlyStop = "deadline"
         case .scanCap: earlyStop = "scan_cap"
         default: earlyStop = nil

@@ -122,7 +122,17 @@ final class LogReadGateTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(t0), 5)
         XCTAssertEqual(response["status"] as? String, "unavailable")
         XCTAssertEqual(response["reason"] as? String, "cancelled")
+        XCTAssertFalse((response["notice"] as? String ?? "").contains("admin group"),
+                       "a cancelled read is not a permissions problem")
         XCTAssertEqual(gate.active, 0)
+    }
+
+    func testAnExtraReleaseDoesNotUnderflowOrCrash() {
+        let gate = LogReadGate(limit: 1)
+        gate.release()
+        XCTAssertEqual(gate.active, 0)
+        XCTAssertTrue(gate.tryAcquire())
+        XCTAssertFalse(gate.tryAcquire(), "the cap still holds")
     }
 
     func testASlotIsHeldUntilTheCancelledReadHasReturned() async throws {
