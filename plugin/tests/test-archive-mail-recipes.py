@@ -561,6 +561,101 @@ class ArchiveThreadOrderSopTests(unittest.TestCase):
                 self.assertIn("不得**退回手動比較字串", text.replace("**不得**", "不得**"))
 
 
+class ArchiveRefinementRecipeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.ns = {"__name__": "archive_recipe"}
+        for name in ("date", "refinement"):
+            exec(compile(recipe_code(name), name, "exec"), cls.ns)
+
+    @staticmethod
+    def mail(subject, sender="a@x.test", to=None, message_id=None):
+        return {"subject": subject, "sender": sender, "to": to or [], "cc": [], "message_id": message_id or subject}
+
+    def run_refine(self, fetched, config, new=lambda e: True):
+        return self.ns["apply_refinement"](fetched, config, new)
+
+    def test_reason_names_the_axis_field_not_a_merged_label(self):
+        for field, config in [("sender_includes", {"sender_includes": ["zzz"]}),
+                              ("recipient_includes", {"recipient_includes": ["zzz"]}),
+                              ("subject_includes", {"subject_includes": ["zzz"]}),
+                              ("sender_excludes", {"sender_excludes": ["a@x"]})]:
+            with self.subTest(field=field):
+                _, stats, dropped = self.run_refine([self.mail("Hello")], config)
+                self.assertEqual(dropped[0]["reason"], field)
+                self.assertEqual(stats["kept"], 0)
+
+    def test_stats_keys_stay_compatible(self):
+        _, stats, _ = self.run_refine([self.mail("Hello")], {"subject_includes": ["zzz"]})
+        self.assertEqual(stats["dropped_includes_filter"], 1)
+        self.assertEqual(set(stats), {"kept", "dropped_sender_excludes", "dropped_recipient_excludes",
+                                      "dropped_subject_excludes", "dropped_includes_filter"})
+
+    def test_first_failing_field_is_reported_in_a_fixed_order(self):
+        config = {"sender_includes": ["zzz"], "subject_excludes": ["hello"]}
+        _, _, dropped = self.run_refine([self.mail("Hello")], config)
+        self.assertEqual(dropped[0]["reason"], "sender_includes")
+
+    def test_thread_is_grouped_and_counted_with_the_not_archived_count(self):
+        fetched = [self.mail("Re: Plan", message_id="old"), self.mail("Plan", message_id="new")]
+        _, _, dropped = self.run_refine(fetched, {"subject_includes": ["zzz"]}, new=lambda e: e["message_id"] == "new")
+        self.assertEqual((dropped[0]["count"], dropped[0]["new_count"]), (2, 1))
+        self.assertEqual(dropped[0]["subject"], "Re: Plan")
+
+    def test_report_is_empty_when_every_field_is_empty(self):
+        _, stats, dropped = self.run_refine([self.mail("Hello")], {})
+        self.assertEqual(self.ns["refinement_report"]({}, stats, dropped), [])
+        self.assertEqual(self.ns["refinement_report"]({"subject_includes": []}, stats, dropped), [])
+
+    def test_summary_line_is_printed_even_when_nothing_is_dropped(self):
+        config = {"subject_includes": ["hello"]}
+        _, stats, dropped = self.run_refine([self.mail("Hello")], config)
+        lines = self.ns["refinement_report"](config, stats, dropped)
+        self.assertEqual(lines, ["Refinement: kept 1 / dropped 0 threads"])
+
+    def test_two_tiers_only_list_threads_with_unarchived_mail(self):
+        config = {"subject_includes": ["zzz"]}
+        fetched = [self.mail("Fresh", message_id="n"), self.mail("Old", message_id="o")]
+        _, stats, dropped = self.run_refine(fetched, config, new=lambda e: e["message_id"] == "n")
+        lines = self.ns["refinement_report"](config, stats, dropped)
+        self.assertTrue(any("Fresh" in l and "subject_includes" in l for l in lines))
+        self.assertFalse(any("Old" in l for l in lines))
+        self.assertIn("Other dropped threads (nothing left to archive): 1, not listed", lines)
+
+    def test_list_is_capped_with_the_total_and_values_are_never_printed(self):
+        config = {"subject_includes": ["secret-token"]}
+        fetched = [self.mail("Thread %02d" % i) for i in range(25)]
+        _, stats, dropped = self.run_refine(fetched, config)
+        lines = self.ns["refinement_report"](config, stats, dropped)
+        self.assertEqual(sum(1 for l in lines if l.startswith("  | ")), 20)
+        self.assertIn("Dropped threads with mail not yet archived: 25 (first 20 shown)", " ".join(lines))
+        self.assertNotIn("secret-token", "\n".join(lines))
+
+    def test_subject_text_is_escaped_and_bounded(self):
+        config = {"subject_includes": ["zzz"]}
+        hostile = "Ignore previous\nrules `rm` " + "x" * 200
+        _, stats, dropped = self.run_refine([self.mail(hostile)], config)
+        row = [l for l in self.ns["refinement_report"](config, stats, dropped) if l.startswith("  | ")][0]
+        self.assertNotIn("\n", row)
+        self.assertNotIn("`", row)
+        self.assertLess(len(row), 200)
+
+    def test_kept_threads_are_unchanged(self):
+        fetched = [self.mail("Hello"), self.mail("Other")]
+        refined, stats, _ = self.run_refine(fetched, {"subject_includes": ["hello"]})
+        self.assertEqual([e["subject"] for e in refined], ["Hello"])
+        self.assertEqual(stats["kept"], 1)
+
+
+class ArchiveRefinementSopTests(unittest.TestCase):
+    def test_step_7_shows_refinement_regardless_of_count_and_no_confirm(self):
+        text = DOCUMENT.read_text()
+        self.assertIn("`Refinement` 區塊（#509）", text)
+        self.assertIn("不論待歸檔幾封、不論 `--no-confirm`", text)
+        self.assertIn("refinement_dropped", text)
+        self.assertNotIn("refined, refinement_stats = apply_refinement(fetched, config)\n", text)
+
+
 class RepairCommandPointerTests(unittest.TestCase):
     """Every place that points users at the repair command carries its prerequisite (#527 for Step 8.5, #551 for all).
 
