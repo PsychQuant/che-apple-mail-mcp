@@ -518,7 +518,7 @@ class ArchiveThreadOrderTests(unittest.TestCase):
     def test_ties_break_by_file_name_and_order_is_input_independent(self):
         a = {"date": "2026-07-01T00:00:00Z", "file": "b.md"}
         b = {"date": "2026-07-01T00:00:00Z", "file": "a.md"}
-        c = {"date": "Wed, 01 Jul 2026", "file": "c.md"}
+        c = {"date": "Tue, 30 Jun 2026", "file": "c.md"}
         for perm in itertools.permutations([a, b, c]):
             ordered, _ = self.dates["thread_order"](list(perm))
             self.assertEqual([m["file"] for m in ordered], ["c.md", "a.md", "b.md"])
