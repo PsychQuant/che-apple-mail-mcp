@@ -44,7 +44,7 @@ final class AutomationProbeRunningListTests: XCTestCase {
         XCTAssertEqual(AutomationStatus.probe(environment: s.environment), .granted,
                        "a transiently empty list must not become 'Mail is not running'")
         XCTAssertEqual(s.sleeps, [AutomationStatus.runningListRecheckInterval])
-        XCTAssertEqual(s.logs.count, 1, "the disagreement is logged so the server's rate is observable")
+        XCTAssertEqual(s.logs.count, 1, "a recovery is logged so the server's rate is observable")
         XCTAssertTrue(s.logs[0].contains("#499"))
     }
 
@@ -54,26 +54,28 @@ final class AutomationProbeRunningListTests: XCTestCase {
         XCTAssertEqual(s.sleeps.count, 2)
     }
 
-    func testProcNotFoundIsNotRunningWithoutWaiting() {
-        // The Apple Event check's own "not running" is authoritative: Mail that
-        // is really closed costs no extra wait and logs nothing.
-        let s = Script(running: [false], status: OSStatus(procNotFound))
-        XCTAssertEqual(AutomationStatus.probe(environment: s.environment), .targetNotRunning)
-        XCTAssertEqual(s.sleeps, [])
-        XCTAssertEqual(s.logs, [])
-    }
-
-    func testListThatStaysEmptyIsStillNotRunning() {
-        // Conservative as before: without the list, a "granted" answer alone
-        // does not make Mail count as running (the GUI path would otherwise
-        // run against an absent Mail until the 45 s guard, #297).
+    func testAListThatStaysEmptyIsNotRunningWithoutAskingAppleEvents() {
+        // The probe must not have side effects: a closed Mail gets no Apple
+        // Event work at all, exactly as before #499. It would answer `.granted`
+        // here if it were asked, so this also proves it was not consulted.
         let s = Script(running: [false], status: noErr)
         XCTAssertEqual(AutomationStatus.probe(environment: s.environment), .targetNotRunning)
+        XCTAssertEqual(s.permissionReads, 0)
         XCTAssertEqual(s.sleeps, Array(repeating: AutomationStatus.runningListRecheckInterval,
                                        count: AutomationStatus.runningListRechecks))
         XCTAssertEqual(s.listReads, 1 + AutomationStatus.runningListRechecks)
-        XCTAssertEqual(s.logs.count, 1)
-        XCTAssertTrue(s.logs[0].contains("stayed empty"))
+        XCTAssertEqual(s.logs, [], "a closed Mail is the ordinary case, not a disagreement")
+    }
+
+    func testAMailThatQuitsBetweenTheListAndTheCheckIsNotRunning() {
+        let s = Script(running: [true], status: OSStatus(procNotFound))
+        XCTAssertEqual(AutomationStatus.probe(environment: s.environment), .targetNotRunning)
+        XCTAssertEqual(s.sleeps, [])
+    }
+
+    func testAnAddressErrorStaysUnknown() {
+        let s = Script(running: [true], status: -1701)
+        XCTAssertEqual(AutomationStatus.probe(environment: s.environment), .unknown(-1701))
     }
 
     func testWorstCaseWaitIsBounded() {

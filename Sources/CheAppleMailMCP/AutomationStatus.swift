@@ -57,34 +57,24 @@ enum AutomationStatus {
     /// to `targetBundleId` (default: Mail).
     ///
     /// #499: `NSRunningApplication` can come back empty for a running Mail
-    /// (seen under load in a test harness, 1–4 runs in 33). An empty list is
-    /// therefore not the verdict on its own. The Apple Event check answers
-    /// `procNotFound` (-600) for a target that is not running, so that is the
-    /// fast, authoritative "not running"; when it says anything else, the list
-    /// is re-read up to `runningListRechecks` times, `runningListRecheckInterval`
-    /// apart, and only a list that stays empty yields `.targetNotRunning`, as
-    /// before. Each disagreement is logged to stderr so the server's own rate
-    /// is observable. Neither check launches Mail.
+    /// (seen under load in a test harness, 1–4 runs in 33), so an empty list is
+    /// re-read up to `runningListRechecks` times, `runningListRecheckInterval`
+    /// apart, before it counts. Only a list that stays empty yields
+    /// `.targetNotRunning`. The Apple Event check still runs only for a target
+    /// the list shows: it is not asked about a closed Mail, so the probe does
+    /// exactly what it did before when Mail really is closed, 300 ms later.
+    /// Each recovery is logged to stderr so the server's own rate is observable.
     static func probe(targetBundleId: String = "com.apple.mail",
                       environment: Environment = .live) -> State {
-        let listed = environment.isRunning(targetBundleId)
-        let status = environment.determinePermission(targetBundleId)
-        if listed { return state(for: status) }
-        if status == OSStatus(procNotFound) { return .targetNotRunning }
-
-        for attempt in 1...runningListRechecks {
-            environment.sleep(runningListRecheckInterval)
-            if environment.isRunning(targetBundleId) {
-                environment.log("check_automation: running-application list was empty for "
-                    + "\(targetBundleId) while the Apple Event check returned \(status); "
-                    + "re-check \(attempt) found it running (#499)\n")
-                return state(for: status)
-            }
+        if !environment.isRunning(targetBundleId) {
+            guard let attempt = (1...runningListRechecks).first(where: { _ in
+                environment.sleep(runningListRecheckInterval)
+                return environment.isRunning(targetBundleId)
+            }) else { return .targetNotRunning }
+            environment.log("check_automation: running-application list was empty for "
+                + "\(targetBundleId); re-check \(attempt) found it running (#499)\n")
         }
-        environment.log("check_automation: running-application list stayed empty for "
-            + "\(targetBundleId) after \(runningListRechecks) re-checks while the Apple Event "
-            + "check returned \(status); reporting not running (#499)\n")
-        return .targetNotRunning
+        return state(for: environment.determinePermission(targetBundleId))
     }
 
     /// The Apple Event permission status for `targetBundleId`, or the
