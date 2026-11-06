@@ -512,12 +512,20 @@ class ArchiveDropSetRecipeTests(unittest.TestCase):
         self.assertFalse(self.drop["matches_special"]("INBOX", None))
         self.assertFalse(self.drop["matches_special"]("INBOX", 3))
 
-    def test_role_names_compare_without_case_on_the_full_path_only(self):
+    def test_inbox_compares_without_case_on_the_full_path_only(self):
         match = self.drop["matches_special"]
         self.assertTrue(match("Inbox", "INBOX"))
         self.assertTrue(match("INBOX", "inbox"))
         self.assertFalse(match("Clients/inbox", "INBOX"))       # a user folder stays kept, as before #634
         self.assertTrue(match("Clients/INBOX", "INBOX"))        # the exact last segment still drops
+
+    def test_the_other_role_names_stay_case_sensitive(self):
+        # IMAP makes only INBOX case-insensitive: a top-level `junk` can be a separate user folder.
+        match = self.drop["matches_special"]
+        for mailbox, name in (("junk", "Junk"), ("JUNK", "Junk"), ("drafts", "Drafts"), ("sent", "Sent"),
+                              ("trash", "Trash")):
+            with self.subTest(mailbox=mailbox):
+                self.assertFalse(match(mailbox, name))
 
     def test_literal_entries_stay_case_sensitive(self):
         self.assertFalse(self.drop["matches_special"]("archive", "Archive"))
@@ -607,13 +615,23 @@ class ArchiveMalformedInputSopTests(unittest.TestCase):
     def test_step_7_reports_unreadable_mailboxes(self):
         step7 = DOCUMENT.read_text()
         self.assertIn("`mailbox 欄位讀不到` 一行（#634）只在 `unreadable` 大於 0 時顯示", step7)
+        self.assertIn("keep-only-Sent 留不下它們", step7)
+
+    def test_step_3_carries_unreadable_to_step_7(self):
+        text = DOCUMENT.read_text()
+        rule = text[text.index("**`exclude_mailboxes` 條目的比對規則（#594）**"):]
+        rule = rule[:rule.index("\n")]
+        self.assertIn("各帳號的 `unreadable` 加總", rule)
 
     def test_the_matching_rule_states_the_case_rule(self):
         text = DOCUMENT.read_text()
         rule = text[text.index("**`exclude_mailboxes` 條目的比對規則（#594）**"):]
         rule = rule[:rule.index("\n")]
-        self.assertIn("五個角色名比對完整路徑時不分大小寫", rule)
-        self.assertIn("末段比對與其他字面條目區分大小寫", rule)
+        self.assertIn("只有 `INBOX` 比對完整路徑時不分大小寫", rule)
+        self.assertIn("其他角色名、末段比對與字面條目都區分大小寫", rule)
+
+    def test_step_7_says_what_a_field_of_ignored_entries_shows(self):
+        self.assertIn("欄位全被忽略時只顯示 `ignored` 那一行", DOCUMENT.read_text())
 
 
 class ArchiveSkipDraftsSopTests(unittest.TestCase):
@@ -952,9 +970,10 @@ class ArchiveRefinementRecipeTests(unittest.TestCase):
 
     def test_missing_or_wrong_typed_fields_are_counted_and_the_mail_stays(self):
         rows = [{"to": []}, {"subject": None, "sender": None}, "not a row", {"subject": 3, "sender": "a@x.test"},
-                dict(self.mail("Bad cc"), cc=3), self.mail("Hello")]
+                dict(self.mail("Bad cc"), cc=3), dict(self.mail("Bad to"), to=["a@x.test", 3]),
+                dict(self.mail("Bad cc item"), cc=[None]), self.mail("Hello")]
         refined, stats, _ = self.run_refine(rows, {"subject_excludes": ["zzz"]})
-        self.assertEqual((stats["malformed_messages"], len(refined)), (5, 6))
+        self.assertEqual((stats["malformed_messages"], len(refined)), (7, 8))
 
     def test_absent_or_none_to_and_cc_are_not_malformed(self):
         rows = [{"subject": "A", "sender": "a@x.test"}, {"subject": "B", "sender": "a@x.test", "to": None, "cc": None}]
@@ -971,7 +990,8 @@ class ArchiveRefinementRecipeTests(unittest.TestCase):
         _, stats, dropped = self.run_refine([{"to": []}, self.mail("Hello")], config)
         lines = self.ns["refinement_report"](config, stats, dropped)
         self.assertIn("Refinement: ignored 3 blank or non-string config entries", lines)
-        self.assertIn("Refinement: 1 messages had a missing or wrong-typed field (counted, not excluded)", lines)
+        self.assertIn("Refinement: 1 messages had a missing or wrong-typed field; the filters read those fields as empty",
+                      lines)
 
     def test_a_config_that_only_has_ignored_entries_says_so(self):
         config = {"subject_includes": [" "]}
