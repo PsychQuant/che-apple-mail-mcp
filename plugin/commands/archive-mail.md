@@ -954,9 +954,11 @@ mcp__plugin_che-apple-mail-mcp_mail__search_emails(
 
 > **mailbox 後過濾比對規則（plugins#109 verify，全 Step 3 適用）**：`search_emails` 結果的 `mailbox` 是**完整解碼路徑**（Gmail 巢狀匣如 `[Gmail]/草稿`、`[Gmail]/寄件備份`），而 `get_special_mailboxes` 回的實名是**葉名**（`草稿` / `寄件備份`）——**不可用裸字串 `==` 比對**（會靜默 no-op：草稿漏進 corpus、keep-only-Sent 丟光寄出信）。`matchesSpecial(result.mailbox, 實名)` 為真 iff **完整路徑相等**，或 **`result.mailbox` 以 `/實名` 結尾（末段相等）**。末段相等**單獨用不安全**：使用者自建資料夾（如 `專案/草稿`）會與 Drafts 葉名衝突——結果集中出現同末段的非特殊匣時，改用完整路徑判別或**停下確認**，勿靜默丟棄/保留。每帳號記錄實際觀察到的 `mailbox` 值供 audit。**統一 drop-set** = Drafts ∪ Trash ∪ `exclude_mailboxes` 配置列出的匣（角色名先展開成該帳號實名，見下方 dropset recipe；字面條目保留）；本規則適用 recipe (1)、3b、3c、Tier 2 的 keep-only-Sent 判定，以及 Step 8b 稽核分母（thread 完整性檢查的 total 計數同樣要對每筆 `mailbox` 套 drop-set，勿裸 `==`）。
 
-> **`exclude_mailboxes` 的角色名展開（#594，選項 A，opt-in）**：條目若是特殊匣**角色名**（封閉集合，只有這五個，不分大小寫，**不得依性質相似類推**：`Inbox`、`Drafts`、`Sent`、`Trash`、`Junk`，即 `get_special_mailboxes` 回傳的五個鍵），先展開成**該帳號**的實名（優先 `<角色>_path`，沒有就用葉名 `<角色>`）再套 `matchesSpecial`。**字面條目一律保留**（取聯集），所以既有設定的行為不變；不在封閉集合內的條目只做字面比對。**預設不變**：`exclude_mailboxes` 沒寫 `Junk` 時，垃圾郵件匣的信照舊進 corpus（改預設屬選項 B，維護者未採用）。展開與警告都用下面這份 recipe，Step 3 的 (1)、3b、3c、Tier 2 與 Step 8b 分母引用同一份，不各自重寫。
+> **`exclude_mailboxes` 的角色名展開（#594，選項 A，opt-in）**：條目若是特殊匣**角色名**（封閉集合，只有這五個，不分大小寫，**不得依性質相似類推**：`Inbox`、`Drafts`、`Sent`、`Trash`、`Junk`，即 `get_special_mailboxes` 回傳的五個鍵），先展開成**該帳號**的實名（優先 `<角色>_path`，沒有就用葉名 `<角色>`）再用 recipe 的 `classify_mailboxes` 判定。**字面條目一律保留**（取聯集），所以既有設定的行為不變；不在封閉集合內的條目只做字面比對。**預設不變**：`exclude_mailboxes` 沒寫 `Junk` 時，垃圾郵件匣的信照舊進 corpus（改預設屬選項 B，維護者未採用）。展開與警告都用下面這份 recipe，Step 3 的 (1)、3b、3c、Tier 2 與 Step 8b 分母引用同一份，不各自重寫。
 >
 > 警告只在**解析失敗**時發出，**不以搜尋零命中判定**（當次剛好沒有垃圾信是正常的）：(a) 角色名在某帳號沒有對應匣（該帳號的 `get_special_mailboxes` 該鍵為空，如 POP 帳號沒有 junk），逐帳號印一行；(b) 字面條目（非角色名）在所有已設定帳號的 `list_mailboxes` 都找不到。警告後照常繼續，不中止。
+>
+> **`exclude_mailboxes` 條目的比對規則（#594）**：只有 Drafts／Trash 實名照上面既有的 `matchesSpecial` 規則；`exclude_mailboxes` 產生的名稱（字面條目與角色名展開）一律用 `classify_mailboxes`：完整路徑相等才丟；沒有斜線的名稱只丟同名的頂層匣；結果裡的匣只是**以 `/名稱` 結尾**（例如 `Clients/Junk` 對 `Junk`）時，**不可無聲丟掉、也不可無聲保留**，回傳 `confirm`，本 run 停下來列出這些匣並問使用者（建議把完整路徑寫進 `exclude_mailboxes`，或授予 Full Disk Access 讓 `get_special_mailboxes` 回傳 `<角色>_path`）。非字串或空白的條目被忽略，`get_special_mailboxes` 沒回傳（`None`）時視為什麼都不知道，角色名列入 unresolved 警告。
 
 <!-- archive-mail-dropset-recipe:start -->
 ```python
@@ -964,22 +966,32 @@ ROLES = ("inbox", "drafts", "sent", "trash", "junk")
 
 
 def matches_special(mailbox, name):
-    """Full-path equality, or the last path segment equals name."""
+    """Full-path equality, or the last path segment equals name. Only for 'does this folder exist' checks:
+    a last-segment match alone is NOT enough to drop mail (see classify_mailboxes)."""
     return bool(name) and (mailbox == name or mailbox.endswith("/" + name))
 
 
+def _entries(value):
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [entry.strip() for entry in value if isinstance(entry, str) and entry.strip()]
+
+
 def expand_exclude(entries, special):
-    """special: one account's get_special_mailboxes result.
-    Returns (names, unresolved_roles). Literal entries are always kept."""
+    """special: one account's get_special_mailboxes result (None or a non-dict is read as 'nothing known').
+    Returns (names, unresolved_roles). Literal entries are always kept; non-string and blank entries are ignored."""
+    special = special if isinstance(special, dict) else {}
     names, unresolved = [], []
-    for entry in entries:
+    for entry in _entries(entries):
         if entry not in names:
             names.append(entry)
-        role = entry.strip().lower()
+        role = entry.lower()
         if role not in ROLES:
             continue
         real = special.get(role + "_path") or special.get(role)
-        if not real:
+        if not isinstance(real, str) or not real.strip():
             unresolved.append(entry)
         elif real not in names:
             names.append(real)
@@ -988,14 +1000,30 @@ def expand_exclude(entries, special):
 
 def unmatched_literals(entries, mailbox_lists):
     """Literal (non-role) entries that exist in no account's mailbox list."""
-    seen = [m for lst in mailbox_lists for m in lst]
-    return [e for e in entries
-            if e.strip().lower() not in ROLES
+    seen = [m for lst in mailbox_lists for m in lst if isinstance(m, str)]
+    return [e for e in _entries(entries)
+            if e.lower() not in ROLES
             and not any(matches_special(m, e) for m in seen)]
 
 
-def is_dropped(mailbox, drop_names):
-    return any(matches_special(mailbox, n) for n in drop_names)
+def classify_mailboxes(mailboxes, drop_names):
+    """Decide every distinct result mailbox against the drop-set, following the surrounding rule: a full path
+    drops; a bare name drops only the top-level folder of that name; a mailbox that merely ENDS in '/name' is not
+    dropped silently and not kept silently, it goes to `confirm` (the run stops and asks), because a user folder
+    such as 'Clients/Junk' shares the last segment with the real junk folder.
+    Returns {"drop": [...], "keep": [...], "confirm": [{"mailbox", "name"}]}."""
+    names = _entries(drop_names)
+    drop, keep, confirm = [], [], []
+    for mailbox in dict.fromkeys(m for m in (mailboxes or []) if isinstance(m, str)):
+        if any(mailbox == name for name in names):
+            drop.append(mailbox)
+            continue
+        tail = next((name for name in names if "/" not in name and mailbox.endswith("/" + name)), None)
+        if tail is not None:
+            confirm.append({"mailbox": mailbox, "name": tail})
+        else:
+            keep.append(mailbox)
+    return {"drop": drop, "keep": keep, "confirm": confirm}
 ```
 <!-- archive-mail-dropset-recipe:end -->
 

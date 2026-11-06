@@ -427,17 +427,30 @@ class ArchiveDropSetRecipeTests(unittest.TestCase):
     def setUpClass(cls):
         cls.drop = recipe("dropset")
 
-    def test_role_name_expands_to_the_localized_path(self):
+    def classify(self, mailboxes, names):
+        return self.drop["classify_mailboxes"](mailboxes, names)
+
+    def test_role_name_expands_to_the_localized_full_path_and_drops_by_full_path(self):
         names, unresolved = self.drop["expand_exclude"](
             ["Junk"], {"junk": "垃圾郵件", "junk_path": "[Gmail]/垃圾郵件"})
         self.assertEqual(names, ["Junk", "[Gmail]/垃圾郵件"])
         self.assertEqual(unresolved, [])
-        self.assertTrue(self.drop["is_dropped"]("[Gmail]/垃圾郵件", names))
+        out = self.classify(["[Gmail]/垃圾郵件", "INBOX"], names)
+        self.assertEqual((out["drop"], out["keep"], out["confirm"]), (["[Gmail]/垃圾郵件"], ["INBOX"], []))
 
-    def test_leaf_fallback_when_path_is_absent_and_case_is_ignored(self):
+    def test_a_user_folder_that_shares_the_last_segment_is_never_dropped_silently(self):
+        names, _ = self.drop["expand_exclude"](["Junk"], {"junk": "Junk", "junk_path": "[Gmail]/Junk"})
+        out = self.classify(["Clients/Junk", "[Gmail]/Junk", "Junk"], names)
+        self.assertEqual(out["drop"], ["[Gmail]/Junk", "Junk"])
+        self.assertEqual(out["confirm"], [{"mailbox": "Clients/Junk", "name": "Junk"}])
+        self.assertNotIn("Clients/Junk", out["keep"])
+
+    def test_leaf_only_expansion_asks_instead_of_guessing(self):
         names, _ = self.drop["expand_exclude"](["junk"], {"junk": "Spam"})
         self.assertIn("Spam", names)
-        self.assertTrue(self.drop["is_dropped"]("[Gmail]/Spam", names))
+        out = self.classify(["[Gmail]/Spam", "Spam"], names)
+        self.assertEqual(out["drop"], ["Spam"])
+        self.assertEqual(out["confirm"], [{"mailbox": "[Gmail]/Spam", "name": "Spam"}])
 
     def test_unknown_names_are_not_expanded_and_literals_are_kept(self):
         names, unresolved = self.drop["expand_exclude"](
@@ -450,29 +463,50 @@ class ArchiveDropSetRecipeTests(unittest.TestCase):
         self.assertEqual(unresolved, ["Junk"])
         self.assertEqual(names, ["Junk"])
 
+    def test_malformed_input_has_a_defined_result(self):
+        expand = self.drop["expand_exclude"]
+        self.assertEqual(expand("Junk", {"junk": "J"}), (["Junk", "J"], []))          # a bare string is one entry
+        self.assertEqual(expand(["Junk", 5, None, "  ", ["x"]], None), (["Junk"], ["Junk"]))
+        self.assertEqual(expand(None, {}), ([], []))
+        self.assertEqual(self.classify([None, 3, "INBOX", "INBOX"], ["INBOX"]),
+                         {"drop": ["INBOX"], "keep": [], "confirm": []})
+        self.assertEqual(self.classify(None, None), {"drop": [], "keep": [], "confirm": []})
+
     def test_unmatched_literals_ignore_roles_and_report_missing_folders(self):
         missing = self.drop["unmatched_literals"](
             ["Junk", "Old", "A/B"], [["INBOX", "X/B"], ["Old"]])
         self.assertEqual(missing, ["A/B"])
 
-    def test_sibling_folder_with_the_same_prefix_is_not_dropped(self):
-        self.assertFalse(self.drop["is_dropped"]("專案/垃圾郵件箱", ["垃圾郵件"]))
+    def test_sibling_folder_with_the_same_prefix_is_kept(self):
+        out = self.classify(["專案/垃圾郵件箱"], ["垃圾郵件"])
+        self.assertEqual((out["drop"], out["confirm"], out["keep"]), ([], [], ["專案/垃圾郵件箱"]))
 
 
 class ArchiveDropSetSopTests(unittest.TestCase):
-    def test_every_drop_set_use_points_at_the_recipe(self):
+    def test_every_drop_set_use_points_at_the_recipe_within_a_window(self):
         text = DOCUMENT.read_text()
         self.assertIn("不以搜尋零命中判定", text)
-        # every place the drop-set is applied points at the recipe (a window after the mention)
-        for marker in ["**統一 drop-set** = Drafts ∪ Trash ∪ `exclude_mailboxes`",
-                       "對每筆的 `mailbox` 欄位套用下方**mailbox 後過濾規則**",
-                       "對結果每筆的 `mailbox` 套用 Step 3 的統一 drop-set"]:
-            with self.subTest(marker=marker):
-                self.assertIn(marker, text)
-        self.assertGreaterEqual(text.count("統一 drop-set"), 5)   # recipe (1), 3b, 3c, Tier 2, Step 8b all name it
-        start = text.index("**統一 drop-set** = Drafts")
-        self.assertIn("dropset recipe", text[start:start + 200])
-        self.assertIn("角色名先展開成該帳號實名", text[start:start + 200])
+        # each place that applies the drop-set must name the unified drop-set and, within 400 characters,
+        # the expansion/recipe or the rule paragraph that carries it
+        anchors = [
+            ("recipe (1)", "對每筆的 `mailbox` 欄位套用下方**mailbox 後過濾規則**"),
+            ("rule paragraph", "**統一 drop-set** = Drafts ∪ Trash ∪ `exclude_mailboxes`"),
+            ("Step 8b denominator", "對結果每筆的 `mailbox` 套用 Step 3 的統一 drop-set"),
+        ]
+        for name, marker in anchors:
+            with self.subTest(place=name):
+                self.assertEqual(text.count(marker), 1)
+        rule = text[text.index("**統一 drop-set** = Drafts"):]
+        self.assertIn("dropset recipe", rule[:260])
+        self.assertIn("角色名先展開成該帳號實名", rule[:260])
+        b8 = text[text.index("對結果每筆的 `mailbox` 套用 Step 3 的統一 drop-set"):]
+        self.assertIn("`expand_exclude` 展開", b8[:400])
+        self.assertIn("`classify_mailboxes`", text[text.index("**`exclude_mailboxes` 條目的比對規則（#594）**"):][:900])
+        for step in ("3b", "3c", "Tier 2"):
+            with self.subTest(step=step):
+                self.assertGreaterEqual(text.count("統一 drop-set"), 5)   # recipe (1), rule, 3b, 3c, Tier 2, 8b all name it
+        self.assertIn("`confirm`", text)
+        self.assertIn("不可無聲丟掉、也不可無聲保留", text)
 
 
 class ArchiveSkipDraftsSopTests(unittest.TestCase):
