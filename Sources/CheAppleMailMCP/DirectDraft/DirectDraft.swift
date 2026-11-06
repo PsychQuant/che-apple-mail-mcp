@@ -54,7 +54,10 @@ enum DirectDraft {
             if parsed.name != nil || raw.trimmingCharacters(in: .whitespaces) != parsed.address {
                 return .displayName
             }
-            if !isSimpleAddrSpec(parsed.address) { return .unsupportedAddress }
+            // An address longer than any path can carry cannot be folded (#622).
+            if !isSimpleAddrSpec(parsed.address) || parsed.address.utf8.count > maxAddressOctets {
+                return .unsupportedAddress
+            }
         }
         guard !subject.isEmpty else { return .emptySubject }
         guard let from = fromAddress, !from.isEmpty else { return .missingFromAddress }
@@ -89,6 +92,9 @@ enum DirectDraft {
 
     /// The longest line RFC 5322 §2.1.1 allows, in octets, line ending excluded.
     static let maxLineOctets = 998
+
+    /// The longest address a mail path can carry (RFC 5321 §4.5.3.1.3).
+    static let maxAddressOctets = 254
 
     /// The draft in the layout Mail writes for drafts it saves (#472 design):
     /// `multipart/alternative` with an empty `text/plain` part and the body in
@@ -183,13 +189,18 @@ enum DirectDraft {
 
     // MARK: - Encoders
 
-    /// The `Subject:` line. A long ASCII subject folds at its spaces; one with a
-    /// run too long to fit any line goes out as encoded words, which fold (#622).
+    /// The `Subject:` line. Encoded words fold themselves, so only a plain ASCII
+    /// subject is folded here, at its spaces. One that folding cannot bring under
+    /// the limit (a run with no space, a long run of spaces) goes out as encoded
+    /// words too (#622). `foldedHeaderLine` must never see encoded words: they
+    /// already hold line breaks, and folding them again ends the header block.
     static func subjectHeader(_ subject: String) -> String {
-        let line = "Subject: \(encodeHeaderText(subject))"
-        guard line.utf8.count > maxLineOctets else { return line }
-        let longestRun = subject.split(separator: " ").map(\.utf8.count).max() ?? 0
-        return longestRun < maxLineOctets ? foldedHeaderLine(line) : "Subject: \(encodedWords(subject))"
+        let encoded = encodeHeaderText(subject)
+        let line = "Subject: \(encoded)"
+        guard encoded == subject, line.utf8.count > maxLineOctets else { return line }
+        let folded = foldedHeaderLine(line)
+        let fits = folded.components(separatedBy: "\n").allSatisfy { $0.utf8.count <= maxLineOctets }
+        return fits ? folded : "Subject: \(encodedWords(subject))"
     }
 
     /// Fold a header line at its spaces so no physical line passes

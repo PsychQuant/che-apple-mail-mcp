@@ -194,6 +194,36 @@ final class DirectDraftMessageTests: XCTestCase {
         XCTAssertFalse(header(m).components(separatedBy: "\n").contains { !$0.isEmpty && $0.allSatisfy { $0 == " " } })
     }
 
+    /// The verify's regression: encoded words already hold line breaks, and
+    /// folding them again put a blank line inside the header block.
+    func testALongNonASCIISubjectKeepsItsHeaderBlockIntact() {
+        for subject in [String(repeating: "測", count: 300), String(repeating: "é ", count: 500) + "x"] {
+            let m = build(subject: subject)
+            XCTAssertLessThanOrEqual(longestLine(m), DirectDraft.maxLineOctets)
+            let h = header(m)
+            XCTAssertTrue(h.hasPrefix("Subject: =?utf-8?B?"))
+            XCTAssertTrue(h.hasSuffix("To: a@example.org, b@example.org"), "the rest of the headers stay in the block")
+            XCTAssertEqual(RFC822Parser.parseHeaders(from: m.mime)["subject"], subject)
+        }
+    }
+
+    func testLongRunsOfSpacesInAnAsciiSubjectStayUnderTheLimit() {
+        for subject in ["a" + String(repeating: " ", count: 1100) + "b",
+                        "a" + String(repeating: " ", count: 1100),
+                        String(repeating: " ", count: 1100)] {
+            let m = build(subject: subject)
+            XCTAssertLessThanOrEqual(longestLine(m), DirectDraft.maxLineOctets)
+            XCTAssertTrue(header(m).hasSuffix("To: a@example.org, b@example.org"))
+        }
+    }
+
+    func testAnAddressLongerThanAPathTakesTheGUIPath() {
+        let long = String(repeating: "x", count: 243) + "@example.org"   // 255 octets
+        XCTAssertEqual(long.utf8.count, 255)
+        XCTAssertEqual(check(to: [long]), .unsupportedAddress)
+        XCTAssertNil(check(to: [String(long.dropFirst())]), "254 octets is a legal path")
+    }
+
     func testAShortSubjectAndRecipientAreUnchanged() {
         let h = header(build(subject: "Hello there", to: ["a@example.org", "b@example.org"]))
         XCTAssertTrue(h.hasPrefix("Subject: Hello there\n"))

@@ -352,7 +352,7 @@ Before writing anything, the system SHALL check eligibility. The call is ineligi
 3. `cc` or `bcc` is non-empty.
 4. `to` is empty.
 5. A `to` entry carries a display name.
-6. A `to` entry is not a plain addr-spec.
+6. A `to` entry is not a plain addr-spec, or is longer than 254 octets (RFC 5321 section 4.5.3.1.3): such an address cannot be folded into a legal header line.
 7. `subject` is empty.
 8. `from_address` is absent or empty.
 9. `from_address` is not a bare addr-spec.
