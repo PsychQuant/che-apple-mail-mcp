@@ -679,7 +679,7 @@ fi
 
 **再驗證 thread 索引形狀（#558）**：不論 `dedup_strategy`（Step 5.7 在每種模式下都維護 `${THREADS_FILE}`），`${THREADS_FILE}` 都要過一次 `load_threads_index`（recipe 與回傳表在下方「載入並驗證 `${THREADS_FILE}`」），這裡只驗證、不讀內容；Step 1.5 與 Step 5.7 用到內容時，各自先驗證當下的檔案再讀（Step 1.6「thread 索引怎麼讀」）。loader 回報 `threads_error` 時，**本 run 在 Step 3 之前停止**：印一行 `⚠ threads_error: <名稱>`（`threads-not-object`、`threads-file-not-object`、`threads-not-json` 或 `thread-entry-invalid`）；與 `index_error` 同時出現時兩行都印。不搜尋、不寫任何檔，也不跑下方的復原流程：那裡的「loader 沒有回報錯誤」指兩個 loader 都沒有。復原方式是請使用者執行 `/archive-mail-rebuild-threads <output_dir> --index-dir <${THREADS_FILE} 所在目錄的絕對路徑>` 後重跑（指名 `--index-dir`，它重建的才是這個 `${THREADS_FILE}`）：它先把舊檔備份成 `threads.json.bak.<時間>`，再從 Markdown frontmatter 重建，messages、日期與筆數都會回來，但 frontmatter 只帶寄件人，所以只出現在 To／Cc 的人會從 `participants` 消失（Step 1.5 的候選也跟著少）。SOP 不自動執行 rebuild、不自動移開該檔：要不要接受這個損失，由使用者決定。
 
-**index 覆蓋檢查（#603,`index`／`both`）**：loader 沒有回報錯誤、而且 index 檔存在時，在 Step 3 之前用「目錄掃描 recipe」的 `scan_top_level` 與 `classify_scan` 掃輸出目錄頂層，再用 `index_coverage` 比對：頂層可用檔案（`unparseable` 與 `synthetic_placeholder` 不算）的 `message_id` 有沒有都是 index 的 key。有缺漏時**本 run 在 Step 3 之前停止**，印一行 `⚠ index_stale: N top-level files are not in the index`，接著把缺漏的檔名（最多 20 個，經 `bounded_text`，放在標明資料的 fenced code block 內）列出，不搜尋、不寫任何檔、不自動補。典型原因：這個 target 曾經是 `last_archived`（那個策略不維護 index，#545），之後改成 `index`／`both`，或被登錄進 registry；不停止的話，`last_archived` 期間歸檔的信會被當成新信，Step 5 的 collision guard 於是寫出 `-N` 重複檔。處置由使用者決定：把 `${INDEX_FILE}` 移開，下方的復原流程就會從 Markdown 重建（那次復原會跑 `/archive-mail-rebuild-threads`，只出現在 To／Cc 的參與者會消失，在意就先備份 `${THREADS_FILE}`），再重跑。這是維護者未拍板前的保守預設（具名停止，而不是在 Step 3 前自動復原）。`last_archived` 不讀 index，不做這個檢查；index 不存在走下方的復原。
+**index 覆蓋檢查（#603,`index`／`both`）**：loader 沒有回報錯誤、而且 index 檔存在時，在 Step 3 之前用「目錄掃描 recipe」的 `scan_top_level` 與 `classify_scan` 掃輸出目錄頂層，再用 `index_coverage` 比對：頂層可用檔案（`unparseable` 與 `synthetic_placeholder` 不算）的 `message_id` 有沒有都是 index 的 key。有缺漏時**本 run 在 Step 3 之前停止**，印一行 `⚠ index_stale: N top-level files are not in the index`，接著把缺漏的檔名（最多 20 個，經 `bounded_text`，放在標明資料的 fenced code block 內）列出，不搜尋、不寫任何檔、不自動補。典型原因：這個 target 曾經是 `last_archived`（那個策略不維護 index，#545），之後改成 `index`／`both`，或被登錄進 registry；不停止的話，`last_archived` 期間歸檔的信會被當成新信，Step 5 的 collision guard 於是寫出 `-N` 重複檔。處置由使用者決定：把 `${INDEX_FILE}` 移開，下方的復原流程就會從 Markdown 重建（那次復原會跑 `/archive-mail-rebuild-threads`，只出現在 To／Cc 的參與者會消失，在意就先備份 `${THREADS_FILE}`），再重跑。這個停止對「index 存在」的情況**取代**下方的就地復原與 Step 8.5 Phase 1 的就地補寫（它們只在 index 不存在，或停止之後使用者移開 index 時才走到）。移開前先備份 `${INDEX_FILE}`：`distributed_to` 墓碑只存在 index 裡，從 Markdown 重建不會帶回，分派過的信之後可能被再抓回來。這是維護者未拍板前的保守預設（具名停止，而不是在 Step 3 前自動復原）。`last_archived` 不讀 index，不做這個檢查；index 不存在走下方的復原。
 
 **復原只適用 `index`／`both`（#545）**：`dedup_strategy=last_archived` 不讀也不寫 index（下方「讀取兩個索引檔」），不走這段復原，`${INDEX_FILE}` 不存在是這個策略的正常狀態；它的 Step 8.5 只做唯讀稽核。`index`／`both` 只有在 loader 沒有回報錯誤時，若上次回報索引未完成，或索引不存在但輸出目錄已有 Markdown，先依 Step 6 的復原流程補齊 canonical index，再做新信搜尋。權限仍不足時停止，不重新輸出已存在的信件。
 
@@ -939,7 +939,7 @@ participant_aliases:                           # workspace 補充；全域 ident
 1. **搜尋收到的郵件**（sender 包含 filter）
 2. **搜尋寄出的郵件**（scoped 到 Sent 信箱）
 
-需要先用 `mcp__plugin_che-apple-mail-mcp_mail__list_accounts` 取得帳號列表，並對每個帳號跑 `get_special_mailboxes(account_id=...)` 解析 **Sent / Drafts / Trash 實名**（#179；不要 hardcode 英文名——本地化帳號可能叫「寄件備份」「草稿」「垃圾桶」）。實名同時供下方 (1) 的後過濾與 (2) 的 scope 使用（plugins#109 機械化）。
+需要先用 `mcp__plugin_che-apple-mail-mcp_mail__list_accounts` 取得帳號列表，並對每個帳號跑 `get_special_mailboxes(account_id=...)` 解析 **Sent / Drafts / Trash 實名**（#179；`exclude_mailboxes` 的角色名展開另需 Inbox／Junk，#594；不要 hardcode 英文名——本地化帳號可能叫「寄件備份」「草稿」「垃圾桶」）。實名同時供下方 (1) 的後過濾與 (2) 的 scope 使用（plugins#109 機械化）。
 
 對每個帳號執行兩類搜尋：
 
@@ -2017,8 +2017,11 @@ import stat
 
 def _frontmatter_value(raw):
     value = raw.strip()
+    if value in ("", "null", "~"):
+        raise ValueError("empty value")
     if value[:1] == '"':
-        return json.loads(value)            # the writers serialize strings as JSON-quoted scalars
+        decoded = json.loads(value)         # the writers serialize strings as JSON-quoted scalars
+        return decoded.strip() if isinstance(decoded, str) else str(decoded)
     if value[:1] == "'":
         if len(value) < 2 or value[-1] != "'":
             raise ValueError("unterminated single quote")
@@ -2055,8 +2058,8 @@ def scan_top_level(output_dir):
     """Only the top level; symlinks and non-regular files are listed, never read."""
     records, excluded = [], []
     for name in sorted(os.listdir(output_dir)):
-        if not name.endswith(".md"):
-            continue
+        if not name.endswith(".md") or name.startswith("."):
+            continue  # same as the shell glob ${output_dir}/*.md: dotfiles (AppleDouble ._x.md) are not archive files
         path = os.path.join(output_dir, name)
         mode = os.lstat(path).st_mode
         if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
@@ -2426,7 +2429,10 @@ def thread_sort_key(date_text, file):
         return (1, "", "", name)
     if isinstance(parsed, datetime):
         if parsed.tzinfo is not None:
-            parsed = parsed.astimezone(timezone.utc)
+            try:
+                parsed = parsed.astimezone(timezone.utc)
+            except OverflowError:  # year 1 / 9999 with an offset: treat as unreadable, never crash
+                return (1, "", "", name)
         return (0, parsed.date().isoformat(), parsed.time().isoformat(), name)
     return (0, parsed.isoformat(), "00:00:00", name)
 
@@ -2434,13 +2440,13 @@ def thread_sort_key(date_text, file):
 def thread_order(messages):
     """messages: list of {"date", "file"} dicts. Returns (sorted copy, unreadable files). Nothing is dropped."""
     ordered = sorted(messages, key=lambda m: thread_sort_key(m.get("date"), m.get("file")))
-    unreadable = [m.get("file") for m in ordered if parse_archive_date(m.get("date")) is None]
+    unreadable = [m.get("file") for m in ordered if thread_sort_key(m.get("date"), m.get("file"))[0] == 1]
     return ordered, unreadable
 
 
 def thread_bounds(messages):
     """first_message / last_message: the raw `date` string of the earliest / latest readable message, else None."""
-    readable = [m for m in messages if parse_archive_date(m.get("date")) is not None]
+    readable = [m for m in messages if thread_sort_key(m.get("date"), m.get("file"))[0] == 0]
     if not readable:
         return {"first_message": None, "last_message": None}
     keyed = sorted(readable, key=lambda m: thread_sort_key(m.get("date"), m.get("file")))

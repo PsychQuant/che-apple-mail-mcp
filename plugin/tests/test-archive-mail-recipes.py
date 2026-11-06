@@ -462,8 +462,16 @@ class ArchiveDropSetRecipeTests(unittest.TestCase):
 class ArchiveDropSetSopTests(unittest.TestCase):
     def test_every_drop_set_use_points_at_the_recipe(self):
         text = DOCUMENT.read_text()
-        self.assertIn("角色名先展開成該帳號實名", text)
         self.assertIn("不以搜尋零命中判定", text)
+        # every place the drop-set is applied points at the recipe (a window after the mention)
+        for marker in ["**統一 drop-set** = Drafts ∪ Trash ∪ `exclude_mailboxes`",
+                       "對每筆的 `mailbox` 欄位套用下方**mailbox 後過濾規則**",
+                       "對結果每筆的 `mailbox` 套用 Step 3 的統一 drop-set"]:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, text)
+        start = text.index("**統一 drop-set** = Drafts")
+        self.assertIn("dropset recipe", text[start:start + 200])
+        self.assertIn("角色名先展開成該帳號實名", text[start:start + 200])
 
 
 class ArchiveSkipDraftsSopTests(unittest.TestCase):
@@ -533,6 +541,16 @@ class ArchiveThreadOrderTests(unittest.TestCase):
                 {"date": "Tue, 30 Jun 2026", "file": "c.md"}]
         self.assertEqual(self.dates["thread_bounds"](msgs),
                          {"first_message": "Tue, 30 Jun 2026", "last_message": "2026-07-01T00:00:00+08:00"})
+
+    def test_extreme_years_with_an_offset_do_not_crash_and_count_as_unreadable(self):
+        for value in ("0001-01-01T00:00:00+08:00", "9999-12-31T23:59:59-08:00"):
+            with self.subTest(value=value):
+                ordered, unreadable = self.dates["thread_order"]([{"date": value, "file": "a.md"},
+                                                                  {"date": "2026-07-01", "file": "b.md"}])
+                self.assertEqual([m["file"] for m in ordered], ["b.md", "a.md"])
+                self.assertEqual(unreadable, ["a.md"])
+                self.assertEqual(self.dates["thread_bounds"]([{"date": value, "file": "a.md"}]),
+                                 {"first_message": None, "last_message": None})
 
     def test_bounds_are_null_without_a_readable_date(self):
         self.assertEqual(self.dates["thread_bounds"]([{"date": "x", "file": "a.md"}]),
@@ -823,6 +841,16 @@ class ArchiveScanRecipeTests(unittest.TestCase):
     def test_an_unreadable_quoted_value_is_unparseable_not_guessed(self):
         out = self.report({"a.md": '---\nmessage_id: "unterminated\ndate: "2026-06-30"\n---\n'})
         self.assertEqual(out["unparseable"], ["a.md"])
+
+    def test_dotfiles_are_not_archive_files(self):
+        out = self.report({"a.md": self.md("<a>"), "._a.md": b"\x00\x05junk"})
+        self.assertEqual((out["scanned"], out["unparseable"]), (1, []))
+
+    def test_null_or_empty_message_ids_are_unparseable_and_quoted_ids_are_stripped(self):
+        out = self.report({"a.md": "---\nmessage_id: null\n---\n", "b.md": '---\nmessage_id: ""\n---\n',
+                           "c.md": '---\nmessage_id: " synthetic:x"\n---\n'})
+        self.assertEqual(sorted(out["unparseable"]), ["a.md", "b.md"])
+        self.assertEqual(out["synthetic_placeholder"], ["c.md"])
 
     def test_coverage_names_usable_files_missing_from_the_index(self):
         directory = self.make({"a.md": self.md("<a>"), "b.md": self.md("<b>"), "c.md": self.md("synthetic:z"),
