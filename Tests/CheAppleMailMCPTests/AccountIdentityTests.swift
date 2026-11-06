@@ -169,8 +169,8 @@ final class AccountIdentityTests: XCTestCase {
         let cache = AccountIdentityCache(waitTimeout: 0.02, loader: { try await loader.load() })
         let first = await cache.get()
         XCTAssertNil(first.snapshot)
-        // #611: the loader stays blocked until the release below, so a get that ignored its timeout
-        // would never return. Any finite ceiling shows that; 5 s keeps it clear of machine load.
+        // #611: the loader stays blocked until the release below. A get that fell back to the default
+        // 5 s wait reaches this ceiling and fails; one that never returned would hang the test instead.
         var second = first
         let clock = ContinuousClock()
         let elapsed = await clock.measure { second = await cache.get(forceRefresh: true) }
