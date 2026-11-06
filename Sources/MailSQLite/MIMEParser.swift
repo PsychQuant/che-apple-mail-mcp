@@ -686,7 +686,7 @@ public enum MIMEParser {
         }
 
         let textEncoding = RFC822Parser.stringEncoding(for: charset)
-        return String(data: Data(bytes), encoding: textEncoding)
+        return ByteDecoding.string(from: Data(bytes), encoding: textEncoding)
             ?? String(data: Data(bytes), encoding: .utf8)
     }
 
@@ -763,8 +763,8 @@ public enum MIMEParser {
     ///    This step must come BEFORE the declared charset: a Latin-1-family
     ///    decode never fails, so tried first it turns UTF-8 bytes into one
     ///    scalar per byte (the mojibake of #538). The ASCII labels used to be
-    ///    rescued only because `String(data:encoding: .ascii)` happens to
-    ///    return `nil` on non-ASCII bytes, which nothing pinned.
+    ///    rescued only because a strict ASCII decode happens to fail on
+    ///    non-ASCII bytes, which the shipped binary's does not (#561).
     /// 2. Otherwise the declared charset, so a real `big5` / `shift_jis` /
     ///    `euc-jp` / … body is never second-guessed.
     /// 3. If that fails, UTF-8 (strict).
@@ -773,8 +773,9 @@ public enum MIMEParser {
     ///    `US-ASCII`) used to come back `nil`, and the renderer then silently
     ///    wrote the raw HTML in its place.
     ///
-    /// `RFC822Parser.stringEncoding(for:)` stays untouched: header and filename
-    /// decoding share it, and they have different rules.
+    /// `RFC822Parser.stringEncoding(for:)` stays a plain label map, shared with
+    /// header and filename decoding. `ByteDecoding.string(from:encoding:)`
+    /// applies steps 1 and 4 to the ASCII labels on all three paths (#561).
     static func decodeBodyText(_ data: Data, declaredCharset: String) -> String {
         let label = declaredCharset.trimmingCharacters(in: .whitespaces).lowercased()
         if weakCharsetLabels.contains(label),
@@ -782,9 +783,8 @@ public enum MIMEParser {
            let utf8 = String(data: data, encoding: .utf8) {
             return utf8
         }
-        return String(data: data, encoding: RFC822Parser.stringEncoding(for: label))
-            ?? String(data: data, encoding: .utf8)
-            ?? String(String.UnicodeScalarView(data.map { Unicode.Scalar($0) }))
+        return ByteDecoding.string(from: data, encoding: RFC822Parser.stringEncoding(for: label))
+            ?? ByteDecoding.utf8OrLatin1(data)
     }
 
     // MARK: - Multipart
@@ -928,8 +928,9 @@ public enum MIMEParser {
         default:
             return data   // already decoded by its own declaration — never second-guess
         }
-        guard let text = String(data: data, encoding: .ascii),
-              text.range(of: #"=[0-9A-Fa-f]{2}"#, options: .regularExpression) != nil
+        guard ByteDecoding.isASCII(data) else { return data }   // honest 8-bit text, never QP
+        let text = ByteDecoding.latin1String(data)
+        guard text.range(of: #"=[0-9A-Fa-f]{2}"#, options: .regularExpression) != nil
                 || text.range(of: #"=\r?\n"#, options: .regularExpression) != nil,
               let candidate = RFC822Parser.decodeQuotedPrintableBytes(text),
               candidate != data,
@@ -942,16 +943,14 @@ public enum MIMEParser {
     private static func decodeTransferEncoding(_ data: Data, encoding: String) -> Data {
         switch encoding.lowercased() {
         case "base64":
-            let cleaned = String(data: data, encoding: .ascii)?
+            let cleaned = ByteDecoding.latin1String(data)
                 .replacingOccurrences(of: "\r\n", with: "")
                 .replacingOccurrences(of: "\n", with: "")
                 .replacingOccurrences(of: " ", with: "")
-                ?? ""
             return Data(base64Encoded: cleaned) ?? data
 
         case "quoted-printable":
-            guard let text = String(data: data, encoding: .ascii) else { return data }
-            return RFC822Parser.decodeQuotedPrintableBytes(text) ?? data
+            return RFC822Parser.decodeQuotedPrintableBytes(data) ?? data
 
         case "7bit", "8bit", "binary":
             return data

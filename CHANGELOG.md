@@ -87,6 +87,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `create_draft` description now states this behaviour. Long header lines (a
   long recipient list or ASCII subject) are not folded yet
   ([#622](https://github.com/PsychQuant/che-apple-mail-mcp/issues/622)).
+- **Decoding no longer depends on how Foundation treats `.ascii`**
+  ([#561](https://github.com/PsychQuant/che-apple-mail-mcp/issues/561)).
+  `String(data:encoding: .ascii)` succeeds on non-ASCII bytes in the shipped
+  binary (stamped sdk 13.0) and fails under `swift test`, so code that used it
+  did something different from what the tests saw. Every call site now says
+  what it means, and the results are the same under both stamps. What changes
+  for the shipped binary: a 7bit/8bit text part with non-ASCII bytes is no
+  longer taken for mislabelled quoted-printable; a quoted-printable part with
+  raw 8-bit bytes keeps those bytes instead of re-encoding each one as UTF-8
+  (`caf\xC3\xA9=20x` is `café x`, not mojibake); an encoded-word or RFC 2231
+  filename labelled `us-ascii` that carries valid UTF-8 now reads as UTF-8, the
+  rule bodies follow since #538. Non-UTF-8 bytes under an ASCII label still read
+  as Latin-1.
 
 ## [4.0.0] - 2026-10-29
 

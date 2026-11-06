@@ -77,10 +77,7 @@ public enum RFC822Parser {
     private static let lineBreaks = CharacterSet(charactersIn: "\r\n")
 
     private static func parseHeaderBlock(_ data: Data) -> [String: String] {
-        guard let text = String(data: data, encoding: .utf8)
-                ?? String(data: data, encoding: .ascii) else {
-            return [:]
-        }
+        let text = ByteDecoding.utf8OrLatin1(data)
 
         // Unfold continuation lines: replace \r\n + whitespace with single space
         var unfolded = text
@@ -169,7 +166,7 @@ public enum RFC822Parser {
             defer { runEncoding = nil; runWords = [] }
 
             let joined = runWords.reduce(into: Data()) { $0.append($1.bytes) }
-            if let decoded = String(data: joined, encoding: encoding) {
+            if let decoded = ByteDecoding.string(from: joined, encoding: encoding) {
                 result += decoded
                 return true
             }
@@ -184,7 +181,7 @@ public enum RFC822Parser {
                 if i > 0, !lastOK {
                     result += value[runWords[i - 1].range.upperBound..<word.range.lowerBound]
                 }
-                if let decoded = String(data: word.bytes, encoding: encoding) {
+                if let decoded = ByteDecoding.string(from: word.bytes, encoding: encoding) {
                     result += decoded
                     lastOK = true
                 } else {
@@ -334,6 +331,23 @@ public enum RFC822Parser {
     // and the charset conversion happens once per run.
 
     static func decodeQuotedPrintableBytes(_ text: String) -> Data? {
+        decodeQuotedPrintable(text) { out, literal in out.append(contentsOf: literal.utf8) }
+    }
+
+    /// Quoted-printable over raw bytes, as in a `quoted-printable` body part.
+    /// A byte that is not part of an escape is kept as that byte: raw 8-bit
+    /// bytes do occur inside quoted-printable parts, and going through the
+    /// `String` overload would re-encode each of them as UTF-8 (#561).
+    static func decodeQuotedPrintableBytes(_ raw: Data) -> Data? {
+        decodeQuotedPrintable(ByteDecoding.latin1String(raw)) { out, literal in
+            out.append(contentsOf: literal.unicodeScalars.map { UInt8($0.value) })
+        }
+    }
+
+    private static func decodeQuotedPrintable(
+        _ text: String,
+        appendLiteral: (inout Data, String) -> Void
+    ) -> Data? {
         var data = Data()
         var i = text.startIndex
         while i < text.endIndex {
@@ -346,7 +360,7 @@ public enum RFC822Parser {
                 }
                 let next2 = text.index(after: next1)
                 guard next2 < text.endIndex else {
-                    data.append(contentsOf: String(text[i...next1]).utf8)
+                    appendLiteral(&data, String(text[i...next1]))
                     break
                 }
                 let hex = String(text[next1]) + String(text[next2])
@@ -375,7 +389,7 @@ public enum RFC822Parser {
                 i = next1
                 continue
             }
-            data.append(contentsOf: String(ch).utf8)
+            appendLiteral(&data, String(ch))
             i = text.index(after: i)
         }
         return data

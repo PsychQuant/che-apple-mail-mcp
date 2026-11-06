@@ -143,7 +143,7 @@
       "name" : "get_account_info"
     },
     {
-      "description" : "Get full content of a specific email. Returns HTML by default (preserving links), or plain text/raw source with format parameter.",
+      "description" : "Get full content of a specific email. Returns HTML by default (preserving links), or plain text/raw source with format parameter. Caveat (#561): the decoding of malformed mail (raw 8-bit bytes in a quoted-printable part, non-ASCII bytes under a us-ascii label) was tested on synthetic messages and has not been compared against a real mailbox.",
       "name" : "get_email"
     },
     {
