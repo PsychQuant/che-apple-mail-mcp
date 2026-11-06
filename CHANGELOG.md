@@ -117,6 +117,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`NSWorkspace`, `NSAppleScript`, `NSTask` and others) refused by name. Handlers
   a test does not call lose their `tell application` blocks before the script
   runs. It is still a deny list. Test-only change.
+- **A server built in a test can take an account mapping**
+  ([#612](https://github.com/PsychQuant/che-apple-mail-mcp/issues/612)).
+  `CheAppleMailMCPServer.init` gained an optional `accountMapping`, passed to
+  `EnvelopeIndexReader`, so a handler test over a fixture index no longer reads
+  the developer's AccountsMap.plist. Without it the server behaves as before.
 - **The six ways around the direct-write guard tests now fail a test**
   ([#492](https://github.com/PsychQuant/che-apple-mail-mcp/issues/492)). A new
   outcome test has Mail apply the read repair 0.6 s later, so looks that do not

@@ -27,7 +27,8 @@ class CheAppleMailMCPServer {
     init(databasePath: String = EnvelopeIndexReader.defaultDatabasePath,
          initialSync: Bool = true,
          classificationDirectory: URL = ClassificationPolicyStore.defaultDirectory,
-         classificationLoader: (@Sendable (String) async throws -> ClassificationMessage)? = nil) async throws {
+         classificationLoader: (@Sendable (String) async throws -> ClassificationMessage)? = nil,
+         accountMapping: [String: String]? = nil) async throws {
         self.classificationStore = ClassificationPolicyStore(directory: classificationDirectory)
         self.classificationEngine = ClassificationPlanEngine(store: self.classificationStore)
         self.classificationLoader = classificationLoader
@@ -45,8 +46,9 @@ class CheAppleMailMCPServer {
         // SQLite reader (optional — read tools fall back to AppleScript while it
         // is unavailable). The provider makes the first attempt right here, so a
         // startup failure is logged as before (now with the FDA probe result
-        // added); it keeps retrying after that (#537). The account mapping is read from AccountsMap.plist inside
-        // `EnvelopeIndexReader.init`, not via AppleScript, so startup is not
+        // added); it keeps retrying after that (#537). Unless a test passes
+        // `accountMapping` (#612), the account mapping is read from AccountsMap.plist
+        // inside `EnvelopeIndexReader.init`, not via AppleScript, so startup is not
         // blocked on Mail.
         //
         // Every failure surfaces to stderr so users can diagnose silent perf
@@ -55,7 +57,7 @@ class CheAppleMailMCPServer {
         // The FDA probe reads the same path as the open, so a probe started
         // against a test-owned path never touches the user's index (#329 verify).
         self.indexProvider = IndexReaderProvider(
-            open: { try EnvelopeIndexReader(databasePath: databasePath) },
+            open: { try EnvelopeIndexReader(databasePath: databasePath, accountMapping: accountMapping) },
             probe: { FDAStatus.probeDetail(path: databasePath) },
             log: { Diagnostics.emit($0) })
         _ = indexProvider.current()

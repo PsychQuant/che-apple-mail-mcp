@@ -45,14 +45,14 @@ final class ExportHandlerTests: XCTestCase {
         var sql = """
         CREATE TABLE subjects (ROWID INTEGER PRIMARY KEY, subject TEXT);
         CREATE TABLE addresses (ROWID INTEGER PRIMARY KEY, address TEXT, comment TEXT);
-        CREATE TABLE mailboxes (ROWID INTEGER PRIMARY KEY, url TEXT);
+        CREATE TABLE mailboxes (ROWID INTEGER PRIMARY KEY, url TEXT, total_count INTEGER DEFAULT 0, unread_count INTEGER DEFAULT 0);
         CREATE TABLE recipients (message INTEGER, address INTEGER, type INTEGER, position INTEGER);
         CREATE TABLE messages (ROWID INTEGER PRIMARY KEY, subject INTEGER, sender INTEGER, mailbox INTEGER,
           date_received INTEGER, read INTEGER DEFAULT 0, flagged INTEGER DEFAULT 0, deleted INTEGER DEFAULT 0,
           size INTEGER DEFAULT 10, conversation_id INTEGER DEFAULT 1, flags INTEGER DEFAULT 0, global_message_id INTEGER, type);
         INSERT INTO addresses VALUES (1, 'sender@example.test', 'Fixture');
-        INSERT INTO mailboxes VALUES (1, 'imap://UUID-A/%5BGmail%5D/%E8%8D%89%E7%A8%BF');
-        INSERT INTO mailboxes VALUES (2, 'imap://UUID-A/%5BGmail%5D/All%20Mail');
+        INSERT INTO mailboxes (ROWID, url) VALUES (1, 'imap://UUID-A/%5BGmail%5D/%E8%8D%89%E7%A8%BF');
+        INSERT INTO mailboxes (ROWID, url) VALUES (2, 'imap://UUID-A/%5BGmail%5D/All%20Mail');
         """
         for (id, mailbox, type) in [(1, 1, 5), (4, 2, 6), (7, 2, 0)] {
             sql += "INSERT INTO subjects VALUES (\(id), 'match \(id)');\n"
@@ -123,8 +123,19 @@ final class ExportHandlerTests: XCTestCase {
 
         let server = try await CheAppleMailMCPServer(
             databasePath: indexPath, initialSync: false,
-            classificationDirectory: root.appendingPathComponent("classification", isDirectory: true))
+            classificationDirectory: root.appendingPathComponent("classification", isDirectory: true),
+            accountMapping: ["UUID-A": "Fixture"])
         return (server, root)
+    }
+
+    /// #612: `UUID-A` is in no machine's AccountsMap.plist, so the name can only come from the mapping
+    /// the test passed. Without that seam the server would read the developer's accounts.
+    func testAHandlerNamesTheAccountFromTheInjectedMapping() async throws {
+        let (server, _) = try await makeServer()
+        let raw = try await server.executeToolCall(name: "list_mailboxes", arguments: [:])
+        let rows = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [[String: Any]], raw)
+        XCTAssertFalse(rows.isEmpty, raw)
+        XCTAssertEqual(Set(rows.compactMap { $0["account_name"] as? String }), ["Fixture"], raw)
     }
 
     private func export(_ server: CheAppleMailMCPServer, tool: String = "batch_export_emails_markdown",
