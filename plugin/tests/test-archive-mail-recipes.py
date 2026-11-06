@@ -1163,6 +1163,19 @@ class ArchiveScanRecipeTests(unittest.TestCase):
         directory = self.make({"tail.md": '---\nmessage_id: "<a>"\r\n---'})
         self.assertEqual(self.ns["read_frontmatter"](str(Path(directory) / "tail.md")), ({"message_id": "<a>"}, None))
 
+    def test_the_scan_audit_sees_only_usable_top_level_files_and_the_index_audit_sees_every_entry(self):
+        directory = self.make({"kept.md": self.md("<kept>", "2026-01-01T00:00:00Z")})
+        index = {"<kept>": {"file": "kept.md", "date": "2026-01-01T00:00:00Z"},
+                 "<tombstone>": {"file": "moved.md", "date": "2026-03-03T00:00:00Z", "distributed_to": ["x"]},
+                 "<left>": {"file": "left.md", "date": "2026-02-02T00:00:00Z"},
+                 "<bad>": {"file": "gone.md", "date": "not a date"}}
+        scan = self.ns["scan_report"](directory)["date_audit"]
+        full = self.ns["reconcile_dates"](index)
+        self.assertEqual((scan["valid_date_count"], scan["date_excluded_count"], scan["last_updated"]), (1, 0, "2026-01-01"))
+        # the tombstone is the newest mail: an audit of the scan result would move last_updated backwards
+        self.assertEqual((full["valid_date_count"], full["date_excluded_count"], full["last_updated"]), (3, 1, "2026-03-03"))
+        self.assertEqual([e["message_id"] for e in full["date_excluded"]], ["<bad>"])
+
     def test_scan_report_emits_the_usable_inventory(self):
         out = self.report({"a.md": self.md("<a>"), "b.md": self.md("synthetic:x")})
         self.assertEqual([(u["file"], u["message_id"]) for u in out["usable"]], [("a.md", "<a>")])
@@ -1176,6 +1189,29 @@ class ArchiveScanSopTests(unittest.TestCase):
         self.assertIn("重複件在兩個分支都要回報", text)
         self.assertIn("輸入是 `scan_report` 的 `files`", text)
         self.assertIn("`date` 壞掉的檔案仍是 `usable`", text)
+
+    def test_the_index_branch_audits_every_entry_not_the_scan_result(self):
+        text = DOCUMENT.read_text()
+        self.assertNotIn("`date_audit` 取代下面第 2 項", text)
+        note = text[text.index("本分支（`index`／`both`）也呼叫 `scan_report(output_dir)`"):]
+        note = note[:note.index("\n")]
+        self.assertIn("`date_audit` **只給**沒有 index 的 `last_archived` 分支用", note)
+        self.assertIn("本分支**不用它**", note)
+        self.assertIn("含 `distributed_to` 墓碑與檔案已離開頂層的 entry", note)
+        self.assertIn("對 **index 全部 entry**（不只本輪新增或頂層 md）執行", text)
+        branch = text[text.index("- **資料怎麼進 `reconcile_dates`**"):]
+        branch = branch[:branch.index("\n")]
+        self.assertIn("本分支的日期稽核也由它提供", branch)
+        self.assertNotIn("三份清單與日期稽核的**唯一來源**", branch)
+        recipe_text = recipe_code("scan")
+        self.assertIn("audits every index entry instead", recipe_text)
+
+    def test_the_changelog_says_which_branch_uses_the_scan_audit(self):
+        changelog = (DOCUMENT.parents[1] / "CHANGELOG.md").read_text()
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [", changelog.index("## [Unreleased]") + 5)]
+        entry = next(line for line in unreleased.split("\n") if "`archive-mail-scan-recipe`" in line)
+        self.assertIn("the `index` / `both` branch keeps auditing every index entry", entry)
+        self.assertNotIn("lists and the date audit.", entry)
 
     def test_the_stale_index_stop_is_not_part_of_this_batch(self):
         text = DOCUMENT.read_text()

@@ -2028,7 +2028,7 @@ Thread 覆蓋: 3 threads, 3 complete ✓
 - **不讀 `${INDEX_FILE}`**：只檢查它存不存在，不開檔、不載入、不比對、不更新。檔案存在時，它已經沒有維護：以前用 `index`／`both` 留下的，停在改用 `last_archived` 那時；舊版 gate 替這個策略寫的（#545 之前每次都更新），停在升級到本版之前。摘要下一行另外印出下方那一句：要改回 `index`／`both`，或把這個 target 登錄進 registry（`/archive-mail-registry` 把它當成權威的歷史）之前，先把它移開，讓 Step 2 的復原從 Markdown 重建；那次復原會跑 `/archive-mail-rebuild-threads`，只出現在 To／Cc 的參與者會消失，在意就先備份 `${THREADS_FILE}`。留著不移：改回 `index` 時，Step 2 照原樣載入這份舊 index、不走復原，停止維護之後歸檔的信會被當成新信再寫一次；改回 `both` 時，受影響的只有 `last_archived` 之後的信。（`${INDEX_FILE}` 內有 `distributed_to` 墓碑時**不可移開**：墓碑只存在 index，從 Markdown 重建不會帶回，分派過的信之後可能被再抓回來；這種情況先停下來問維護者。）
 - **Phase 1 照常掃描**頂層 `${output_dir}/*.md`（範圍同下方 Phase 1 第 1 項），只在記憶體裡判定。`synthetic_placeholder` 與 `unparseable` 的判定與揭露同下方（修復的前提見下方「`synthetic_placeholder` 的修復」）；其餘檔案只計入頂層 md 數。沒有 index 就沒有孤兒，所以不算 `verified`、不算 `repaired`，也不補寫任何 entry。
 - **日期稽核照跑**：用掃到的 frontmatter 在記憶體裡組成 `emails`（key 是 `message_id`；entry 只放 `file` 與原樣的 frontmatter `date`；`unparseable` 與 `synthetic_placeholder` 的檔案不放進去，與 `index` 模式不收它們一致），交給同一個 `reconcile_dates(emails)`。同一個 `message_id` 出現在不只一個頂層檔時只算一筆：取檔名依 Unicode code point 排序的第一個，其餘列為 `duplicate_message_id`（列出檔名與保留的那一個），不放進 `emails`。有效日期數加排除數等於這份 `emails` 的筆數，也等於頂層 md 數減去 `unparseable`、`synthetic_placeholder` 與 `duplicate_message_id` 的檔數；`date_excluded` 的列法與欄位邊界同下方第 2、6 項。
-- **資料怎麼進 `reconcile_dates`**:用下方「目錄掃描 recipe」的 `scan_report(output_dir)`(#604),它是頂層 md 盤點、`unparseable`/`synthetic_placeholder`/`duplicate_message_id` 三份清單與日期稽核的**唯一來源**:本分支與 `index`／`both` 分支都呼叫它,agent 不另寫掃描程式,也不在記憶體裡另做一次分類。
+- **資料怎麼進 `reconcile_dates`**:用下方「目錄掃描 recipe」的 `scan_report(output_dir)`(#604),它是頂層 md 盤點與 `unparseable`/`synthetic_placeholder`/`duplicate_message_id` 三份清單的**唯一來源**,本分支的日期稽核也由它提供:本分支與 `index`／`both` 分支都呼叫它,agent 不另寫掃描程式,也不在記憶體裡另做一次分類。
 - **不寫任何 index 檔**：不寫 `${INDEX_FILE}`，也不寫 `${INDEX_FILE}.tmp`；不跑 `/archive-mail-rebuild-threads`（`${THREADS_FILE}` 照 Step 5.7 維護，本 gate 不碰）。
 - **`synthetic_placeholder` 的修復**：`/archive-mail-repair-synthetic-ids` 需要可用的 SQLite envelope index（通常要替實際執行 MCP server 的宿主授予 Full Disk Access），也需要 `${INDEX_FILE}`：它不把缺少的 index 當成空的，會以 `index-missing` 停止。這個策略沒有 index（或只有沒維護的舊檔），所以路線是：先把舊的 `${INDEX_FILE}`（若存在）移開，把 `dedup_strategy` 暫時改成 `index`／`both` 跑一次 `/archive-mail`，讓 Step 2 的復原從 Markdown 建好 index（那次復原會跑 `/archive-mail-rebuild-threads`，只出現在 To／Cc 的參與者會消失，在意就先備份 `${THREADS_FILE}`），再跑修復指令；之後改回 `last_archived`，那份 index 又會停止維護（見上方「不讀」一項）。（`${INDEX_FILE}` 內有 `distributed_to` 墓碑時**不可移開**：墓碑只存在 index，從 Markdown 重建不會帶回，分派過的信之後可能被再抓回來；這種情況先停下來問維護者。）
 - **推進 `last_archived` 的參考值**：摘要顯示 `last_updated`（可解析日期的最大值），另外顯示參考值 `min(last_updated, 本 run 開始時的 UTC 日期)`，供使用者手動推進 `${CONFIG_FILE}` 的 `last_archived`。上限取 UTC 日期，因為 Step 4.1 比較的是時刻（#600；date-only 的界線讀成本機時區當天的 00:00，與伺服器的 `date_from` 規則一致，不再是字串比較），而 `last_updated` 是寄件人那邊的日曆日，可以晚到今天加一天（下方第 2 項），寄件人的 Date 也可能偏差或偽造。參考值只有日期，兩個方向都要注意：參考值當天的信會被當成新信再抓一次；本 run 之後才收到（或才同步進 Mail）、但日期早於參考值當天本機 00:00 的信，下一輪會被略過，這個策略沒有 index，不會有任何提示。`last_updated` 是空字串（`no-valid-dates` 或 `empty-index`）時沒有參考值：不顯示，也不拿本 run 的日期代替。要不要推進、推進到哪一天，由使用者決定；本 gate 不寫回設定檔，也不自動推進。
@@ -2178,8 +2178,10 @@ def classify_scan(records):
 
 
 def scan_report(output_dir):
-    """The single source for Step 8.5 (both branches). `usable` and `files` are raw and for the program only
-    (Phase 1's verified/orphan decision, reverse_inventory's `scanned` input); the other lists are for display."""
+    """The single source for Step 8.5's inventory (both branches). `usable` and `files` are raw and for the program
+    only (Phase 1's verified/orphan decision, reverse_inventory's `scanned` input); the other lists are for display.
+    `date_audit` covers usable top-level files only, for the no-index `last_archived` branch; the `index`/`both`
+    branch audits every index entry instead (Phase 1 item 2) and does not use it."""
     records, excluded = scan_top_level(output_dir)
     classified = classify_scan(records)
     audit = reconcile_dates(classified["emails"])
@@ -2214,7 +2216,7 @@ def scan_report(output_dir):
 **Phase 1：full-scan fallback（歷史孤兒 + 非 manifest 來源）**
 
 1. 對每個 `${output_dir}/*.md`（**僅頂層 glob**，不深入子目錄、不追 Step 2.1 的 symlink 兄弟歸檔——那些只是 read-only 去重來源，絕不寫進本 index）：讀 frontmatter `message_id`。
-   > **本分支（`index`／`both`）也呼叫 `scan_report(output_dir)`(#604),用它的結果,不另掃、不另分類**:`usable`(逐檔 `{file, message_id, date}`)對 index 的 key 做「verified／孤兒」判定;`unparseable`、`synthetic_placeholder` 與 `duplicate_message_id` 三份清單直接進摘要(重複件在兩個分支都要回報:列出檔名與保留的那一個,不補寫 index,保留的是檔名依 code point 排序的第一個);`date_audit` 取代下面第 2 項另算的日期稽核輸入。`date` 壞掉的檔案仍是 `usable`(`message_id` 有效),只會被日期稽核列入 `date_excluded`,不會變成 `unparseable`。下列各項是這份結果的處置規則,不是第二套判定。
+   > **本分支（`index`／`both`）也呼叫 `scan_report(output_dir)`(#604),用它的結果,不另掃、不另分類**:`usable`(逐檔 `{file, message_id, date}`)對 index 的 key 做「verified／孤兒」判定;`unparseable`、`synthetic_placeholder` 與 `duplicate_message_id` 三份清單直接進摘要(重複件在兩個分支都要回報:列出檔名與保留的那一個,不補寫 index,保留的是檔名依 code point 排序的第一個);`date_audit` **只給**沒有 index 的 `last_archived` 分支用,本分支**不用它**:日期稽核照下面第 2 項,對補完後的 index 全部 entry 跑(含 `distributed_to` 墓碑與檔案已離開頂層的 entry,這些 `scan_report` 看不到)。`date` 壞掉的檔案仍是 `usable`(`message_id` 有效),由第 2 項的日期稽核列入 `date_excluded`,不會變成 `unparseable`。下列各項是這份結果的處置規則,不是第二套判定。
    - message_id 已在 Phase 0 set 或 `${INDEX_FILE}` keys → `verified` +1（不重複補寫）。
    - **`message_id` 匹配 `^synthetic:`（mail#319）→ 記入獨立的 `synthetic_placeholder` 清單**（列檔名報告，不 `verified` 不 `repaired` 不補寫 index）——synthetic key 是過去 session 發明的佔位符，不是真 Message-ID；即使內容衍生格式在本 target 內穩定，也無法可靠對齊真 ID 且可能碰撞，不能當合法 key 收進 index。修復走 `/archive-mail-repair-synthetic-ids`——該指令需要可用的 SQLite envelope index（通常要替實際執行 MCP server 的宿主授予 Full Disk Access），一般歸檔的 AppleScript fallback 不能代替；缺少時它會以 `environment-unavailable`／`apply-unavailable` 具名停止、不改任何檔（白跑一趟，不損資料）。
    - 無 frontmatter / 無 `message_id` / `message_id_missing: true` → 記入 `unparseable` 清單（列檔名報告，不修改該檔）。
