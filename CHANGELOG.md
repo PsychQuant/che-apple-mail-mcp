@@ -93,8 +93,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `application`, `process`, raw `«…»` codes, `|…|` identifiers, `run script`,
   `do shell script`, `load script`, `store script`, `open location` and `use`
   statements. It is a deny list, not a proof; a false positive only fails a test.
-  Four other test files still use literal checks
-  ([#617](https://github.com/PsychQuant/che-apple-mail-mcp/issues/617)).
   Test-only change.
 - **Timing CSV: script marks stay with the run that produced them**
   ([#483](https://github.com/PsychQuant/che-apple-mail-mcp/issues/483)). The
@@ -113,12 +111,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the text it executes with `OsascriptFixtureGuard`. Handlers that really use the
   Foundation bridge pass through an explicit allowance: `use framework
   "Foundation"`, `use scripting additions`, `current application's` followed by a
-  closed list of the names these handlers use, and plain piped names. `NSPredicate`
+  closed list of the names these handlers use, and three piped words. `NSPredicate`
   passes only with the one format string they use, because a format string can run
   code. Any other class-shaped name, selectors by name, and the ways to name a class
   in a string are refused. Handlers a test does not call lose their `tell
   application` blocks before the script runs. The list bounds which classes run, not
-  what the methods of those classes do. Test-only change.
+  what the methods of those classes do: they can read and write files and fetch
+  URLs. Test-only change.
 - **A server built in a test can take an account mapping**
   ([#612](https://github.com/PsychQuant/che-apple-mail-mcp/issues/612)).
   `CheAppleMailMCPServer.init` gained an optional `accountMapping`, passed to

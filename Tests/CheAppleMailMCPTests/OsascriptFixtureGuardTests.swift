@@ -93,11 +93,16 @@ final class OsascriptFixtureGuardTests: XCTestCase {
             "return its NSFileManager's defaultManager()",
             "return its CIFilter",
             "return its OSAScript's alloc()",
-            "set ca to current application\nreturn ca's NSString",
             "return current application's class (\"NS\" & \"Task\")",
             "return its class \"NSTask\"",
             "return its class (\"NS\" & \"Task\")",
             "return x's makeObjectsPerformSelector:\"y\"",
+            // `current application` passes only before a listed name; the `application` check refuses the rest.
+            "set ca to current application\nreturn ca's NSString",
+            // Pipes pass only around the listed words, so these stay in reach of the word checks.
+            "tell |application| \"Mail\" to activate",
+            "return |process|",
+            "return |NSString|",
         ]
         for fragment in refused {
             XCTAssertThrowsError(try OsascriptFixtureGuard.check(fragment, foundationBridge: true), "must refuse: \(fragment.debugDescription)")

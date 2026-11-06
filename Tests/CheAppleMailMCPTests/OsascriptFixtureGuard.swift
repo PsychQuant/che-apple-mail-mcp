@@ -6,7 +6,8 @@ import Foundation
 /// `… of application "Mail"`, `activate application "Mail"`, `application id "…"`,
 /// `tell process "Mail"`, or indirectly through `run script` / `do shell script`.
 ///
-/// It is a deny list of the forms known to reach an application, not a proof that none can. It is
+/// It is a deny list of the forms known to reach an application, not a proof that none can, except
+/// the Foundation bridge allowance, which is a closed list. It is
 /// deliberately broader than the code it guards: a false positive only fails a test, which is the
 /// safe direction; a false negative sends a real Apple Event from `swift test`.
 enum OsascriptFixtureGuard {
@@ -43,6 +44,10 @@ enum OsascriptFixtureGuard {
         "NSMutableSet", "NSNotFound", "NSPredicate", "NSString", "NSUTF8StringEncoding",
     ]
 
+    /// The words the handlers under test put in pipes, a closed list like `bridgeNames`: the plain-word
+    /// shape would also erase `|application|` and `|process|` from the word checks (#617 verify).
+    static let bridgePipedWords = ["date", "error", "set"]
+
     /// Any `NS…` word in either case, or the shape of an Objective-C class of another prefix
     /// (`SBApplication`, `OSAScript`).
     static let classShaped = #"\b(?:[Nn][Ss][A-Za-z0-9_]*|[A-Z]{2,}[a-z0-9][A-Za-z0-9_]*)\b"#
@@ -57,14 +62,16 @@ enum OsascriptFixtureGuard {
 
     /// Throws `ApplicationReference` if the fragment could address an application.
     ///
-    /// Both lists run against `code(of:)`: comments removed and every string literal emptied.
+    /// Both lists run against `code(of:)`: comments removed and every string literal emptied. The
+    /// bridge's predicate and framework checks read the same lexer with literals kept.
     /// Production scripts mention System Events in comments and in error messages, which cannot
     /// address anything; `application "Mail"` becomes `application ""` and is still refused.
     ///
     /// `foundationBridge` is for handlers that really use the AppleScript-Objective-C bridge. It lets
-    /// through exactly `use framework "Foundation"`, `use scripting additions`,
-    /// `current application's` followed by a name in `bridgeNames`, and plain words in pipes (#617).
-    /// That bounds which classes run, not what the methods of those classes do.
+    /// through exactly `use framework "Foundation"`, `use scripting additions`, the names in
+    /// `bridgeNames`, `current application's` before one of them, and the words in `bridgePipedWords`
+    /// (#617). That bounds which classes run, not what the methods of those classes do: `NSData` and
+    /// `NSString` can read and write files and fetch URLs. None of them reaches another application.
     static func check(_ fragment: String, foundationBridge: Bool = false) throws {
         var code = code(of: fragment)
         if foundationBridge {
@@ -108,9 +115,8 @@ enum OsascriptFixtureGuard {
         // Any other `current application` stays in the text, and the `application` check refuses it.
         let names = bridgeNames.sorted().joined(separator: "|")
         return code
-            // Bridge calls put keyword-like names in pipes (`… |error|:missing value`, `… |set|()`). A
-            // plain word between pipes has no escape, quote or comment marker for the lexer to misread.
-            .replacingOccurrences(of: #"\|[A-Za-z_][A-Za-z0-9_]*\|"#, with: "pipedName", options: .regularExpression)
+            // Bridge calls put keyword-like names in pipes (`… |error|:missing value`, `… |set|()`).
+            .replacingOccurrences(of: "\\|(\(bridgePipedWords.joined(separator: "|")))\\|", with: "pipedName", options: .regularExpression)
             .replacingOccurrences(of: #"(?m)^[ \t]*use[ \t]+framework[ \t]+""[ \t]*$"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"(?m)^[ \t]*use[ \t]+scripting[ \t]+additions[ \t]*$"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: "\\bcurrent[ \\t]+application's[ \\t]+(\(names))\\b", with: "$1", options: .regularExpression)
