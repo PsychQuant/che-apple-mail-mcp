@@ -540,6 +540,39 @@ class ArchiveDropSetRecipeTests(unittest.TestCase):
         self.assertEqual((out["keep"], out["drop"], out["unreadable"]), (["INBOX"], [], 3))
         self.assertEqual(self.classify(["INBOX"], ["Junk"])["unreadable"], 0)
 
+    def test_padded_entries_match_after_trimming(self):
+        self.assertEqual(self.classify(["Junk"], [" Junk "])["drop"], ["Junk"])
+        self.assertEqual(self.drop["expand_exclude"]([" Junk "], {"junk": "J"}), (["Junk", "J"], []))
+
+    def test_a_bare_string_of_names_is_one_name(self):
+        out = self.classify(["INBOX", "I"], "INBOX")
+        self.assertEqual((out["drop"], out["keep"]), (["INBOX"], ["I"]))
+
+    def test_a_bare_string_of_mailboxes_is_one_mailbox(self):
+        self.assertEqual(self.classify("abc", ["a"]), {"drop": [], "keep": ["abc"], "last_segment": [], "unreadable": 0})
+
+    def test_an_empty_name_matches_nothing(self):
+        self.assertFalse(self.drop["matches_special"]("Foo/", ""))
+
+    def test_a_special_result_that_is_not_a_dict_knows_nothing(self):
+        for special in (["junk"], "junk", 5):
+            with self.subTest(special=special):
+                self.assertEqual(self.drop["expand_exclude"](["Junk"], special), (["Junk"], ["Junk"]))
+
+    def test_tuples_work_like_lists(self):
+        out = self.classify(("INBOX", "Junk"), ("Junk",))
+        self.assertEqual((out["drop"], out["keep"]), (["Junk"], ["INBOX"]))
+
+    def test_a_real_name_is_used_as_returned(self):
+        self.assertEqual(self.drop["expand_exclude"](["Junk"], {"junk": " 垃圾 "}), (["Junk", " 垃圾 "], []))
+
+    def test_ignored_exclude_entries_are_counted(self):
+        count = self.drop["ignored_entries"]
+        self.assertEqual(count([5, None, "  ", ["Junk"], "Junk"]), 4)
+        for value, expected in (("  ", 1), (5, 1), (("Junk", 5), 1), (["Junk"], 0), ("Junk", 0), (None, 0), ("", 0), ([], 0)):
+            with self.subTest(value=value):
+                self.assertEqual(count(value), expected)
+
 
 class ArchiveDropSetSopTests(unittest.TestCase):
     def test_every_drop_set_use_points_at_the_recipe_within_a_window(self):
@@ -632,6 +665,31 @@ class ArchiveMalformedInputSopTests(unittest.TestCase):
 
     def test_step_7_says_what_a_field_of_ignored_entries_shows(self):
         self.assertIn("欄位全被忽略時只顯示 `ignored` 那一行", DOCUMENT.read_text())
+
+    def phase2(self):
+        text = DOCUMENT.read_text()
+        return text[text.index("#### Phase 2: Search Preview"):text.index("#### Phase 3")]
+
+    def test_the_preview_says_what_a_field_of_ignored_entries_shows(self):
+        self.assertIn("欄位全被忽略時只顯示 `ignored` 那一行", self.phase2())
+
+    def test_the_preview_shows_both_counts_before_anything_is_written(self):
+        self.assertIn("mailbox 欄位讀不到: {N} 筆", self.phase2())
+        self.assertIn("exclude_mailboxes 條目被忽略: {N} 個", self.phase2())
+
+    def test_step_7_reports_ignored_exclude_entries(self):
+        text = DOCUMENT.read_text()
+        self.assertIn("exclude_mailboxes 條目被忽略: 1 個", text)
+        self.assertIn("`exclude_mailboxes 條目被忽略` 一行（#634）只在 `ignored_entries` 大於 0 時顯示", text)
+
+    def test_step_3_carries_ignored_entries_to_the_report(self):
+        text = DOCUMENT.read_text()
+        rule = text[text.index("**`exclude_mailboxes` 條目的比對規則（#594）**"):]
+        rule = rule[:rule.index("\n")]
+        self.assertIn("`ignored_entries` 算出的數字", rule)
+
+    def test_the_unreadable_docstring_does_not_promise_the_row_stays(self):
+        self.assertNotIn("its row stays in the results", DOCUMENT.read_text())
 
 
 class ArchiveSkipDraftsSopTests(unittest.TestCase):
@@ -992,6 +1050,14 @@ class ArchiveRefinementRecipeTests(unittest.TestCase):
         self.assertIn("Refinement: ignored 3 blank or non-string config entries", lines)
         self.assertIn("Refinement: 1 messages had a missing or wrong-typed field; the filters read those fields as empty",
                       lines)
+
+    def test_an_empty_string_field_is_unset_not_an_ignored_entry(self):
+        self.assertEqual(self.ns["_ignored_entries"]({"subject_includes": ""}), 0)
+        self.assertEqual(self.ns["_ignored_entries"]({"subject_includes": "  "}), 1)
+
+    def test_tuples_work_like_lists_in_config_and_rows(self):
+        self.assertEqual(self.ns["_listed"](("a", " ")), ["a"])
+        self.assertEqual(self.ns["_addresses"]({"to": ("a@x.test",), "cc": ("b@x.test", 5)}), ["a@x.test", "b@x.test"])
 
     def test_a_config_that_only_has_ignored_entries_says_so(self):
         config = {"subject_includes": [" "]}
