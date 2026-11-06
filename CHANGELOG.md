@@ -115,6 +115,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or a similar character (kept by the header parser since #555) became two
   entries that matched nothing, and the mail was exported again. Lines now end
   only at CR or LF.
+- **Frontmatter values can no longer start another line**
+  ([#616](https://github.com/PsychQuant/che-apple-mail-mcp/issues/616)). YAML 1.1
+  readers and Python's `str.splitlines()` end a line at U+0085, U+2028 and U+2029,
+  which survived into the frontmatter, including the unquoted `sender` and
+  `date`. These and the other C1 controls are now flattened to a space, like the
+  ASCII controls. A Message-ID holding one of them is spelled with a space in
+  the frontmatter, as VT and FF already were.
 
 ### Documentation
 

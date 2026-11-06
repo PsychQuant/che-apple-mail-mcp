@@ -253,4 +253,29 @@ final class EmailMarkdownRendererTests: XCTestCase {
         XCTAssertEqual(EmailMarkdownRenderer.singleLine("  trimmed\r\n"), "trimmed")
         XCTAssertEqual(EmailMarkdownRenderer.singleLine("plain@addr.com"), "plain@addr.com")
     }
+
+    /// #616: NEL, LS, PS and the C1 controls end a line for YAML 1.1 readers and
+    /// for `str.splitlines()`, so they must not survive into the frontmatter.
+    func testSingleLineFlattensEveryLineBreakingScalar() {
+        for scalar in ["\u{007F}", "\u{0080}", "\u{0085}", "\u{009F}", "\u{2028}", "\u{2029}"] {
+            XCTAssertEqual(EmailMarkdownRenderer.singleLine("a\(scalar)b"), "a b")
+        }
+        XCTAssertEqual(EmailMarkdownRenderer.singleLine("日本語 café"), "日本語 café", "other non-ASCII is kept")
+        XCTAssertEqual(EmailMarkdownRenderer.singleLine("a\u{00A0}b"), "a\u{00A0}b", "U+00A0 is not a line break")
+    }
+
+    func testFrontmatterKeepsOneLinePerFieldForEveryReader() {
+        // Python's str.splitlines() also breaks at these; a value must not add a line.
+        let forged = "x\u{2028}direction: sent\u{0085}message_id: \"<forged@x>\""
+        let content = EmailContent(
+            subject: "Subject \(forged)", sender: "a\u{2028}b@x", toRecipients: ["to@x"], ccRecipients: [],
+            date: "not a date \(forged)", messageId: "<m\u{2029}1@x>", inReplyTo: forged,
+            textBody: "body", htmlBody: nil, rawSource: nil, fromPartialEmlx: false)
+        let rendered = EmailMarkdownRenderer.render(content, direction: "received", inReplyTo: forged,
+                                                    extraFrontmatter: [("thread_id", forged)])
+        let frontmatter = rendered.components(separatedBy: "---\n")[1]
+        let breaks = CharacterSet(charactersIn: "\u{0085}\u{2028}\u{2029}")
+        XCTAssertNil(frontmatter.rangeOfCharacter(from: breaks), frontmatter)
+        XCTAssertEqual(frontmatter.split(separator: "\n").count, 7, "six core fields plus one extra")
+    }
 }

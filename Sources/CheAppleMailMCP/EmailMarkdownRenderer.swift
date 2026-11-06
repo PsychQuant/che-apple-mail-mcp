@@ -232,10 +232,16 @@ enum EmailMarkdownRenderer {
 
     /// Flatten any line break or control character to a single space and trim.
     /// Used for the unquoted `date` / `sender` frontmatter fields (and inside
-    /// `yamlQuoted`) so no value can break out of its YAML line.
+    /// `yamlQuoted`) so no value can break out of its YAML line. Beyond the
+    /// ASCII controls that covers the C1 controls, NEL among them, and U+2028 /
+    /// U+2029: YAML 1.1 readers and Python's `str.splitlines()` end a line at
+    /// those (#616). It is the set `EmailAddress.singleCanonical` refuses.
     static func singleLine(_ value: String) -> String {
         let scalars = value.unicodeScalars.map { scalar -> Character in
-            (scalar.value < 0x20 || scalar.value == 0x7f) ? " " : Character(scalar)
+            switch scalar.value {
+            case 0..<0x20, 0x7F...0x9F, 0x2028, 0x2029: return " "
+            default: return Character(scalar)
+            }
         }
         return String(scalars).trimmingCharacters(in: .whitespaces)
     }
