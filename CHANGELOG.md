@@ -121,6 +121,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A refused export path no longer says where it resolved**
+  ([#625](https://github.com/PsychQuant/che-apple-mail-mcp/issues/625)). When
+  `batch_export_emails_markdown` refused `output_dir` or
+  `skip_message_ids_path`, the error printed the validator's reason, which held
+  the symlink-resolved path and named the kind of refusal. Resolution runs before
+  the check, so a caller with only MCP tools could learn where a link points or
+  whether a protected folder exists. Both parameters now get one fixed message
+  whatever the kind, and the reason goes to stderr, as `save_attachment` has done
+  since #576. The `<parameter> rejected by write-safety check:` lead is unchanged;
+  only the text after it differs.
 - **Accounts added or renamed while the server runs resolve without a restart**
   ([#554](https://github.com/PsychQuant/che-apple-mail-mcp/issues/554)). The
   SQLite reader built its account mapping from AccountsMap.plist once, when it

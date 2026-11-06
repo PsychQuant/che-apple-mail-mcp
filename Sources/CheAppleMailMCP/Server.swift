@@ -2168,7 +2168,7 @@ class CheAppleMailMCPServer {
             do {
                 validatedDir = try AllowedRootsValidator().validate(outputDir, allowedRoots: exportAllowedRoots)
             } catch {
-                throw MailError.invalidParameter("output_dir rejected by write-safety check: \(error)")
+                throw Self.exportPolicyRejection(parameter: "output_dir", reason: error)
             }
             // #177: optional dedup skip-set — a file (validated read-only under the
             // SAME allowed-roots policy as output_dir) listing already-archived
@@ -2182,7 +2182,7 @@ class CheAppleMailMCPServer {
                 do {
                     validatedSkip = try AllowedRootsValidator().validate(skipPath, allowedRoots: exportAllowedRoots)
                 } catch {
-                    throw MailError.invalidParameter("skip_message_ids_path rejected by write-safety check: \(error)")
+                    throw Self.exportPolicyRejection(parameter: "skip_message_ids_path", reason: error)
                 }
                 // Read only a regular file ≤64MB (stat BEFORE open: a FIFO would
                 // hang `String(contentsOf:)`, a huge file would OOM — neither is a
@@ -2684,6 +2684,18 @@ class CheAppleMailMCPServer {
             throw MailError.invalidParameter("dedup 'logical' is only supported with projection 'ids', 'summary', or 'count' (full-row dedup is not implemented)")
         }
         return (projection, dedup)
+    }
+
+    /// The one answer a caller gets for an export path the policy refuses (#625,
+    /// as #576 did for `save_attachment`). The reason, which can hold the resolved
+    /// path, goes to stderr only: resolution runs before the check, so echoing it
+    /// would tell a caller with no more than MCP tools where a symlink points or
+    /// whether a protected folder exists. The kinds of refusal read the same for
+    /// the same reason.
+    private static func exportPolicyRejection(parameter: String, reason: Error) -> MailError {
+        Diagnostics.emit("batch_export_emails_markdown: \(parameter) refused: \(reason)\n")
+        return .invalidParameter("\(parameter) rejected by write-safety check: outside the permitted export policy. "
+            + "Use a path within CHE_MAIL_EXPORT_ALLOWED_ROOTS (default: home excluding sensitive paths).")
     }
 
     /// #177: parse a `skip_message_ids_path` file body into the dedup Message-ID
