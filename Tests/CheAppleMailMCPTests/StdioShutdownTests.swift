@@ -7,6 +7,7 @@ import Foundation
 /// SDK/stdio are real. `openURL`, the Automation probe, `/usr/bin/log` and the
 /// direct-write path stay real too, which is safe only while the probe is sent
 /// nothing past `initialize` (#578, tracked in #623).
+/// `testTheProbeIsSentNothingPastInitialize` pins that.
 final class StdioShutdownTests: XCTestCase {
     private static var probeDirectory: URL?
 
@@ -207,6 +208,27 @@ final class StdioShutdownTests: XCTestCase {
                        ["PATH": "/usr/bin", "HOME": "/h", "TMPDIR": "/t", "USER": "u", "LOGNAME": "l",
                         "DYLD_LIBRARY_PATH": "/d"])
         XCTAssertEqual(Self.probeEnvironment(from: inherited, strict: true)["LIBDISPATCH_COOPERATIVE_POOL_STRICT"], "1")
+    }
+
+    /// #623: `HOME` stays on the allow list, so a tool call through this probe could reach the real
+    /// `~/Library/Mail`. The probe is safe only while `initialize` is all it is sent. This reads the
+    /// file's own source, so it is a tripwire and not a proof: a frame assembled from a variable gets
+    /// past it. An interpolated method name does not, because its value reads as empty here.
+    func testTheProbeIsSentNothingPastInitialize() throws {
+        let source = try String(contentsOfFile: #filePath, encoding: .utf8)
+        let quote = #"\\?""#   // a double quote, escaped or not
+        let pattern = quote + "method" + quote + #"\s*:\s*"# + quote + #"([^"\\]*)"#
+        let regex = try NSRegularExpression(pattern: pattern)
+        let everything = NSRange(source.startIndex..., in: source)
+        let methods = regex.matches(in: source, range: everything).compactMap { match in
+            Range(match.range(at: 1), in: source).map { String(source[$0]) }
+        }
+        XCTAssertEqual(Set(methods), ["initialize"], """
+            StdioShutdownTests must send the probe nothing past `initialize` (#623). Before it sends \
+            more, inject `openURL`, the Automation probe, `/usr/bin/log` and the direct-write path, \
+            whose Envelope Index ignores `databasePath`. Then drop `HOME` from `probeEnvironment` or \
+            point it at a temporary directory.
+            """)
     }
 
     /// #578: the two strict tests discriminate only if `LIBDISPATCH_COOPERATIVE_POOL_STRICT=1` really
