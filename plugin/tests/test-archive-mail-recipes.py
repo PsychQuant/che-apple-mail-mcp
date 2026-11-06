@@ -787,7 +787,10 @@ class ArchiveWatermarkTests(unittest.TestCase):
     def test_z_boundary_and_naive_datetime(self):
         self.assertTrue(self.after("2026-01-01T00:00:01Z", "2026-01-01T00:00:00Z"))
         self.assertFalse(self.after("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"))
-        self.assertFalse(self.after("2025-12-31T15:59:00Z", "2026-01-01T00:00:00"))
+        with self.assertRaises(ValueError):                        # a time without a zone: the server would drop date_from
+            self.dates["watermark_instant"]("2026-01-01T00:00:00", self.utc8)
+        with self.assertRaises(ValueError):
+            self.dates["watermark_instant"]("Tue, 30 Jun 2026 10:00:00 -0000", self.utc8)   # RFC unknown offset
 
     def test_production_path_without_local_tz_gives_an_aware_instant(self):
         mark = self.dates["watermark_instant"]("2026-01-01")
@@ -798,7 +801,7 @@ class ArchiveWatermarkTests(unittest.TestCase):
     def test_date_only_and_naive_mail_dates_use_the_boundary_zone(self):
         self.assertTrue(self.after("2026-01-02", "2026-01-01"))
         self.assertFalse(self.after("2026-01-01", "2026-01-01"))     # date-only mail = start of that day = boundary
-        self.assertTrue(self.after("2026-01-01T00:00:01", "2026-01-01"))   # naive: read in the boundary's zone
+        self.assertTrue(self.after("2026-01-01T00:00:01", "2026-01-01"))   # naive MAIL date: read in the boundary's zone
         self.assertFalse(self.after("2025-12-31T23:59:59", "2026-01-01"))
 
     def test_config_scalars_with_quotes_or_a_comment_are_accepted(self):
@@ -822,6 +825,11 @@ class ArchiveWatermarkTests(unittest.TestCase):
         self.assertIn('email.get("date_received") or email.get("date")', text)
         self.assertNotIn('if email["date"] <= LAST_ARCHIVED', text)
         self.assertIn("停止並點名 `last_archived`", text)
+        self.assertIn("帶時間但沒有時區的值（`2026-06-30T10:00:00`）不接受", text)
+        self.assertIn("`last_archived` 沒有 index，這種信每次執行都會重抓", text)
+        self.assertIn("日期早於參考值當天本機 00:00 的信，下一輪會被略過", text)
+        self.assertNotIn("在參考值當天或之前的信", text)
+        self.assertIn("`日期讀不出而保留: N 封` 一行（#600）", text)
 
 
 class ArchiveScanRecipeTests(unittest.TestCase):
