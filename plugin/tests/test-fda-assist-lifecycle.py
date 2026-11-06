@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -163,6 +164,21 @@ sys.exit(mode.get('status',1))
         self.addCleanup(survivor.kill)
         with self.assertRaises(AssertionError):
             self.assert_fixture_group_gone(elapsed=2.0,grace=0,wait=.2)
+
+    def test_a_fixture_that_is_still_leaving_is_waited_for(self):
+        # The listings are scripted: a real process racing a timer passes without any poll under load.
+        listings=iter([f'123 {self.binary} --version\n',''])
+        def scripted(command,**kwargs):
+            return subprocess.CompletedProcess(command,0,next(listings),'')
+        with mock.patch('subprocess.run',scripted):
+            self.assertEqual(self.fixture_processes(POLL_SECONDS),[])
+        self.assertEqual(list(listings),[])
+
+    def test_a_failed_listing_raises_instead_of_reading_as_none(self):
+        real=subprocess.run
+        with mock.patch('subprocess.run',lambda command,**kwargs:real(['/usr/bin/false'],**kwargs)):
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.fixture_processes(0)
 
     def test_no_pid_before_the_deadline_is_a_failure(self):
         with self.assertRaises(AssertionError):
