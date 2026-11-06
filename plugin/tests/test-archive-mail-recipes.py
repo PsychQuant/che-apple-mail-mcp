@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Execute the shipped SOP recipes, rather than a second implementation."""
 import copy
-from datetime import date
+from datetime import date, timedelta, timezone
 import itertools
 import json
 from pathlib import Path
@@ -717,6 +717,44 @@ class ArchiveReverseInventorySopTests(unittest.TestCase):
         self.assertIn("3b. **反向盤點(#559", text)
         self.assertIn("不改變 gate 的通過條件", text)
         self.assertIn("reverse check:", text)
+
+
+class ArchiveWatermarkTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dates = recipe("date")
+        cls.utc8 = timezone(timedelta(hours=8))
+
+    def after(self, mail, boundary, tz=None):
+        mark = self.dates["watermark_instant"](boundary, tz or self.utc8)
+        return self.dates["is_after_watermark"](mail, mark)
+
+    def test_offset_boundary_compares_by_instant_not_text(self):
+        boundary = "2026-01-01T00:00:00+08:00"          # 2025-12-31T16:00:00Z
+        self.assertTrue(self.after("2025-12-31T17:00:00Z", boundary))     # the issue's example: later, text says <=
+        self.assertFalse(self.after("2025-12-31T16:00:00Z", boundary))    # exactly on the boundary: archived
+        self.assertFalse(self.after("2025-12-31T15:59:59Z", boundary))
+
+    def test_date_only_boundary_is_local_midnight(self):
+        # UTC+8 machine: the boundary day starts at 2025-12-31T16:00:00Z, not at 2026-01-01T00:00:00Z
+        self.assertTrue(self.after("2025-12-31T17:00:00Z", "2026-01-01"))
+        self.assertFalse(self.after("2025-12-31T15:00:00Z", "2026-01-01"))
+
+    def test_z_boundary_and_naive_datetime(self):
+        self.assertTrue(self.after("2026-01-01T00:00:01Z", "2026-01-01T00:00:00Z"))
+        self.assertFalse(self.after("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"))
+        self.assertFalse(self.after("2025-12-31T15:59:00Z", "2026-01-01T00:00:00"))
+
+    def test_unreadable_boundary_raises_and_unreadable_mail_is_kept(self):
+        with self.assertRaises(ValueError):
+            self.dates["watermark_instant"]("soon", self.utc8)
+        self.assertTrue(self.after("not a date", "2026-01-01"))
+
+    def test_sop_reads_date_received_and_no_longer_compares_strings(self):
+        text = DOCUMENT.read_text()
+        self.assertIn('email.get("date_received") or email.get("date")', text)
+        self.assertNotIn('if email["date"] <= LAST_ARCHIVED', text)
+        self.assertIn("停止並點名 `last_archived`", text)
 
 
 class RepairCommandPointerTests(unittest.TestCase):
