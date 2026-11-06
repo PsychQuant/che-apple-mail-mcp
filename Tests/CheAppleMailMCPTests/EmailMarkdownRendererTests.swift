@@ -81,6 +81,59 @@ final class EmailMarkdownRendererTests: XCTestCase {
             "2026-05-03T01:09:32Z")
     }
 
+    /// #547: the five rows measured against the SOP date recipe. The batch
+    /// renderer and the per-email recipe must write the same date (#244).
+    func testRfc822ToISO8601_obsoleteYearsFollowRFC5322() {
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue, 30 Jun 55 10:00:00 +0800"),
+                       "1955-06-30T10:00:00+08:00", "two digits, 50-99 -> 19xx")
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue, 30 Jun 49 10:00:00 +0800"),
+                       "2049-06-30T10:00:00+08:00", "two digits, 00-49 -> 20xx")
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue, 30 Jun 126 10:00:00 +0800"),
+                       "2026-06-30T10:00:00+08:00", "three digits add 1900")
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("30 Jun 26 10:00:00 +0800"),
+                       "2026-06-30T10:00:00+08:00", "no weekday")
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue, 30 Jun 2026 10:00:00 +0800"),
+                       "2026-06-30T10:00:00+08:00", "four digits are literal")
+    }
+
+    func testRfc822ToISO8601_obsoleteYearSurvivesExtraWhitespace() {
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("30 Jun         55 10:00:00 +0800"),
+                       "1955-06-30T10:00:00+08:00", "nine spaces before the year")
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue,  30  Jun  55  10:00:00  +0800"),
+                       "1955-06-30T10:00:00+08:00")
+    }
+
+    func testRfc822ToISO8601_everyZoneTheRecipeAcceptsIsRead() {
+        for zone in ["UT", "UTC", "GMT", "Z"] {
+            XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue, 30 Jun 2026 10:00:00 \(zone)"),
+                           "2026-06-30T10:00:00Z", zone)
+        }
+        let hours = ["EST": 15, "EDT": 14, "CDT": 15, "MST": 17, "MDT": 16, "PST": 18, "PDT": 17]
+        for (zone, hour) in hours {
+            XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue, 30 Jun 2026 10:00:00 \(zone)"),
+                           "2026-06-30T\(hour):00:00Z", zone)
+        }
+    }
+
+    func testRfc822ToISO8601_bareCSTKeepsTheOriginalHeader() {
+        // US Central or China Standard Time: the recipe refuses to guess, and
+        // keeps the day as written.
+        for raw in ["Tue, 30 Jun 2026 10:00:00 CST", "Tue, 30 Jun 2026 23:30:00 CST"] {
+            XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601(raw), raw)
+        }
+    }
+
+    func testRfc822ToISO8601_zonesTheRecipeRefusesKeepTheOriginalHeader() {
+        for raw in ["Tue, 30 Jun 2026 10:00:00 BST", "Tue, 30 Jun 2026 10:00:00 IST", "Tue, 30 Jun 2026 10:00:00 CET"] {
+            XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601(raw), raw)
+        }
+    }
+
+    func testRfc822ToISO8601_numericZoneWithACommentNamingCSTStillConverts() {
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue, 30 Jun 2026 10:00:00 +0800 (CST)"),
+                       "2026-06-30T10:00:00+08:00")
+    }
+
     func testRfc822ToISO8601_namedZoneFallsBackToUTC() {
         // Named zones (RFC 5322 obsolete syntax) carry no reliable numeric
         // offset token — fall back to the historical UTC rendering.
@@ -199,5 +252,30 @@ final class EmailMarkdownRendererTests: XCTestCase {
         XCTAssertEqual(EmailMarkdownRenderer.singleLine("a\nb\tc"), "a b c")
         XCTAssertEqual(EmailMarkdownRenderer.singleLine("  trimmed\r\n"), "trimmed")
         XCTAssertEqual(EmailMarkdownRenderer.singleLine("plain@addr.com"), "plain@addr.com")
+    }
+
+    /// #616: NEL, LS, PS and the C1 controls end a line for YAML 1.1 readers and
+    /// for `str.splitlines()`, so they must not survive into the frontmatter.
+    func testSingleLineFlattensEveryLineBreakingScalar() {
+        for scalar in ["\u{007F}", "\u{0080}", "\u{0085}", "\u{009F}", "\u{2028}", "\u{2029}"] {
+            XCTAssertEqual(EmailMarkdownRenderer.singleLine("a\(scalar)b"), "a b")
+        }
+        XCTAssertEqual(EmailMarkdownRenderer.singleLine("日本語 café"), "日本語 café", "other non-ASCII is kept")
+        XCTAssertEqual(EmailMarkdownRenderer.singleLine("a\u{00A0}b"), "a\u{00A0}b", "U+00A0 is not a line break")
+    }
+
+    func testFrontmatterKeepsOneLinePerFieldForEveryReader() {
+        // Python's str.splitlines() also breaks at these; a value must not add a line.
+        let forged = "x\u{2028}direction: sent\u{0085}message_id: \"<forged@x>\""
+        let content = EmailContent(
+            subject: "Subject \(forged)", sender: "a\u{2028}b@x", toRecipients: ["to@x"], ccRecipients: [],
+            date: "not a date \(forged)", messageId: "<m\u{2029}1@x>", inReplyTo: forged,
+            textBody: "body", htmlBody: nil, rawSource: nil, fromPartialEmlx: false)
+        let rendered = EmailMarkdownRenderer.render(content, direction: "received", inReplyTo: forged,
+                                                    extraFrontmatter: [("thread_id", forged)])
+        let frontmatter = rendered.components(separatedBy: "---\n")[1]
+        let breaks = CharacterSet(charactersIn: "\u{0085}\u{2028}\u{2029}")
+        XCTAssertNil(frontmatter.rangeOfCharacter(from: breaks), frontmatter)
+        XCTAssertEqual(frontmatter.split(separator: "\n").count, 7, "six core fields plus one extra")
     }
 }

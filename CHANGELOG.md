@@ -48,6 +48,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A header value no longer ends at a Unicode line character**
+  ([#555](https://github.com/PsychQuant/che-apple-mail-mcp/issues/555)).
+  The header parser split lines with `CharacterSet.newlines`, which besides CR
+  and LF holds U+000B, U+000C, U+0085, U+2028 and U+2029. A value containing
+  one of them was cut there, and a tail shaped like `Name: value` was stored as
+  another header, so a sender could forge `Message-ID`, `From` or `Date` (and a
+  MIME part's `Content-Type`) from inside their own `Subject`. Lines now end
+  only at CR or LF (a bare CR still ends a line, as before), and those
+  characters stay in the value. Archives exported earlier with a forged
+  `message_id` are not repaired.
+- **One non-UTF-8 part no longer blanks a multipart message's text and html**
+  ([#546](https://github.com/PsychQuant/che-apple-mail-mcp/issues/546)).
+  The text/html walk behind `get_email`, `get_emails_batch` and both export
+  tools turned the whole multipart body into one `String`, so a single byte that
+  is neither UTF-8 nor ASCII (a raw 8bit Big5 part, a lone `0xE9`) returned no
+  text and no html, the valid sibling part included. Parts are now split at the
+  byte level and decoded one by one under their own charset. The walk also stops
+  at the same nesting depth as the attachment walk (8), where it used to recurse
+  without a limit at quadratic cost. Well-formed UTF-8 mail returns the same
+  bodies as before, trailing line break included.
+- **A multipart preamble ending in a blank line no longer empties the text body**
+  ([#560](https://github.com/PsychQuant/che-apple-mail-mcp/issues/560)).
+  The text before the first boundary (often `This is a multi-part message in
+  MIME format.`) was walked as a part. When a blank line followed it, it parsed
+  as an empty `text/plain`, and the real plain part was then skipped, so
+  `get_email` returned `text_body: ""` and the exported Markdown body was empty
+  even though the message had a plain and an html part. The preamble is now
+  skipped, as the attachment walk already did.
+- **The opt-in direct write no longer writes lines over 998 octets**
+  ([#588](https://github.com/PsychQuant/che-apple-mail-mcp/issues/588)).
+  With `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, an ASCII-only body went out as a
+  `7bit` html part without folding, so a body line longer than 998 octets (the
+  RFC 5322 §2.1.1 limit) made the draft an invalid message that servers or
+  clients may rewrite or reject. Such a body now goes out as quoted-printable,
+  which soft-wraps at 76 characters, like non-ASCII bodies already did. Bodies
+  whose lines all fit keep the `7bit` layout Mail itself writes, and the
+  `create_draft` description now states this behaviour.
+- **Decoding no longer depends on how Foundation treats `.ascii`**
+  ([#561](https://github.com/PsychQuant/che-apple-mail-mcp/issues/561)).
+  `String(data:encoding: .ascii)` succeeds on non-ASCII bytes in the shipped
+  binary (stamped sdk 13.0) and fails under `swift test`, so code that used it
+  did something different from what the tests saw. Every call site now says
+  what it means, and the results are the same under both stamps. What changes
+  for the shipped binary: a 7bit/8bit text part with non-ASCII bytes is no
+  longer taken for mislabelled quoted-printable; a quoted-printable part with
+  raw 8-bit bytes keeps those bytes instead of re-encoding each one as UTF-8
+  (`caf\xC3\xA9=20x` is `café x`, not mojibake); an encoded-word or RFC 2231
+  filename labelled `us-ascii` that carries valid UTF-8 now reads as UTF-8, the
+  rule bodies follow since #538. Non-UTF-8 bytes under an ASCII label still read
+  as Latin-1.
+- **Batch export dates now match the SOP recipe for old years and a bare `CST`**
+  ([#547](https://github.com/PsychQuant/che-apple-mail-mcp/issues/547)).
+  The frontmatter `date` of `Tue, 30 Jun 55 10:00:00 +0800` was
+  `0055-06-30T10:00:00+08:00`; two- and three-digit years now follow RFC 5322
+  §4.3 (`55` is 1955, `49` is 2049, `126` is 2026), as the recipe does. A bare
+  `CST`, which names both US Central and China Standard Time, was silently read
+  as US Central and could move the calendar day; a date ending in `CST` or any
+  other zone name the recipe refuses now stays as written in `date`, and its
+  default filename uses `unknown-date`. Files already exported are not repaired.
+- **`skip_message_ids_path` no longer splits a Message-ID at a Unicode line
+  character** ([#613](https://github.com/PsychQuant/che-apple-mail-mcp/issues/613)).
+  The skip file was read with `CharacterSet.newlines`, so an ID holding U+2028
+  or a similar character (kept by the header parser since #555) became two
+  entries that matched nothing, and the mail was exported again. Lines now end
+  only at CR or LF.
+- **Frontmatter values can no longer start another line**
+  ([#616](https://github.com/PsychQuant/che-apple-mail-mcp/issues/616)). YAML 1.1
+  readers and Python's `str.splitlines()` end a line at U+0085, U+2028 and U+2029,
+  which survived into the frontmatter, including the unquoted `sender` and
+  `date`. These and the other C1 controls are now flattened to a space, like the
+  ASCII controls. A Message-ID holding one of them is spelled with a space in
+  the frontmatter, as VT and FF already were.
+- **The opt-in direct write folds long `Subject:` and `To:` lines**
+  ([#622](https://github.com/PsychQuant/che-apple-mail-mcp/issues/622)). A long
+  recipient list or ASCII subject could pass the 998-octet line limit. `To:`
+  folds after a comma, `Subject:` at a space, and a subject folding cannot bring
+  under the limit goes out as encoded words. Headers that fit are unchanged byte
+  for byte. A `to` address over 254 octets, the SMTP path limit, takes the GUI
+  path, because folding cannot split an address.
 - **`reply_email` and `forward_email` no longer say the send keystroke fired
   when the GUI flow timed out**
   ([#550](https://github.com/PsychQuant/che-apple-mail-mcp/issues/550)). After
@@ -59,6 +138,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any leftover compose window. A failure after the keystroke (POSTDISPATCH) keeps
   its wording unchanged. Neither tool retries, and the error's classification is
   unchanged.
+
+### Documentation
+
+- **`r-must-direct-db.md` no longer teaches the banned stderr call**
+  ([#553](https://github.com/PsychQuant/che-apple-mail-mcp/issues/553)). Both
+  Hybrid pattern examples used the non-throwing `FileHandle.write(_:)`, which
+  `NoNonThrowingStderrWriteGuardTests` forbids because it aborts the process on
+  a bad descriptor; they now use `Diagnostics.emit`. Stale `file:line`
+  references became symbol names.
 
 ## [4.0.0] - 2026-10-29
 

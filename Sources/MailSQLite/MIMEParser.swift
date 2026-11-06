@@ -36,7 +36,7 @@ public enum MIMEParser {
         let contentType = headers["content-type"] ?? "text/plain"
         let cte = headers["content-transfer-encoding"] ?? "7bit"
 
-        return parsePart(bodyData, contentType: contentType, encoding: cte)
+        return parsePart(bodyData, contentType: contentType, encoding: cte, depth: 0)
     }
 
     /// Parse the body portion of an RFC 822 message into **every** MIME
@@ -686,8 +686,8 @@ public enum MIMEParser {
         }
 
         let textEncoding = RFC822Parser.stringEncoding(for: charset)
-        return String(data: Data(bytes), encoding: textEncoding)
-            ?? String(data: Data(bytes), encoding: .utf8)
+        return ByteDecoding.string(from: Data(bytes), encoding: textEncoding)
+            ?? ByteDecoding.strictUTF8(Data(bytes))
     }
 
     /// Extract the numeric index from a continuation key like `<paramName>*3*`
@@ -706,15 +706,23 @@ public enum MIMEParser {
     private static func parsePart(
         _ data: Data,
         contentType: String,
-        encoding: String
+        encoding: String,
+        depth: Int
     ) -> ParsedEmailContent {
+        // Same depth guard as `collectParts`, so `parseBody` and
+        // `parseAllParts` stop at the same part (#546). Without it a message
+        // nested thousands deep was walked in full, at quadratic cost.
+        guard depth < maxMultipartDepth else {
+            return ParsedEmailContent(textBody: nil, htmlBody: nil)
+        }
+
         let (mimeType, params) = parseContentType(contentType)
 
         if mimeType.hasPrefix("multipart/") {
             guard let boundary = params["boundary"] else {
                 return ParsedEmailContent(textBody: nil, htmlBody: nil)
             }
-            return parseMultipart(data, boundary: boundary)
+            return parseMultipart(data, boundary: boundary, depth: depth)
         }
 
         // Decode transfer encoding
@@ -755,8 +763,8 @@ public enum MIMEParser {
     ///    This step must come BEFORE the declared charset: a Latin-1-family
     ///    decode never fails, so tried first it turns UTF-8 bytes into one
     ///    scalar per byte (the mojibake of #538). The ASCII labels used to be
-    ///    rescued only because `String(data:encoding: .ascii)` happens to
-    ///    return `nil` on non-ASCII bytes, which nothing pinned.
+    ///    rescued only because a strict ASCII decode happens to fail on
+    ///    non-ASCII bytes, which the shipped binary's does not (#561).
     /// 2. Otherwise the declared charset, so a real `big5` / `shift_jis` /
     ///    `euc-jp` / … body is never second-guessed.
     /// 3. If that fails, UTF-8 (strict).
@@ -765,45 +773,50 @@ public enum MIMEParser {
     ///    `US-ASCII`) used to come back `nil`, and the renderer then silently
     ///    wrote the raw HTML in its place.
     ///
-    /// `RFC822Parser.stringEncoding(for:)` stays untouched: header and filename
-    /// decoding share it, and they have different rules.
+    /// `RFC822Parser.stringEncoding(for:)` stays a plain label map, shared with
+    /// header and filename decoding. `ByteDecoding.string(from:encoding:)`
+    /// applies steps 1 and 4 to the ASCII labels on all three paths (#561).
     static func decodeBodyText(_ data: Data, declaredCharset: String) -> String {
         let label = declaredCharset.trimmingCharacters(in: .whitespaces).lowercased()
         if weakCharsetLabels.contains(label),
-           data.contains(where: { $0 >= 0x80 }),
-           let utf8 = String(data: data, encoding: .utf8) {
+           !ByteDecoding.isASCII(data),
+           let utf8 = ByteDecoding.strictUTF8(data) {
             return utf8
         }
-        return String(data: data, encoding: RFC822Parser.stringEncoding(for: label))
-            ?? String(data: data, encoding: .utf8)
-            ?? String(String.UnicodeScalarView(data.map { Unicode.Scalar($0) }))
+        return ByteDecoding.string(from: data, encoding: RFC822Parser.stringEncoding(for: label))
+            ?? ByteDecoding.utf8OrLatin1(data)
     }
 
     // MARK: - Multipart
 
+    /// Walk one multipart level for the first text/plain and text/html.
+    ///
+    /// The body is split at the byte level and each part is decoded on its
+    /// own (#546). It used to be turned into one `String` first, so a single
+    /// byte that is neither UTF-8 nor ASCII (raw 8bit Big5, a lone `0xE9`)
+    /// returned no text and no html for the whole message, siblings included.
+    ///
+    /// The chunking matches the old string split exactly: a part is the bytes
+    /// between two delimiters, including the line break before the next
+    /// delimiter, so the bodies of well-formed UTF-8 mail do not change. That
+    /// is why this does not reuse `splitMultipart`, which strips that line
+    /// break. Like `splitMultipart`, it skips the preamble (#560).
     private static func parseMultipart(
         _ data: Data,
-        boundary: String
+        boundary: String,
+        depth: Int
     ) -> ParsedEmailContent {
-        let boundaryMarker = "--\(boundary)"
-        let endMarker = "--\(boundary)--"
-
-        guard let text = String(data: data, encoding: .utf8)
-                ?? String(data: data, encoding: .ascii) else {
-            return ParsedEmailContent(textBody: nil, htmlBody: nil)
-        }
-
         var textBody: String?
         var htmlBody: String?
 
-        let parts = text.components(separatedBy: boundaryMarker)
-
-        for part in parts {
-            let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty || trimmed.hasPrefix("--") { continue }
+        // The chunk before the first delimiter is the preamble, which is not a
+        // part (RFC 2046 §5.1.1), as `splitMultipart` already treats it. Walked
+        // as a part, a preamble ending in a blank line parsed as an empty
+        // text/plain, and "first text wins" then rejected the real one (#560).
+        for partData in multipartChunks(data, boundary: boundary).dropFirst() {
+            if isBlankOrClosingChunk(partData) { continue }
 
             // Each part has its own headers + body
-            let partData = Data(part.utf8)
             guard let splitOffset = RFC822Parser.headerBodySplitOffset(in: partData) else {
                 continue
             }
@@ -814,7 +827,7 @@ public enum MIMEParser {
             let partCT = partHeaders["content-type"] ?? "text/plain"
             let partCTE = partHeaders["content-transfer-encoding"] ?? "7bit"
 
-            let result = parsePart(Data(partBody), contentType: partCT, encoding: partCTE)
+            let result = parsePart(Data(partBody), contentType: partCT, encoding: partCTE, depth: depth + 1)
 
             if let t = result.textBody, textBody == nil {
                 textBody = t
@@ -825,6 +838,33 @@ public enum MIMEParser {
         }
 
         return ParsedEmailContent(textBody: textBody, htmlBody: htmlBody)
+    }
+
+    /// The bytes between successive `--boundary` delimiters, in order,
+    /// including the chunk before the first delimiter and the one after the
+    /// last: the byte-level equivalent of `String.components(separatedBy:)`.
+    static func multipartChunks(_ data: Data, boundary: String) -> [Data] {
+        let delimiter = Data("--\(boundary)".utf8)
+        var chunks: [Data] = []
+        var cursor = data.startIndex
+        while let range = data.range(of: delimiter, in: cursor..<data.endIndex) {
+            chunks.append(Data(data[cursor..<range.lowerBound]))
+            cursor = range.upperBound
+        }
+        chunks.append(Data(data[cursor..<data.endIndex]))
+        return chunks
+    }
+
+    /// True for a chunk that is only ASCII whitespace, or whose first
+    /// non-whitespace bytes are `--` (the tail of a closing delimiter and the
+    /// epilogue after it).
+    private static func isBlankOrClosingChunk(_ chunk: Data) -> Bool {
+        let whitespace: Set<UInt8> = [0x20, 0x09, 0x0A, 0x0B, 0x0C, 0x0D]
+        guard let first = chunk.firstIndex(where: { !whitespace.contains($0) }) else {
+            return true
+        }
+        let next = chunk.index(after: first)
+        return chunk[first] == 0x2D && next < chunk.endIndex && chunk[next] == 0x2D
     }
 
     // MARK: - Content-Type Parsing
@@ -888,12 +928,13 @@ public enum MIMEParser {
         default:
             return data   // already decoded by its own declaration — never second-guess
         }
-        guard let text = String(data: data, encoding: .ascii),
-              text.range(of: #"=[0-9A-Fa-f]{2}"#, options: .regularExpression) != nil
+        guard ByteDecoding.isASCII(data) else { return data }   // honest 8-bit text, never QP
+        let text = ByteDecoding.latin1String(data)
+        guard text.range(of: #"=[0-9A-Fa-f]{2}"#, options: .regularExpression) != nil
                 || text.range(of: #"=\r?\n"#, options: .regularExpression) != nil,
               let candidate = RFC822Parser.decodeQuotedPrintableBytes(text),
               candidate != data,
-              let s = String(data: candidate, encoding: .utf8),
+              let s = ByteDecoding.strictUTF8(candidate),
               s.unicodeScalars.contains(where: { !$0.isASCII })
         else { return data }
         return candidate
@@ -902,16 +943,13 @@ public enum MIMEParser {
     private static func decodeTransferEncoding(_ data: Data, encoding: String) -> Data {
         switch encoding.lowercased() {
         case "base64":
-            let cleaned = String(data: data, encoding: .ascii)?
-                .replacingOccurrences(of: "\r\n", with: "")
-                .replacingOccurrences(of: "\n", with: "")
-                .replacingOccurrences(of: " ", with: "")
-                ?? ""
+            // Byte level on purpose: this runs on every attachment, and a
+            // `String` round trip costs several times the attachment's size.
+            let cleaned = data.filter { $0 != 0x0D && $0 != 0x0A && $0 != 0x20 }
             return Data(base64Encoded: cleaned) ?? data
 
         case "quoted-printable":
-            guard let text = String(data: data, encoding: .ascii) else { return data }
-            return RFC822Parser.decodeQuotedPrintableBytes(text) ?? data
+            return RFC822Parser.decodeQuotedPrintableBytes(data) ?? data
 
         case "7bit", "8bit", "binary":
             return data

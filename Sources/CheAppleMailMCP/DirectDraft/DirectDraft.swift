@@ -32,7 +32,7 @@ enum DirectDraft {
             case .ccOrBcc: return "cc/bcc are not written directly"
             case .noRecipient: return "no To recipient"
             case .displayName: return "display-name recipients are not written directly"
-            case .unsupportedAddress: return "a recipient is not a plain addr-spec"
+            case .unsupportedAddress: return "a recipient is not a plain addr-spec of at most 254 octets"
             case .emptySubject: return "empty subject"
             case .missingFromAddress: return "from_address is required to pick the account"
             case .fromNotBare: return "from_address must be a bare address"
@@ -54,7 +54,10 @@ enum DirectDraft {
             if parsed.name != nil || raw.trimmingCharacters(in: .whitespaces) != parsed.address {
                 return .displayName
             }
-            if !isSimpleAddrSpec(parsed.address) { return .unsupportedAddress }
+            // Folding cannot split an address, so its length is bounded here (#622).
+            if !isSimpleAddrSpec(parsed.address) || parsed.address.utf8.count > maxAddressOctets {
+                return .unsupportedAddress
+            }
         }
         guard !subject.isEmpty else { return .emptySubject }
         guard let from = fromAddress, !from.isEmpty else { return .missingFromAddress }
@@ -87,11 +90,18 @@ enum DirectDraft {
         var size: Int { mime.count }
     }
 
+    /// The longest line RFC 5322 §2.1.1 allows, in octets, line ending excluded.
+    static let maxLineOctets = 998
+
+    /// The SMTP path limit for an address (RFC 5321 §4.5.3.1.3).
+    static let maxAddressOctets = 254
+
     /// The draft in the layout Mail writes for drafts it saves (#472 design):
     /// `multipart/alternative` with an empty `text/plain` part and the body in
     /// `text/html`, LF line endings, `X-Uniform-Type-Identifier: com.apple.mail-draft`.
     /// Non-ASCII goes out as UTF-8: RFC 2047 encoded words in headers,
-    /// quoted-printable in the body.
+    /// quoted-printable in the body. An ASCII body with a line over
+    /// `maxLineOctets` goes out as quoted-printable too (#588).
     static func buildMessage(fromName: String?, fromAddress: String, to: [String], subject: String, body: String,
                              date: Date, documentUUID: UUID, messageIdLocalPart: UUID, boundary: UUID,
                              mailVersion: String, timeZone: TimeZone = .current) -> Message {
@@ -102,7 +112,7 @@ enum DirectDraft {
             .replacingOccurrences(of: "(", with: "\\(").replacingOccurrences(of: ")", with: "\\)")
 
         let headers = [
-            "Subject: \(encodeHeaderText(subject))",
+            subjectHeader(subject),
             "Mime-Version: 1.0 (Mac OS X Mail \(versionComment))",
             "Content-Type: multipart/alternative;\n\tboundary=\"\(marker)\"",
             "X-Apple-Base-Url: x-msg://16/",
@@ -114,7 +124,7 @@ enum DirectDraft {
             "X-Apple-Mail-Signature: ",
             "Message-Id: <\(messageId)>",
             "X-Uniform-Type-Identifier: com.apple.mail-draft",
-            "To: \(to.joined(separator: ", "))",
+            foldedHeaderLine("To: \(to.map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: ", "))"),
         ]
 
         let html = "<html><head></head><body dir=\"auto\" style=\"overflow-wrap: break-word; "
@@ -122,7 +132,14 @@ enum DirectDraft {
             + body.components(separatedBy: "\n").map(escapeHTML).joined(separator: "<br>\n")
             + "\n</body></html>"
         let ascii = html.unicodeScalars.allSatisfy { $0.isASCII }
-        let htmlPart = ascii
+        // RFC 5322 §2.1.1 limits a line to 998 octets (line ending excluded),
+        // and a 7bit part does not fold. An ASCII html part with a longer line
+        // goes out as quoted-printable, which soft-wraps at 76 (#588). Short
+        // ASCII bodies keep the 7bit layout Mail itself writes (#472).
+        let sevenBitSafe = ascii
+            && !html.utf8.split(separator: 0x0A, omittingEmptySubsequences: false)
+                .contains { $0.count > maxLineOctets }
+        let htmlPart = sevenBitSafe
             ? "Content-Transfer-Encoding: 7bit\nContent-Type: text/html;\n\tcharset=us-ascii\n\n\(html)"
             : "Content-Transfer-Encoding: quoted-printable\nContent-Type: text/html;\n\tcharset=utf-8\n\n"
                 + quotedPrintable(Data(html.utf8))
@@ -171,6 +188,44 @@ enum DirectDraft {
     }
 
     // MARK: - Encoders
+
+    /// The `Subject:` line. Encoded words fold themselves, so only a plain ASCII
+    /// subject is folded here, at its spaces. One that folding cannot bring under
+    /// the limit (a run with no space, a long run of spaces) goes out as encoded
+    /// words too (#622). `foldedHeaderLine` must never see encoded words: they
+    /// already hold line breaks, and folding them again ends the header block.
+    static func subjectHeader(_ subject: String) -> String {
+        let encoded = encodeHeaderText(subject)
+        let line = "Subject: \(encoded)"
+        guard encoded == subject, line.utf8.count > maxLineOctets else { return line }
+        let folded = foldedHeaderLine(line)
+        let fits = folded.components(separatedBy: "\n").allSatisfy { $0.utf8.count <= maxLineOctets }
+        return fits ? folded : "Subject: \(encodedWords(subject))"
+    }
+
+    /// Fold a header line at its spaces so no physical line passes
+    /// `maxLineOctets` (RFC 5322 §2.1.1). A line that fits comes back unchanged,
+    /// so every message that was already legal keeps Mail's layout (#622). The
+    /// break goes before a space, which unfolding turns back into that space,
+    /// and only before a word: a continuation line must not be all whitespace.
+    static func foldedHeaderLine(_ line: String) -> String {
+        guard line.utf8.count > maxLineOctets else { return line }
+        var lines: [String] = []
+        var current = ""
+        for (index, word) in line.components(separatedBy: " ").enumerated() {
+            if index == 0 {
+                current = word
+            } else if !word.isEmpty, current.utf8.count + 1 + word.utf8.count > maxLineOctets,
+                      current.contains(where: { $0 != " " }) {
+                lines.append(current)
+                current = " \(word)"
+            } else {
+                current += " \(word)"
+            }
+        }
+        lines.append(current)
+        return lines.joined(separator: "\n")
+    }
 
     static func encodeHeaderText(_ text: String) -> String {
         if text.unicodeScalars.allSatisfy({ $0.value >= 0x20 && $0.value < 0x7F }) { return text }

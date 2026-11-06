@@ -173,13 +173,11 @@ public enum EmlxParser {
 
         guard let splitOffset = RFC822Parser.headerBodySplitOffset(in: messageData) else {
             // No body separator — return entire message as headers
-            return String(data: messageData, encoding: .utf8)
-                ?? String(data: messageData, encoding: .ascii) ?? ""
+            return ByteDecoding.utf8OrLatin1(messageData)
         }
 
         let headerData = messageData[messageData.startIndex..<messageData.index(messageData.startIndex, offsetBy: splitOffset)]
-        return String(data: headerData, encoding: .utf8)
-            ?? String(data: headerData, encoding: .ascii) ?? ""
+        return ByteDecoding.utf8OrLatin1(headerData)
     }
 
     /// Read raw RFC 822 source from an .emlx file.
@@ -189,7 +187,6 @@ public enum EmlxParser {
         }
         let fileData = try Data(contentsOf: URL(fileURLWithPath: path))
         let messageData = try EmlxFormat.extractMessageData(from: fileData)
-        return String(data: messageData, encoding: .utf8)
-            ?? String(data: messageData, encoding: .ascii) ?? ""
+        return ByteDecoding.utf8OrLatin1(messageData)
     }
 }
