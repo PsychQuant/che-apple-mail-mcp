@@ -715,6 +715,23 @@ Without this setting, ordinary paths within the user's home are accepted; the
 home denylist is not an exhaustive list of sensitive files. Configure narrow roots
 when unrelated home files must be protected.
 
+Where to set it depends on how the server was installed
+([#574](https://github.com/PsychQuant/che-apple-mail-mcp/issues/574)). In every
+case the value is read when the server starts, so restart the host after changing it.
+
+| Install | Where | Example |
+|---|---|---|
+| Claude Code plugin | The `env` block of a Claude Code settings file (for example `~/.claude/settings.json`); Claude Code passes it to the MCP servers it starts. Exporting the variable in the shell that launches `claude` also works. | `"env": { "CHE_MAIL_EXPORT_ALLOWED_ROOTS": "/Volumes/Archive/Mail" }` |
+| Claude Desktop `.mcpb` | The extension's settings in Claude Desktop: **Allowed save and export folders**. Leave it empty to keep the home default. | `/Volumes/Archive/Mail:/Users/you/Mail Exports` |
+| Manual / binary | The `env` of the server entry in your MCP client's configuration, or the environment of the process that launches the binary. | `CHE_MAIL_EXPORT_ALLOWED_ROOTS=/Volumes/Archive/Mail` |
+
+The value is one string of absolute paths separated by `:`, so a path that
+contains `:` cannot be listed. An entry that is an unexpanded installer
+placeholder (`${...}`) is ignored with a note on stderr, so a host that passes an
+unset `.mcpb` setting through literally keeps the home default instead of
+denying every destination. Whether Claude Desktop passes an empty optional
+setting as an empty string has not been checked on a real install (#574).
+
 `~/Library` is denied except for the cloud-sync folders macOS keeps inside it:
 paths inside an existing provider folder in `~/Library/CloudStorage` (Dropbox,
 Google Drive, OneDrive, Box; `~/Dropbox` is a link into it), inside iCloud

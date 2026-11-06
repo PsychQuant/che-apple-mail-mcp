@@ -34,6 +34,30 @@ enum AllowedRootsError: Error, Equatable {
 ///    canonicalized before comparison, so symlinked roots compare correctly).
 struct AllowedRootsValidator {
 
+    /// The roots configured by `CHE_MAIL_EXPORT_ALLOWED_ROOTS`, the one policy
+    /// input shared by `save_attachment` and the Markdown export tools (#574).
+    ///
+    /// `:`-separated; empty entries are skipped. An entry that is an unexpanded
+    /// installer placeholder (`${...}`, e.g. `${user_config.export_allowed_roots}`
+    /// from the `.mcpb` manifest) is skipped too, with a note on stderr: a
+    /// nonempty list REPLACES the home allowance, so a host that passed an unset
+    /// optional setting through literally would otherwise deny every
+    /// destination. Whether Claude Desktop does that was not checked on a real
+    /// install; the manifest also gives the setting an empty default.
+    static func configuredRoots(from raw: String?,
+                                log: (String) -> Void = { Diagnostics.emit($0) }) -> [String] {
+        (raw ?? "").split(separator: ":").map(String.init).filter { entry in
+            guard entry.hasPrefix("${"), entry.hasSuffix("}") else { return true }
+            log("CHE_MAIL_EXPORT_ALLOWED_ROOTS: ignoring the unexpanded placeholder \(entry) (#574)\n")
+            return false
+        }
+    }
+
+    /// `configuredRoots(from:)` applied to this process's environment.
+    static var environmentRoots: [String] {
+        configuredRoots(from: ProcessInfo.processInfo.environment["CHE_MAIL_EXPORT_ALLOWED_ROOTS"])
+    }
+
     /// System directory prefixes that are never writable, regardless of the
     /// configured allowed roots. `/Library` here is the system-level Library;
     /// the user's `~/Library` resolves under home (`/Users/<u>/Library`) and

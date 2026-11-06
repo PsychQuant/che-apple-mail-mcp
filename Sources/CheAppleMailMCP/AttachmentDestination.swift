@@ -34,10 +34,7 @@ final class AttachmentDestination: @unchecked Sendable {
     private let parentFd: Int32
     private let filename: String
 
-    static var configuredRoots: [String] {
-        (ProcessInfo.processInfo.environment["CHE_MAIL_EXPORT_ALLOWED_ROOTS"] ?? "")
-            .split(separator: ":").map(String.init)
-    }
+    static var configuredRoots: [String] { AllowedRootsValidator.environmentRoots }
 
     init(savePath: String, allowedRoots: [String] = AttachmentDestination.configuredRoots,
          beforeValidation: (() throws -> Void)? = nil,

@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The `.mcpb` install can set the destination policy**
+  ([#574](https://github.com/PsychQuant/che-apple-mail-mcp/issues/574)). The
+  bundle's manifest had no way to set `CHE_MAIL_EXPORT_ALLOWED_ROOTS`, so a
+  Claude Desktop user could not save attachments or export outside the home
+  folder (an external disk, for example). The extension now has an optional
+  **Allowed save and export folders** setting that maps onto the variable; it
+  takes the same colon-separated absolute paths and, when set, replaces the
+  home default. The README lists where to set the variable for each install
+  method. An entry that is an unexpanded placeholder (`${...}`) is now ignored
+  with a note on stderr, so a host that passes an unset setting through
+  literally keeps the home default instead of denying every destination. How
+  Claude Desktop passes an empty setting was not checked on a real install; the
+  setting has an empty default, and the `save_attachment` and `output_dir`
+  descriptions state the limit.
+
 ### Changed
 
 - **BREAKING: `reply_email` refuses `attachments` for now**
