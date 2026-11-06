@@ -6,10 +6,15 @@ import Foundation
 /// `… of application "Mail"`, `activate application "Mail"`, `application id "…"`,
 /// `tell process "Mail"`, or indirectly through `run script` / `do shell script`.
 ///
-/// It is a deny list of the forms known to reach an application, not a proof that none can, except
-/// the Foundation bridge allowance, which is a closed list. It is
-/// deliberately broader than the code it guards: a false positive only fails a test, which is the
-/// safe direction; a false negative sends a real Apple Event from `swift test`.
+/// What it defends against: a fixture written by mistake, one that keeps a line of a production
+/// script or picks up another way of addressing an application. It does not defend against an author
+/// trying to get past it, so the answer to a bypass that takes deliberate effort is not a longer list.
+///
+/// `bridgeNames` and `bridgePipedWords` are closed: nothing else of those shapes passes. Everything
+/// else here is a deny list of the forms known to reach an application, not a proof that none can,
+/// and that includes `bridgeRefusals`, which lists methods. It is deliberately broader than the code
+/// it guards: a false positive only fails a test, which is the safe direction; a false negative sends
+/// a real Apple Event from `swift test`.
 enum OsascriptFixtureGuard {
     struct ApplicationReference: Error, CustomStringConvertible {
         let pattern: String
@@ -71,8 +76,9 @@ enum OsascriptFixtureGuard {
     /// `foundationBridge` is for handlers that really use the AppleScript-Objective-C bridge. It lets
     /// through exactly `use framework "Foundation"`, `use scripting additions`, the names in
     /// `bridgeNames`, `current application's` before one of them, and the words in `bridgePipedWords`
-    /// (#617). That bounds which classes run, not what the methods of those classes do: `NSData` and
-    /// `NSString` can read and write files and fetch URLs. None of them reaches another application.
+    /// (#617). That bounds the class names a fixture can write, not what the methods of those classes
+    /// do or return: `NSData` and `NSString` can read and write files and fetch URLs. No way from them
+    /// to another application is known.
     static func check(_ fragment: String, foundationBridge: Bool = false) throws {
         var code = code(of: fragment)
         if foundationBridge {
