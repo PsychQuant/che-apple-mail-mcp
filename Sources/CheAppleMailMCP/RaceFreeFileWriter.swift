@@ -66,11 +66,23 @@ enum RaceFreeFileWriter {
     /// on the final component only adds protection (it must be a real dir).
     /// Caller owns the returned fd and must `close` it.
     static func openValidatedRootDir(_ path: String) throws -> Int32 {
-        let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        let fd = openDirectoryForWalk { open(path, $0) }
         if fd < 0 {
             throw RaceFreeWriteError.openRootFailed(path: path, errno: errno)
         }
         return fd
+    }
+
+    /// Opens a directory for a no-follow walk (#576). `O_SEARCH` needs search
+    /// permission only, as the path-based writes it replaced did: `O_RDONLY`
+    /// also needs read permission, so a `-wx--x--x` ancestor failed every save.
+    /// A descriptor opened this way cannot list the directory, and nothing that
+    /// walks needs to. `O_RDONLY` stays as the fallback for a filesystem that
+    /// refuses `O_SEARCH` outright, which was not tested on network or FUSE mounts.
+    static func openDirectoryForWalk(_ open: (Int32) -> Int32) -> Int32 {
+        let fd = open(O_SEARCH | O_NOFOLLOW | O_CLOEXEC)
+        guard fd < 0, errno == EINVAL || errno == ENOTSUP else { return fd }
+        return open(O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
     }
 
     /// Descend `components` below `rootFd`, creating each directory (`mkdirat`,
@@ -102,7 +114,7 @@ enum RaceFreeFileWriter {
                 }
                 // Open without following symlinks (still guards a swap after the
                 // stat above — O_NOFOLLOW makes that open fail too).
-                let fd = openat(parentFd, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                let fd = openDirectoryForWalk { openat(parentFd, component, $0) }
                 if fd < 0 {
                     let e = errno
                     throw e == ELOOP
@@ -169,11 +181,95 @@ enum RaceFreeFileWriter {
         }
     }
 
-    /// Attachment publishing uses a unique sibling temp: concurrent saves must
-    /// never unlink or publish another call's temporary file (#402).
+    /// How old a temporary of a live or unknown owner must be before a sweep
+    /// removes it. A running copy keeps its file's modification time current.
+    static let staleTemporaryAge: TimeInterval = 24 * 60 * 60
+
+    /// The sibling temporary for one save. Unique, not fixed per destination:
+    /// concurrent saves must never unlink or publish each other's file (#402).
+    /// The pid is what lets a later save tell an abandoned file from a live
+    /// one (#576).
+    static func temporaryName(pid: Int32 = getpid()) -> String {
+        ".attachment-\(pid)-\(UUID().uuidString).tmp"
+    }
+
+    /// What `temporaryName` wrote, or `nil` for any other name. The pid is `nil`
+    /// for the form before #576, which named no owner.
+    static func parseTemporaryName(_ name: String) -> (isTemporary: Bool, pid: Int32?) {
+        let prefix = ".attachment-", suffix = ".tmp"
+        guard name.hasPrefix(prefix), name.hasSuffix(suffix),
+              name.count > prefix.count + suffix.count else { return (false, nil) }
+        let middle = String(name.dropFirst(prefix.count).dropLast(suffix.count))
+        if UUID(uuidString: middle) != nil { return (true, nil) }
+        guard let dash = middle.firstIndex(of: "-"),
+              let pid = Int32(middle[..<dash]), pid > 0,
+              UUID(uuidString: String(middle[middle.index(after: dash)...])) != nil else { return (false, nil) }
+        return (true, pid)
+    }
+
+    static func processIsAlive(_ pid: Int32) -> Bool {
+        kill(pid, 0) == 0 || errno != ESRCH
+    }
+
+    /// Removes temporaries a killed server left behind in this directory: a
+    /// `SIGKILL` skips the `defer` that normally removes them, and their names
+    /// are never used again (#576). Only regular files of this user with a name
+    /// `temporaryName` wrote, and only when the owner is dead or the file is
+    /// older than `staleTemporaryAge`. Best effort: a directory that cannot be
+    /// listed, which a search-only one cannot, is left alone and never fails a save.
+    static func sweepStaleTemporaries(dirFd: Int32, now: Date = Date(),
+                                      isAlive: (Int32) -> Bool = RaceFreeFileWriter.processIsAlive) {
+        let listFd = openat(dirFd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard listFd >= 0 else { return }
+        guard let directory = fdopendir(listFd) else { close(listFd); return }
+        var candidates: [(name: String, pid: Int32?)] = []
+        while let entry = readdir(directory) {
+            let name = withUnsafePointer(to: &entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(entry.pointee.d_namlen) + 1) { String(cString: $0) }
+            }
+            let parsed = parseTemporaryName(name)
+            if parsed.isTemporary { candidates.append((name, parsed.pid)) }
+        }
+        closedir(directory)
+        for candidate in candidates {
+            var info = stat()
+            guard fstatat(dirFd, candidate.name, &info, AT_SYMLINK_NOFOLLOW) == 0,
+                  (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == geteuid() else { continue }
+            let modified = TimeInterval(info.st_mtimespec.tv_sec)
+            let ownerGone = candidate.pid.map { !isAlive($0) } ?? false
+            if ownerGone || now.timeIntervalSince1970 - modified >= staleTemporaryAge {
+                _ = unlinkat(dirFd, candidate.name, 0)
+            }
+        }
+    }
+
+    /// Removes the extended ACL a new file inherited from its folder (#576). A
+    /// POSIX mode does not remove ACL entries, so a folder with an inheritable
+    /// read entry would make the 0600 temporary, and the published file,
+    /// readable through it. Runs before any byte is written. A filesystem
+    /// without ACLs has nothing to clear; one that has an ACL it will not clear
+    /// fails the save rather than publishing a file others may read.
+    private static func clearInheritedACL(fd: Int32, name: String) throws {
+        guard let inherited = acl_get_fd_np(fd, ACL_TYPE_EXTENDED) else {
+            guard errno == ENOENT || errno == ENOTSUP else {
+                throw RaceFreeWriteError.writeFailed(name: name, errno: errno)
+            }
+            return
+        }
+        acl_free(UnsafeMutableRawPointer(inherited))
+        guard let empty = acl_init(0) else {
+            throw RaceFreeWriteError.writeFailed(name: name, errno: errno)
+        }
+        defer { acl_free(UnsafeMutableRawPointer(empty)) }
+        guard acl_set_fd_np(fd, empty, ACL_TYPE_EXTENDED) == 0 else {
+            throw RaceFreeWriteError.writeFailed(name: name, errno: errno)
+        }
+    }
+
     static func withAtomicAttachmentFile(dirFd: Int32, name: String,
                                          body: (Int32) throws -> Void) throws {
-        let temporary = ".attachment-" + UUID().uuidString + ".tmp"
+        sweepStaleTemporaries(dirFd: dirFd)
+        let temporary = temporaryName()
         // Created 0600, so no other user can open it while the bytes are
         // written, not even between creation and a mode change (#402 verify).
         let fd = openat(dirFd, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
@@ -184,6 +280,7 @@ enum RaceFreeFileWriter {
             close(fd)
             _ = unlinkat(dirFd, temporary, 0)
         }
+        try clearInheritedACL(fd: fd, name: name)
         try body(fd)
         // The final mode: an overwrite keeps the replaced file's permissions so a
         // private file stays private; neither case keeps execute bits, since the

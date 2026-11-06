@@ -142,6 +142,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   closed gets that answer 300 ms later than before; nothing else about it changes.
   A recovery goes to stderr, so the server's own rate can be seen; whether the
   server sees this at all was not established.
+- **Saving an attachment works through a search-only folder, says less, cleans
+  up after a kill and drops inherited ACLs**
+  ([#576](https://github.com/PsychQuant/che-apple-mail-mcp/issues/576)). Four
+  edge cases in the publisher #402 added:
+  - The walk from `/` opened each directory with read access, so an ancestor at
+    `-wx--x--x` failed every save with `destination_write_failed`, where the
+    path-based write before #402 needed only search permission. It now opens
+    with `O_SEARCH`, and falls back to read access on a filesystem that refuses
+    that. `O_SEARCH` was not tested on network or FUSE mounts. The Markdown
+    export shares the walk and gets the same change.
+  - A refused path now gets one fixed message that names no path. It used to
+    carry the resolved path, so a caller could learn where a symlink points or
+    whether a protected folder exists. The reason stays on stderr. A path that
+    fails to resolve outside the policy gets the same message; inside the policy
+    it keeps its specific reason.
+  - A save now removes temporaries a killed server left in that folder: files
+    named by this writer, owned by this user, whose server is gone or which are
+    over a day old. Temporary names stay unique per save rather than fixed per
+    destination as the issue proposed, because concurrent saves must not touch
+    each other's file (#402); the name now carries the server's pid. A folder
+    that cannot be listed is left alone.
+  - A saved file no longer keeps an ACL inherited from its folder: a folder's
+    inheritable read entry made the 0600 temporary, and so the published file,
+    readable through it. **Behaviour change:** a file saved into a folder that
+    shares through an inherited ACL, or over a file with its own ACL, ends up
+    with no ACL.
 
 ## [4.0.0] - 2026-10-29
 

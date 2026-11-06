@@ -49,26 +49,27 @@ final class AttachmentDestination: @unchecked Sendable {
         do {
             try AllowedRootsValidator().checkHomeNames(savePath, homePath: NSHomeDirectory())
         } catch {
-            throw AttachmentDestinationError.rejected("is outside the permitted destination policy (\(error))")
+            throw Self.policyRejection(error)
         }
         // Foundation's URL path presentation preserves aliases such as /var
         // on macOS. Use realpath for the actual no-follow descriptor walk, then
         // validate that exact target; never reopen the original caller string.
         let canonical: String
         do { canonical = try Self.filesystemPath(savePath) }
-        catch AttachmentDestinationError.io(let reason) {
-            // A permission error before authorization is reported as one only
+        catch let failure as AttachmentDestinationError {
+            // A resolution failure before authorization is reported as one only
             // for a path the policy accepts as written; anything else is a
-            // rejection, and says nothing about a location outside the policy.
+            // rejection, and says nothing about a location outside the policy
+            // (#576: "a component is a file" answers whether a path exists).
             let writtenRoots = allowedRoots.filter { !$0.isEmpty }.flatMap {
                 [URL(fileURLWithPath: $0).standardizedFileURL.path, AllowedRootsValidator.canonicalize($0).path]
             }
             if (try? AllowedRootsValidator().validateCanonicalPath(
                 savePath, homePath: NSHomeDirectory(), allowedRoots: writtenRoots,
                 deniedTargets: [], directoryExists: { _ in true })) != nil {
-                throw AttachmentDestinationError.io(reason)
+                throw failure
             }
-            throw AttachmentDestinationError.rejected("is outside the permitted destination policy")
+            throw Self.policyRejection(failure)
         }
         try beforeValidation?()
         do {
@@ -82,7 +83,7 @@ final class AttachmentDestination: @unchecked Sendable {
             }
             try AllowedRootsValidator().validateCanonicalPath(canonical, homePath: home, allowedRoots: roots)
         } catch {
-            throw AttachmentDestinationError.rejected("is outside the permitted destination policy (\(error))")
+            throw Self.policyRejection(error)
         }
         let components = canonical.dropFirst().split(separator: "/").map(String.init)
         guard components.count > 1, components.allSatisfy(ExportEmailsMarkdown.isSafeSegment) else {
@@ -91,7 +92,7 @@ final class AttachmentDestination: @unchecked Sendable {
         // Deterministic validation-to-open race seam; absent in production.
         try beforeOpen?()
         // Start at /, not at a pathname whose ancestors can be swapped to links.
-        let rootFd = open("/", O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        let rootFd = RaceFreeFileWriter.openDirectoryForWalk { open("/", $0) }
         guard rootFd >= 0 else { throw AttachmentDestinationError.io("cannot open filesystem root") }
         defer { close(rootFd) }
         let fd: Int32
@@ -120,6 +121,15 @@ final class AttachmentDestination: @unchecked Sendable {
         self.savePath = savePath
         self.filename = components.last!
         self.parentFd = fd
+    }
+
+    /// The one answer a caller gets for a path the policy refuses (#576). The
+    /// reason, which can hold the resolved path, goes to stderr only: resolution
+    /// runs before the check, so echoing it would tell a caller with no more than
+    /// MCP tools where a symlink points or whether a protected folder exists.
+    private static func policyRejection(_ reason: Error) -> AttachmentDestinationError {
+        Diagnostics.emit("save_attachment: destination refused: \(reason)\n")
+        return .rejected("is outside the permitted destination policy")
     }
 
     private static func filesystemPath(_ path: String) throws -> String {
