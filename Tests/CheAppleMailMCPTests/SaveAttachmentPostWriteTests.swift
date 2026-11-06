@@ -26,32 +26,40 @@ final class SaveAttachmentPostWriteTests: XCTestCase {
     }
     private func path(_ n: String) -> String { dir.appendingPathComponent(n).path }
 
-    // MARK: - the verifier itself
+    /// Runs the publication step #402 made the only one: `run` stands in for
+    /// Mail, writing to the private stage path it is handed.
+    private func save(_ p: String, stage: (String) throws -> String) throws -> String {
+        try destination(p).saveUsingScript({ try stage($0) }, allowEmpty: false)
+    }
+
+    // MARK: - saveUsingScript
 
     func testZeroByteFile_throwsActionableError() throws {
         let p = path("empty.pdf")
-        FileManager.default.createFile(atPath: p, contents: Data())
-        XCTAssertThrowsError(
-            try MailController.verifySavedAttachmentOnDisk("Attachment saved to \(p)", savePath: p)
-        ) { error in
+        XCTAssertThrowsError(try save(p) { stage in
+            FileManager.default.createFile(atPath: stage, contents: Data())
+            return "Attachment saved to \(stage)"
+        }) { error in
             let msg = error.localizedDescription
             XCTAssertTrue(msg.contains("0-byte"), "must name the failure shape: \(msg)")
             XCTAssertTrue(msg.contains("synchronize_account") || msg.contains("download_if_missing"),
                           "must be actionable: \(msg)")
         }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: p), "nothing reaches save_path")
     }
 
     func testMissingFile_throws() {
         let p = path("never-written.pdf")
-        XCTAssertThrowsError(
-            try MailController.verifySavedAttachmentOnDisk("Attachment saved to \(p)", savePath: p),
-            "success string + no file on disk = Mail's save silently failed")
+        XCTAssertThrowsError(try save(p) { "Attachment saved to \($0)" },
+            "success string + nothing staged = Mail's save silently failed")
     }
 
     func testRealBytes_appendsSizeSuffix() throws {
         let p = path("real.pdf")
-        FileManager.default.createFile(atPath: p, contents: Data(repeating: 7, count: 1234))
-        let out = try MailController.verifySavedAttachmentOnDisk("Attachment saved to \(p)", savePath: p)
+        let out = try save(p) { stage in
+            FileManager.default.createFile(atPath: stage, contents: Data(repeating: 7, count: 1234))
+            return "Attachment saved to \(stage)"
+        }
         XCTAssertEqual(out, "Attachment saved to \(p) (1234 bytes)",
                        "a verified success must carry the size — list_attachments has no "
                        + "size field, so this is the only size signal callers/audits get")
@@ -59,10 +67,9 @@ final class SaveAttachmentPostWriteTests: XCTestCase {
 
     func testNonSuccessStrings_passThroughUntouched() throws {
         let p = path("whatever.pdf")
-        XCTAssertEqual(
-            try MailController.verifySavedAttachmentOnDisk("Attachment not found", savePath: p),
-            "Attachment not found",
-            "only success claims are verified; negatives are not rewritten")
+        XCTAssertEqual(try save(p) { _ in "Attachment not found" }, "Attachment not found",
+                       "only success claims are verified; negatives are not rewritten")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: p))
     }
 
     // MARK: - through the real Tier-2 overload (script runner stubbed)

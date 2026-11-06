@@ -134,21 +134,18 @@ final class SaveAttachmentScriptBuilderTests: XCTestCase {
 
     // MARK: - #112: byte-identity snapshot lock for the accountId=nil path
 
-    /// Golden-file regression lock for the `#101` README + CHANGELOG promise:
-    /// `buildSaveAttachmentScript(accountId: nil)` produces AppleScript
-    /// byte-identical to the legacy 5-arg `MailController.saveAttachment`
-    /// path. The `expected` string below was extracted from that legacy path
-    /// — `MailController.saveAttachment(id:mailbox:accountName:attachmentName:savePath:)`'s
-    /// inline template + `MailController.msgRef` — which builds the script
-    /// independently of `buildSaveAttachmentScript`. Verify-101's Devil's
-    /// Advocate flagged that nothing pinned this guarantee (#112): a future
-    /// refactor of either path could silently shift the bytes.
+    /// Golden-text lock for the `#101` README + CHANGELOG promise: with no
+    /// `account_id`, the script keeps the bytes it had before #101. The literal
+    /// below is the only referent left. The 5-arg
+    /// `MailController.saveAttachment` overload used to build the same text
+    /// independently; since #402 every overload goes through
+    /// `buildSaveAttachmentScript`, so comparing with it would compare the
+    /// builder with itself (#575).
     ///
     /// If you intentionally change the `save_attachment` AppleScript shape,
     /// update BOTH this `expected` string AND the `#101` backward-compat
-    /// clause in README / CHANGELOG — and confirm the legacy 5-arg path moved
-    /// with it (otherwise the documented byte-identity no longer holds).
-    func testBuildSaveAttachmentScript_nilAccountId_byteIdenticalToLegacyPath() {
+    /// clause in README / CHANGELOG.
+    func testBuildSaveAttachmentScript_nilAccountId_matchesTheGoldenText() {
         let script = buildSaveAttachmentScript(
             id: "42",
             mailbox: "INBOX",
@@ -170,8 +167,7 @@ final class SaveAttachmentScriptBuilderTests: XCTestCase {
         end tell
         """
         XCTAssertEqual(script, expected,
-                       "buildSaveAttachmentScript(accountId: nil) MUST stay byte-identical to "
-                       + "the legacy 5-arg MailController.saveAttachment path (#101 backward-compat "
-                       + "guarantee, #112 regression lock).")
+                       "buildSaveAttachmentScript(accountId: nil) MUST keep these exact bytes "
+                       + "(#101 backward-compat guarantee, #112 regression lock).")
     }
 }

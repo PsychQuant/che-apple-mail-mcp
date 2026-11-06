@@ -2415,109 +2415,8 @@ actor MailController {
         }
     }
 
-    /// Save attachment to disk.
-    ///
-    /// 5-arg overload retained as the #112 byte-identity referent for
-    /// `buildSaveAttachmentScript(accountId: nil)`. No live caller (the Server
-    /// `save_attachment` handler uses the #101 6-arg overload), but #180 still
-    /// routes its `msgRef` through the `resolveMsgRef` chokepoint — so this path
-    /// is no longer an inline-legacy bypass while staying byte-identical at
-    /// `accountId: nil`.
-    /// #314 — post-write verification for every "Attachment saved" success.
-    ///
-    /// Mail.app's `save att in POSIX file` is a black box: for an attachment
-    /// whose bytes are not locally cached it can write a 0-byte file and
-    /// return without error, and the tool then reported the same success
-    /// string as a correct save — indistinguishable to every caller, and
-    /// invisible to the archive audit (three 0-byte attachments sat
-    /// undetected for ~11 weeks). Tier 1 (SQLite/.emlx) has had a pre-write
-    /// emptiness guard since #66/#238; this closes the same hole on the
-    /// AppleScript tier, where no post-write check existed at all.
-    ///
-    /// Non-success strings ("Attachment not found") pass through untouched.
-    /// A verified success gains a `(N bytes)` suffix so callers and audits
-    /// finally have a size signal (`list_attachments` carries none).
-    /// #347 — verify through `stat(2)`, not `FileManager.attributesOfItem`.
-    ///
-    /// `attributesOfItem(atPath:)` does **not** follow symlinks: for a link it
-    /// reports `.type = .symbolicLink` and a `.size` equal to the length of the
-    /// link's target path. Measured, on a link pointing at an empty file:
-    /// `type=NSFileTypeSymbolicLink size=55` — a non-zero number that sailed
-    /// past the `size > 0` guard, so the exact 0-byte state #314 exists to
-    /// catch verified as a success reporting `(55 bytes)`.
-    ///
-    /// `stat` follows the link, which is the right call here: `save_path` is a
-    /// destination the caller chose, and saving through a symlink is legitimate
-    /// use. (Contrast #303's version sidecar, where `O_NOFOLLOW` *rejects*
-    /// links — that path reads a file an attacker might plant, this one writes
-    /// where the caller asked.) What must be checked is that the **target** is
-    /// a regular file. `stat` rather than `open` + `fstat` because opening a
-    /// FIFO blocks until a writer appears, and this runs on the shared actor.
-    ///
-    /// Precisely: `stat` does not wait on a **local FIFO's** reader/writer
-    /// rendezvous, which is the hazard `open` introduces here. It is NOT
-    /// unconditionally non-blocking — on a hard-mounted NFS/SMB/FUSE path whose
-    /// server has stopped answering, any pathname resolution can hang, and this
-    /// one is outside #297's timeout guard. An earlier draft of this comment
-    /// claimed more than that (#347 verify round 1).
-    ///
-    /// Also inherent: this is a path-based check, so it cannot bind the result
-    /// to the inode Mail actually wrote. Between the save returning and this
-    /// `stat`, another process could swap the destination — the size reported
-    /// would then describe the substitute. Verifying "Mail wrote THIS inode"
-    /// would require a descriptor handed back by Mail, which AppleScript's
-    /// `save att in POSIX file` does not provide.
-    ///
-    /// - Parameter allowEmpty: accept a 0-byte regular file — for an attachment
-    ///   that is genuinely empty (#347 C). The success string then discloses it,
-    ///   because the envelope carries no size and neither the caller nor this
-    ///   code can distinguish "empty on purpose" from "the bytes never arrived":
-    ///   the override is a caller's attestation, and it has to leave a trace an
-    ///   archive audit can find later.
-    nonisolated static func verifySavedAttachmentOnDisk(
-        _ result: String, savePath: String, allowEmpty: Bool = false
-    ) throws -> String {
-        guard result.hasPrefix("Attachment saved") else { return result }
-
-        var st = stat()
-        guard stat(savePath, &st) == 0 else {
-            // ENOENT (and ENOTDIR on a missing intermediate) is genuinely
-            // "nothing is there" — the state Mail's silent no-op produces, and
-            // the one a download retry can still resolve. Every other errno
-            // describes a path that DOES exist but could not be examined;
-            // calling those "missing" both misinforms the caller and buys them
-            // a pointless 30s poll (#347 verify round 1).
-            let e = errno
-            throw MailError.attachmentWriteUnverified(
-                path: savePath,
-                problem: (e == ENOENT || e == ENOTDIR) ? .missing : .statFailed(errno: e))
-        }
-        guard (st.st_mode & S_IFMT) == S_IFREG else {
-            throw MailError.attachmentWriteUnverified(
-                path: savePath, problem: .notRegular(Self.fileKindName(st.st_mode)))
-        }
-        let size = Int64(st.st_size)
-        guard size > 0 else {
-            guard allowEmpty else {
-                throw MailError.attachmentWriteUnverified(path: savePath, problem: .empty)
-            }
-            return "\(result) (0 bytes — empty write accepted via allow_empty)"
-        }
-        return "\(result) (\(size) bytes)"
-    }
-
-    /// Human-readable name for a `st_mode` file type, for the rejection message.
-    private nonisolated static func fileKindName(_ mode: mode_t) -> String {
-        switch mode & S_IFMT {
-        case S_IFDIR:  return "directory"
-        case S_IFIFO:  return "FIFO"
-        case S_IFSOCK: return "socket"
-        case S_IFBLK:  return "block device"
-        case S_IFCHR:  return "character device"
-        default:       return "non-regular file"
-        }
-    }
-
+    /// Save attachment to disk. No production caller: the `save_attachment`
+    /// handler pins its destination first and uses the destination overload.
     func saveAttachment(id: String, mailbox: String, accountName: String, attachmentName: String,
                         savePath: String, allowEmpty: Bool = false) throws -> String {
         try saveAttachment(id: id, mailbox: mailbox, accountId: nil, accountName: accountName,
@@ -3240,12 +3139,6 @@ enum AttachmentWriteProblem: Equatable {
     /// A regular file of zero length. Retryable, and overridable via
     /// `allow_empty` for a genuinely empty attachment.
     case empty
-    /// `stat` failed for a reason that is not "nothing is there" — `ELOOP`
-    /// (symlink loop), `EACCES`, `EIO`, `ENOTDIR`. Terminal: reporting these as
-    /// `.missing` told the caller "no file exists" about a path that does
-    /// exist, and made them eligible for a download retry that cannot help
-    /// (#347 verify round 1).
-    case statFailed(errno: Int32)
 }
 
 /// Interpreter exit is distinct from completion or rollback of Apple Events
@@ -3356,12 +3249,6 @@ enum MailError: LocalizedError {
                 return "save_attachment: Mail reported saving the attachment for \(path), but "
                     + "what it produced is a \(kind), not a regular file (#347). Nothing was "
                     + "written to save_path, and retrying will not change it."
-            case .statFailed(let e):
-                let detail = String(cString: strerror(e))
-                return "save_attachment reported success but \(path) could not be examined: "
-                    + "\(detail) (errno \(e), #347). The path exists in some form — this is not "
-                    + "a missing file and retrying will not change it. Check for a symlink loop, "
-                    + "permissions on the containing directory, or an I/O error on the volume."
             case .empty:
                 return "save_attachment produced a 0-byte attachment for \(path) — Mail's "
                     + "local attachment cache likely lacks the bytes (#314). Nothing was written "

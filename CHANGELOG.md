@@ -89,6 +89,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reason: cancelled`. The slot stays taken until then. A descendant
   that holds the stderr pipe can still outlive the call, as before; putting the
   child in its own process group is not part of this change.
+- **Removed attachment code that #402 left unused**
+  ([#575](https://github.com/PsychQuant/che-apple-mail-mcp/issues/575)).
+  `MailController.verifySavedAttachmentOnDisk`, `AttachmentWriteProblem.statFailed`
+  and `EmlxParser.saveAttachment(..., destination:)` had no production caller; the
+  last wrote to a plain URL with no containment, so any future caller would have
+  reopened #402. The #314 and #347 tests now run against `saveUsingScript`, the
+  step that does this work, and a new structural test pins that a Tier-1
+  publication failure ends the call instead of reaching AppleScript. The tool's
+  behaviour does not change.
 
 ### Fixed
 

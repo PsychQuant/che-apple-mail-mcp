@@ -14,7 +14,7 @@ import Foundation
 /// 4. Walk the full MIME tree via `MIMEParser.parseAllParts` (non-lossy).
 /// 5. Find the **first** part whose filename matches the requested
 ///    `attachmentName` (first-match semantics — see design.md).
-/// 6. Write `decodedData.write(to: destination)`.
+/// 6. Return the decoded bytes; the caller publishes them.
 ///
 /// The size limit for in-memory extraction is 100 MB per part. Anything
 /// larger throws `MailSQLiteError.attachmentTooLarge`, which the
@@ -28,50 +28,14 @@ extension EmlxParser {
     /// handled by the AppleScript fallback.
     public static let attachmentInMemoryLimit = 100 * 1024 * 1024  // 100 MB
 
-    /// Save an attachment from the referenced message to disk, using the
-    /// SQLite + `.emlx` fast path.
+    /// Extract an attachment's decoded bytes from the local Mail store. This
+    /// module does not write them: every caller owns the filesystem write through
+    /// a containment-checked, no-follow descent (#200, #402, #575). Matching is
+    /// case-sensitive and compares against both `Content-Disposition: filename`
+    /// (with RFC 2231/5987 decoding) and the legacy `Content-Type: name` parameter.
     ///
-    /// - Parameters:
-    ///   - rowId: The message ROWID from the Envelope Index.
-    ///   - mailboxURL: The raw mailbox URL from the database.
-    ///   - attachmentName: The filename to match. Matching is
-    ///     case-sensitive and compares against both
-    ///     `Content-Disposition: filename` (with RFC 2231/5987 decoding)
-    ///     and the legacy `Content-Type: name` parameter.
-    ///   - destination: File URL to write to. Parent directory MUST
-    ///     already exist.
-    /// - Throws:
-    ///   - `MailSQLiteError.emlxNotFound` if the `.emlx` cannot be
-    ///     located
-    ///   - `MailSQLiteError.emlxParseFailed` if the envelope cannot be
-    ///     parsed
-    ///   - `MailSQLiteError.attachmentNotFound` if no MIME part matches
-    ///     the filename
-    ///   - `MailSQLiteError.attachmentTooLarge` if the matched part's
-    ///     decoded size exceeds `attachmentInMemoryLimit`
-    ///   - Foundation file-IO errors on write failure
-    public static func saveAttachment(
-        rowId: Int,
-        mailboxURL: String,
-        attachmentName: String,
-        destination: URL,
-        partId: String? = nil
-    ) throws {
-        // #200: delegate extraction to attachmentData, then atomic-write. Keeps
-        // the `save_attachment` tool path byte-identical while letting the export
-        // path (race-free writer) own the write via `attachmentData`.
-        let data = try attachmentData(
-            rowId: rowId, mailboxURL: mailboxURL, attachmentName: attachmentName,
-            partId: partId)
-        try data.write(to: destination, options: .atomic)
-    }
-
-    /// Extract an attachment's decoded bytes from the local Mail store **without
-    /// writing** (#200) — the extraction half of `saveAttachment`. Lets a caller
-    /// (the race-free `export_emails_markdown` writer) own the filesystem write
-    /// via an `openat`-relative, no-follow descent. Throws the same errors as
-    /// `saveAttachment` (`emlxNotFound` / `emlxParseFailed` / `attachmentNotFound`
-    /// / `attachmentTooLarge`).
+    /// - Throws: `MailSQLiteError.emlxNotFound`, `.emlxParseFailed`,
+    ///   `.attachmentNotFound`, `.attachmentTooLarge`.
     public static func attachmentData(
         rowId: Int,
         mailboxURL: String,
