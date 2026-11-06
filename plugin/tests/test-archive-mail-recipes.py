@@ -450,7 +450,7 @@ class ArchiveDropSetRecipeTests(unittest.TestCase):
         self.assertEqual(out["drop"], ["[Gmail]/Spam"])
         self.assertEqual(out["keep"], ["INBOX"])
         self.assertEqual(out["last_segment"], [{"mailbox": "[Gmail]/Spam", "name": "Spam"}])
-        self.assertEqual(set(out), {"drop", "keep", "last_segment"})    # no result sends the run to a question
+        self.assertEqual(set(out), {"drop", "keep", "last_segment", "unreadable"})    # no result sends the run to a question
 
     def test_the_leaf_fallback_the_server_requires_never_stops_a_run(self):
         # without Full Disk Access get_special_mailboxes has no <role>_path, only the leaf
@@ -490,8 +490,8 @@ class ArchiveDropSetRecipeTests(unittest.TestCase):
         self.assertEqual(expand(["Junk", 5, None, "  ", ["x"]], None), (["Junk"], ["Junk"]))
         self.assertEqual(expand(None, {}), ([], []))
         self.assertEqual(self.classify([None, 3, "INBOX", "INBOX"], ["INBOX"]),
-                         {"drop": ["INBOX"], "keep": [], "last_segment": []})
-        self.assertEqual(self.classify(None, None), {"drop": [], "keep": [], "last_segment": []})
+                         {"drop": ["INBOX"], "keep": [], "last_segment": [], "unreadable": 2})
+        self.assertEqual(self.classify(None, None), {"drop": [], "keep": [], "last_segment": [], "unreadable": 0})
 
     def test_unmatched_literals_ignore_roles_and_report_missing_folders(self):
         missing = self.drop["unmatched_literals"](
@@ -501,6 +501,36 @@ class ArchiveDropSetRecipeTests(unittest.TestCase):
     def test_sibling_folder_with_the_same_prefix_is_kept(self):
         out = self.classify(["專案/垃圾郵件箱"], ["垃圾郵件"])
         self.assertEqual((out["drop"], out["last_segment"], out["keep"]), ([], [], ["專案/垃圾郵件箱"]))
+
+
+    def test_a_non_string_mailbox_never_matches(self):
+        for mailbox in (None, 3, ["INBOX"]):
+            with self.subTest(mailbox=mailbox):
+                self.assertFalse(self.drop["matches_special"](mailbox, "Junk"))
+
+    def test_a_non_string_name_never_matches(self):
+        self.assertFalse(self.drop["matches_special"]("INBOX", None))
+        self.assertFalse(self.drop["matches_special"]("INBOX", 3))
+
+    def test_role_names_compare_without_case_on_the_full_path_only(self):
+        match = self.drop["matches_special"]
+        self.assertTrue(match("Inbox", "INBOX"))
+        self.assertTrue(match("INBOX", "inbox"))
+        self.assertFalse(match("Clients/inbox", "INBOX"))       # a user folder stays kept, as before #634
+        self.assertTrue(match("Clients/INBOX", "INBOX"))        # the exact last segment still drops
+
+    def test_literal_entries_stay_case_sensitive(self):
+        self.assertFalse(self.drop["matches_special"]("archive", "Archive"))
+        self.assertFalse(self.drop["matches_special"]("Clients/archive", "Archive"))
+
+    def test_a_case_folded_full_path_match_is_not_reported_as_last_segment_only(self):
+        out = self.classify(["Inbox"], ["INBOX"])
+        self.assertEqual((out["drop"], out["last_segment"]), (["Inbox"], []))
+
+    def test_non_string_mailboxes_are_counted_and_left_out_of_both_lists(self):
+        out = self.classify(["INBOX", None, 3, None], ["Junk"])
+        self.assertEqual((out["keep"], out["drop"], out["unreadable"]), (["INBOX"], [], 3))
+        self.assertEqual(self.classify(["INBOX"], ["Junk"])["unreadable"], 0)
 
 
 class ArchiveDropSetSopTests(unittest.TestCase):
@@ -571,6 +601,19 @@ class ArchiveDropSetSopTests(unittest.TestCase):
         self.assertIn("every mailbox an entry dropped before is still dropped", entry)
         self.assertIn("the run never stops for it", entry)
         self.assertIn("Step 7 lists each one", entry)
+
+
+class ArchiveMalformedInputSopTests(unittest.TestCase):
+    def test_step_7_reports_unreadable_mailboxes(self):
+        step7 = DOCUMENT.read_text()
+        self.assertIn("`mailbox 欄位讀不到` 一行（#634）只在 `unreadable` 大於 0 時顯示", step7)
+
+    def test_the_matching_rule_states_the_case_rule(self):
+        text = DOCUMENT.read_text()
+        rule = text[text.index("**`exclude_mailboxes` 條目的比對規則（#594）**"):]
+        rule = rule[:rule.index("\n")]
+        self.assertIn("五個角色名比對完整路徑時不分大小寫", rule)
+        self.assertIn("末段比對與其他字面條目區分大小寫", rule)
 
 
 class ArchiveSkipDraftsSopTests(unittest.TestCase):
@@ -814,7 +857,7 @@ class ArchiveRefinementRecipeTests(unittest.TestCase):
         _, stats, _ = self.run_refine([self.mail("Hello")], {"subject_includes": ["zzz"]})
         self.assertEqual(stats["dropped_includes_filter"], 1)
         self.assertEqual(set(stats), {"kept", "dropped_sender_excludes", "dropped_recipient_excludes",
-                                      "dropped_subject_excludes", "dropped_includes_filter"})
+                                      "dropped_subject_excludes", "dropped_includes_filter", "malformed_messages"})
 
     def test_first_failing_field_is_reported_in_a_fixed_order(self):
         config = {"sender_includes": ["zzz"], "subject_excludes": ["hello"]}
@@ -881,6 +924,72 @@ class ArchiveRefinementRecipeTests(unittest.TestCase):
         self.assertEqual(stats["kept"], 1)
 
 
+    def test_a_field_of_only_blanks_or_non_strings_is_inactive(self):
+        for name in ("subject_includes", "sender_includes", "recipient_includes"):
+            for value in ([" "], ["", "  "], [None, 3], 3, {}):
+                with self.subTest(name=name, value=value):
+                    refined, stats, dropped = self.run_refine([self.mail("Hello")], {name: value})
+                    self.assertEqual((len(refined), stats["kept"], dropped), (1, 1, []))
+
+    def test_a_string_config_field_is_one_entry_not_its_characters(self):
+        kept, _, _ = self.run_refine([self.mail("Hello")], {"subject_includes": "hello"})
+        self.assertEqual(len(kept), 1)
+        kept, _, dropped = self.run_refine([self.mail("Hello")], {"subject_includes": "zzz"})
+        self.assertEqual((kept, dropped[0]["reason"]), ([], "subject_includes"))
+        kept, _, _ = self.run_refine([self.mail("Hello")], {"subject_excludes": "h"})
+        self.assertEqual(kept, [])        # a substring of the subject, so it matches as one entry
+        kept, _, _ = self.run_refine([self.mail("Hello")], {"subject_excludes": "hz"})
+        self.assertEqual(len(kept), 1)    # read as characters this would have matched the h
+
+    def test_to_and_cc_of_any_shape_do_not_raise(self):
+        for value, passes in ((None, False), ("b@x.test", True), (["b@x.test"], True), (3, False),
+                              ([None, "b@x.test"], True)):
+            with self.subTest(value=value):
+                message = self.mail("Hello")
+                message["to"], message["cc"] = value, value
+                kept, _, _ = self.run_refine([message], {"recipient_includes": ["b@x"]})
+                self.assertEqual(len(kept), 1 if passes else 0)
+
+    def test_missing_or_wrong_typed_fields_are_counted_and_the_mail_stays(self):
+        rows = [{"to": []}, {"subject": None, "sender": None}, "not a row", {"subject": 3, "sender": "a@x.test"},
+                dict(self.mail("Bad cc"), cc=3), self.mail("Hello")]
+        refined, stats, _ = self.run_refine(rows, {"subject_excludes": ["zzz"]})
+        self.assertEqual((stats["malformed_messages"], len(refined)), (5, 6))
+
+    def test_absent_or_none_to_and_cc_are_not_malformed(self):
+        rows = [{"subject": "A", "sender": "a@x.test"}, {"subject": "B", "sender": "a@x.test", "to": None, "cc": None}]
+        _, stats, _ = self.run_refine(rows, {"subject_excludes": ["zzz"]})
+        self.assertEqual(stats["malformed_messages"], 0)
+
+    def test_a_dropped_thread_of_malformed_rows_is_still_reported(self):
+        _, stats, dropped = self.run_refine([{"to": []}], {"subject_includes": ["zzz"]})
+        self.assertEqual((stats["dropped_includes_filter"], dropped[0]["subject"], dropped[0]["reason"]),
+                         (1, "", "subject_includes"))
+
+    def test_the_report_names_malformed_messages_and_ignored_entries(self):
+        config = {"subject_includes": [" ", None, "hello"], "sender_excludes": 3}
+        _, stats, dropped = self.run_refine([{"to": []}, self.mail("Hello")], config)
+        lines = self.ns["refinement_report"](config, stats, dropped)
+        self.assertIn("Refinement: ignored 3 blank or non-string config entries", lines)
+        self.assertIn("Refinement: 1 messages had a missing or wrong-typed field (counted, not excluded)", lines)
+
+    def test_a_config_that_only_has_ignored_entries_says_so(self):
+        config = {"subject_includes": [" "]}
+        _, stats, dropped = self.run_refine([self.mail("Hello")], config)
+        self.assertEqual(self.ns["refinement_report"](config, stats, dropped),
+                         ["Refinement: ignored 1 blank or non-string config entries"])
+
+    def test_malformed_mail_is_not_reported_when_refinement_is_off(self):
+        _, stats, dropped = self.run_refine([{"to": []}], {})
+        self.assertEqual(self.ns["refinement_report"]({}, stats, dropped), [])
+
+    def test_the_malformed_count_is_not_in_the_dropped_total(self):
+        config = {"subject_excludes": ["zzz"]}
+        _, stats, dropped = self.run_refine([{"to": []}], config)
+        self.assertEqual(self.ns["refinement_report"](config, stats, dropped)[0],
+                         "Refinement: kept 1 / dropped 0 threads")
+
+
 class ArchiveRefinementSopTests(unittest.TestCase):
     def test_step_7_shows_refinement_regardless_of_count_and_no_confirm(self):
         text = DOCUMENT.read_text()
@@ -944,6 +1053,24 @@ class ArchiveReverseInventoryTests(unittest.TestCase):
         self.assertEqual((len(out["findings"]), out["omitted"], out["total"]), (20, 10, 30))
         self.assertNotIn("`", out["findings"][0]["file"])
 
+    def test_an_exact_name_wins_over_a_case_twin(self):
+        scanned = [{"file": "a.md", "message_id": "<lower>"}, {"file": "A.md", "message_id": "<upper>"}]
+        for key, name in (("<upper>", "A.md"), ("<lower>", "a.md")):
+            with self.subTest(name=name):
+                self.assertEqual(self.run_inv({key: {"file": name}}, scanned)["total"], 0)
+
+    def test_twins_with_no_exact_name_are_reported_as_ambiguous(self):
+        scanned = [{"file": "AA.md", "message_id": "<1>"}, {"file": "aa.md", "message_id": "<2>"}]
+        out = self.run_inv({"<x>": {"file": "aA.md"}}, scanned)
+        self.assertEqual(out["counts"]["file-name-ambiguous"], 1)
+        self.assertEqual((out["total"], out["findings"][0]["kind"]), (1, "file-name-ambiguous"))
+        self.assertEqual(out["counts"]["key-differs-from-file-message-id"], 0)
+
+    def test_the_finding_kinds_are_a_closed_set(self):
+        self.assertEqual(set(self.run_inv({}, [])["counts"]), {
+            "file-not-in-target-top-level", "key-differs-from-file-message-id", "file-name-ambiguous",
+            "file-missing-or-invalid", "entry-not-object"})
+
     def test_the_inventory_does_not_touch_its_inputs(self):
         emails = {"<a>": {"file": "gone.md"}}
         before = copy.deepcopy(emails)
@@ -960,6 +1087,14 @@ class ArchiveReverseInventorySopTests(unittest.TestCase):
         item = text[text.index("3b. **反向盤點(#559"):text.index("<!-- archive-mail-reverse-recipe:start -->")]
         self.assertIn("`index_error` 不為 `None` 時(寫入屏障)略過", item)
         self.assertIn("`last_archived` 唯讀稽核沒有 index,也略過", item)
+
+
+    def test_the_glossary_defines_every_finding_kind(self):
+        text = DOCUMENT.read_text()
+        glossary = text[text.index("用語:`file-not-in-target-top-level`"):]
+        glossary = glossary[:glossary.index("\n")]
+        self.assertIn("`file-name-ambiguous`", glossary)
+        self.assertIn("不猜", glossary)
 
 
 class ArchiveWatermarkTests(unittest.TestCase):
