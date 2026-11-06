@@ -1810,7 +1810,7 @@ User 看到註記知道 inline 圖存在但需手動 export from Mail.app。File
    ```
    {"messages": [], "participants": [], "first_message": null, "last_message": null, "message_count": 0}
    ```
-3. 在 `messages` 陣列**尾端** append 新 message（只 append，不重排：`messages` 維持到達順序，**不保證時序**；時序排序一律由 `/archive-mail-rebuild-threads` 與 `/archive-mail-view` 用 `thread_order` 建立，不在這裡插入位置，也不對 `date` 字串排序）
+3. 在 `messages` 陣列**尾端** append 新 message（只 append，不重排：`messages` 維持到達順序，**不保證時序**；時序排序一律由 `/archive-mail-rebuild-threads` 與 `/archive-mail-view` 用 `thread_order` 建立，不在這裡插入位置，也不對 `date` 字串排序。要時序的讀取端自己呼叫 `thread_order`，不可假設 `messages[-1]` 是最新一封，最早與最晚的日期看 `first_message`／`last_message`）
 4. 更新 `participants` 集合（加入 sender + to + cc 的 email，去重）
    > **來源（batch 與 per-email 皆同）**：`sender` 取自 md frontmatter；`to`／`cc` 取自 md **本文的 `To:`／`Cc:` header 行**（frontmatter 只帶 `sender`，不帶 to/cc）。batch 工具（Step 5.0）與 per-email（Step 5.1）都寫出相同的 `To:`／`Cc:` body header，故本步 file-driven、source-agnostic，兩路徑一致——不需針對 batch 另設 participant 來源。
 5. 更新 `first_message`／`last_message`（#556）：**不可**對 `date` 字串做 `min`／`max`（RFC822 文字排在所有 ISO 值之後，跨 offset 的 ISO 也會排錯）。把這個 thread 的 `messages`（含剛 append 的這封）交給日期 recipe 的 `thread_bounds`，取回傳的 `first_message`／`last_message`（這一步要執行 Python；執行不了——宿主不放行、`python3` 不存在、recipe 報錯——**不中止歸檔**：本封信照常 append 到 `messages`，`first_message`／`last_message` 維持原值，Step 7 報告列出 `thread bounds 未更新: N 個 thread`，之後 `/archive-mail-rebuild-threads` 會重算，不手動比較字串補上）：它們是最早／最晚那封**可讀**日期的信的**原始 `date` 字串**（不另做正規化），沒有任何可讀日期時是 `null`，不可讀的信不參與、也不被丟掉。執行方式與日期 recipe 其他函式相同（固定程式、輸入走 JSON 檔、不把郵件欄位放進指令字串）。`messages` 陣列維持 append 的到達順序（不保證時序）；時序排序由 `/archive-mail-rebuild-threads` 與 `/archive-mail-view` 用 `thread_order` 建立

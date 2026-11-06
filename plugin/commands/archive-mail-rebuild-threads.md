@@ -111,7 +111,8 @@ for each valid md:
 # 後處理
 for key, entry in new_threads:
     # 時序排序與 first/last：一律用 archive-mail.md 日期 recipe 的 thread_order / thread_bounds，不對 date 字串排序
-    entry.messages, entry.unreadable_dates = thread_order(entry.messages)
+    entry.messages, unreadable = thread_order(entry.messages)
+    report.unreadable_dates.extend(unreadable)   # 只給 Step 6 的報告，不是 thread entry 的欄位
     entry.first_message, entry.last_message = thread_bounds(entry.messages).values()
     entry.message_count = len(entry.messages)
     entry.participants = sorted(list(entry.participants_set))
@@ -130,6 +131,8 @@ for key, entry in new_threads:
 ```
 
 **頂層加 `rebuilt_from` 欄位**，記錄這次是從 frontmatter 重建的（而非 archive-mail 增量維護）。方便區分。
+
+`unreadable_dates` 只進 Step 6 的報告，不寫進 `.threads.json`：thread entry 的欄位不變，這些信仍在 `messages` 裡，排在該 thread 最後。
 
 ### Step 6: 輸出報告
 
@@ -154,6 +157,7 @@ Backup: .threads.json.bak.20260422_150109
 Issues:
   ⚠️ 2024-07-14_Old-email.md: missing frontmatter (legacy md, needs backfill)
   ⚠️ 2024-07-14_Another-old.md: missing thread_key
+  ⚠️ 2024-07-14_Odd-date.md: date unreadable (sorted last in its thread, kept)
 
 ═══════════════════════════════════════════
 ```

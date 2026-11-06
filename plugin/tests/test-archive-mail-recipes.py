@@ -753,6 +753,30 @@ class ArchiveThreadOrderSopTests(unittest.TestCase):
         view = (self.ROOT / "archive-mail-view.md").read_text()
         self.assertNotIn("依 `date` 欄位排序", view)
 
+    def test_step_5_7_keeps_arrival_order_and_tells_readers_what_to_do(self):
+        item = sop_section("### Step 5.7")
+        item = item[item.index("3. 在 `messages` 陣列**尾端** append"):]
+        item = item[:item.index("\n")]
+        self.assertIn("只 append，不重排", item)
+        self.assertIn("**不保證時序**", item)
+        self.assertIn("要時序的讀取端自己呼叫 `thread_order`，不可假設 `messages[-1]` 是最新一封", item)
+
+    def test_the_changelog_states_the_order_change_and_what_readers_do(self):
+        changelog = (DOCUMENT.parents[1] / "CHANGELOG.md").read_text()
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [", changelog.index("## [Unreleased]") + 5)]
+        entry = next(line for line in unreleased.split("\n") if "[#556]" in line)
+        self.assertIn("`messages` stays in arrival order", entry)
+        self.assertIn("the option to insert an earlier mail at its place is gone", entry)
+        self.assertIn("A reader that needs time order calls `thread_order`", entry)
+        self.assertIn("`first_message` / `last_message` give those dates", entry)
+
+    def test_unreadable_dates_are_a_report_value_not_a_stored_field(self):
+        rebuild = (self.ROOT / "archive-mail-rebuild-threads.md").read_text()
+        self.assertNotIn("entry.unreadable_dates", rebuild)
+        self.assertIn("report.unreadable_dates.extend(unreadable)", rebuild)
+        self.assertIn("`unreadable_dates` 只進 Step 6 的報告，不寫進 `.threads.json`", rebuild)
+        self.assertIn("date unreadable (sorted last in its thread, kept)", rebuild)
+
     def test_rebuild_and_view_name_the_recipe_and_the_stop_outcome(self):
         for name in ("archive-mail-rebuild-threads.md", "archive-mail-view.md"):
             text = (self.ROOT / name).read_text()
