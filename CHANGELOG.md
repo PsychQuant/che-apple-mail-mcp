@@ -114,10 +114,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   known. The mapping is now guarded by a lock, because the reader is shared by
   concurrent request handlers; the plist itself is read outside the lock.
   Lookups by `account_id` were not affected. A lookup that finds what it asked
-  for does not re-read: an account whose email changed keeps its old name in
-  results until some lookup misses, and the old name keeps resolving to it until
-  then. The names are the account emails taken from AccountsMap.plist, so
-  renaming an account's description in Mail does not change them.
+  for also checks, at most once every 5 seconds, whether the plist's modification
+  date changed, and re-reads it if so
+  ([#615](https://github.com/PsychQuant/che-apple-mail-mcp/issues/615)), so an
+  account whose email changed gets its new name in results and its old name stops
+  resolving, without a miss. The names are the account emails taken from
+  AccountsMap.plist, so renaming an account's description in Mail does not
+  change them.
 - **A read that the Envelope Index stops part-way through is an error, not a
   shorter answer** ([#549](https://github.com/PsychQuant/che-apple-mail-mcp/issues/549)).
   Every SQLite read stepped through its rows with

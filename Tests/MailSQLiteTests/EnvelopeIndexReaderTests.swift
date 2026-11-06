@@ -392,4 +392,137 @@ final class EnvelopeIndexReaderTests: XCTestCase {
         XCTAssertEqual(mailboxes.first?["account_name"] as? String, "Bob")
         XCTAssertEqual(mailboxes.first?["total_count"] as? Int, 5)
     }
+
+    // MARK: - Mapping refresh on a hit (#615)
+
+    /// Stands in for AccountsMap.plist's modification date.
+    private final class StampSource {
+        var stamp: Date? = Date(timeIntervalSince1970: 1_000)
+        var reads = 0
+        func read() -> Date? { reads += 1; return stamp }
+    }
+
+    private func makeStampedReader(_ source: MappingSource, stamp: StampSource, clock: FakeClock,
+                                   cooldown: TimeInterval = 5) throws -> EnvelopeIndexReader {
+        try EnvelopeIndexReader(
+            databasePath: try makeEmptyTestDB(),
+            accountMapping: source.mapping,
+            accountMappingSource: { source.read() },
+            accountMappingStamp: { stamp.read() },
+            mappingRefreshCooldown: cooldown,
+            clock: { clock.now }
+        )
+    }
+
+    func testAHitPicksUpAChangedMappingAfterTheCooldown() throws {
+        let clock = FakeClock(), stamp = StampSource()
+        let source = MappingSource(["UUID-A": "alice@example.com"])
+        let reader = try makeStampedReader(source, stamp: stamp, clock: clock)
+
+        source.mapping = ["UUID-A": "alicia@example.com"]
+        stamp.stamp = Date(timeIntervalSince1970: 2_000)
+        XCTAssertEqual(reader.accountName(for: "UUID-A"), "alice@example.com", "inside the cooldown")
+
+        clock.now += 5
+        XCTAssertEqual(reader.accountName(for: "UUID-A"), "alicia@example.com", "a hit, with no miss to trigger it")
+        XCTAssertEqual(reader.accountUUIDs(forName: "alice@example.com"), [], "the old email no longer resolves")
+    }
+
+    func testANameLookupThatHitsAlsoChecks() throws {
+        let clock = FakeClock(), stamp = StampSource()
+        let source = MappingSource(["UUID-A": "alice@example.com"])
+        let reader = try makeStampedReader(source, stamp: stamp, clock: clock)
+
+        // Another account took over the old email: without the check, the
+        // old answer would send a name-scoped query to the wrong account.
+        source.mapping = ["UUID-B": "alice@example.com"]
+        stamp.stamp = Date(timeIntervalSince1970: 2_000)
+        clock.now += 5
+        XCTAssertEqual(reader.accountUUIDs(forName: "alice@example.com"), ["UUID-B"])
+    }
+
+    func testNoStatInsideTheCooldownAndNoReadWhileTheStampHolds() throws {
+        let clock = FakeClock(), stamp = StampSource()
+        let source = MappingSource(["UUID-A": "Alice"])
+        let reader = try makeStampedReader(source, stamp: stamp, clock: clock)
+        let afterInit = stamp.reads
+
+        for _ in 0..<100 { _ = reader.accountName(for: "UUID-A") }
+        XCTAssertEqual(stamp.reads, afterInit, "per-row lookups must not stat")
+
+        clock.now += 5
+        for _ in 0..<100 { _ = reader.accountName(for: "UUID-A") }
+        XCTAssertEqual(stamp.reads, afterInit + 1, "one stat per interval")
+        XCTAssertEqual(source.reads, 0, "an unchanged stamp reads nothing")
+    }
+
+    func testAnUnreadableStampChangesNothing() throws {
+        let clock = FakeClock(), stamp = StampSource()
+        let source = MappingSource(["UUID-A": "Alice"])
+        let reader = try makeStampedReader(source, stamp: stamp, clock: clock)
+
+        stamp.stamp = nil
+        source.mapping = ["UUID-A": "Alicia"]
+        clock.now += 5
+        XCTAssertEqual(reader.accountName(for: "UUID-A"), "Alice")
+        XCTAssertEqual(source.reads, 0)
+    }
+
+    func testAChangedStampWithAnUnreadableMappingKeepsTheMappingAndTriesAgain() throws {
+        let clock = FakeClock(), stamp = StampSource()
+        let source = MappingSource(["UUID-A": "Alice"])
+        let reader = try makeStampedReader(source, stamp: stamp, clock: clock)
+
+        source.mapping = [:]
+        stamp.stamp = Date(timeIntervalSince1970: 2_000)
+        clock.now += 5
+        XCTAssertEqual(reader.accountName(for: "UUID-A"), "Alice", "an empty read forgets nothing")
+        XCTAssertEqual(source.reads, 1)
+
+        source.mapping = ["UUID-A": "Alicia"]
+        clock.now += 5
+        XCTAssertEqual(reader.accountName(for: "UUID-A"), "Alicia", "the stamp is recorded only with a good read")
+    }
+
+    func testAChangeDuringTheReadIsPickedUpByTheNextCheck() throws {
+        let clock = FakeClock(), stamp = StampSource()
+        let source = MappingSource(["UUID-A": "Alice"])
+        var hook: (() -> Void)?
+        let reader = try EnvelopeIndexReader(
+            databasePath: try makeEmptyTestDB(),
+            accountMapping: source.mapping,
+            accountMappingSource: { let mapping = source.read(); hook?(); return mapping },
+            accountMappingStamp: { stamp.read() },
+            clock: { clock.now }
+        )
+        source.mapping = ["UUID-A": "Alicia"]
+        stamp.stamp = Date(timeIntervalSince1970: 2_000)
+        hook = {
+            hook = nil
+            source.mapping = ["UUID-A": "Alina"]
+            stamp.stamp = Date(timeIntervalSince1970: 3_000)
+        }
+        clock.now += 5
+        XCTAssertEqual(reader.accountName(for: "UUID-A"), "Alicia")
+        clock.now += 5
+        XCTAssertEqual(reader.accountName(for: "UUID-A"), "Alina", "the stamp was taken before the read")
+    }
+
+    func testASourceWithoutAStampIsOnlyReadOnMisses() throws {
+        let clock = FakeClock()
+        let source = MappingSource(["UUID-A": "Alice"])
+        let reader = try makeReader(initial: ["UUID-A": "Alice"], source: source, clock: clock)
+        source.mapping = ["UUID-A": "Alicia"]
+        clock.now += 60
+        XCTAssertEqual(reader.accountName(for: "UUID-A"), "Alice")
+        XCTAssertEqual(source.reads, 0)
+    }
+
+    func testAccountsMapStampReadsTheFilesDate() throws {
+        let path = try makeEmptyTestDB()
+        let date = Date(timeIntervalSince1970: 1_500_000_000)
+        try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: path)
+        XCTAssertEqual(AccountMapper.accountsMapModificationDate(path: path), date)
+        XCTAssertNil(AccountMapper.accountsMapModificationDate(path: path + ".absent"))
+    }
 }

@@ -102,10 +102,18 @@ public final class EnvelopeIndexReader {
     /// but not in the mapping built at init. `nil` when the caller injected a
     /// fixed mapping without a source, so fixtures never read the user's plist.
     private let mappingSource: (() -> [String: String])?
+    /// When the source last changed; compared at most once per cooldown so a
+    /// lookup that hits can notice a changed source too (#615). `nil` with no
+    /// source, and for a source that has no such date.
+    private let mappingStamp: (() -> Date?)?
     private let mappingRefreshCooldown: TimeInterval
     private let clock: () -> TimeInterval
     /// When `mappingSource` was last read; `nil` if it never was.
     private var lastMappingRead: TimeInterval?
+    /// The stamp taken just before the held mapping was read.
+    private var mappingStampRead: Date?
+    /// When the stamp was last compared; bounds the `stat` to once per cooldown.
+    private var lastStampCheck: TimeInterval?
     /// Bumped whenever a mapping is installed, so a refresh that read the
     /// source while another install happened does not overwrite the newer one.
     private var mappingGeneration = 0
@@ -124,6 +132,10 @@ public final class EnvelopeIndexReader {
     ///     most once per `mappingRefreshCooldown` (#554). Defaults to
     ///     `AccountMapper.buildMapping()` when `accountMapping` is `nil`, and to
     ///     no source (the injected mapping is never replaced) when it is given.
+    ///   - accountMappingStamp: When the source last changed, compared at most
+    ///     once per `mappingRefreshCooldown` on any lookup (#615). Defaults to
+    ///     the plist's modification date when the source is the default one, and
+    ///     to none otherwise: a source without a stamp is re-read on misses only.
     ///   - mappingRefreshCooldown: Minimum seconds between two reads of the
     ///     source. When the initial mapping is read from the source (no
     ///     `accountMapping` given), that read starts the cooldown; an injected
@@ -134,6 +146,7 @@ public final class EnvelopeIndexReader {
     public init(databasePath: String,
                 accountMapping: [String: String]? = nil,
                 accountMappingSource: (() -> [String: String])? = nil,
+                accountMappingStamp: (() -> Date?)? = nil,
                 mappingRefreshCooldown: TimeInterval = EnvelopeIndexReader.defaultMappingRefreshCooldown,
                 clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
         // Checked before the account mapping, so an absent path (a test-owned
@@ -149,8 +162,14 @@ public final class EnvelopeIndexReader {
         let source: (() -> [String: String])? = accountMappingSource
             ?? (accountMapping == nil ? { AccountMapper.buildMapping() } : nil)
         self.mappingSource = source
+        let usesDefaultSource = accountMapping == nil && accountMappingSource == nil
+        self.mappingStamp = accountMappingStamp
+            ?? (usesDefaultSource ? { AccountMapper.accountsMapModificationDate() } : nil)
         self.mappingRefreshCooldown = mappingRefreshCooldown
         self.clock = clock
+        // Taken before the first read, so a change during it shows up at the next check.
+        self.mappingStampRead = mappingStamp?()
+        self.lastStampCheck = clock()
         let mapping: [String: String]
         if let accountMapping = accountMapping {
             mapping = accountMapping
@@ -377,6 +396,7 @@ public final class EnvelopeIndexReader {
     /// Falls back to the UUID itself if no mapping exists. A miss re-reads the
     /// mapping source once (subject to the cooldown) before falling back (#554).
     public func accountName(for uuid: String) -> String {
+        refreshMappingIfSourceChanged()
         if let name = withMappingLock({ accountMap[uuid] }) { return name }
         refreshMappingAfterMiss()
         return withMappingLock { accountMap[uuid] } ?? uuid
@@ -408,7 +428,7 @@ public final class EnvelopeIndexReader {
     /// `AccountMapper.buildMapping()` returns when the plist cannot be read, so
     /// it keeps the mapping already known instead of forgetting every account.
     private func refreshMappingAfterMiss() {
-        guard let source = mappingSource else { return }
+        guard mappingSource != nil else { return }
         let claimed: Int? = withMappingLock {
             let now = clock()
             if let last = lastMappingRead, now - last < mappingRefreshCooldown { return nil }
@@ -416,12 +436,41 @@ public final class EnvelopeIndexReader {
             return mappingGeneration
         }
         guard let generation = claimed else { return }
+        readAndInstallMapping(generation: generation, stamp: mappingStamp?())
+    }
+
+    /// Re-read the mapping when its source changed since it was read (#615), so
+    /// a lookup that hits does not keep an answer the source no longer gives.
+    /// Claimed under the lock, so per-row lookups cost one `stat` per cooldown.
+    private func refreshMappingIfSourceChanged() {
+        guard let mappingStamp else { return }
+        let due: Bool = withMappingLock {
+            let now = clock()
+            if let last = lastStampCheck, now - last < mappingRefreshCooldown { return false }
+            lastStampCheck = now
+            return true
+        }
+        guard due, let stamp = mappingStamp() else { return }
+        let generation: Int? = withMappingLock {
+            guard stamp != mappingStampRead else { return nil }
+            lastMappingRead = clock()
+            return mappingGeneration
+        }
+        guard let generation else { return }
+        readAndInstallMapping(generation: generation, stamp: stamp)
+    }
+
+    /// The stamp was taken before this read and is recorded only with a good
+    /// mapping, so a read that failed or raced a change is tried again.
+    private func readAndInstallMapping(generation: Int, stamp: Date?) {
+        guard let source = mappingSource else { return }
         let fresh = source()
         guard !fresh.isEmpty else { return }
         withMappingLock {
             guard mappingGeneration == generation else { return }
             accountMap = fresh
             reverseAccountMap = Self.buildReverseMap(from: fresh)
+            mappingStampRead = stamp
             mappingGeneration += 1
         }
     }
@@ -441,6 +490,7 @@ public final class EnvelopeIndexReader {
     /// account added or renamed while the server runs resolves without a
     /// restart (#554).
     public func accountUUIDs(forName name: String) -> [String] {
+        refreshMappingIfSourceChanged()
         if let uuids = withMappingLock({ reverseAccountMap[name] }), !uuids.isEmpty { return uuids }
         refreshMappingAfterMiss()
         return withMappingLock { reverseAccountMap[name] } ?? []

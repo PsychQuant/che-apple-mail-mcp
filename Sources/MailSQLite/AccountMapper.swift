@@ -70,6 +70,13 @@ public enum AccountMapper {
         return mapping
     }
 
+    /// When AccountsMap.plist last changed, or nil if it cannot be read. One
+    /// `stat`, so a holder of `buildMapping()`'s result can tell cheaply whether
+    /// it is out of date (#615).
+    public static func accountsMapModificationDate(path: String? = nil) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: path ?? accountsMapPath))?[.modificationDate] as? Date
+    }
+
     /// Reverse lookup: all account UUIDs whose AccountsMap email matches the
     /// given address (#173).
     ///
