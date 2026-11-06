@@ -63,13 +63,26 @@ func timeoutVerificationHint(_ kind: TimeoutOutcomeKind) -> String {
 /// (a post-dispatch GUI failure, or a send-flow timeout). It used to be built
 /// inline at both call sites, with no test on either copy.
 ///
-/// The wording before the hint is deliberately unchanged; #550 owns the
-/// over-claim in it ("already dispatched" is also said for a timeout, where the
-/// keystroke may not have fired). The hint sits before the clamped echo, because
-/// `clampedErrorEcho` cuts the original error at 200 characters and a timeout
-/// description is longer than that.
+/// #550 — a timeout gets compose's wording (`unknownSendStateError`): the GUI
+/// script did not finish, so the send keystroke may or may not have fired, and
+/// the script was terminated, so nothing is known about the compose window.
+/// Every other input keeps the post-dispatch wording unchanged. The hint sits
+/// before the clamped echo, because `clampedErrorEcho` cuts the original error at
+/// 200 characters and a timeout description is longer than that.
 func unknownReplyForwardSendStateError(noun: String, error: Error) -> MailError {
-    MailError.scriptFailed(
+    if isTimeoutError(error) {
+        return MailError.scriptFailed(
+            message: "the GUI send flow hit its deadline — the send keystroke may or may "
+                + "not have fired, so the send state is UNKNOWN and the \(noun) may already "
+                + "be on the wire. NOT retrying (that could send a duplicate). Check Mail's "
+                + "Sent mailbox / Outbox, the original thread and any leftover compose window "
+                + "before re-sending. "
+                + timeoutVerificationHint(.sendFlow)
+                + " Original error: "
+                + clampedErrorEcho(error.localizedDescription),
+            code: -1)
+    }
+    return MailError.scriptFailed(
         message: "the send keystroke was already dispatched but a GUI step failed "
             + "afterwards — the send state is UNKNOWN and the \(noun) may already "
             + "be on the wire. Check Mail's Sent mailbox / Outbox and the original thread "
