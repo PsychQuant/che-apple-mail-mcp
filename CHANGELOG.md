@@ -121,6 +121,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolving, without a miss. The names are the account emails taken from
   AccountsMap.plist, so renaming an account's description in Mail does not
   change them.
+- **A failed read in the direct-write draft path no longer reads as an empty
+  answer** ([#618](https://github.com/PsychQuant/che-apple-mail-mcp/issues/618)).
+  The check that refuses to roll back a draft Mail has already uploaded treated
+  a failed read as "not uploaded", so it could delete a draft that was on the
+  server. It now refuses, and the result reports the draft as created with its
+  upload not confirmed. A mailbox scan that stops part-way answers nothing
+  instead of passing the single-mailbox gate on the rows it saw, and `insert`
+  reports the SQLite error instead of "row missing". Experimental path only
+  (`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`).
 - **A read that the Envelope Index stops part-way through is an error, not a
   shorter answer** ([#549](https://github.com/PsychQuant/che-apple-mail-mcp/issues/549)).
   Every SQLite read stepped through its rows with

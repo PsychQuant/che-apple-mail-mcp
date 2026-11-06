@@ -89,11 +89,11 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
   - 檔案寫不進去（`testInsertLeavesNothingBehindWhenTheFileCannotBeWritten`）；
   - `.emlx` 放好之後才失敗（`testInsertRemovesThePlacedFileWhenALaterStepFails`）：檢查放檔已執行、writer 的交易確實結束（另一條連線拿得到寫入鎖）、沒有留下任何資料列或檔案。拿掉 ROLLBACK、拿掉刪檔、或把失敗移到放檔之前，這條都會轉紅。
   - 缺口：交易一開始就拿寫入鎖（`BEGIN IMMEDIATE`）沒有測試，改成一般的 `BEGIN` 這兩條都不會轉紅；失敗後會留下空的 `Messages` 目錄（#503），上面那條測試目前正是靠這個目錄證明放檔已執行。
-- **第 2、3、6 項**：只有純函式的單元測試（`outcomeAfterFailedTrigger` 三條、`readOutcome`）、`createDraft` 層的一條（直接寫入回報已建立時不走 GUI 路徑，`testACreatedDirectDraftSkipsTheGuiPath`），以及 writer 端的兩條：提交後的 `rollback()` 會還原全部（`testInsertWritesEveryRowAndTheFileThenRollbackRestoresAll`）、Mail 已上傳就拒絕還原（`testRollbackRefusesOnceTheServerHasTheMessage`）。以下三件事在 `attemptSteps` 層都沒有行為測試，要等 #484 的測試入口：
+- **第 2、3、6 項**：只有純函式的單元測試（`outcomeAfterFailedTrigger` 三條、`readOutcome`）、`createDraft` 層的一條（直接寫入回報已建立時不走 GUI 路徑，`testACreatedDirectDraftSkipsTheGuiPath`），以及 writer 端的三條：提交後的 `rollback()` 會還原全部（`testInsertWritesEveryRowAndTheFileThenRollbackRestoresAll`）、Mail 已上傳就拒絕還原（`testRollbackRefusesOnceTheServerHasTheMessage`）、讀不到上傳狀態也拒絕還原且不刪任何東西（`testAFailedUploadCheckRefusesTheRollbackAndDeletesNothing`，#618）。以下三件事在 `attemptSteps` 層都沒有行為測試，要等 #484 的測試入口：
   - 觸發失敗時先還原，才改走 GUI 路徑；
   - 觸發成功後不退回；
   - 沒有確認上傳就不回報已上傳。
-- **第 4 項**：`DirectDraftPathTests` 有三種寫入前結果的行為測試：旗標關、一種不符條件（cc/bcc）、版本閘門（讀不到 Mail 版本）。其餘條件與閘門只測了結果代碼與文字，也沒有測試證明每次呼叫都依序跑完全部閘門。「cache 不能取代閘門」要等 cache 存在才有東西可測（#487）。
+- **第 4 項**：`DirectDraftPathTests` 有三種寫入前結果的行為測試：旗標關、一種不符條件（cc/bcc）、版本閘門（讀不到 Mail 版本）。writer 端另有一條：找草稿匣的掃描中途失敗時不回傳部分結果（`testAMailboxScanThatFailsAfterTheMatchAnswersNothing`，#618）。其餘條件與閘門只測了結果代碼與文字，也沒有測試證明每次呼叫都依序跑完全部閘門。「cache 不能取代閘門」要等 cache 存在才有東西可測（#487）。
 - **第 5 項**：沒有測試，見 #491。
 
 已評估過的提案（2026-10-05，live 計時：直接寫入 3.17 秒，其中寫入 14 ms、找草稿匣 470 ms、
