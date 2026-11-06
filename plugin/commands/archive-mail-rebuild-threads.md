@@ -79,6 +79,8 @@ fi
 
 ### Step 4: 聚合成 threads 結構
 
+**排序怎麼執行（#556）**：`thread_order`／`thread_bounds` 是 `archive-mail.md` 日期 recipe（標記 `archive-mail-date-recipe`）裡的純函式，這個指令不另寫一份。把該 recipe 存成固定腳本，輸入（每封信的 `date` 與 `file`）用 `Write` 寫成固定的 JSON 檔，由腳本讀入後當函式引數，輸出寫成 JSON 檔再用 `Read` 讀回；信件衍生的字串只經 JSON 檔傳遞，不放進指令字串。本指令的 `allowed-tools` 沒有 python，執行 Python 時由宿主提示權限，不擴大 `allowed-tools`。**拿不到執行能力（宿主不放行、`python3` 不存在、recipe 執行失敗）就停止**，報 `status: order-unavailable` 與原因，不寫任何輸出、不改 `.threads.json`；**不得**退回手動比較字串或心算排序（那正是 #556 要消除的不確定性）。
+
 建立新的 threads 物件：
 
 ```
@@ -104,12 +106,13 @@ for each valid md:
     })
     entry.participants_set.add(md.sender)
     if md.to/cc available in frontmatter → add to set
-    entry.first_message = min(entry.first_message, md.date)
-    entry.last_message = max(entry.last_message, md.date)
+    # first_message / last_message 不在這裡累積（#556）：對 date 字串做 min/max 會排錯，見下方「後處理」
 
 # 後處理
 for key, entry in new_threads:
-    entry.messages.sort(key=lambda m: m.date)  # 時序排序
+    # 時序排序與 first/last：一律用 archive-mail.md 日期 recipe 的 thread_order / thread_bounds，不對 date 字串排序
+    entry.messages, entry.unreadable_dates = thread_order(entry.messages)
+    entry.first_message, entry.last_message = thread_bounds(entry.messages).values()
     entry.message_count = len(entry.messages)
     entry.participants = sorted(list(entry.participants_set))
     del entry.participants_set

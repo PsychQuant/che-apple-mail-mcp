@@ -491,6 +491,76 @@ class ArchiveSkipDraftsSopTests(unittest.TestCase):
         self.assertIn("只有值恰為 `false` 才歸檔", self.text)
 
 
+class ArchiveThreadOrderTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dates = recipe("date")
+
+    def order(self, *dates):
+        msgs = [{"date": d, "file": "f%d.md" % i} for i, d in enumerate(dates)]
+        ordered, unreadable = self.dates["thread_order"](msgs)
+        return [m["date"] for m in ordered], unreadable
+
+    def test_cross_offset_example_orders_by_instant(self):
+        later = "2026-06-30T23:30:00-08:00"   # 2026-07-01T07:30Z
+        earlier = "2026-07-01T00:30:00+08:00"  # 2026-06-30T16:30Z
+        self.assertEqual(self.order(later, earlier)[0], [earlier, later])
+
+    def test_rfc822_text_does_not_beat_iso(self):
+        got, _ = self.order("2026-07-01T00:00:00+08:00", "Tue, 30 Jun 2026")
+        self.assertEqual(got, ["Tue, 30 Jun 2026", "2026-07-01T00:00:00+08:00"])
+
+    def test_unreadable_sorts_last_and_is_listed_not_dropped(self):
+        got, unreadable = self.order("garbage", "2026-07-01T00:00:00Z")
+        self.assertEqual(got, ["2026-07-01T00:00:00Z", "garbage"])
+        self.assertEqual(unreadable, ["f0.md"])
+
+    def test_ties_break_by_file_name_and_order_is_input_independent(self):
+        a = {"date": "2026-07-01T00:00:00Z", "file": "b.md"}
+        b = {"date": "2026-07-01T00:00:00Z", "file": "a.md"}
+        c = {"date": "Wed, 01 Jul 2026", "file": "c.md"}
+        for perm in itertools.permutations([a, b, c]):
+            ordered, _ = self.dates["thread_order"](list(perm))
+            self.assertEqual([m["file"] for m in ordered], ["c.md", "a.md", "b.md"])
+
+    def test_date_only_and_instant_on_the_same_day_are_comparable(self):
+        got, _ = self.order("2026-07-01T09:00:00Z", "2026-07-01")
+        self.assertEqual(got, ["2026-07-01", "2026-07-01T09:00:00Z"])
+
+    def test_bounds_use_readable_dates_and_keep_raw_strings(self):
+        msgs = [{"date": "2026-07-01T00:00:00+08:00", "file": "a.md"},
+                {"date": "nonsense", "file": "b.md"},
+                {"date": "Tue, 30 Jun 2026", "file": "c.md"}]
+        self.assertEqual(self.dates["thread_bounds"](msgs),
+                         {"first_message": "Tue, 30 Jun 2026", "last_message": "2026-07-01T00:00:00+08:00"})
+
+    def test_bounds_are_null_without_a_readable_date(self):
+        self.assertEqual(self.dates["thread_bounds"]([{"date": "x", "file": "a.md"}]),
+                         {"first_message": None, "last_message": None})
+        self.assertEqual(self.dates["thread_bounds"]([]), {"first_message": None, "last_message": None})
+
+
+class ArchiveThreadOrderSopTests(unittest.TestCase):
+    ROOT = DOCUMENT.parent
+
+    def test_no_string_min_max_or_sort_on_date_remains(self):
+        archive = DOCUMENT.read_text()
+        self.assertNotIn("min(first_message, new.date)", archive)
+        rebuild = (self.ROOT / "archive-mail-rebuild-threads.md").read_text()
+        self.assertNotIn("min(entry.first_message", rebuild)
+        self.assertNotIn("key=lambda m: m.date", rebuild)
+        view = (self.ROOT / "archive-mail-view.md").read_text()
+        self.assertNotIn("依 `date` 欄位排序", view)
+
+    def test_rebuild_and_view_name_the_recipe_and_the_stop_outcome(self):
+        for name in ("archive-mail-rebuild-threads.md", "archive-mail-view.md"):
+            text = (self.ROOT / name).read_text()
+            with self.subTest(name=name):
+                self.assertIn("thread_order", text)
+                self.assertIn("order-unavailable", text)
+                self.assertIn("不得**退回手動比較字串", text.replace("**不得**", "不得**"))
+
+
 class RepairCommandPointerTests(unittest.TestCase):
     """Every place that points users at the repair command carries its prerequisite (#527 for Step 8.5, #551 for all).
 

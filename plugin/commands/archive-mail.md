@@ -1722,7 +1722,7 @@ User 看到註記知道 inline 圖存在但需手動 export from Mail.app。File
 3. 在 `messages` 陣列**尾端** append 新 message（保持時間序；若日期早於 last_message，可插入正確位置，但一般 append 即可）
 4. 更新 `participants` 集合（加入 sender + to + cc 的 email，去重）
    > **來源（batch 與 per-email 皆同）**：`sender` 取自 md frontmatter；`to`／`cc` 取自 md **本文的 `To:`／`Cc:` header 行**（frontmatter 只帶 `sender`，不帶 to/cc）。batch 工具（Step 5.0）與 per-email（Step 5.1）都寫出相同的 `To:`／`Cc:` body header，故本步 file-driven、source-agnostic，兩路徑一致——不需針對 batch 另設 participant 來源。
-5. 更新 `first_message` = `min(first_message, new.date)`，`last_message` = `max(last_message, new.date)`
+5. 更新 `first_message`／`last_message`（#556）：**不可**對 `date` 字串做 `min`／`max`（RFC822 文字排在所有 ISO 值之後，跨 offset 的 ISO 也會排錯）。把這個 thread 的 `messages`（含剛 append 的這封）交給日期 recipe 的 `thread_bounds`，取回傳的 `first_message`／`last_message`：它們是最早／最晚那封**可讀**日期的信的**原始 `date` 字串**（不另做正規化），沒有任何可讀日期時是 `null`，不可讀的信不參與、也不被丟掉。執行方式與日期 recipe 其他函式相同（固定程式、輸入走 JSON 檔、不把郵件欄位放進指令字串）。`messages` 陣列維持 append 的到達順序；時序排序由 `/archive-mail-rebuild-threads` 與 `/archive-mail-view` 用 `thread_order` 建立
 6. `message_count += 1`
 7. 更新頂層 `last_updated` 為目前時間
 
@@ -2248,6 +2248,38 @@ def reconcile_dates(emails, today=None):
             valid.append(day)
     return {"index_error": None, "last_updated": max(valid, default=""), "valid_date_count": len(valid),
             "date_excluded_count": len(excluded), "date_excluded": excluded}
+
+
+def thread_sort_key(date_text, file):
+    """Total order for thread messages (#556): readable before unreadable, then by instant, then file name.
+
+    A value with a known zone is placed by its UTC day and UTC time; a date-only or zone-less value by the day as
+    written, at the start of that day for date-only. That position is an approximation, not data."""
+    name = file if isinstance(file, str) else ""
+    parsed = parse_archive_date(date_text)
+    if parsed is None:
+        return (1, "", "", name)
+    if isinstance(parsed, datetime):
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone.utc)
+        return (0, parsed.date().isoformat(), parsed.time().isoformat(), name)
+    return (0, parsed.isoformat(), "00:00:00", name)
+
+
+def thread_order(messages):
+    """messages: list of {"date", "file"} dicts. Returns (sorted copy, unreadable files). Nothing is dropped."""
+    ordered = sorted(messages, key=lambda m: thread_sort_key(m.get("date"), m.get("file")))
+    unreadable = [m.get("file") for m in ordered if parse_archive_date(m.get("date")) is None]
+    return ordered, unreadable
+
+
+def thread_bounds(messages):
+    """first_message / last_message: the raw `date` string of the earliest / latest readable message, else None."""
+    readable = [m for m in messages if parse_archive_date(m.get("date")) is not None]
+    if not readable:
+        return {"first_message": None, "last_message": None}
+    keyed = sorted(readable, key=lambda m: thread_sort_key(m.get("date"), m.get("file")))
+    return {"first_message": keyed[0]["date"], "last_message": keyed[-1]["date"]}
 ```
 <!-- archive-mail-date-recipe:end -->
 
