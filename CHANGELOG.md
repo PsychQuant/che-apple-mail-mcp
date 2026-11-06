@@ -132,6 +132,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   attempted, where it used to report "no Drafts mailbox path"; it still uses
   the GUI path in that case. More AppleScript fallbacks may now run when the
   index is busy or damaged, which is slower but no longer wrong.
+- **The Automation pre-flight no longer takes one empty running-application
+  list as "Mail is not running"**
+  ([#499](https://github.com/PsychQuant/che-apple-mail-mcp/issues/499)). A test
+  harness saw `NSRunningApplication` come back empty for a running Mail under
+  load (1 to 4 runs in 33), which every GUI-path call would report as a false
+  "Mail is not running". The Apple Event permission check, which never launches
+  Mail, now runs first: its own `procNotFound` is the fast answer for a Mail that
+  is really closed. When it says anything else and the list is empty, the list
+  is re-read up to twice, 150 ms apart, and only a list that stays empty reports
+  not running, as before. Each disagreement goes to stderr, so the server's own
+  rate can be seen; whether the server sees this at all was not established.
+  That wait is at most 300 ms, and only in the disagreement case.
 
 ## [4.0.0] - 2026-10-29
 

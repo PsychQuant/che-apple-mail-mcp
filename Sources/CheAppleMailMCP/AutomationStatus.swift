@@ -33,21 +33,74 @@ enum AutomationStatus {
         case unknown(OSStatus)
     }
 
+    /// How the probe reads the running-application list and the Apple Event
+    /// permission. Injected so the #499 decision table is testable without
+    /// Mail; `live` is the only production value.
+    struct Environment {
+        var isRunning: (String) -> Bool
+        var determinePermission: (String) -> OSStatus
+        var sleep: (TimeInterval) -> Void
+        var log: (String) -> Void
+
+        static let live = Environment(
+            isRunning: { !NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty },
+            determinePermission: AutomationStatus.determinePermission,
+            sleep: { Thread.sleep(forTimeInterval: $0) },
+            log: { Diagnostics.emit($0) })
+    }
+
+    /// #499: re-checks of the running-application list, and the wait before each.
+    static let runningListRechecks = 2
+    static let runningListRecheckInterval: TimeInterval = 0.15
+
     /// Non-prompting probe of this process's permission to send Apple Events
     /// to `targetBundleId` (default: Mail).
-    static func probe(targetBundleId: String = "com.apple.mail") -> State {
-        guard !NSRunningApplication.runningApplications(
-            withBundleIdentifier: targetBundleId).isEmpty else {
-            return .targetNotRunning
+    ///
+    /// #499: `NSRunningApplication` can come back empty for a running Mail
+    /// (seen under load in a test harness, 1–4 runs in 33). An empty list is
+    /// therefore not the verdict on its own. The Apple Event check answers
+    /// `procNotFound` (-600) for a target that is not running, so that is the
+    /// fast, authoritative "not running"; when it says anything else, the list
+    /// is re-read up to `runningListRechecks` times, `runningListRecheckInterval`
+    /// apart, and only a list that stays empty yields `.targetNotRunning`, as
+    /// before. Each disagreement is logged to stderr so the server's own rate
+    /// is observable. Neither check launches Mail.
+    static func probe(targetBundleId: String = "com.apple.mail",
+                      environment: Environment = .live) -> State {
+        let listed = environment.isRunning(targetBundleId)
+        let status = environment.determinePermission(targetBundleId)
+        if listed { return state(for: status) }
+        if status == OSStatus(procNotFound) { return .targetNotRunning }
+
+        for attempt in 1...runningListRechecks {
+            environment.sleep(runningListRecheckInterval)
+            if environment.isRunning(targetBundleId) {
+                environment.log("check_automation: running-application list was empty for "
+                    + "\(targetBundleId) while the Apple Event check returned \(status); "
+                    + "re-check \(attempt) found it running (#499)\n")
+                return state(for: status)
+            }
         }
+        environment.log("check_automation: running-application list stayed empty for "
+            + "\(targetBundleId) after \(runningListRechecks) re-checks while the Apple Event "
+            + "check returned \(status); reporting not running (#499)\n")
+        return .targetNotRunning
+    }
+
+    /// The Apple Event permission status for `targetBundleId`, or the
+    /// `AECreateDesc` error when the address cannot be built.
+    static func determinePermission(_ targetBundleId: String) -> OSStatus {
         var addr = AEAddressDesc()
         let createErr = targetBundleId.withCString { cstr in
             AECreateDesc(typeApplicationBundleID, cstr, strlen(cstr), &addr)
         }
-        guard createErr == noErr else { return .unknown(OSStatus(createErr)) }
+        guard createErr == noErr else { return OSStatus(createErr) }
         defer { AEDisposeDesc(&addr) }
-        let status = AEDeterminePermissionToAutomateTarget(
-            &addr, typeWildCard, typeWildCard, false)
+        return AEDeterminePermissionToAutomateTarget(&addr, typeWildCard, typeWildCard, false)
+    }
+
+    /// Pure status → state mapping.
+    static func state(for status: OSStatus) -> State {
         switch status {
         case noErr:
             return .granted
