@@ -17,9 +17,12 @@ ROOT = Path(__file__).resolve().parents[2]
 # POLL_SECONDS: a slow start only costs time, and a real failure still fails the assertion after it.
 # `assertLess(elapsed, ...)`, `run_hook(timeout=5)` and `communicate(timeout=2)` measure the 2.0 s
 # probe deadline in fda-assist.pl, so they assume an idle machine and stay as they are; that deadline
-# does not change for test convenience. They can still fail under heavy CPU load. So can the concurrent
-# test: a wider poll does not widen the deadline, so a hook that times out before or at the barrier
-# ends with no offer, and the failure moves to the offer assertion.
+# does not change for test convenience. They can still fail under heavy CPU load.
+#
+# The concurrent test rests on the same deadline. Twelve hooks have to reach the barrier inside the
+# 2.0 s each probe allows, and no poll changes that: measured under load, every `--version` probe
+# expired before Python started, and the hooks exited with nothing raced. That run is a skip. A hook
+# that times out at the barrier has already written `ready-*`, so a slow run can race fewer than twelve.
 POLL_SECONDS = 10
 
 class FDALifecycleTests(unittest.TestCase):
@@ -100,6 +103,10 @@ sys.exit(mode.get('status',1))
             self.assertTrue(not status or status.startswith('Z'),status)
         (self.root/'pids').unlink(missing_ok=True)
 
+    def assert_every_hook_timed_out(self,errors,wall):
+        self.assertEqual([e for e in errors if 'timeout (2 seconds)' not in e],[],'a hook left the race without a probe timeout')
+        self.assertGreaterEqual(wall,2.0,'hooks reported a probe timeout before the 2.0 s deadline')
+
     def configure(self,**kwargs): (self.root/'mode.json').write_text(json.dumps(kwargs))
     def run_hook(self,timeout=5):
         started=time.monotonic()
@@ -156,6 +163,21 @@ sys.exit(mode.get('status',1))
     def test_no_pid_before_the_deadline_is_a_failure(self):
         with self.assertRaises(AssertionError):
             self.assert_fixture_group_gone(elapsed=1.9,grace=0)
+
+    def test_concurrent_hooks_that_all_time_out_are_a_skip_not_a_failure(self):
+        self.configure(barrier=True,status=1,slow_start='--version')
+        started=time.monotonic()
+        with self.assertRaises(unittest.SkipTest):
+            self.run_concurrent_hooks()
+        self.assertLess(time.monotonic()-started,POLL_SECONDS,'the poll outlived the hooks')
+
+    def test_only_a_full_probe_timeout_excuses_the_race(self):
+        timed_out='che-apple-mail-mcp: FDA assist version timeout (2 seconds); preserving offer\n'
+        self.assert_every_hook_timed_out([timed_out]*12,2.0)
+        with self.assertRaises(AssertionError):
+            self.assert_every_hook_timed_out([timed_out]*11+['version exited 3\n'],2.0)
+        with self.assertRaises(AssertionError):
+            self.assert_every_hook_timed_out([timed_out]*12,1.9)
 
     def test_exited_leader_with_stdout_descendant_times_out(self):
         for flag in ['--version','--check-fda']:
@@ -245,10 +267,18 @@ sub fixture_pause {
 
     def test_concurrent_denied_has_one_atomic_offer(self):
         self.configure(barrier=True,status=1)
+        self.run_concurrent_hooks()
+
+    def run_concurrent_hooks(self):
+        started=time.monotonic()
         processes=[subprocess.Popen(['/bin/bash',str(self.root/'plugin/hooks/session-start.sh')],env=self.env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True) for _ in range(12)]
         try:
             deadline=time.monotonic()+POLL_SECONDS
-            while len(list(self.root.glob('ready-*')))<12 and time.monotonic()<deadline:time.sleep(.01)
+            while len(list(self.root.glob('ready-*')))<12 and time.monotonic()<deadline and any(p.poll() is None for p in processes):time.sleep(.01)
+            # The barrier holds a hook until `release`, so a hook that has gone left by another way.
+            if all(p.poll() is not None for p in processes):
+                self.assert_every_hook_timed_out([p.communicate(timeout=5)[1] for p in processes],time.monotonic()-started)
+                self.skipTest('every hook hit the 2.0 s probe deadline before the barrier opened, so nothing raced')
             self.assertEqual(len(list(self.root.glob('ready-*'))),12)
             (self.root/'release').touch()
             outputs=[p.communicate(timeout=5) for p in processes]
