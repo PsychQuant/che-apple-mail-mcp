@@ -2693,7 +2693,7 @@ class CheAppleMailMCPServer {
     /// whether a protected folder exists. The kinds of refusal read the same for
     /// the same reason.
     private static func exportPolicyRejection(parameter: String, reason: Error) -> MailError {
-        Diagnostics.emit("batch_export_emails_markdown: \(parameter) refused: \(reason)\n")
+        Diagnostics.emit("markdown export: \(parameter) refused: \(reason)\n")
         return .invalidParameter("\(parameter) rejected by write-safety check: outside the permitted export policy. "
             + "Use a path within CHE_MAIL_EXPORT_ALLOWED_ROOTS (default: home excluding sensitive paths).")
     }

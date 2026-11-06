@@ -273,15 +273,16 @@ final class ExportHandlerTests: XCTestCase {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("export625-stderr-\(UUID().uuidString)")
         addTeardownBlock { try? FileManager.default.removeItem(at: file) }
         let saved = dup(STDERR_FILENO)
+        guard saved >= 0 else { throw NSError(domain: "ExportHandlerFixture", code: 3) }
+        defer { close(saved) }
         let sink = open(file.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
-        guard saved >= 0, sink >= 0, dup2(sink, STDERR_FILENO) == STDERR_FILENO else {
-            throw NSError(domain: "ExportHandlerFixture", code: 3)
-        }
+        guard sink >= 0 else { throw NSError(domain: "ExportHandlerFixture", code: 4) }
+        let redirected = dup2(sink, STDERR_FILENO)
         close(sink)
+        guard redirected == STDERR_FILENO else { throw NSError(domain: "ExportHandlerFixture", code: 5) }
         var failure: Error?
         do { try await body() } catch { failure = error }
-        dup2(saved, STDERR_FILENO)
-        close(saved)
+        XCTAssertEqual(dup2(saved, STDERR_FILENO), STDERR_FILENO, "fd 2 was not restored")
         if let failure { throw failure }
         return try String(contentsOf: file, encoding: .utf8)
     }
@@ -294,7 +295,8 @@ final class ExportHandlerTests: XCTestCase {
         try FileManager.default.createSymbolicLink(atPath: root.path + "/link", withDestinationPath: secret.path)
         for parameter in Self.refusedParameters {
             let message = await refusal(server, parameter, root.path + "/link/target", root: root)
-            XCTAssertTrue(message.contains("\(parameter) rejected by write-safety check"), message)
+            XCTAssertEqual(message, "Invalid parameter: \(parameter) rejected by write-safety check: outside the permitted "
+                + "export policy. Use a path within CHE_MAIL_EXPORT_ALLOWED_ROOTS (default: home excluding sensitive paths).")
             XCTAssertFalse(message.contains(secret.lastPathComponent), message)
             XCTAssertFalse(message.contains("escapesAllowedRoots"), message)
             XCTAssertFalse(message.contains("path:"), message)
