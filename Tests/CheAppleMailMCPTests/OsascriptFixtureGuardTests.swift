@@ -26,7 +26,13 @@ final class OsascriptFixtureGuardTests: XCTestCase {
             "do ¬\nshell script \"true\"",                               // ¬ continuation
             "open location \"mailto:a@example.invalid\"",                  // launches the mail handler
             "store script me in (POSIX file \"/tmp/x.scpt\")",
-            "use framework \"AppKit\"\nset w to current application's NSWorkspace",
+            "use framework \"AppKit\"\nreturn its NSWorkspace's sharedWorkspace()",
+            "set x to 1\ruse framework \"Foundation\"\rreturn its NSWorkspace's sharedWorkspace()",  // CR ends a line
+            // #572 verify, round 2: `\|` and `\\` are escapes inside |…|, so any `|` is refused.
+            "set |a\\| \" | to 1\ntell app \"Mail\" to activate",
+            "set |a\\| (* | to 1\ntell app \"Mail\" to activate",
+            "set |x\\\\\\|-- | to name of application \"Mail\"",
+            "set |x\\\\\\|\"| to name of application \"Mail\"",
         ]
         for fragment in forms {
             XCTAssertThrowsError(try OsascriptFixtureGuard.check(fragment), "must refuse: \(fragment.debugDescription)")
@@ -46,8 +52,8 @@ final class OsascriptFixtureGuardTests: XCTestCase {
         }
     }
 
-    /// Words inside a string literal are text, not code: an error message that mentions an
-    /// application must not trip the code checks. The raw checks still catch `application "`.
+    /// Words inside a string literal or a comment are text, not code: an error message that mentions
+    /// an application must not trip the checks. `application "Mail"` in code still does.
     func testCommentsAndStringLiteralsAreNotCode() throws {
         // The production cleanup block mentions System Events in both places (#572).
         XCTAssertNoThrow(try OsascriptFixtureGuard.check(

@@ -30,7 +30,8 @@ enum OsascriptFixtureGuard {
         ("load script", #"\bload\s+script\b"#),
         ("store script", #"\bstore\s+script\b"#),
         ("open location", #"\bopen\s+location\b"#),
-        ("use statement", #"(^|\n)\s*use\s"#),
+        ("use statement", #"(^|[\n\r])\s*use\s"#),
+        ("|…| identifier", #"\|"#),
     ]
 
     /// Throws `ApplicationReference` if the fragment could address an application.
@@ -52,9 +53,10 @@ enum OsascriptFixtureGuard {
 
     /// The fragment with `--` and `#` line comments and `(* … *)` block comments (nested) removed,
     /// and the content of every `"…"` literal removed (the quotes stay), honouring `\"` and `\\`.
-    /// A `|…|` identifier is copied as written, and a quote or comment marker inside it does not
-    /// start a literal or a comment (it does not in AppleScript either). A `¬` continuation and its
-    /// line break become one space, so `do ¬⏎ shell script` is still seen as `do shell script`.
+    /// A `|` is copied as written and `check` refuses it: a `|…|` identifier has escapes of its own,
+    /// so lexing it here could only disagree with AppleScript about where it ends, and no fixture
+    /// needs one (#572 verify, rounds 1 and 2). A `¬` continuation and its line break become one
+    /// space, so `do ¬⏎ shell script` is still seen as `do shell script`.
     ///
     /// Works on Unicode scalars, not `Character`s: Swift treats `\r\n` as ONE `Character`, so a
     /// `Character` loop never sees the `\r` or `\n` that ends a comment and swallows every later line
@@ -75,14 +77,6 @@ enum OsascriptFixtureGuard {
             if c == "(" && next == "*" { blockDepth = 1; i += 2; continue }
             if (c == "-" && next == "-") || c == "#" {
                 while i < chars.count && chars[i] != "\n" && chars[i] != "\r" { i += 1 }
-                continue
-            }
-            if c == "|" {
-                out.append(c); i += 1
-                while i < chars.count {
-                    out.append(chars[i]); i += 1
-                    if chars[i - 1] == "|" { break }
-                }
                 continue
             }
             if c == "¬" {

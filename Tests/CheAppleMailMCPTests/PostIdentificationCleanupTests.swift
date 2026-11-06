@@ -10,8 +10,9 @@ final class PostIdentificationCleanupTests: XCTestCase {
             .replacingOccurrences(of: "name of _window", with: "missing value")
             .replacingOccurrences(of: "id of front window", with: "42")
         let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        try OsascriptFixtureGuard.check(helpers + "\nreturn my composeCleanupOwnerState(42, \"missing value\", false)")   // #572: the exact text osascript runs
-        process.arguments = ["-e", helpers + "\nreturn my composeCleanupOwnerState(42, \"missing value\", false)"]
+        let source = helpers + "\nreturn my composeCleanupOwnerState(42, \"missing value\", false)"
+        try OsascriptFixtureGuard.check(source)   // #572: the exact text osascript runs
+        process.arguments = ["-e", source]
         let output = Pipe(), errors = Pipe(); process.standardOutput = output; process.standardError = errors
         try process.run(); process.waitUntilExit()
         XCTAssertEqual(process.terminationStatus, 0, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
