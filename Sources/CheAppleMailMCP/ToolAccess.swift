@@ -14,18 +14,33 @@ import MCP
 /// cautious.
 enum ToolAccess: CaseIterable {
     /// Reads accounts, settings, rules or the server's own status, or parses its
-    /// input. Nothing it returns was written by a third party.
+    /// input. It returns the user's configuration, not message content, though
+    /// a mailbox or rule name can quote other text.
     case readLocal
     /// Returns message content or metadata, which third parties wrote: open
-    /// world, as `classify_emails` already is.
+    /// world, as `classify_emails` already is. `list_vip_senders` returns the
+    /// senders of messages, and `get_mail_log_events` an unmatched log line as
+    /// it stands, so both take this class. A read can make Mail fetch a body
+    /// from the server (#274); that changes no mailbox.
     case readMail
-    /// Creates something and changes nothing that exists. A repeat adds another.
+    /// Creates something inside Mail and changes nothing that exists. A repeat
+    /// adds another.
     case add
-    /// Asks the mail server for new mail. Repeating it does no harm.
+    /// Asks the mail server for new mail. A repeat fetches only what arrived since.
     case fetch
-    /// Modifies, moves or removes something that exists, or sets a rule that will.
+    /// Puts text the caller wrote where it can leave, and sends nothing: a draft
+    /// syncs to the mail server and sits one key from sent, and `open_mailto`
+    /// hands over to the system's default mail client, which may not be Mail.
+    case prepareMail
+    /// Modifies, moves or removes something that exists, sets a rule that will,
+    /// or imports a mailbox, which is not undone in one step.
     case change
-    /// Writes a file, which can replace one already there.
+    /// `update_draft`: deletes the old draft, and the new one syncs like any draft.
+    case replaceDraft
+    /// Writes files on this machine and can replace one already there:
+    /// `save_attachment` by design, an export through an attachment of the same
+    /// name. Not idempotent, because a repeated export adds `-N` copies of its
+    /// Markdown. `save_attachment` alone would be.
     case writeFile
     /// Can send mail. A sent message cannot be recalled, a retry sends a second
     /// one (#242), and mail leaves for third parties. `reply_email` also has a
@@ -42,11 +57,11 @@ enum ToolAccess: CaseIterable {
             return .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false)
         case .fetch:
             return .init(readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true)
-        case .change:
+        case .prepareMail:
+            return .init(readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true)
+        case .change, .writeFile:
             return .init(readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false)
-        case .writeFile:
-            return .init(readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false)
-        case .send:
+        case .replaceDraft, .send:
             return .init(readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true)
         }
     }
@@ -57,19 +72,23 @@ enum ToolAccess: CaseIterable {
             return ["check_accessibility", "check_automation", "check_fda", "extract_address",
                     "extract_name_from_address", "get_account_info", "get_mail_app_info", "get_rule_details",
                     "get_signature", "get_special_mailboxes", "get_unread_count", "list_accounts",
-                    "list_mailboxes", "list_rules", "list_signatures", "list_smtp_servers", "list_vip_senders"]
+                    "list_mailboxes", "list_rules", "list_signatures", "list_smtp_servers"]
         case .readMail:
             return ["get_email", "get_email_headers", "get_email_metadata", "get_email_source", "get_emails_batch",
                     "get_mail_log_events", "list_attachments", "list_attachments_batch", "list_drafts",
-                    "list_emails", "search_emails"]
+                    "list_emails", "list_vip_senders", "search_emails"]
         case .add:
-            return ["copy_email", "create_draft", "create_mailbox", "import_mailbox", "open_mailto"]
+            return ["copy_email", "create_mailbox"]
         case .fetch:
             return ["check_for_new_mail", "synchronize_account"]
+        case .prepareMail:
+            return ["create_draft", "open_mailto"]
         case .change:
             return ["create_rule", "delete_email", "delete_mailbox", "delete_rule", "enable_rule", "flag_email",
-                    "mark_as_junk", "mark_read", "move_email", "set_background_color", "set_flag_color",
-                    "update_draft"]
+                    "import_mailbox", "mark_as_junk", "mark_read", "move_email", "set_background_color",
+                    "set_flag_color"]
+        case .replaceDraft:
+            return ["update_draft"]
         case .writeFile:
             return ["save_attachment", "export_emails_markdown", "batch_export_emails_markdown"]
         case .send:

@@ -13,6 +13,10 @@ final class ToolAccessTests: XCTestCase {
         "configure_email_classification", "get_email_classification_policy",
     ]
 
+    private static func hints(_ a: Tool.Annotations) -> [Bool?] {
+        [a.readOnlyHint, a.destructiveHint, a.idempotentHint, a.openWorldHint]
+    }
+
     private func tool(_ name: String) throws -> Tool {
         try XCTUnwrap(CheAppleMailMCPServer.defineTools().first { $0.name == name }, "missing tool \(name)")
     }
@@ -44,21 +48,21 @@ final class ToolAccessTests: XCTestCase {
     // MARK: - What each class states
 
     func testClassValues() {
-        func hints(_ access: ToolAccess) -> [Bool?] {
-            let a = access.annotations
-            return [a.readOnlyHint, a.destructiveHint, a.idempotentHint, a.openWorldHint]
-        }
+        func hints(_ access: ToolAccess) -> [Bool?] { Self.hints(access.annotations) }
         XCTAssertEqual(hints(.readLocal), [true, false, true, false])
         XCTAssertEqual(hints(.readMail), [true, false, true, true], "the text comes from third parties")
         XCTAssertEqual(hints(.add), [false, false, false, false], "a repeat adds another")
         XCTAssertEqual(hints(.fetch), [false, false, true, true])
+        XCTAssertEqual(hints(.prepareMail), [false, false, false, true])
         XCTAssertEqual(hints(.change), [false, true, false, false])
-        XCTAssertEqual(hints(.writeFile), [false, true, true, false], "an existing file is replaced")
+        XCTAssertEqual(hints(.replaceDraft), [false, true, false, true])
+        XCTAssertEqual(hints(.writeFile), [false, true, false, false], "a repeated export adds copies")
         XCTAssertEqual(hints(.send), [false, true, false, true])
     }
 
     func testToolsThatMustNotReadAsSafe() throws {
-        for name in ["delete_email", "delete_mailbox", "delete_rule", "move_email", "update_draft", "mark_as_junk"] {
+        for name in ["delete_email", "delete_mailbox", "delete_rule", "move_email", "update_draft", "mark_as_junk",
+                     "import_mailbox"] {
             let a = try tool(name).annotations
             XCTAssertEqual(a.readOnlyHint, false, name)
             XCTAssertEqual(a.destructiveHint, true, name)
@@ -66,8 +70,26 @@ final class ToolAccessTests: XCTestCase {
     }
 
     func testToolsThatReturnMailAreOpenWorld() throws {
-        for name in ["get_email", "get_email_source", "get_emails_batch", "search_emails", "list_emails"] {
+        for name in ["get_email", "get_email_source", "get_emails_batch", "search_emails", "list_emails",
+                     "list_vip_senders"] {
             XCTAssertEqual(try tool(name).annotations.openWorldHint, true, name)
+        }
+    }
+
+    /// The tools where "may a client run this unasked" was the real question.
+    func testTheCallsThatWereWeighed() throws {
+        for name in ["create_draft", "open_mailto"] {
+            XCTAssertEqual(Self.hints(try tool(name).annotations), [false, false, false, true],
+                           "\(name) removes nothing, but its text leaves Mail's local store")
+        }
+        XCTAssertEqual(Self.hints(try tool("update_draft").annotations), [false, true, false, true],
+                       "the old draft is deleted, and the new one syncs")
+        XCTAssertEqual(Self.hints(try tool("copy_email").annotations), [false, false, false, false])
+        XCTAssertEqual(Self.hints(try tool("import_mailbox").annotations), [false, true, false, false],
+                       "an import is not undone in one step")
+        for name in ["export_emails_markdown", "batch_export_emails_markdown"] {
+            XCTAssertEqual(Self.hints(try tool(name).annotations), [false, true, false, false],
+                           "\(name): a repeat adds -N copies, and an attachment of the same name is replaced")
         }
     }
 
@@ -93,6 +115,8 @@ final class ToolAccessTests: XCTestCase {
         XCTAssertEqual(length, .init(readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false))
         XCTAssertEqual(try tool("classify_emails").annotations.readOnlyHint, true)
         XCTAssertEqual(try tool("apply_email_classification").annotations.destructiveHint, true)
+        XCTAssertEqual(Self.hints(try tool("get_email_classification_policy").annotations), [true, false, true, false])
+        XCTAssertEqual(Self.hints(try tool("configure_email_classification").annotations), [false, true, false, false])
     }
 
     func testAnnotationsReachTheWire() throws {
@@ -101,5 +125,10 @@ final class ToolAccessTests: XCTestCase {
         let annotations = try XCTUnwrap(json["annotations"] as? [String: Any])
         XCTAssertEqual(annotations["destructiveHint"] as? Bool, true)
         XCTAssertEqual(annotations["openWorldHint"] as? Bool, true)
+
+        let readData = try JSONEncoder().encode(try tool("list_accounts"))
+        let readJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: readData) as? [String: Any])
+        let readAnnotations = try XCTUnwrap(readJSON["annotations"] as? [String: Any])
+        XCTAssertEqual(readAnnotations["readOnlyHint"] as? Bool, true)
     }
 }

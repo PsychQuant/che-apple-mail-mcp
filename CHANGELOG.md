@@ -81,15 +81,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#621](https://github.com/PsychQuant/che-apple-mail-mcp/issues/621)). Without
   them a client read every tool as possibly destructive, so it could not tell a
   read from a delete. Each tool now sits in one class of a closed table
-  (`ToolAccess`), and a test fails on a new tool with no class: reads of
-  accounts and settings, reads of mail (open world, because third parties wrote
-  that text), tools that only add something, tools that fetch from the server,
-  tools that change or remove what exists, tools that write files, and the four
-  that send. The classification tools and `check_compose_length` keep the
-  annotations they already had. **A client that runs `readOnlyHint` tools without
-  asking will now read mail without a prompt**: the hint states a fact about the
-  tool, and that policy is the client's. Whether any client does this was not
-  verified.
+  (`ToolAccess`), and a test fails on a new tool with no class. Reads of accounts
+  and settings are read-only and closed world. Reads of mail are read-only and
+  open world, because third parties wrote that text. `create_draft` and
+  `open_mailto` send nothing but are open world, because a draft syncs to the
+  server and `open_mailto` hands over to the default mail client. Tools that
+  change, move, remove or import are destructive, as are `save_attachment` and
+  the exports (an attachment of the same name is replaced). `update_draft` is
+  destructive and open world. The classification tools and `check_compose_length`
+  keep the annotations they already had.
+
+  **A client that runs `readOnlyHint` tools without asking will now read mail
+  without a prompt**, and text in a message can then steer what gets read next.
+  The hint states a fact about the tool: it changes no mailbox, though a read can
+  make Mail fetch a body from the server (#274). Acting on it is the client's
+  policy. The MCP specification tells clients to treat annotations as untrusted
+  unless the server is trusted, and `openWorldHint` does not make a client ask.
+  Whether any client acts on these hints was not verified.
 - **`get_mail_log_events` runs at most two reads at once and stops when the
   client cancels** ([#467](https://github.com/PsychQuant/che-apple-mail-mcp/issues/467)).
   Each call started its own `log show` child (237–350 MB) with no limit, and a
