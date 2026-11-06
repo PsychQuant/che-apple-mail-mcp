@@ -31,6 +31,35 @@ final class ByteDecodingTests: XCTestCase {
         XCTAssertEqual(ByteDecoding.utf8OrLatin1(Data([0x63, 0x61, 0x66, 0xE9])), "café")
     }
 
+    func testStrictUTF8AcceptsValidInput() {
+        XCTAssertEqual(ByteDecoding.strictUTF8(Data()), "")
+        XCTAssertEqual(ByteDecoding.strictUTF8(Data("a日𠮷".utf8)), "a日𠮷")
+        XCTAssertEqual(ByteDecoding.strictUTF8(Data("\u{FFFD}".utf8)), "\u{FFFD}", "a real U+FFFD is not a repair")
+        XCTAssertEqual(ByteDecoding.strictUTF8(Data([0x61, 0x00, 0x62])), "a\u{0}b")
+    }
+
+    func testStrictUTF8RejectsEveryInvalidShape() {
+        let invalid: [(String, [UInt8])] = [
+            ("lone continuation", [0x80]),
+            ("lone lead", [0xE9]),
+            ("truncated sequence", [0xE6, 0x97]),
+            ("overlong NUL", [0xC0, 0x80]),
+            ("overlong slash", [0xE0, 0x80, 0xAF]),
+            ("surrogate", [0xED, 0xA0, 0x80]),
+            ("above U+10FFFF", [0xF4, 0x90, 0x80, 0x80]),
+            ("invalid byte", [0xFF])
+        ]
+        for (label, bytes) in invalid {
+            XCTAssertNil(ByteDecoding.strictUTF8(Data(bytes)), label)
+            XCTAssertNil(ByteDecoding.strictUTF8(Data([0x61] + bytes + [0x62])), label + " inside text")
+        }
+    }
+
+    func testStrictUTF8DropsOnlyALeadingByteOrderMark() {
+        XCTAssertEqual(ByteDecoding.strictUTF8(Data([0xEF, 0xBB, 0xBF, 0x61])), "a")
+        XCTAssertEqual(ByteDecoding.strictUTF8(Data([0x61, 0xEF, 0xBB, 0xBF]))?.unicodeScalars.count, 2)
+    }
+
     func testAnASCIILabelNeverFails() {
         XCTAssertEqual(ByteDecoding.string(from: Data("plain".utf8), encoding: .ascii), "plain")
         XCTAssertEqual(ByteDecoding.string(from: Data("日".utf8), encoding: .ascii), "日")
@@ -83,6 +112,15 @@ final class ByteDecodingTests: XCTestCase {
             "content-transfer-encoding": "quoted-printable"
         ])
         XCTAssertEqual(result.textBody, "café x")
+    }
+
+    func testBase64PartWithFoldedLinesDecodes() {
+        let body = Data("SGVs\r\nbG8s\nIHdv cmxkIQ==\r\n".utf8)
+        let result = MIMEParser.parseBody(body, headers: [
+            "content-type": "text/plain; charset=utf-8",
+            "content-transfer-encoding": "base64"
+        ])
+        XCTAssertEqual(result.textBody, "Hello, world!")
     }
 
     func testBase64PartWithAHighByteKeepsTheRawBytes() {

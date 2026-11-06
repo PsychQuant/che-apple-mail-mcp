@@ -687,7 +687,7 @@ public enum MIMEParser {
 
         let textEncoding = RFC822Parser.stringEncoding(for: charset)
         return ByteDecoding.string(from: Data(bytes), encoding: textEncoding)
-            ?? String(data: Data(bytes), encoding: .utf8)
+            ?? ByteDecoding.strictUTF8(Data(bytes))
     }
 
     /// Extract the numeric index from a continuation key like `<paramName>*3*`
@@ -779,8 +779,8 @@ public enum MIMEParser {
     static func decodeBodyText(_ data: Data, declaredCharset: String) -> String {
         let label = declaredCharset.trimmingCharacters(in: .whitespaces).lowercased()
         if weakCharsetLabels.contains(label),
-           data.contains(where: { $0 >= 0x80 }),
-           let utf8 = String(data: data, encoding: .utf8) {
+           !ByteDecoding.isASCII(data),
+           let utf8 = ByteDecoding.strictUTF8(data) {
             return utf8
         }
         return ByteDecoding.string(from: data, encoding: RFC822Parser.stringEncoding(for: label))
@@ -934,7 +934,7 @@ public enum MIMEParser {
                 || text.range(of: #"=\r?\n"#, options: .regularExpression) != nil,
               let candidate = RFC822Parser.decodeQuotedPrintableBytes(text),
               candidate != data,
-              let s = String(data: candidate, encoding: .utf8),
+              let s = ByteDecoding.strictUTF8(candidate),
               s.unicodeScalars.contains(where: { !$0.isASCII })
         else { return data }
         return candidate
@@ -943,10 +943,9 @@ public enum MIMEParser {
     private static func decodeTransferEncoding(_ data: Data, encoding: String) -> Data {
         switch encoding.lowercased() {
         case "base64":
-            let cleaned = ByteDecoding.latin1String(data)
-                .replacingOccurrences(of: "\r\n", with: "")
-                .replacingOccurrences(of: "\n", with: "")
-                .replacingOccurrences(of: " ", with: "")
+            // Byte level on purpose: this runs on every attachment, and a
+            // `String` round trip costs several times the attachment's size.
+            let cleaned = data.filter { $0 != 0x0D && $0 != 0x0A && $0 != 0x20 }
             return Data(base64Encoded: cleaned) ?? data
 
         case "quoted-printable":

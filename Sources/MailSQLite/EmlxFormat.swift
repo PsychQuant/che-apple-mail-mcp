@@ -32,7 +32,7 @@ public enum EmlxFormat {
 
         // 2. Parse the text before the newline as a byte count
         let headerBytes = data[data.startIndex..<newlineIndex]
-        guard let headerString = String(bytes: headerBytes, encoding: .utf8),
+        guard let headerString = ByteDecoding.strictUTF8(Data(headerBytes)),
               let byteCount = Int(headerString.trimmingCharacters(in: .whitespaces)),
               byteCount >= 0
         else {

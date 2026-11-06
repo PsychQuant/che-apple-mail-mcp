@@ -7,7 +7,8 @@ import XCTest
 /// through `ByteDecoding` in `Sources/MailSQLite/` instead, which says which of
 /// the two it means.
 ///
-/// This scan reads code lines only (a `//` comment may name the call).
+/// This is a text scan of code lines (a `//` comment may name the call): it
+/// fails on the two spellings below, not on `.ascii` passed through a variable.
 final class NoAsciiDecodingGuardTests: XCTestCase {
 
     private func sourcesDir() -> URL {
@@ -30,7 +31,7 @@ final class NoAsciiDecodingGuardTests: XCTestCase {
             let text = try String(contentsOf: url, encoding: .utf8)
             for (idx, line) in text.components(separatedBy: "\n").enumerated() {
                 let code = line.components(separatedBy: "//").first ?? line
-                if code.contains("encoding: .ascii") {
+                if code.contains("encoding: .ascii") || code.contains("Encoding.ascii") {
                     hits.append("\(url.lastPathComponent):\(idx + 1)")
                 }
             }
