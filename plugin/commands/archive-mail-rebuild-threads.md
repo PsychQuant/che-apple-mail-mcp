@@ -79,6 +79,8 @@ fi
 
 ### Step 4: 聚合成 threads 結構
 
+**排序怎麼執行（#556）**：`thread_order`／`thread_bounds` 是 `archive-mail.md` 日期 recipe（標記 `archive-mail-date-recipe`）裡的純函式，這個指令不另寫一份。把該 recipe 存成固定腳本，腳本與輸入輸出檔都放在這次叫用用 `mktemp -d` 建的私有目錄（不用共用的固定路徑），輸入（每封信的 `date` 與 `file`）用 `Write` 寫成 JSON 檔，由腳本讀入後當函式引數，輸出寫成 JSON 檔再用 `Read` 讀回；信件衍生的字串只經 JSON 檔傳遞，不放進指令字串。本指令的 `allowed-tools` 沒有 python，執行 Python 時由宿主提示權限，不擴大 `allowed-tools`。**無人值守時不等待授權**：宿主沒有放行 Python（沒有人可以按允許）就視同拿不到執行能力，立刻停止，不卡住。**拿不到執行能力（宿主不放行、`python3` 不存在、recipe 執行失敗）就停止**，報 `status: order-unavailable` 與原因，不寫任何輸出、不改 `.threads.json`；**不得**退回手動比較字串或心算排序（那正是 #556 要消除的不確定性）。
+
 建立新的 threads 物件：
 
 ```
@@ -104,12 +106,14 @@ for each valid md:
     })
     entry.participants_set.add(md.sender)
     if md.to/cc available in frontmatter → add to set
-    entry.first_message = min(entry.first_message, md.date)
-    entry.last_message = max(entry.last_message, md.date)
+    # first_message / last_message 不在這裡累積（#556）：對 date 字串做 min/max 會排錯，見下方「後處理」
 
 # 後處理
 for key, entry in new_threads:
-    entry.messages.sort(key=lambda m: m.date)  # 時序排序
+    # 時序排序與 first/last：一律用 archive-mail.md 日期 recipe 的 thread_order / thread_bounds，不對 date 字串排序
+    entry.messages, unreadable = thread_order(entry.messages)
+    report.unreadable_dates.extend(unreadable)   # 只給 Step 6 的報告，不是 thread entry 的欄位
+    entry.first_message, entry.last_message = thread_bounds(entry.messages).values()
     entry.message_count = len(entry.messages)
     entry.participants = sorted(list(entry.participants_set))
     del entry.participants_set
@@ -127,6 +131,8 @@ for key, entry in new_threads:
 ```
 
 **頂層加 `rebuilt_from` 欄位**，記錄這次是從 frontmatter 重建的（而非 archive-mail 增量維護）。方便區分。
+
+`unreadable_dates` 只進 Step 6 的報告，不寫進 `.threads.json`：thread entry 的欄位不變，這些信仍在 `messages` 裡，排在該 thread 最後。
 
 ### Step 6: 輸出報告
 
@@ -151,6 +157,7 @@ Backup: .threads.json.bak.20260422_150109
 Issues:
   ⚠️ 2024-07-14_Old-email.md: missing frontmatter (legacy md, needs backfill)
   ⚠️ 2024-07-14_Another-old.md: missing thread_key
+  ⚠️ 2024-07-14_Odd-date.md: date unreadable (sorted last in its thread, kept)
 
 ═══════════════════════════════════════════
 ```

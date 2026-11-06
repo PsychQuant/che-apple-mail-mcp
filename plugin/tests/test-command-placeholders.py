@@ -197,5 +197,32 @@ class MigrateArgumentsTests(unittest.TestCase):
         self.assertIn("停止", usage)
 
 
+class MigrateNoDiskNameInPythonSourceTests(unittest.TestCase):
+    """#602: a name found on disk must reach python3 through argv, never inside the program text."""
+
+    DISK_DERIVED = ("INDEX_DIR", "SLUG", "NAMESPACE_DIR", "archive_dir")
+
+    @staticmethod
+    def python_sources(text: str) -> list[str]:
+        """The quoted program text of every `python3 -c '...'` / `python3 -c "..."` in the text."""
+        return [m.group(2) for m in re.finditer(r"python3 -c (['\"])(.*?)\1", text, re.S)]
+
+    def hits(self, text: str) -> list[str]:
+        return [name for source in self.python_sources(text) for name in self.DISK_DERIVED if name in source]
+
+    def test_migrate_keeps_disk_derived_names_out_of_python_source(self) -> None:
+        text = (PLUGIN / "commands/archive-mail-migrate.md").read_text(encoding="utf-8")
+        self.assertTrue(self.python_sources(text), "the guard found no python3 -c; did the command change?")
+        self.assertEqual(self.hits(text), [])
+
+    def test_the_index_check_passes_the_path_through_argv(self) -> None:
+        text = (PLUGIN / "commands/archive-mail-migrate.md").read_text(encoding="utf-8")
+        self.assertIn("json.load(open(sys.argv[1]))' \"${INDEX_DIR}/email_index.json\"", text)
+
+    def test_a_planted_interpolation_turns_the_guard_red(self) -> None:
+        planted = "python3 -c \"import json; json.load(open('${INDEX_DIR}/email_index.json'))\""
+        self.assertEqual(self.hits(planted), ["INDEX_DIR"])
+
+
 if __name__ == "__main__":
     unittest.main()

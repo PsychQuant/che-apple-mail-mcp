@@ -123,9 +123,10 @@ enum EmailMarkdownRenderer {
     /// Convert an RFC 822 / RFC 2822 email `Date` header to ISO 8601,
     /// preserving the header's numeric UTC offset (`+0800` → `…+08:00`) so the
     /// frontmatter agrees with the body `Date:` line (#244). A zero offset
-    /// renders as the historical `Z`; a named or missing zone falls back to
-    /// UTC; an unparseable date is returned unchanged (never crashes / never
-    /// drops data).
+    /// renders as the historical `Z`; a named zone the SOP date recipe accepts
+    /// falls back to UTC; an unparseable date, or a zone the recipe refuses, is
+    /// returned unchanged (never crashes / never drops data). Two- and
+    /// three-digit years follow RFC 5322 §4.3 (#547).
     static func rfc822ToISO8601(_ raw: String) -> String {
         let original = raw.trimmingCharacters(in: .whitespaces)
         guard !original.isEmpty else { return original }
@@ -136,6 +137,8 @@ enum EmailMarkdownRenderer {
         // unparseable passthrough still returns the untouched original.
         let trimmed = original.replacingOccurrences(
             of: #"\s*\([^()]*\)\s*$"#, with: "", options: .regularExpression)
+        if zoneIsRefused(in: trimmed) { return original }
+        let expanded = expandingObsoleteYear(trimmed)
 
         let formats = [
             "EEE, d MMM yyyy HH:mm:ss Z",
@@ -148,7 +151,7 @@ enum EmailMarkdownRenderer {
         parser.timeZone = TimeZone(identifier: "UTC")
         for fmt in formats {
             parser.dateFormat = fmt
-            if let date = parser.date(from: trimmed) {
+            if let date = parser.date(from: expanded) {
                 let out = DateFormatter()
                 out.locale = Locale(identifier: "en_US_POSIX")
                 if let offset = numericZoneOffsetSeconds(in: trimmed), offset != 0,
@@ -163,6 +166,41 @@ enum EmailMarkdownRenderer {
             }
         }
         return original
+    }
+
+    /// The named zones the SOP date recipe accepts (`_NAMED_ZONES` in
+    /// `plugin/commands/archive-mail.md`). Bare `CST` is absent on purpose: it
+    /// is both US Central and China/Taipei Standard Time, and `DateFormatter`
+    /// silently picks US Central, which moves the calendar day (#547).
+    private static let acceptedNamedZones: Set<String> = [
+        "UT", "UTC", "GMT", "Z", "EST", "EDT", "CDT", "MST", "MDT", "PST", "PDT"
+    ]
+
+    /// True when the date ends in a zone name the recipe refuses to read. The
+    /// batch renderer and the per-email recipe must write the same date (#244),
+    /// so such a header stays as written, the recipe's answer.
+    private static func zoneIsRefused(in dateString: String) -> Bool {
+        guard let match = dateString.range(of: #"(?<=\s)[A-Za-z]+\s*$"#, options: .regularExpression) else {
+            return false
+        }
+        let zone = dateString[match].trimmingCharacters(in: .whitespaces).uppercased()
+        return !acceptedNamedZones.contains(zone)
+    }
+
+    /// Rewrite an obsolete year to four digits (RFC 5322 §4.3): `00`-`49` is
+    /// 20xx, `50`-`99` is 19xx, three digits add 1900. `yyyy` would otherwise
+    /// read `55` as the year 55. Only the year of a day-month-year date before
+    /// its time matches; four-digit years are left alone.
+    private static func expandingObsoleteYear(_ dateString: String) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"[0-9]\s+[A-Za-z]{3,9}\s+([0-9]{2,3})\s+[0-9]{1,2}:"#),
+              let match = regex.firstMatch(
+                in: dateString, range: NSRange(dateString.startIndex..., in: dateString)),
+              let range = Range(match.range(at: 1), in: dateString),
+              let year = Int(dateString[range]) else { return dateString }
+        let digits = dateString.distance(from: range.lowerBound, to: range.upperBound)
+        let expanded = digits == 3 ? year + 1900 : year + (year <= 49 ? 2000 : 1900)
+        return dateString.replacingCharacters(in: range, with: String(expanded))
     }
 
     /// Extract the numeric zone token (`+0800` / `-0530`) from an RFC 2822
@@ -194,10 +232,16 @@ enum EmailMarkdownRenderer {
 
     /// Flatten any line break or control character to a single space and trim.
     /// Used for the unquoted `date` / `sender` frontmatter fields (and inside
-    /// `yamlQuoted`) so no value can break out of its YAML line.
+    /// `yamlQuoted`) so no value can break out of its YAML line. Beyond the
+    /// ASCII controls that covers the C1 controls, NEL among them, and U+2028 /
+    /// U+2029: YAML 1.1 readers and Python's `str.splitlines()` end a line at
+    /// those (#616). It is the set `EmailAddress.singleCanonical` refuses.
     static func singleLine(_ value: String) -> String {
         let scalars = value.unicodeScalars.map { scalar -> Character in
-            (scalar.value < 0x20 || scalar.value == 0x7f) ? " " : Character(scalar)
+            switch scalar.value {
+            case 0..<0x20, 0x7F...0x9F, 0x2028, 0x2029: return " "
+            default: return Character(scalar)
+            }
         }
         return String(scalars).trimmingCharacters(in: .whitespaces)
     }

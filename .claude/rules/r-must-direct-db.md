@@ -57,12 +57,13 @@
 每個 read tool 必須:
 
 1. **嘗試 SQLite 路徑** — `if let reader = indexReader, let rowId = Int(id) { ... }`
-2. **Catch 任何錯誤,寫 stderr log** — 格式參照 `save_attachment` precedent (`Server.swift:1003-1009`):
+2. **Catch 任何錯誤,寫 stderr log** — 格式參照 `Server.swift` 裡 `list_emails` 的 fast-path catch:
    ```swift
    let message = "SQLite <tool> fast path failed for rowId=\(rowId): "
        + "\(error.localizedDescription); falling through to AppleScript\n"
-   FileHandle.standardError.write(Data(message.utf8))
+   Diagnostics.emit(message)
    ```
+   stderr 一律走 `Diagnostics.emit`:非 throwing 的 `FileHandle.standardError.write(_:)` 在 descriptor 出錯時丟出無法捕捉的 Objective-C exception(SIGABRT,#346、#303),`NoNonThrowingStderrWriteGuardTests` 會擋下 `Sources/` 裡的這種寫法。
 3. **Fall through 到 `mailController.<tool>(...)`** AppleScript 實作
 4. **Init failure** 也要 log stderr;`indexReader = nil` 不可 silent。**nil 不是終態**(#537):`Server.indexReader` 是向 `IndexReaderProvider` 取用的計算屬性,每次讀取在距上次嘗試超過 30 秒時重試開啟,`check_fda` 強制重試;每次重試的結果都要有 stderr 紀錄(經 `Diagnostics.emit`),且附 `FDA probe: <結果> (errno N)`。完全相同的失敗不重複印,所以沒設定 Mail 的使用者不會每 30 秒洗一行
 
@@ -87,7 +88,7 @@ if let reader = indexReader, let rowId = Int(id) {
     } catch {
         let message = "SQLite ... fast path failed for rowId=\(rowId): "
             + "\(error.localizedDescription); falling through to AppleScript\n"
-        FileHandle.standardError.write(Data(message.utf8))
+        Diagnostics.emit(message)
     }
 }
 return try await mailController.fallback(...)
@@ -106,6 +107,7 @@ return try await mailController.fallback(...)
 
 - PR review 必查:任何新增 read tool 是否走 hybrid pattern + 有 stderr log?
 - Grep 反例:`grep -rn "try? reader\." Sources/CheAppleMailMCP/` 應該回 0 hit(全部都該是 do/catch 並 log)
+- stderr 只走 `Diagnostics.emit`:`NoNonThrowingStderrWriteGuardTests` 掃 `Sources/`
 - README "Performance & Storage" 表格必須跟現實同步;新加 read tool 要在表上一行
 
 ## 來源
@@ -123,7 +125,7 @@ return try await mailController.fallback(...)
 任何 read 路徑（shipped code、live test、ad-hoc 驗證）**絕不可**用 `messages ... whose content contains "<x>"`。這是 O(corpus) predicate：Mail 必須把**每封信的 body 反序列化**才能比對，在大信箱（~80k）會 OOM 直接拖垮 Mail.app（#218 spike 實證）。
 
 安全替代：
-- **subject / sender 比對**（`whose subject contains ... or sender contains ...`）—— shipped `searchEmails`（`MailController.swift:520/550/574`）就是這樣，不碰 content。
+- **subject / sender 比對**（`whose subject contains ... or sender contains ...`）—— shipped `searchEmails`（`AppleScript/MailController.swift`，predicate 由 `searchEmailsWhoseSuffix` 組出）就是這樣，不碰 content。
 - **scope 到特定小信箱**（如某帳號的 Drafts，~10s 封）再逐封讀 `content of m` —— 有界，可接受。
 - **id-delta 清理**：要刪測試草稿用「snapshot ids before → 刪 not-in-before」，不要靠 content 比對找。
 - live-test 找已存草稿的 .emlx：用 disk `grep`（檔案系統，不載入 Mail body）或 subject-match，不要 `whose content contains`。

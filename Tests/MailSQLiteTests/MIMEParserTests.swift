@@ -268,8 +268,9 @@ final class MIMEParserTests: XCTestCase {
         XCTAssertNotNil(firstText)
         XCTAssertNotNil(firstHTML)
 
-        // parseBody uses String-based components split and keeps trailing CRLFs
-        // in text bodies; parseAllParts uses byte-level split and strips them.
+        // parseBody splits at delimiters and keeps the CRLF before the next one
+        // in text bodies; parseAllParts (splitMultipart) strips it. Both split
+        // bytes, not a String, since #546.
         // Both are semantically equivalent — compare after trimming whitespace.
         let lossyTextTrim = lossy.textBody?.trimmingCharacters(in: .whitespacesAndNewlines)
         let allPartsTextTrim = firstText
@@ -780,5 +781,49 @@ final class MIMEParserTests: XCTestCase {
         XCTAssertEqual(names, ["測試附件.pdf"],
                        "RFC 2047 encoded-word filename split across RFC 2231 continuation "
                        + "segments must decode to the full filename; got \(names)")
+    }
+
+    // MARK: - Preamble (#560)
+
+    /// A multipart/alternative with a plain and an html part, after `preamble`.
+    private func alternative(preamble: String, eol: String) -> Data {
+        let body = preamble
+            + "--BB\(eol)Content-Type: text/plain; charset=utf-8\(eol)\(eol)real plain text\(eol)"
+            + "--BB\(eol)Content-Type: text/html; charset=utf-8\(eol)\(eol)<p>html</p>\(eol)"
+            + "--BB--\(eol)"
+        return Data(body.utf8)
+    }
+
+    private let alternativeHeaders = ["content-type": "multipart/alternative; boundary=BB"]
+
+    func testPreambleIsNotAPart() {
+        let preamble = "This is a multi-part message in MIME format."
+        for eol in ["\r\n", "\n"] {
+            let rows: [(String, String)] = [
+                ("no preamble", ""),
+                ("preamble, then a blank line", preamble + eol + eol),
+                ("preamble, no blank line", preamble + eol)
+            ]
+            for (label, text) in rows {
+                let result = MIMEParser.parseBody(alternative(preamble: text, eol: eol), headers: alternativeHeaders)
+                XCTAssertEqual(result.textBody?.trimmingCharacters(in: .whitespacesAndNewlines), "real plain text",
+                               "\(label), eol \(eol.debugDescription)")
+                XCTAssertEqual(result.htmlBody?.trimmingCharacters(in: .whitespacesAndNewlines), "<p>html</p>",
+                               "\(label), eol \(eol.debugDescription)")
+            }
+        }
+    }
+
+    func testPreambleOfANestedMultipartIsNotAPart() {
+        let inner = "Inner preamble.\r\n\r\n"
+            + "--IN\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nnested plain\r\n"
+            + "--IN--\r\n"
+        let body = "Outer preamble.\r\n\r\n"
+            + "--OUT\r\nContent-Type: multipart/alternative; boundary=IN\r\n\r\n" + inner
+            + "--OUT\r\nContent-Type: text/html; charset=utf-8\r\n\r\n<p>outer</p>\r\n"
+            + "--OUT--\r\n"
+        let result = MIMEParser.parseBody(Data(body.utf8), headers: ["content-type": "multipart/mixed; boundary=OUT"])
+        XCTAssertEqual(result.textBody?.trimmingCharacters(in: .whitespacesAndNewlines), "nested plain")
+        XCTAssertEqual(result.htmlBody?.trimmingCharacters(in: .whitespacesAndNewlines), "<p>outer</p>")
     }
 }
