@@ -224,6 +224,15 @@ final class DirectDraftMessageTests: XCTestCase {
         XCTAssertNil(check(to: [String(long.dropFirst())]), "254 octets is a legal path")
     }
 
+    func testSpacesAroundARecipientAreNotWritten() {
+        // Eligibility compares the trimmed address, so the raw entry can be longer.
+        let raw = String(repeating: " ", count: 1100) + "a@example.org"
+        XCTAssertNil(check(to: [raw]))
+        let m = build(to: [raw, "b@example.org "])
+        XCTAssertLessThanOrEqual(longestLine(m), DirectDraft.maxLineOctets)
+        XCTAssertTrue(header(m).hasSuffix("To: a@example.org, b@example.org"))
+    }
+
     func testAShortSubjectAndRecipientAreUnchanged() {
         let h = header(build(subject: "Hello there", to: ["a@example.org", "b@example.org"]))
         XCTAssertTrue(h.hasPrefix("Subject: Hello there\n"))

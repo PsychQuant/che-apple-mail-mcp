@@ -32,7 +32,7 @@ enum DirectDraft {
             case .ccOrBcc: return "cc/bcc are not written directly"
             case .noRecipient: return "no To recipient"
             case .displayName: return "display-name recipients are not written directly"
-            case .unsupportedAddress: return "a recipient is not a plain addr-spec"
+            case .unsupportedAddress: return "a recipient is not a plain addr-spec of at most 254 octets"
             case .emptySubject: return "empty subject"
             case .missingFromAddress: return "from_address is required to pick the account"
             case .fromNotBare: return "from_address must be a bare address"
@@ -54,7 +54,7 @@ enum DirectDraft {
             if parsed.name != nil || raw.trimmingCharacters(in: .whitespaces) != parsed.address {
                 return .displayName
             }
-            // An address longer than any path can carry cannot be folded (#622).
+            // Folding cannot split an address, so its length is bounded here (#622).
             if !isSimpleAddrSpec(parsed.address) || parsed.address.utf8.count > maxAddressOctets {
                 return .unsupportedAddress
             }
@@ -93,7 +93,7 @@ enum DirectDraft {
     /// The longest line RFC 5322 §2.1.1 allows, in octets, line ending excluded.
     static let maxLineOctets = 998
 
-    /// The longest address a mail path can carry (RFC 5321 §4.5.3.1.3).
+    /// The SMTP path limit for an address (RFC 5321 §4.5.3.1.3).
     static let maxAddressOctets = 254
 
     /// The draft in the layout Mail writes for drafts it saves (#472 design):
@@ -124,7 +124,7 @@ enum DirectDraft {
             "X-Apple-Mail-Signature: ",
             "Message-Id: <\(messageId)>",
             "X-Uniform-Type-Identifier: com.apple.mail-draft",
-            foldedHeaderLine("To: \(to.joined(separator: ", "))"),
+            foldedHeaderLine("To: \(to.map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: ", "))"),
         ]
 
         let html = "<html><head></head><body dir=\"auto\" style=\"overflow-wrap: break-word; "

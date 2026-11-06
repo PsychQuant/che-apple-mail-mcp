@@ -125,8 +125,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recipient list or ASCII subject could pass the 998-octet line limit. `To:`
   folds after a comma, `Subject:` at a space, and a subject folding cannot bring
   under the limit goes out as encoded words. Headers that fit are unchanged byte
-  for byte. A `to` address over 254 octets, which no line can hold, takes the GUI
-  path.
+  for byte. A `to` address over 254 octets, the SMTP path limit, takes the GUI
+  path, because folding cannot split an address.
 
 ### Documentation
 
