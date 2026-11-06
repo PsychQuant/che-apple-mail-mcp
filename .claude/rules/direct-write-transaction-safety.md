@@ -87,7 +87,8 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 
 - 第 1 項：條件只在測試情境以外成立的提早回報；
 - 第 3 項：只讓上傳輪詢不等待的宣告（補設已讀的等待照舊）；把等待縮短但沒有變成空的宣告（約 90 ms 以上，八次查看仍涵蓋 0.6 秒）；宣告 `Task` 以外的名稱，例如 `Date`；
-- 第 6 項：用別的名字沿用已開的 writer；寫成 `DraftStoreWriter.init(`；把平行路徑放進 `DraftStoreWriter.swift`；不經 `DraftStoreWriter` 寫入 store。
+- 第 4 項：藏在 `ComposeTiming.prelude` 或 `markStatement` 裡、只在計時時執行的切換；
+- 第 6 項：用別的名字沿用已開的 writer；寫成 `DraftStoreWriter.init(` 或把 `.insert(` 換行；把平行路徑放進 `DraftStoreWriter.swift`；不經 `DraftStoreWriter` 寫入 store。
 
 測試轉紅時，先取得上面要求的證據並更新本規則，再改測試；不要只改門檻或凍結副本。
 
