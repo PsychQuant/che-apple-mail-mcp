@@ -23,8 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the setting has an empty default, and the `save_attachment` and `output_dir`
   descriptions state the limit. **Behaviour change:** any other entry that is not
   an absolute path now matches nothing, with a note on stderr. A relative entry
-  used to be resolved against the server's working directory; a value made only
-  of such entries now denies every destination.
+  used to be resolved against the server's working directory; a nonempty value
+  with no absolute path in it now denies every destination.
 
 ### Changed
 

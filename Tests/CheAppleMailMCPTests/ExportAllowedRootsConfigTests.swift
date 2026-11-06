@@ -92,7 +92,7 @@ final class ExportAllowedRootsConfigTests: XCTestCase {
     /// `${...}` entry, emptied the list, and silently widened it to home).
     func testAnyOtherUnusableValueDeniesInsteadOfFallingBackToHome() throws {
         let values = ["${OTHER}", "${user_config.other}", "${}", "${user_config.export_allowed_roots}:${OTHER}",
-                      " ${user_config.export_allowed_roots}", "undefined", "null", " ", "Mail"]
+                      " ${user_config.export_allowed_roots}", "undefined", "null", " ", "Mail", ":", "::"]
         for raw in values {
             let roots = parse(raw)
             XCTAssertFalse(roots.isEmpty, "\(raw.debugDescription) must not read as unset")

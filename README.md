@@ -728,8 +728,8 @@ case the value is read when the server starts, so restart the host after changin
 The value is one string of absolute paths separated by `:`, so a path that
 contains `:` cannot be listed. An entry that is not an absolute path matches
 nothing and is noted on stderr: it is not resolved against the server's working
-directory, and a value made only of such entries denies every destination rather
-than falling back to home. The one exception is a value that is exactly the
+directory, and a nonempty value with no absolute path in it denies every
+destination rather than falling back to home. The one exception is a value that is exactly the
 manifest's own `${user_config.export_allowed_roots}`, which counts as unset, so a
 host that passes an unset `.mcpb` setting through literally keeps the home
 default. Whether Claude Desktop passes an empty optional setting as an empty

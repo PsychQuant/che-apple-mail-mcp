@@ -62,7 +62,13 @@ struct AllowedRootsValidator {
                 + "treating the setting as unset (#574)\n")
             return []
         }
-        return value.split(separator: ":").map(String.init).map { entry in
+        let entries = value.split(separator: ":").map(String.init)
+        // `:` alone splits to nothing, and an empty list would mean all of home.
+        guard !entries.isEmpty || value.isEmpty else {
+            log("CHE_MAIL_EXPORT_ALLOWED_ROOTS: the value names no path and matches nothing (#574)\n")
+            return [unusableRoot]
+        }
+        return entries.map { entry in
             if (entry as NSString).expandingTildeInPath.hasPrefix("/") { return entry }
             log("CHE_MAIL_EXPORT_ALLOWED_ROOTS: \(entry) is not an absolute path and matches nothing (#574)\n")
             return unusableRoot
