@@ -246,7 +246,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lists what to inject first. The scan is textual, so a frame assembled from a
   variable gets past it. The injection points stay deferred until a test needs
   them; this is test code only.
-
 - **The stdio shutdown probe starts with an allow-listed environment and checks its own assumptions**
   ([#578](https://github.com/PsychQuant/che-apple-mail-mcp/issues/578)). The
   probe now starts with a small allow-listed environment (`PATH`, `HOME`,
