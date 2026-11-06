@@ -85,6 +85,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Four other test files still use literal checks
   ([#617](https://github.com/PsychQuant/che-apple-mail-mcp/issues/617)).
   Test-only change.
+- **The stdio shutdown probe runs sealed and checks its own assumptions**
+  ([#578](https://github.com/PsychQuant/che-apple-mail-mcp/issues/578)). The
+  probe now starts with a small allow-listed environment (`PATH`, `HOME`,
+  `TMPDIR`, `USER`, `LOGNAME`, `DYLD_*`), so switches such as
+  `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT` or `MAIL_APP_INTEGRATION_TESTS` no longer
+  reach it. A probe that never started is reported without writing to its stdin.
+  A new canary fails when `LIBDISPATCH_COOPERATIVE_POOL_STRICT` stops narrowing
+  the cooperative pool to one thread, which would silently turn the strict
+  shutdown tests into ordinary-pool tests. `StdioProbeBuildPlan` compares
+  resolved paths, so a checkout reached through a symlink (`/tmp` is one) finds
+  its link command. Test-only change. The probe still fakes only `scriptRunner`
+  and `refusal`, because it sends nothing past `initialize`.
 
 ## [4.0.0] - 2026-10-29
 
