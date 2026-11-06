@@ -656,6 +656,69 @@ class ArchiveRefinementSopTests(unittest.TestCase):
         self.assertNotIn("refined, refinement_stats = apply_refinement(fetched, config)\n", text)
 
 
+class ArchiveReverseInventoryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.ns = {"__name__": "archive_recipe"}
+        for name in ("date", "reverse"):
+            exec(compile(recipe_code(name), name, "exec"), cls.ns)
+
+    def run_inv(self, emails, scanned):
+        return self.ns["reverse_inventory"](emails, scanned)
+
+    def test_consistent_index_has_no_findings_and_shows_zero(self):
+        out = self.run_inv({"<a>": {"file": "a.md"}}, [{"file": "a.md", "message_id": "<a>"}])
+        self.assertEqual((out["total"], out["findings"], out["checked"]), (0, [], 1))
+
+    def test_entry_whose_file_left_the_top_level_is_reported(self):
+        out = self.run_inv({"<a>": {"file": "gone.md"}}, [{"file": "a.md", "message_id": "<a>"}])
+        self.assertEqual(out["counts"]["file-not-in-target-top-level"], 1)
+        self.assertEqual(out["findings"][0]["kind"], "file-not-in-target-top-level")
+
+    def test_key_that_differs_from_the_file_message_id_is_reported(self):
+        out = self.run_inv({"<old>": {"file": "a.md"}}, [{"file": "a.md", "message_id": "<new>"}])
+        self.assertEqual(out["counts"]["key-differs-from-file-message-id"], 1)
+
+    def test_tombstones_are_counted_not_reported(self):
+        out = self.run_inv({"<a>": {"file": "moved.md", "distributed_to": ["other"]}}, [])
+        self.assertEqual((out["total"], out["tombstones"]), (0, 1))
+
+    def test_unparseable_file_present_is_not_dangling(self):
+        out = self.run_inv({"<a>": {"file": "a.md"}}, [{"file": "a.md", "message_id": None}])
+        self.assertEqual(out["total"], 0)
+
+    def test_malformed_entries_are_reported_by_kind(self):
+        out = self.run_inv({"<a>": "oops", "<b>": {"file": ""}, "<c>": {"file": 3}, "<d>": {}}, [])
+        self.assertEqual(out["counts"]["entry-not-object"], 1)
+        self.assertEqual(out["counts"]["file-missing-or-invalid"], 3)
+
+    def test_nfc_nfd_and_case_differences_are_not_dangling(self):
+        import unicodedata
+        nfd = unicodedata.normalize("NFD", "2026-01-01_Caf\u00e9.md")
+        out = self.run_inv({"<a>": {"file": "2026-01-01_CAF\u00c9.md"}}, [{"file": nfd, "message_id": "<a>"}])
+        self.assertEqual(out["total"], 0)
+
+    def test_listing_is_capped_and_text_is_bounded(self):
+        emails = {"<%d>" % i: {"file": "x%d.md" % i + "`" * 3} for i in range(30)}
+        out = self.run_inv(emails, [])
+        self.assertEqual((len(out["findings"]), out["omitted"], out["total"]), (20, 10, 30))
+        self.assertNotIn("`", out["findings"][0]["file"])
+
+    def test_the_inventory_does_not_touch_its_inputs(self):
+        emails = {"<a>": {"file": "gone.md"}}
+        before = copy.deepcopy(emails)
+        self.run_inv(emails, [])
+        self.assertEqual(emails, before)
+
+
+class ArchiveReverseInventorySopTests(unittest.TestCase):
+    def test_the_gate_item_is_report_only_and_skipped_without_an_index(self):
+        text = DOCUMENT.read_text()
+        self.assertIn("3b. **反向盤點(#559", text)
+        self.assertIn("不改變 gate 的通過條件", text)
+        self.assertIn("reverse check:", text)
+
+
 class RepairCommandPointerTests(unittest.TestCase):
     """Every place that points users at the repair command carries its prerequisite (#527 for Step 8.5, #551 for all).
 
