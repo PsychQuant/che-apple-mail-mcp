@@ -943,7 +943,7 @@ class ArchiveRefinementRecipeTests(unittest.TestCase):
 
     def test_to_and_cc_of_any_shape_do_not_raise(self):
         for value, passes in ((None, False), ("b@x.test", True), (["b@x.test"], True), (3, False),
-                              ([None, "b@x.test"], True)):
+                              ([None, 3, "b@x.test"], True)):
             with self.subTest(value=value):
                 message = self.mail("Hello")
                 message["to"], message["cc"] = value, value
