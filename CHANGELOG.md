@@ -100,6 +100,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filename labelled `us-ascii` that carries valid UTF-8 now reads as UTF-8, the
   rule bodies follow since #538. Non-UTF-8 bytes under an ASCII label still read
   as Latin-1.
+- **Batch export dates now match the SOP recipe for old years and a bare `CST`**
+  ([#547](https://github.com/PsychQuant/che-apple-mail-mcp/issues/547)).
+  The frontmatter `date` of `Tue, 30 Jun 55 10:00:00 +0800` was
+  `0055-06-30T10:00:00+08:00`; two- and three-digit years now follow RFC 5322
+  §4.3 (`55` is 1955, `49` is 2049, `126` is 2026), as the recipe does. A bare
+  `CST`, which names both US Central and China Standard Time, was silently read
+  as US Central and could move the calendar day; a date ending in `CST` or any
+  other zone name the recipe refuses now stays as written in `date`, and its
+  default filename uses `unknown-date`. Files already exported are not repaired.
 
 ## [4.0.0] - 2026-10-29
 

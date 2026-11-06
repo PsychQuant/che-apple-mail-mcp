@@ -81,6 +81,40 @@ final class EmailMarkdownRendererTests: XCTestCase {
             "2026-05-03T01:09:32Z")
     }
 
+    /// #547: the five rows measured against the SOP date recipe. The batch
+    /// renderer and the per-email recipe must write the same date (#244).
+    func testRfc822ToISO8601_obsoleteYearsFollowRFC5322() {
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue, 30 Jun 55 10:00:00 +0800"),
+                       "1955-06-30T10:00:00+08:00", "two digits, 50-99 -> 19xx")
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue, 30 Jun 49 10:00:00 +0800"),
+                       "2049-06-30T10:00:00+08:00", "two digits, 00-49 -> 20xx")
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue, 30 Jun 126 10:00:00 +0800"),
+                       "2026-06-30T10:00:00+08:00", "three digits add 1900")
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("30 Jun 26 10:00:00 +0800"),
+                       "2026-06-30T10:00:00+08:00", "no weekday")
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue, 30 Jun 2026 10:00:00 +0800"),
+                       "2026-06-30T10:00:00+08:00", "four digits are literal")
+    }
+
+    func testRfc822ToISO8601_bareCSTKeepsTheOriginalHeader() {
+        // US Central or China Standard Time: the recipe refuses to guess, and
+        // keeps the day as written.
+        for raw in ["Tue, 30 Jun 2026 10:00:00 CST", "Tue, 30 Jun 2026 23:30:00 CST"] {
+            XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601(raw), raw)
+        }
+    }
+
+    func testRfc822ToISO8601_zonesTheRecipeRefusesKeepTheOriginalHeader() {
+        for raw in ["Tue, 30 Jun 2026 10:00:00 BST", "Tue, 30 Jun 2026 10:00:00 IST", "Tue, 30 Jun 2026 10:00:00 CET"] {
+            XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601(raw), raw)
+        }
+    }
+
+    func testRfc822ToISO8601_numericZoneWithACommentNamingCSTStillConverts() {
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue, 30 Jun 2026 10:00:00 +0800 (CST)"),
+                       "2026-06-30T10:00:00+08:00")
+    }
+
     func testRfc822ToISO8601_namedZoneFallsBackToUTC() {
         // Named zones (RFC 5322 obsolete syntax) carry no reliable numeric
         // offset token — fall back to the historical UTC rendering.
