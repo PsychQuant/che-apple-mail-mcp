@@ -879,38 +879,6 @@ class ArchiveScanRecipeTests(unittest.TestCase):
         self.assertEqual(sorted(out["unparseable"]), ["a.md", "b.md"])
         self.assertEqual(out["synthetic_placeholder"], ["c.md"])
 
-    def test_coverage_names_usable_files_missing_from_the_index(self):
-        directory = self.make({"a.md": self.md("<a>"), "b.md": self.md("<b>"), "c.md": self.md("synthetic:z"),
-                               "d.md": "nothing"})
-        records, _ = self.ns["scan_top_level"](directory)
-        classified = self.ns["classify_scan"](records)
-        out = self.ns["index_coverage"](classified, {"<a>": {}})
-        self.assertEqual((out["missing_count"], out["missing"]), (1, ["b.md"]))
-        self.assertEqual(self.ns["index_coverage"](classified, {"<a>": {}, "<b>": {}})["missing_count"], 0)
-
-    def test_coverage_counts_tombstones_so_the_remedy_can_refuse_a_rebuild(self):
-        directory = self.make({"a.md": self.md("<a>"), "b.md": self.md("<b>")})
-        records, _ = self.ns["scan_top_level"](directory)
-        classified = self.ns["classify_scan"](records)
-        index = {"<a>": {"file": "a.md"}, "<moved>": {"file": "moved.md", "distributed_to": ["other"]}}
-        out = self.ns["index_coverage"](classified, index)
-        self.assertEqual((out["missing_count"], out["tombstone_count"]), (1, 1))
-        self.assertEqual(index["<moved>"], {"file": "moved.md", "distributed_to": ["other"]})   # read-only
-
-    def test_a_distributed_to_key_counts_as_a_tombstone_whatever_its_value(self):
-        directory = self.make({"a.md": self.md("<a>")})
-        classified = self.ns["classify_scan"](self.ns["scan_top_level"](directory)[0])
-        for value in ([], "", None, {"x": 1}):
-            with self.subTest(value=value):
-                out = self.ns["index_coverage"](classified, {"<m>": {"file": "m.md", "distributed_to": value}})
-                self.assertEqual(out["tombstone_count"], 1)
-
-    def test_remedy_a_gets_raw_uncapped_file_names(self):
-        names = {"%s%02d.md" % ("x" * 90, i): self.md("<%d>" % i) for i in range(25)}
-        out = self.ns["index_coverage"](self.ns["classify_scan"](self.ns["scan_top_level"](self.make(names))[0]), {})
-        self.assertEqual(sorted(out["missing_files"]), sorted(names))
-        self.assertEqual(len(out["missing"]), 20)
-
     def test_missing_directory_is_nothing_to_scan_and_vanishing_files_are_unparseable(self):
         self.assertEqual(self.ns["scan_top_level"]("/nonexistent-lane4-dir"), ([], []))
         directory = self.make({"a.md": self.md("<a>")}, links=[("dangling.md", "gone.md")])
@@ -930,29 +898,14 @@ class ArchiveScanRecipeTests(unittest.TestCase):
         out = self.report({"a.md": self.md("<a>"), "b.md": self.md("synthetic:x")})
         self.assertEqual(out["usable"], [{"file": "a.md", "message_id": "<a>"}])
 
-    def test_coverage_listing_is_capped(self):
-        directory = self.make({"f%02d.md" % i: self.md("<%d>" % i) for i in range(25)})
-        records, _ = self.ns["scan_top_level"](directory)
-        out = self.ns["index_coverage"](self.ns["classify_scan"](records), {})
-        self.assertEqual((out["missing_count"], len(out["missing"]), out["omitted"]), (25, 20, 5))
-
 
 class ArchiveScanSopTests(unittest.TestCase):
-    def test_step_2_stops_on_a_stale_index_before_step_3(self):
+    def test_the_stale_index_stop_is_not_part_of_this_batch(self):
         text = DOCUMENT.read_text()
-        self.assertIn("index_stale: N top-level files are not in the index", text)
-        self.assertLess(text.index("**index 覆蓋檢查（#603"), text.index("**復原只適用 `index`／`both`（#545）**"))
+        self.assertNotIn("index_stale: N top-level files", text)   # #603 is a maintainer decision (stop vs recovery)
         self.assertNotIn("一段固定的掃描程式", text)
-        self.assertIn("不得指示會遺失 `distributed_to` 墓碑的做法", text)
-        self.assertIn("只有 `tombstone_count` 為 0 時才可提出 (B)", text)
-        # every older "move the index aside" instruction carries the tombstone qualifier (#603 verify DA-1)
-        self.assertGreaterEqual(text.count("不可移開"), 2)
-        self.assertGreaterEqual(text.count("distributed_to 墓碑時不要移開"), 2)
-        self.assertIn("`index_stale` 停止優先", text)
-        self.assertIn("append-only，既有 entry 含墓碑原樣保留", text)
         registry = (DOCUMENT.parent / "archive-mail-registry.md").read_text()
-        self.assertIn("index_stale", registry)
-        self.assertIn("index_coverage", registry)
+        self.assertNotIn("index_stale", registry)
 
 
 class RepairCommandPointerTests(unittest.TestCase):
