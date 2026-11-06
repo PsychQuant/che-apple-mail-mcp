@@ -76,9 +76,46 @@ class CheAppleMailMCPServer {
         await server.waitUntilCompleted()
     }
 
+    // MARK: - Index read failures (#549)
+
+    /// A read the Envelope Index could not complete (prepare or step failure,
+    /// database not open). These fall back to AppleScript; resolution answers
+    /// such as `accountNotResolvable` and `mailboxNotResolvable` do not.
+    static func isIndexReadFailure(_ error: Error) -> Bool {
+        if case MailSQLiteError.queryFailed = error { return true }
+        return false
+    }
+
+    static func logIndexFallback(_ tool: String, _ error: Error) {
+        Diagnostics.emit("SQLite \(tool) fast path failed: \(error.localizedDescription); "
+            + "falling through to AppleScript\n")
+    }
+
+    /// `list_attachments`' two index reads, or `nil` (logged) when the index
+    /// could not complete them, so the tool falls back to AppleScript (#549).
+    static func indexAttachmentRows(_ reader: EnvelopeIndexReader,
+                                    rowId: Int) -> ([[String: Any]], String?)? {
+        do {
+            return (try reader.listAttachments(messageId: rowId),
+                    try reader.mailboxURL(forMessageId: rowId))
+        } catch {
+            logIndexFallback("list_attachments", error)
+            return nil
+        }
+    }
+
     // MARK: - Tool Definitions
 
     static func defineTools() -> [Tool] {
+        definedTools().map { tool in
+            guard let access = ToolAccess.of(tool.name) else { return tool }
+            var annotated = tool
+            annotated.annotations = access.annotations
+            return annotated
+        }
+    }
+
+    private static func definedTools() -> [Tool] {
         [
             // Account Tools
             Tool(
@@ -415,7 +452,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "save_attachment",
-                description: "Save an email attachment to disk within CHE_MAIL_EXPORT_ALLOWED_ROOTS (colon-separated configured roots replace home; default: home excluding sensitive paths). Unsafe path components and paths escaping the policy are rejected before Mail work. SQLite and AppleScript share safe atomic publication; AppleScript first saves to a private temporary file. Existing symlinks are allowed only when their canonical target passes the policy. Optionally accepts `account_id` (UUID) for disambiguation when multiple Mail.app accounts share the same `display_name` (e.g., iCloud catch-all alias + Gmail with the same address — #101). When provided, the AppleScript fallback path uses Mail.app's globally-unique `account id` selector; when omitted, falls back to the legacy `account_name` (display_name) form for backward compatibility.",
+                description: "Save an email attachment to disk within CHE_MAIL_EXPORT_ALLOWED_ROOTS (colon-separated configured roots replace home; default: home excluding sensitive paths). Unsafe path components and paths escaping the policy are rejected before Mail work. SQLite and AppleScript share safe atomic publication; AppleScript first saves to a private temporary file. Existing symlinks are allowed only when their canonical target passes the policy. Optionally accepts `account_id` (UUID) for disambiguation when multiple Mail.app accounts share the same `display_name` (e.g., iCloud catch-all alias + Gmail with the same address — #101). When provided, the AppleScript fallback path uses Mail.app's globally-unique `account id` selector; when omitted, falls back to the legacy `account_name` (display_name) form for backward compatibility. In the Claude Desktop .mcpb install the variable comes from the extension's Allowed save and export folders setting; how Claude Desktop passes that setting when it is left empty was not checked on a real install (#574).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -811,7 +848,7 @@ class CheAppleMailMCPServer {
             ]),
             "mailbox": .object(["type": .string("string"), "description": .string("Optional mailbox name, used only for disclosed fallback direction. Export compares sender addresses with a 300-second in-memory snapshot of Mail configured addresses, including EWS and configured aliases. A complete snapshot plus represented account permits a confident non-match; partial/unavailable identity is disclosed via direction_inferred. SQLite-primary fallback is also marked inferred, even on a positive match. Manifests expose identity_source/identity_complete/cache age. Set opts.refresh_identity=true after changing aliases. Unconfigured SMTP From capabilities and changes after the snapshot are not inferred.")]),
             "account_name": .object(["type": .string("string"), "description": .string("Optional mail account (accepted for consistency; the SQLite fast path is account-agnostic)")]),
-            "output_dir": .object(["type": .string("string"), "description": .string("Directory to write .md files into. Must pass the destination policy shared with save_attachment: the user's home, or only CHE_MAIL_EXPORT_ALLOWED_ROOTS when set; never system directories or sensitive home paths; cloud-sync folders inside ~/Library are permitted. Path traversal is rejected.")]),
+            "output_dir": .object(["type": .string("string"), "description": .string("Directory to write .md files into. Must pass the destination policy shared with save_attachment: the user's home, or only CHE_MAIL_EXPORT_ALLOWED_ROOTS when set; never system directories or sensitive home paths; cloud-sync folders inside ~/Library are permitted. Path traversal is rejected. In the Claude Desktop .mcpb install the variable comes from the extension's Allowed save and export folders setting; how Claude Desktop passes that setting when it is left empty was not checked on a real install (#574).")]),
             "skip_message_ids_path": .object(["type": .string("string"), "description": .string("Optional dedup escape hatch (#177): path to a file listing already-archived RFC 5322 Message-IDs (one per line; blank lines and `#` comments ignored). Emails whose Message-ID is in the set are skipped (status 'skipped', counted in the manifest's `skipped`), not rewritten — so a re-run only writes new mail. Validated read-only under the same allowed-roots policy as output_dir; missing/unreadable file → no skips.")]),
             "opts": .object([
                 "type": .string("object"),
@@ -1004,8 +1041,12 @@ class CheAppleMailMCPServer {
             // / resolveAccountIdForTool) instead of returning every account's boxes.
             let accountId = try resolveAccountIdForTool(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName ?? "", tool: invokedTool)
             if let reader = indexReader {
-                let mailboxes = try reader.listMailboxes(accountName: accountName, accountId: accountId)
-                return formatJSON(mailboxes)
+                do {
+                    let mailboxes = try reader.listMailboxes(accountName: accountName, accountId: accountId)
+                    return formatJSON(mailboxes)
+                } catch let error where Self.isIndexReadFailure(error) {
+                    Self.logIndexFallback("list_mailboxes", error)
+                }
             }
             let mailboxes = try await mailController.listMailboxes(accountName: accountName, accountId: accountId)
             return formatJSON(mailboxes)
@@ -1276,28 +1317,34 @@ class CheAppleMailMCPServer {
                     mailbox: mailbox, dateFrom: dateFrom, dateTo: dateTo,
                     sort: sortOrder, limit: limit
                 )
-                switch projection {
-                case "ids":
-                    let page = try reader.searchIds(params, dedup: dedup)
-                    let ids = page.ids.map { String($0) }
-                    return formatJSON([
-                        "results": ids,
-                        "returned": ids.count,
-                        "limit": limit,
-                        "truncated": page.truncated
-                    ])
-                case "count":
-                    let count = try reader.searchCount(params, dedup: dedup)
-                    return formatJSON(["count": count])
-                case "summary":
-                    // #374: triage shape adds the nullable per-message is_draft fact.
-                    let page = try reader.searchSummaryPage(params, dedup: dedup)
-                    let formatted: [[String: Any]] = page.results.map(Self.formatSummaryResultForJSON)
-                    return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
-                default:
-                    let page = try reader.searchPage(params)
-                    let formatted: [[String: Any]] = page.results.map(Self.formatSearchResultForJSON)
-                    return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
+                // #549: only the full projection has an AppleScript fallback; the
+                // others are SQLite-only and report the failure.
+                do {
+                    switch projection {
+                    case "ids":
+                        let page = try reader.searchIds(params, dedup: dedup)
+                        let ids = page.ids.map { String($0) }
+                        return formatJSON([
+                            "results": ids,
+                            "returned": ids.count,
+                            "limit": limit,
+                            "truncated": page.truncated
+                        ])
+                    case "count":
+                        let count = try reader.searchCount(params, dedup: dedup)
+                        return formatJSON(["count": count])
+                    case "summary":
+                        // #374: triage shape adds the nullable per-message is_draft fact.
+                        let page = try reader.searchSummaryPage(params, dedup: dedup)
+                        let formatted: [[String: Any]] = page.results.map(Self.formatSummaryResultForJSON)
+                        return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
+                    default:
+                        let page = try reader.searchPage(params)
+                        let formatted: [[String: Any]] = page.results.map(Self.formatSearchResultForJSON)
+                        return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
+                    }
+                } catch let error where projection == "full" && Self.isIndexReadFailure(error) {
+                    Self.logIndexFallback("search_emails", error)
                 }
             }
 
@@ -1314,8 +1361,12 @@ class CheAppleMailMCPServer {
             let mailbox = arguments["mailbox"]?.stringValue
             let accountName = arguments["account_name"]?.stringValue
             if let reader = indexReader {
-                let count = try reader.getUnreadCount(mailbox: mailbox, accountName: accountName)
-                return "Unread count: \(count)"
+                do {
+                    let count = try reader.getUnreadCount(mailbox: mailbox, accountName: accountName)
+                    return "Unread count: \(count)"
+                } catch let error where Self.isIndexReadFailure(error) {
+                    Self.logIndexFallback("get_unread_count", error)
+                }
             }
             let accountId = decodeAccountId(arguments, tool: invokedTool)
             let count = try await mailController.getUnreadCount(mailbox: mailbox, accountName: accountName, accountId: accountId)
@@ -1483,14 +1534,14 @@ class CheAppleMailMCPServer {
                   let accountName = arguments["account_name"]?.stringValue else {
                 throw MailError.invalidParameter("mailbox, and account_name are required")
             }
-            if let reader = indexReader, let rowId = Int(id) {
-                let sqliteAttachments = try reader.listAttachments(messageId: rowId)
+            if let reader = indexReader, let rowId = Int(id),
+               let (sqliteAttachments, mailboxUrl) = Self.indexAttachmentRows(reader, rowId: rowId) {
                 // Cross-validate SQLite metadata against actual .emlx contents
                 // (issue #24): SQLite caches attachment rows even after Mail.app
                 // strips the binary on Sent / IMAP lazy-load, leaving stale
                 // entries that save_attachment then fails to extract. Filter
                 // SQLite results to names actually present in the .emlx body.
-                if let mailboxUrl = try reader.mailboxURL(forMessageId: rowId) {
+                if let mailboxUrl {
                     do {
                         // #105: the savability keys ARE the validated names
                         // (== attachmentNames), so one .emlx parse yields both
@@ -1584,8 +1635,17 @@ class CheAppleMailMCPServer {
                         // #183: thread the Envelope Index attachment_id so the
                         // name-free part-dir probe can rescue a degraded disk
                         // filename (best-effort lookup; nil keeps prior behavior).
-                        let partId = (try? reader.listAttachments(messageId: rowId))?
-                            .first { ($0["name"] as? String) == attachmentName }?["attachment_id"] as? String
+                        // A failed lookup is logged and only loses the rescue hint (#549).
+                        let partId: String?
+                        do {
+                            partId = try reader.listAttachments(messageId: rowId)
+                                .first { ($0["name"] as? String) == attachmentName }?["attachment_id"] as? String
+                        } catch {
+                            partId = nil
+                            Diagnostics.emit(
+                                "save_attachment: Envelope Index attachment lookup failed for rowId=\(rowId): "
+                                + "\(error.localizedDescription); continuing without the part id\n")
+                        }
                         localData = try EmlxParser.attachmentData(
                             rowId: rowId,
                             mailboxURL: mailboxUrl,
@@ -2103,8 +2163,7 @@ class CheAppleMailMCPServer {
             // deployment can set CHE_MAIL_EXPORT_ALLOWED_ROOTS (`:`-separated
             // absolute paths) to opt into a strict allowlist — those roots then
             // REPLACE home as the allowed set (deny-by-default).
-            let exportAllowedRoots = (ProcessInfo.processInfo.environment["CHE_MAIL_EXPORT_ALLOWED_ROOTS"] ?? "")
-                .split(separator: ":").map(String.init)
+            let exportAllowedRoots = AllowedRootsValidator.environmentRoots
             let validatedDir: URL
             do {
                 validatedDir = try AllowedRootsValidator().validate(outputDir, allowedRoots: exportAllowedRoots)
@@ -2161,9 +2220,15 @@ class CheAppleMailMCPServer {
                     // Fail CLOSED: anything we cannot resolve to a known
                     // address-bearing account is "cannot tell" → disclosed,
                     // never silently resolved to `received` (#351).
-                    guard let rowId = Int(id),
-                          let url = try? exportReader.mailboxURL(forMessageId: rowId),
-                          let mailbox = MailboxURL.decode(url) else { return false }
+                    guard let rowId = Int(id) else { return false }
+                    let url: String?
+                    do { url = try exportReader.mailboxURL(forMessageId: rowId) } catch {
+                        // Still "cannot tell" (#549): logged, never a silent nil.
+                        Diagnostics.emit("SQLite batch_export identity lookup failed for rowId=\(rowId): "
+                            + "\(error.localizedDescription); reporting the direction as not inferred\n")
+                        return false
+                    }
+                    guard let url, let mailbox = MailboxURL.decode(url) else { return false }
                     // Hex case carries no meaning in a UUID, and the rest of
                     // the reader already folds it (#343 verify) — a store that
                     // reports one case in the account map and the other in the

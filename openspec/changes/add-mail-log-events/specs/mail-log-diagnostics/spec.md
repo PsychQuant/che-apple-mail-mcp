@@ -270,7 +270,7 @@ The reader works in whole seconds; the system SHALL ask it for every second from
 
 The response SHALL contain `status` with exactly one of `ok`, `no_events_in_window`, or `unavailable`. The system SHALL NOT output any field or value that asserts an action did not happen. When no event matches, `status` SHALL be `no_events_in_window` and `notice` SHALL state that the absence of log lines does not establish that the action did not occur; when reading also stopped early, the notice SHALL say the window was not fully searched. The response SHALL include `window` (start and end actually queried), `coverage` (`first_event` and `last_event` of the returned events, and `source`), and `stopped_by` (one of `limit`, `size_cap`, `scan_cap`, `deadline`, or `null`).
 
-`status` SHALL be `unavailable` in exactly these cases, each with its `reason` and with at most 300 characters of explanation in `reason_detail`, which SHALL NOT contain log content: the log reader cannot be spawned (`spawn_failed`); it exits with a non-zero status (`nonzero_exit`, with the tail of the reader's own standard error text); it produces output lines but not one of them can be read as a log event (`unrecognized_output`, because the log format can change and a format change must not read as an empty window); or it stops at its deadline or its scan cap before its cursor can move past the request's cursor (`deadline_exceeded` or `scan_cap_exceeded`), because such a window was not searched and a cursor would only lead back to the same place. Events the reader emits from just before the window do not count as progress. When the deadline or the scan cap is reached after the cursor has moved, the system SHALL return the matching events read with `stopped_by` equal to `deadline` or `scan_cap`, and `status` SHALL be `no_events_in_window` if none of them matched.
+`status` SHALL be `unavailable` in exactly these cases, each with its `reason` and with at most 300 characters of explanation in `reason_detail`, which SHALL NOT contain log content: the log reader cannot be spawned (`spawn_failed`); it exits with a non-zero status (`nonzero_exit`, with the tail of the reader's own standard error text); it produces output lines but not one of them can be read as a log event (`unrecognized_output`, because the log format can change and a format change must not read as an empty window); it stops at its deadline or its scan cap before its cursor can move past the request's cursor (`deadline_exceeded` or `scan_cap_exceeded`), because such a window was not searched and a cursor would only lead back to the same place; two reads are already running (`busy`, and no reader is started); or the client cancels the call while the read runs (`cancelled`). Events the reader emits from just before the window do not count as progress. When the deadline or the scan cap is reached after the cursor has moved, the system SHALL return the matching events read with `stopped_by` equal to `deadline` or `scan_cap`, and `status` SHALL be `no_events_in_window` if none of them matched.
 
 Lines that are not valid JSON objects, and JSON objects that are neither a log event nor the closing `{"count":N,"finished":1}` trailer that `log show` writes, SHALL be skipped and counted in `skipped_lines`; the trailer SHALL NOT be counted.
 
@@ -437,7 +437,7 @@ When `detail` is `detailed` and `redact_identifiers` is `true`, the system SHALL
 
 ### Requirement: Bounded subprocess execution
 
-The system SHALL start the log reader using the absolute path `/usr/bin/log` with an argument array, without a shell, and with standard input closed. The predicate passed to the reader SHALL be composed only of fixed text and validated category tokens and SHALL NOT contain any free text supplied by the caller; the `contains` filter SHALL be evaluated inside the server process. The window SHALL be converted to the reader's local-time arguments using the system time zone in effect at the time of the call, not a zone cached when the server started. The system SHALL read the reader's output line by line without buffering it whole, SHALL stop reading and set `stopped_by` to `scan_cap` after 64 MiB of reader output, SHALL enforce a 30 second deadline in its own read loop (so that a descendant process holding the output pipe open cannot extend it), and SHALL terminate and reap the subprocess whenever it stops reading for any reason.
+The system SHALL start the log reader using the absolute path `/usr/bin/log` with an argument array, without a shell, and with standard input closed. The predicate passed to the reader SHALL be composed only of fixed text and validated category tokens and SHALL NOT contain any free text supplied by the caller; the `contains` filter SHALL be evaluated inside the server process. The window SHALL be converted to the reader's local-time arguments using the system time zone in effect at the time of the call, not a zone cached when the server started. The system SHALL read the reader's output line by line without buffering it whole, SHALL stop reading and set `stopped_by` to `scan_cap` after 64 MiB of reader output, SHALL enforce a 30 second deadline in its own read loop (so that a descendant process holding the output pipe open cannot extend it), and SHALL terminate and reap the subprocess whenever it stops reading for any reason. At most two reader subprocesses SHALL run at once; a call past that limit SHALL be answered at once and SHALL NOT wait. When the client cancels a running call, the system SHALL stop the read within one poll slice, terminate and reap the subprocess, and keep the call's slot until the subprocess is gone (#467).
 
 #### Scenario: Caller text never reaches the predicate
 
@@ -461,3 +461,15 @@ The system SHALL start the log reader using the absolute path `/usr/bin/log` wit
 - **GIVEN** an environment in which the reader cannot be launched
 - **WHEN** the tool is called
 - **THEN** `status` is `unavailable` and `reason` is `spawn_failed`
+
+#### Scenario: A third concurrent read is refused
+
+- **GIVEN** two calls whose readers are still running
+- **WHEN** a third call arrives
+- **THEN** it returns at once with `status` `unavailable` and `reason` `busy`, and no reader is started for it
+
+#### Scenario: A cancelled call stops its reader
+
+- **GIVEN** a call whose reader is running and has produced no output
+- **WHEN** the client cancels the call
+- **THEN** the reader is terminated and reaped well before the deadline, `reason` is `cancelled`, and the slot is free only once the reader is gone

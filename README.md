@@ -373,7 +373,7 @@ reply_email(
 | `check_fda` | Check Full Disk Access status and retry opening this server's index reader now; reports the server's actual SQLite fast-path state (open / just recovered / still unavailable) |
 | `check_accessibility` | Check Accessibility permission (the compose/reply GUI paths; without it those tools refuse — except the opt-in direct-write `create_draft` path, which needs Full Disk Access instead) |
 | `check_automation` | Check Automation permission (Apple Events to Mail) — non-prompting probe, four states with remediation ([#293](https://github.com/PsychQuant/che-apple-mail-mcp/issues/293)); the binary holds its OWN grant, osascript working ≠ binary authorized ([#288](https://github.com/PsychQuant/che-apple-mail-mcp/issues/288)) |
-| `get_mail_log_events` | Read Mail's own unified log to find where an event chain stops (e.g. draft saved → queued → engine notified → IMAP `APPENDUID` receipt) — read-only ([#465](https://github.com/PsychQuant/che-apple-mail-mcp/issues/465)). `detail=brief` (default) returns only the static event template, integer arguments and an account letter for `[account - mailbox]` lines — no account names, subjects or Message-IDs, as long as the template is a compile-time string (Mail's own are); `detail=detailed` adds the raw message, which **contains account identifiers and received-mail content: do not paste it into public issues**. Window ≤ 60 min, times must carry a UTC offset; page with `since=next_start`, `offset=next_offset` and the same `until`. No event-name filter yet ([#466](https://github.com/PsychQuant/che-apple-mail-mcp/issues/466)). An empty result never means the action did not happen. Verified on macOS 27.2 / Mail 16.0 only; needs an admin-group user |
+| `get_mail_log_events` | Read Mail's own unified log to find where an event chain stops (e.g. draft saved → queued → engine notified → IMAP `APPENDUID` receipt) — read-only ([#465](https://github.com/PsychQuant/che-apple-mail-mcp/issues/465)). `detail=brief` (default) returns only the static event template, integer arguments and an account letter for `[account - mailbox]` lines — no account names, subjects or Message-IDs, as long as the template is a compile-time string (Mail's own are); `detail=detailed` adds the raw message, which **contains account identifiers and received-mail content: do not paste it into public issues**. Window ≤ 60 min, times must carry a UTC offset; page with `since=next_start`, `offset=next_offset` and the same `until`. No event-name filter yet ([#466](https://github.com/PsychQuant/che-apple-mail-mcp/issues/466)). An empty result never means the action did not happen. At most two reads run at once; a third returns `status: unavailable`, `reason: busy` and starts nothing ([#467](https://github.com/PsychQuant/che-apple-mail-mcp/issues/467)). Verified on macOS 27.2 / Mail 16.0 only; needs an admin-group user |
 
 </details>
 
@@ -715,6 +715,26 @@ Without this setting, ordinary paths within the user's home are accepted; the
 home denylist is not an exhaustive list of sensitive files. Configure narrow roots
 when unrelated home files must be protected.
 
+Where to set it depends on how the server was installed
+([#574](https://github.com/PsychQuant/che-apple-mail-mcp/issues/574)). In every
+case the value is read when the server starts, so restart the host after changing it.
+
+| Install | Where | Example |
+|---|---|---|
+| Claude Code plugin | The `env` block of a Claude Code settings file (for example `~/.claude/settings.json`); Claude Code passes it to the MCP servers it starts. Exporting the variable in the shell that launches `claude` also works. | `"env": { "CHE_MAIL_EXPORT_ALLOWED_ROOTS": "/Volumes/Archive/Mail" }` |
+| Claude Desktop `.mcpb` | The extension's settings in Claude Desktop: **Allowed save and export folders**. Leave it empty to keep the home default. | `/Volumes/Archive/Mail:/Users/you/Mail Exports` |
+| Manual / binary | The `env` of the server entry in your MCP client's configuration, or the environment of the process that launches the binary. | `CHE_MAIL_EXPORT_ALLOWED_ROOTS=/Volumes/Archive/Mail` |
+
+The value is one string of absolute paths separated by `:`, so a path that
+contains `:` cannot be listed. An entry that is not an absolute path matches
+nothing and is noted on stderr: it is not resolved against the server's working
+directory, and a nonempty value with no absolute path in it denies every
+destination rather than falling back to home. The one exception is a value that is exactly the
+manifest's own `${user_config.export_allowed_roots}`, which counts as unset, so a
+host that passes an unset `.mcpb` setting through literally keeps the home
+default. Whether Claude Desktop passes an empty optional setting as an empty
+string has not been checked on a real install (#574).
+
 `~/Library` is denied except for the cloud-sync folders macOS keeps inside it:
 paths inside an existing provider folder in `~/Library/CloudStorage` (Dropbox,
 Google Drive, OneDrive, Box; `~/Dropbox` is a link into it), inside iCloud
@@ -745,8 +765,10 @@ parents are created, and existing regular files are atomically replaced. A new
 file gets 0644 as allowed by the umask, as before; a replaced file keeps its read
 and write bits; execute bits are never kept, because the bytes come from the
 sender. The temporary file is created 0600 and keeps that mode until it is
-renamed into place; an ACL that the destination folder passes on to new files
-still applies to it. Path forms that were previously
+renamed into place. An ACL the destination folder passes on to new files is
+removed before any bytes are written, so a saved file has no ACL even in a folder
+that shares through an inherited one, and a replaced file's ACL is not kept
+([#576](https://github.com/PsychQuant/che-apple-mail-mcp/issues/576)). Path forms that were previously
 normalized, such as `a//b`, `a/./b` or a trailing `/.`, are now refused.
 AppleScript saves each attempt to a fresh private temporary file, then the server
 streams it to the authorized destination. `destination_rejected` and

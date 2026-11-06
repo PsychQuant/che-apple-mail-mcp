@@ -34,6 +34,52 @@ enum AllowedRootsError: Error, Equatable {
 ///    canonicalized before comparison, so symlinked roots compare correctly).
 struct AllowedRootsValidator {
 
+    /// What the `.mcpb` manifest maps onto `CHE_MAIL_EXPORT_ALLOWED_ROOTS` (#574).
+    /// A host that does not substitute an unset setting passes this text as is.
+    static let unsetManifestPlaceholder = "${user_config.export_allowed_roots}"
+
+    /// Stands in for a configured entry that is not an absolute path. It has to
+    /// stay in the list: an empty list means all of home, so dropping the entry
+    /// would widen a restriction someone asked for. `/dev/null` is a file, so
+    /// nothing can exist below this path and it matches no real destination.
+    /// Left as written, the entry would go through `canonicalize`, which
+    /// resolves a relative path against the server's working directory.
+    static let unusableRoot = "/dev/null/che-mail-unusable-root"
+
+    /// The roots configured by `CHE_MAIL_EXPORT_ALLOWED_ROOTS`, the one policy
+    /// input shared by `save_attachment` and the Markdown export tools (#574).
+    ///
+    /// `:`-separated; empty entries are skipped. The value counts as unset only
+    /// when it is empty or, as a whole, exactly `unsetManifestPlaceholder`.
+    /// Anything else is a restriction: an entry that is not an absolute path
+    /// (a `~/` path is one) matches nothing, with a note on stderr, so a typo or
+    /// another installer's placeholder denies rather than falling back to home.
+    static func configuredRoots(from raw: String?,
+                                log: (String) -> Void = { Diagnostics.emit($0) }) -> [String] {
+        let value = raw ?? ""
+        if value == unsetManifestPlaceholder {
+            log("CHE_MAIL_EXPORT_ALLOWED_ROOTS: the host passed the unexpanded placeholder \(value); "
+                + "treating the setting as unset (#574)\n")
+            return []
+        }
+        let entries = value.split(separator: ":").map(String.init)
+        // `:` alone splits to nothing, and an empty list would mean all of home.
+        guard !entries.isEmpty || value.isEmpty else {
+            log("CHE_MAIL_EXPORT_ALLOWED_ROOTS: the value names no path and matches nothing (#574)\n")
+            return [unusableRoot]
+        }
+        return entries.map { entry in
+            if (entry as NSString).expandingTildeInPath.hasPrefix("/") { return entry }
+            log("CHE_MAIL_EXPORT_ALLOWED_ROOTS: \(entry) is not an absolute path and matches nothing (#574)\n")
+            return unusableRoot
+        }
+    }
+
+    /// `configuredRoots(from:)` applied to this process's environment.
+    static var environmentRoots: [String] {
+        configuredRoots(from: ProcessInfo.processInfo.environment["CHE_MAIL_EXPORT_ALLOWED_ROOTS"])
+    }
+
     /// System directory prefixes that are never writable, regardless of the
     /// configured allowed roots. `/Library` here is the system-level Library;
     /// the user's `~/Library` resolves under home (`/Users/<u>/Library`) and

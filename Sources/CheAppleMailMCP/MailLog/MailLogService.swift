@@ -56,7 +56,7 @@ struct MailLogService {
         self.time = MailLogTime(timeZone: timeZone)
     }
 
-    func run(_ query: MailLogQuery) -> [String: Any] {
+    func run(_ query: MailLogQuery, cancellation: LogReadCancellation = LogReadCancellation()) -> [String: Any] {
         let request = LogReadRequest(start: query.start, end: query.end, categories: query.categories)
         let startKey = MailLogTime.millisecondKey(query.start)
         var collected: [MailLogEvent] = []
@@ -66,7 +66,7 @@ struct MailLogService {
         var inversions = 0          // in-window events that arrived earlier in time than one already seen
         var resumed = 0             // matching events at the start millisecond passed over for `offset`
 
-        let end = source.read(request) { line in
+        let end = source.read(request, cancellation: cancellation) { line in
             switch NdjsonParser.parse(line) {
             case .malformed, .unrecognized:
                 skipped += 1
@@ -103,6 +103,10 @@ struct MailLogService {
             return unavailable(query, reason: "spawn_failed", detail: message, skipped: skipped)
         case .exhausted(let status, let stderrTail) where status != 0:
             return unavailable(query, reason: "nonzero_exit", detail: stderrTail, skipped: skipped)
+        case .cancelled:
+            return unavailable(query, reason: "cancelled",
+                               detail: "the call was cancelled before the read finished", skipped: skipped,
+                               notice: "The read was cancelled, so this says nothing about whether the action happened.")
         case .deadline: earlyStop = "deadline"
         case .scanCap: earlyStop = "scan_cap"
         default: earlyStop = nil
@@ -300,7 +304,18 @@ struct MailLogService {
         return response
     }
 
-    private func unavailable(_ query: MailLogQuery, reason: String, detail: String, skipped: Int) -> [String: Any] {
+    /// The answer when `LogReadGate` has no free slot (#467). No read ran.
+    func busy(_ query: MailLogQuery, limit: Int) -> [String: Any] {
+        unavailable(query, reason: "busy",
+                    detail: "\(limit) log reads are already running; try again in a few seconds", skipped: 0,
+                    notice: "The log was not read, so this says nothing about whether the action happened. "
+                        + "Try again in a few seconds; another read may take up to 30 seconds to finish.")
+    }
+
+    private func unavailable(_ query: MailLogQuery, reason: String, detail: String, skipped: Int,
+                             notice: String = "The log could not be read, so this says nothing about whether the action happened. "
+                                + "Reading Mail's log needs the current user to be in the admin group; if that is not the cause, "
+                                + "reason_detail carries the reader's own message.") -> [String: Any] {
         [
             "status": "unavailable",
             "reason": reason,
@@ -317,9 +332,7 @@ struct MailLogService {
             "accounts_seen": 0,
             "contains_sensitive": query.detail == .detailed,
             "skipped_lines": skipped,
-            "notice": "The log could not be read, so this says nothing about whether the action happened. "
-                + "Reading Mail's log needs the current user to be in the admin group; if that is not the cause, "
-                + "reason_detail carries the reader's own message.",
+            "notice": notice,
             "results": [] as [[String: Any]],
         ]
     }

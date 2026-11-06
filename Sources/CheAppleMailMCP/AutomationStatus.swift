@@ -33,21 +33,64 @@ enum AutomationStatus {
         case unknown(OSStatus)
     }
 
+    /// How the probe reads the running-application list and the Apple Event
+    /// permission. Injected so the #499 decision table is testable without
+    /// Mail; `live` is the only production value.
+    struct Environment {
+        var isRunning: (String) -> Bool
+        var determinePermission: (String) -> OSStatus
+        var sleep: (TimeInterval) -> Void
+        var log: (String) -> Void
+
+        static let live = Environment(
+            isRunning: { !NSRunningApplication.runningApplications(withBundleIdentifier: $0).isEmpty },
+            determinePermission: AutomationStatus.determinePermission,
+            sleep: { Thread.sleep(forTimeInterval: $0) },
+            log: { Diagnostics.emit($0) })
+    }
+
+    /// #499: re-checks of the running-application list, and the wait before each.
+    static let runningListRechecks = 2
+    static let runningListRecheckInterval: TimeInterval = 0.15
+
     /// Non-prompting probe of this process's permission to send Apple Events
     /// to `targetBundleId` (default: Mail).
-    static func probe(targetBundleId: String = "com.apple.mail") -> State {
-        guard !NSRunningApplication.runningApplications(
-            withBundleIdentifier: targetBundleId).isEmpty else {
-            return .targetNotRunning
+    ///
+    /// #499: `NSRunningApplication` can come back empty for a running Mail
+    /// (seen under load in a test harness, 1–4 runs in 33), so an empty list is
+    /// re-read up to `runningListRechecks` times, `runningListRecheckInterval`
+    /// apart, before it counts. Only a list that stays empty yields
+    /// `.targetNotRunning`. The Apple Event check still runs only for a target
+    /// the list shows: it is not asked about a closed Mail, so the probe does
+    /// exactly what it did before when Mail really is closed, 300 ms later.
+    /// Each recovery is logged to stderr so the server's own rate is observable.
+    static func probe(targetBundleId: String = "com.apple.mail",
+                      environment: Environment = .live) -> State {
+        if !environment.isRunning(targetBundleId) {
+            guard let attempt = (1...runningListRechecks).first(where: { _ in
+                environment.sleep(runningListRecheckInterval)
+                return environment.isRunning(targetBundleId)
+            }) else { return .targetNotRunning }
+            environment.log("check_automation: running-application list was empty for "
+                + "\(targetBundleId); re-check \(attempt) found it running (#499)\n")
         }
+        return state(for: environment.determinePermission(targetBundleId))
+    }
+
+    /// The Apple Event permission status for `targetBundleId`, or the
+    /// `AECreateDesc` error when the address cannot be built.
+    static func determinePermission(_ targetBundleId: String) -> OSStatus {
         var addr = AEAddressDesc()
         let createErr = targetBundleId.withCString { cstr in
             AECreateDesc(typeApplicationBundleID, cstr, strlen(cstr), &addr)
         }
-        guard createErr == noErr else { return .unknown(OSStatus(createErr)) }
+        guard createErr == noErr else { return OSStatus(createErr) }
         defer { AEDisposeDesc(&addr) }
-        let status = AEDeterminePermissionToAutomateTarget(
-            &addr, typeWildCard, typeWildCard, false)
+        return AEDeterminePermissionToAutomateTarget(&addr, typeWildCard, typeWildCard, false)
+    }
+
+    /// Pure status → state mapping.
+    static func state(for status: OSStatus) -> State {
         switch status {
         case noErr:
             return .granted

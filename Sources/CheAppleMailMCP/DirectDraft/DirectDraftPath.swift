@@ -239,7 +239,13 @@ struct DirectDraftPath {
         let special: [String: Any]
         do { special = try await controller.getSpecialMailboxes(accountId: account, accountName: nil) }
         catch { return .notAttempted(.draftsUnidentified(error.localizedDescription)) }
-        let entries: [(path: String, components: [String])] = ((try? reader.listMailboxes(accountId: account)) ?? [])
+        // #549: a read that fails is a reason not to attempt the direct write,
+        // named as such; it used to read as "no mailboxes" and surface as an
+        // unmatched Drafts path.
+        let mailboxRows: [[String: Any]]
+        do { mailboxRows = try reader.listMailboxes(accountId: account) }
+        catch { return .notAttempted(.draftsUnidentified("the Envelope Index mailbox list could not be read: \(error.localizedDescription)")) }
+        let entries: [(path: String, components: [String])] = mailboxRows
             .compactMap { row in
                 guard let name = row["name"] as? String else { return nil }
                 return (name, (row["path_components"] as? [String]) ?? [name])

@@ -1,6 +1,16 @@
 import XCTest
 @testable import MailSQLite
 
+/// Extracts and writes, for the tests below that compare files.
+/// `EmlxParser.saveAttachment` is gone (#575): production writes only through a
+/// containment-checked destination, so this stays in the tests.
+private func extractToFile(rowId: Int, mailboxURL: String, attachmentName: String,
+                           destination: URL, partId: String? = nil) throws {
+    let data = try EmlxParser.attachmentData(rowId: rowId, mailboxURL: mailboxURL,
+                                             attachmentName: attachmentName, partId: partId)
+    try data.write(to: destination, options: .atomic)
+}
+
 final class AttachmentExtractorTests: XCTestCase {
 
     // MARK: - Test infrastructure
@@ -86,19 +96,14 @@ final class AttachmentExtractorTests: XCTestCase {
             in: root
         )
 
-        let dest = root.appendingPathComponent("out.pdf")
-        try EmlxParser.saveAttachment(
+        let extracted = try EmlxParser.attachmentData(
             rowId: rowId,
             mailboxURL: mailboxURL,
-            attachmentName: "report.pdf",
-            destination: dest
+            attachmentName: "report.pdf"
         )
 
-        XCTAssertTrue(FileManager.default.fileExists(atPath: dest.path))
-
-        let written = try Data(contentsOf: dest)
         let expected = try Data(contentsOf: fixtureURLNamed("multipart-attachment-ascii.expected.bin"))
-        XCTAssertEqual(written, expected, "decoded PDF bytes must match the original payload")
+        XCTAssertEqual(extracted, expected, "decoded PDF bytes must match the original payload")
     }
 
     // MARK: - Scenario: Extract attachment with CJK filename encoded as RFC 5987
@@ -114,19 +119,14 @@ final class AttachmentExtractorTests: XCTestCase {
             in: root
         )
 
-        let dest = root.appendingPathComponent("中文.pdf")
-        try EmlxParser.saveAttachment(
+        let extracted = try EmlxParser.attachmentData(
             rowId: rowId,
             mailboxURL: mailboxURL,
-            attachmentName: "中文檔案.pdf",
-            destination: dest
+            attachmentName: "中文檔案.pdf"
         )
 
-        XCTAssertTrue(FileManager.default.fileExists(atPath: dest.path))
-
-        let written = try Data(contentsOf: dest)
         let expected = try Data(contentsOf: fixtureURLNamed("multipart-attachment-cjk.expected.bin"))
-        XCTAssertEqual(written, expected, "CJK filename must resolve via RFC 5987 decoding")
+        XCTAssertEqual(extracted, expected, "CJK filename must resolve via RFC 5987 decoding")
     }
 
     // MARK: - Scenario: First-match semantics for duplicate filenames
@@ -143,7 +143,7 @@ final class AttachmentExtractorTests: XCTestCase {
         )
 
         let dest = root.appendingPathComponent("out.bin")
-        try EmlxParser.saveAttachment(
+        try extractToFile(
             rowId: rowId,
             mailboxURL: mailboxURL,
             attachmentName: "report.pdf",
@@ -174,7 +174,7 @@ final class AttachmentExtractorTests: XCTestCase {
         )
 
         let dest = root.appendingPathComponent("nope.pdf")
-        XCTAssertThrowsError(try EmlxParser.saveAttachment(
+        XCTAssertThrowsError(try extractToFile(
             rowId: rowId,
             mailboxURL: mailboxURL,
             attachmentName: "does-not-exist.pdf",
@@ -204,7 +204,7 @@ final class AttachmentExtractorTests: XCTestCase {
         EnvelopeIndexReader.mailStoragePathOverride = mailV10.path
 
         let dest = root.appendingPathComponent("out.bin")
-        XCTAssertThrowsError(try EmlxParser.saveAttachment(
+        XCTAssertThrowsError(try extractToFile(
             rowId: 262653,
             mailboxURL: "ews://ABCE3A85-06BE-43BC-9B84-2CA6F325612F/INBOX",
             attachmentName: "report.pdf",
@@ -275,7 +275,7 @@ final class AttachmentExtractorTests: XCTestCase {
         let dest = root.appendingPathComponent("out.pdf")
 
         let start = Date()
-        try EmlxParser.saveAttachment(
+        try extractToFile(
             rowId: rowId,
             mailboxURL: mailboxURL,
             attachmentName: "report.pdf",
@@ -545,7 +545,7 @@ final class AttachmentExtractorTests: XCTestCase {
         try realBytes.write(to: externalFile)
 
         let dest = root.appendingPathComponent("out.pdf")
-        try EmlxParser.saveAttachment(
+        try extractToFile(
             rowId: rowId,
             mailboxURL: mailboxURL,
             attachmentName: filename,
@@ -583,7 +583,7 @@ final class AttachmentExtractorTests: XCTestCase {
         // Deliberately don't create the Attachments/<rowId>/ folder.
 
         let dest = root.appendingPathComponent("out.pdf")
-        XCTAssertThrowsError(try EmlxParser.saveAttachment(
+        XCTAssertThrowsError(try extractToFile(
             rowId: rowId,
             mailboxURL: mailboxURL,
             attachmentName: filename,
@@ -729,7 +729,7 @@ final class AttachmentExtractorTests: XCTestCase {
         try bytes.write(to: partDir.appendingPathComponent(filename))
 
         let dest = root.appendingPathComponent("out.pdf")
-        try EmlxParser.saveAttachment(
+        try extractToFile(
             rowId: rowId,
             mailboxURL: mailboxURL,
             attachmentName: filename,
@@ -807,7 +807,7 @@ final class AttachmentExtractorTests: XCTestCase {
             for name in names {
                 let dest = root.appendingPathComponent("parity-out-\(UUID().uuidString)")
                 XCTAssertNoThrow(
-                    try EmlxParser.saveAttachment(
+                    try extractToFile(
                         rowId: rowId,
                         mailboxURL: mailboxURL,
                         attachmentName: name,

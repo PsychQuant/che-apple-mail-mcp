@@ -14,7 +14,8 @@ import SQLite3
 /// behaviour under `NOMUTEX` (observed as crashes in synthetic runs and as a
 /// CPU-bound livelock in the field). Every method below prepares, steps and
 /// finalizes inside its own call, so serialized mode is sufficient and no
-/// actor or lock is needed on top of it.
+/// actor or lock is needed on top of it for SQLite. The account mapping is
+/// separate state that a lookup can replace (#554), so it has its own lock.
 public final class EnvelopeIndexReader {
 
     // Built once during initialization from the schema, which does not change
@@ -80,13 +81,43 @@ public final class EnvelopeIndexReader {
 
     private var db: OpaquePointer?
 
-    /// Mapping from account UUID to human-readable account name.
+    /// Mapping from account UUID to human-readable account name. Guarded by
+    /// `mappingLock`: the server shares one reader between concurrent request
+    /// handlers, and a lookup that misses can replace the mapping (#554).
     private var accountMap: [String: String]
 
     /// Reverse index: display_name → list of UUIDs. Rebuilt whenever
     /// `accountMap` is set. List form (not single value) surfaces
     /// multi-account-same-display-name collisions to callers — see #101.
+    /// Guarded by `mappingLock`.
     private var reverseAccountMap: [String: [String]]
+
+    /// Seconds a lookup miss waits after the last read of the mapping source
+    /// before it reads it again (#554). A name that never resolves therefore
+    /// costs at most one AccountsMap.plist read per interval, not one per call.
+    public static let defaultMappingRefreshCooldown: TimeInterval = 5
+
+    /// Where the mapping is re-read from when a lookup misses (#554): an
+    /// account added or renamed while the server runs is in AccountsMap.plist
+    /// but not in the mapping built at init. `nil` when the caller injected a
+    /// fixed mapping without a source, so fixtures never read the user's plist.
+    private let mappingSource: (() -> [String: String])?
+    /// When the source last changed; compared at most once per cooldown so a
+    /// lookup that hits can notice a changed source too (#615). `nil` with no
+    /// source, and for a source that has no such date.
+    private let mappingStamp: (() -> Date?)?
+    private let mappingRefreshCooldown: TimeInterval
+    private let clock: () -> TimeInterval
+    /// When `mappingSource` was last read; `nil` if it never was.
+    private var lastMappingRead: TimeInterval?
+    /// The stamp taken just before the held mapping was read.
+    private var mappingStampRead: Date?
+    /// When the stamp was last compared; bounds the `stat` to once per cooldown.
+    private var lastStampCheck: TimeInterval?
+    /// Bumped whenever a mapping is installed, so a refresh that read the
+    /// source while another install happened does not overwrite the newer one.
+    private var mappingGeneration = 0
+    private let mappingLock = NSLock()
 
     // MARK: - Initialization
 
@@ -95,10 +126,29 @@ public final class EnvelopeIndexReader {
     /// - Parameters:
     ///   - databasePath: Path to the Envelope Index SQLite file.
     ///   - accountMapping: UUID → account name mapping. Defaults to reading
-    ///     AccountsMap.plist via `AccountMapper.buildMapping()` (no AppleScript).
+    ///     `accountMappingSource`, which defaults to AccountsMap.plist via
+    ///     `AccountMapper.buildMapping()` (no AppleScript).
+    ///   - accountMappingSource: Re-read when a name or UUID lookup misses or the
+    ///     stamp changed, at most once per `mappingRefreshCooldown` (#554, #615). Defaults to
+    ///     `AccountMapper.buildMapping()` when `accountMapping` is `nil`, and to
+    ///     no source (the injected mapping is never replaced) when it is given.
+    ///   - accountMappingStamp: When the source last changed, compared at most
+    ///     once per `mappingRefreshCooldown` on any lookup (#615). Defaults to
+    ///     the plist's modification date when the source is the default one, and
+    ///     to none otherwise: a source without a stamp is re-read on misses only.
+    ///   - mappingRefreshCooldown: Minimum seconds between two reads of the
+    ///     source. When the initial mapping is read from the source (no
+    ///     `accountMapping` given), that read starts the cooldown; an injected
+    ///     mapping does not, so the first miss reads the source at once.
+    ///   - clock: Monotonic seconds, injected for tests.
     /// - Throws: `MailSQLiteError.databaseNotAccessible` if the file
     ///   does not exist or cannot be opened (e.g., missing Full Disk Access).
-    public init(databasePath: String, accountMapping: [String: String]? = nil) throws {
+    public init(databasePath: String,
+                accountMapping: [String: String]? = nil,
+                accountMappingSource: (() -> [String: String])? = nil,
+                accountMappingStamp: (() -> Date?)? = nil,
+                mappingRefreshCooldown: TimeInterval = EnvelopeIndexReader.defaultMappingRefreshCooldown,
+                clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
         // Checked before the account mapping, so an absent path (a test-owned
         // fixture, #329) never reads the user's AccountsMap.plist.
         guard FileManager.default.fileExists(atPath: databasePath) else {
@@ -109,7 +159,24 @@ public final class EnvelopeIndexReader {
             )
         }
 
-        let mapping = accountMapping ?? AccountMapper.buildMapping()
+        let source: (() -> [String: String])? = accountMappingSource
+            ?? (accountMapping == nil ? { AccountMapper.buildMapping() } : nil)
+        self.mappingSource = source
+        let usesDefaultSource = accountMapping == nil && accountMappingSource == nil
+        self.mappingStamp = accountMappingStamp
+            ?? (usesDefaultSource ? { AccountMapper.accountsMapModificationDate() } : nil)
+        self.mappingRefreshCooldown = mappingRefreshCooldown
+        self.clock = clock
+        // Taken before the first read, so a change during it shows up at the next check.
+        self.mappingStampRead = mappingStamp?()
+        self.lastStampCheck = clock()
+        let mapping: [String: String]
+        if let accountMapping = accountMapping {
+            mapping = accountMapping
+        } else {
+            mapping = source?() ?? [:]
+            self.lastMappingRead = clock()
+        }
         self.accountMap = mapping
         self.reverseAccountMap = Self.buildReverseMap(from: mapping)
 
@@ -317,7 +384,7 @@ public final class EnvelopeIndexReader {
         }
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_int64(statement, 1, Int64(messageId))
-        guard sqlite3_step(statement) == SQLITE_ROW else {
+        guard try stepFirstRow(statement, "Draft status query") else {
             throw MailSQLiteError.queryFailed("Draft status unavailable for message \(messageId)")
         }
         return Self.draftFlag(statement, column: 0)
@@ -326,15 +393,93 @@ public final class EnvelopeIndexReader {
     // MARK: - Account Mapping
 
     /// Resolve an account UUID to a human-readable name.
-    /// Falls back to the UUID itself if no mapping exists.
+    /// Falls back to the UUID itself if no mapping exists. A miss re-reads the
+    /// mapping source once (subject to the cooldown) before falling back (#554),
+    /// and a hit is re-checked against the source's stamp once per cooldown (#615).
     public func accountName(for uuid: String) -> String {
-        accountMap[uuid] ?? uuid
+        refreshMappingIfSourceChanged()
+        if let name = withMappingLock({ accountMap[uuid] }) { return name }
+        refreshMappingAfterMiss()
+        return withMappingLock { accountMap[uuid] } ?? uuid
     }
 
     /// Update the account mapping (e.g., after querying AppleScript).
     public func updateAccountMapping(_ mapping: [String: String]) {
-        accountMap = mapping
-        reverseAccountMap = Self.buildReverseMap(from: mapping)
+        withMappingLock {
+            accountMap = mapping
+            reverseAccountMap = Self.buildReverseMap(from: mapping)
+            mappingGeneration += 1
+        }
+    }
+
+    private func withMappingLock<T>(_ body: () -> T) -> T {
+        mappingLock.lock()
+        defer { mappingLock.unlock() }
+        return body()
+    }
+
+    /// Re-read the mapping after a lookup missed (#554).
+    ///
+    /// The cooldown is checked and claimed under the lock, so concurrent misses
+    /// cause one read per interval; a miss that arrives while that read runs
+    /// sees the mapping it had. The source itself is read outside the lock: a
+    /// source that calls back into the reader cannot deadlock, and lookups that
+    /// hit do not wait for the plist read. A read is installed only if no other
+    /// mapping was installed meanwhile. An empty result is what
+    /// `AccountMapper.buildMapping()` returns when the plist cannot be read, so
+    /// it keeps the mapping already known instead of forgetting every account.
+    private func refreshMappingAfterMiss() {
+        guard mappingSource != nil else { return }
+        guard let generation = withMappingLock({ claimSourceRead() }) else { return }
+        readAndInstallMapping(generation: generation, stamp: nil)
+    }
+
+    /// Re-read the mapping when its source changed since it was read (#615), so
+    /// a lookup that hits does not keep an answer the source no longer gives.
+    /// Claimed under the lock, so per-row lookups cost one `stat` per cooldown;
+    /// this is the only `stat` after `init`. A change that lands inside the
+    /// cooldown of the last read stays unrecorded, and a later check retries it.
+    private func refreshMappingIfSourceChanged() {
+        guard let mappingStamp else { return }
+        let due: Bool = withMappingLock {
+            let now = clock()
+            if let last = lastStampCheck, now - last < mappingRefreshCooldown { return false }
+            lastStampCheck = now
+            return true
+        }
+        guard due, let stamp = mappingStamp() else { return }
+        let generation: Int? = withMappingLock {
+            stamp == mappingStampRead ? nil : claimSourceRead()
+        }
+        guard let generation else { return }
+        readAndInstallMapping(generation: generation, stamp: stamp)
+    }
+
+    /// Call under the lock. One claim for both paths, so the source is read at
+    /// most once per cooldown whichever path asks, and two paths racing for it
+    /// cause one read. Returns the generation to install against.
+    private func claimSourceRead() -> Int? {
+        let now = clock()
+        if let last = lastMappingRead, now - last < mappingRefreshCooldown { return nil }
+        lastMappingRead = now
+        return mappingGeneration
+    }
+
+    /// The stamp was taken before this read and is recorded only with a good
+    /// mapping, so a read that failed or raced a change is tried again. A miss
+    /// read passes no stamp: if the source had changed, the next stamp check
+    /// reads it once more, which is cheaper than a second `stat` per cooldown.
+    private func readAndInstallMapping(generation: Int, stamp: Date?) {
+        guard let source = mappingSource else { return }
+        let fresh = source()
+        guard !fresh.isEmpty else { return }
+        withMappingLock {
+            guard mappingGeneration == generation else { return }
+            accountMap = fresh
+            reverseAccountMap = Self.buildReverseMap(from: fresh)
+            if let stamp { mappingStampRead = stamp }
+            mappingGeneration += 1
+        }
     }
 
     /// Reverse lookup: display name → list of UUIDs that map to it.
@@ -347,8 +492,15 @@ public final class EnvelopeIndexReader {
     /// Backs the 4 previously-duplicated O(n) reverse-lookup callsites
     /// inside this file. Externally, sets up the collision-aware path for
     /// the `#101` `account_id` fix.
+    ///
+    /// A miss re-reads the mapping source once (subject to the cooldown), so an
+    /// account added or renamed while the server runs resolves without a
+    /// restart (#554).
     public func accountUUIDs(forName name: String) -> [String] {
-        reverseAccountMap[name] ?? []
+        refreshMappingIfSourceChanged()
+        if let uuids = withMappingLock({ reverseAccountMap[name] }), !uuids.isEmpty { return uuids }
+        refreshMappingAfterMiss()
+        return withMappingLock { reverseAccountMap[name] } ?? []
     }
 
     /// Build the reverse index in O(n). Called from `init` and
@@ -455,12 +607,12 @@ public final class EnvelopeIndexReader {
         }
 
         var results: [[String: Any]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try forEachRow(stmt, "Mailbox list") {
             let url = columnText(stmt, 0)
             let totalCount = Int(sqlite3_column_int(stmt, 1))
             let unreadCount = Int(sqlite3_column_int(stmt, 2))
 
-            guard let parsed = MailboxURL.decode(url) else { continue }
+            guard let parsed = MailboxURL.decode(url) else { return }
             let acctName = self.accountName(for: parsed.accountUUID)
 
             results.append([
@@ -529,7 +681,7 @@ public final class EnvelopeIndexReader {
         sqlite3_bind_int(stmt, idx, Int32(fetchLimit))
 
         var results: [[String: Any]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try forEachRow(stmt, "Email list") {
             let rowId = Int(sqlite3_column_int64(stmt, 0))
             let subject = columnText(stmt, 1)
             let senderAddr = columnText(stmt, 2)
@@ -587,7 +739,7 @@ public final class EnvelopeIndexReader {
             sqlite3_bind_text(stmt, Int32(i + 1), binding, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
         }
 
-        if sqlite3_step(stmt) == SQLITE_ROW {
+        if try stepFirstRow(stmt, "Unread count") {
             return Int(sqlite3_column_int64(stmt, 0))
         }
         return 0
@@ -606,7 +758,7 @@ public final class EnvelopeIndexReader {
         sqlite3_bind_int64(stmt, 1, Int64(messageId))
 
         var results: [[String: Any]] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try forEachRow(stmt, "Attachment list") {
             results.append([
                 "name": columnText(stmt, 0),
                 "attachment_id": columnText(stmt, 1)
@@ -635,7 +787,7 @@ public final class EnvelopeIndexReader {
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int64(stmt, 1, Int64(messageId))
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
+        guard try stepFirstRow(stmt, "Metadata query") else {
             throw MailSQLiteError.queryFailed("Message \(messageId) not found")
         }
 
@@ -682,7 +834,7 @@ public final class EnvelopeIndexReader {
         }
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_int64(stmt, 1, Int64(id))
-        if sqlite3_step(stmt) == SQLITE_ROW {
+        if try stepFirstRow(stmt, "Mailbox lookup") {
             return columnText(stmt, 0)
         }
         return nil
@@ -742,7 +894,7 @@ public final class EnvelopeIndexReader {
 
         // Execute and collect results
         var results: [SearchResult] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try forEachRow(stmt, "Search") {
             let rowId = Int(sqlite3_column_int64(stmt, 0))
             let subject = columnText(stmt, 1)
             let senderAddr = columnText(stmt, 2)
@@ -758,7 +910,7 @@ public final class EnvelopeIndexReader {
             let mbPath = parsed?.mailboxPath ?? mailboxUrl
 
             // Fetch To recipients for this message
-            let toAddrs = fetchRecipients(messageId: rowId, type: 0)
+            let toAddrs = try fetchRecipients(messageId: rowId, type: 0)
 
             results.append(SearchResult(
                 id: rowId,
@@ -830,7 +982,7 @@ public final class EnvelopeIndexReader {
         sqlite3_bind_int(stmt, idx, Int32(fetchLimit))
 
         var results: [SearchResult] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try forEachRow(stmt, "Search") {
             let rowId = Int(sqlite3_column_int64(stmt, 0))
             let subject = columnText(stmt, 1)
             let senderAddr = columnText(stmt, 2)
@@ -1034,15 +1186,15 @@ public final class EnvelopeIndexReader {
         defer { sqlite3_finalize(stmt) }
         var ids: [Int64] = []
         var nearMisses: [String] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let urlC = sqlite3_column_text(stmt, 1) else { continue }
-            guard let decoded = MailboxURL.decode(String(cString: urlC)) else { continue }
+        try forEachRow(stmt, "Mailbox lookup") {
+            guard let urlC = sqlite3_column_text(stmt, 1) else { return }
+            guard let decoded = MailboxURL.decode(String(cString: urlC)) else { return }
             // #344 (B) — a UUID is hex, so its case carries no meaning and
             // folding it cannot over-match onto a different account. Comparing
             // the PARSED authority also beats the old `url.contains("://uuid/")`,
             // which the same text appearing inside a mailbox path could satisfy.
             if let uuid = accountUUID,
-               !Self.asciiCaseInsensitiveEqual(decoded.accountUUID, uuid) { continue }
+               !Self.asciiCaseInsensitiveEqual(decoded.accountUUID, uuid) { return }
             if Self.mailboxPathMatches(query: query, mailbox: decoded, lax: false) {
                 ids.append(sqlite3_column_int64(stmt, 0))
             } else if Self.mailboxPathMatches(query: query, mailbox: decoded, lax: true) {
@@ -1193,7 +1345,7 @@ public final class EnvelopeIndexReader {
         sqlite3_bind_int(stmt, idx, Int32(fetchLimit))
 
         var ids: [Int] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try forEachRow(stmt, "Search") {
             ids.append(Int(sqlite3_column_int64(stmt, 0)))
         }
 
@@ -1250,7 +1402,7 @@ public final class EnvelopeIndexReader {
             idx += 1
         }
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else {
+        guard try stepFirstRow(stmt, "Search count") else {
             return 0
         }
         return Int(sqlite3_column_int64(stmt, 0))
@@ -1258,13 +1410,47 @@ public final class EnvelopeIndexReader {
 
     // MARK: - Private Helpers
 
+    /// Step `statement` through its result set, calling `body` once per row,
+    /// and throw unless SQLite reports the end of the results (#549).
+    ///
+    /// `while sqlite3_step(stmt) == SQLITE_ROW` treated every other result
+    /// (`SQLITE_BUSY` after the busy timeout, `SQLITE_IOERR`, `SQLITE_CORRUPT`,
+    /// an interrupt) as "no more rows", so a read that stopped part-way returned
+    /// its partial result as if it were complete, with nothing on stderr. The
+    /// throw reaches the caller's hybrid fallback instead (r-must-direct-db).
+    private func forEachRow(_ statement: OpaquePointer?, _ what: String,
+                            _ body: () throws -> Void) throws {
+        var status = sqlite3_step(statement)
+        while status == SQLITE_ROW {
+            try body()
+            status = sqlite3_step(statement)
+        }
+        guard status == SQLITE_DONE else { throw stepFailure(what, status) }
+    }
+
+    /// One-row queries: `true` when there is a row, `false` when the result
+    /// set is empty, and a throw for anything else, which used to read as
+    /// "no row" (#549).
+    private func stepFirstRow(_ statement: OpaquePointer?, _ what: String) throws -> Bool {
+        let status = sqlite3_step(statement)
+        if status == SQLITE_ROW { return true }
+        if status == SQLITE_DONE { return false }
+        throw stepFailure(what, status)
+    }
+
+    private func stepFailure(_ what: String, _ status: Int32) -> MailSQLiteError {
+        let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
+        let code = db.map { sqlite3_extended_errcode($0) } ?? status
+        return .queryFailed("\(what) stopped before the end of its results: \(message) (SQLite result code \(code))")
+    }
+
     private func columnText(_ stmt: OpaquePointer?, _ col: Int32) -> String {
         guard let cStr = sqlite3_column_text(stmt, col) else { return "" }
         return String(cString: cStr)
     }
 
-    private func fetchRecipients(messageId: Int, type: Int) -> [String] {
-        guard let db = db else { return [] }
+    private func fetchRecipients(messageId: Int, type: Int) throws -> [String] {
+        guard let db = db else { throw MailSQLiteError.queryFailed("Database not open") }
         let sql = """
             SELECT a.address FROM recipients r
             JOIN addresses a ON r.address = a.ROWID
@@ -1272,14 +1458,16 @@ public final class EnvelopeIndexReader {
             ORDER BY r.position
             """
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw MailSQLiteError.queryFailed("Prepare failed: \(String(cString: sqlite3_errmsg(db)))")
+        }
         defer { sqlite3_finalize(stmt) }
 
         sqlite3_bind_int64(stmt, 1, Int64(messageId))
         sqlite3_bind_int(stmt, 2, Int32(type))
 
         var addrs: [String] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
+        try forEachRow(stmt, "Recipient list") {
             addrs.append(columnText(stmt, 0))
         }
         return addrs

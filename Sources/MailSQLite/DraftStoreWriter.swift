@@ -115,12 +115,18 @@ public final class DraftStoreWriter {
     /// The `mailboxes` row of an account whose decoded path equals `pathComponents`.
     public func mailboxRow(accountUUID: String, pathComponents: [String]) -> (rowId: Int64, url: String)? {
         var hits: [(Int64, String)] = []
-        query("SELECT ROWID, url FROM mailboxes WHERE url LIKE ?", [.text("%://\(accountUUID)/%")]) { st in
-            let url = String(cString: sqlite3_column_text(st, 1))
-            if let parsed = MailboxURL.decode(url), parsed.accountUUID == accountUUID,
-               parsed.pathComponents == pathComponents {
-                hits.append((sqlite3_column_int64(st, 0), url))
+        do {
+            try query("SELECT ROWID, url FROM mailboxes WHERE url LIKE ?", [.text("%://\(accountUUID)/%")]) { st in
+                let url = String(cString: sqlite3_column_text(st, 1))
+                if let parsed = MailboxURL.decode(url), parsed.accountUUID == accountUUID,
+                   parsed.pathComponents == pathComponents {
+                    hits.append((sqlite3_column_int64(st, 0), url))
+                }
             }
+        } catch {
+            // A scan that stopped early cannot say there is exactly one row (#618).
+            logReadFailure("mailboxes", error)
+            return nil
         }
         return hits.count == 1 ? hits[0] : nil
     }
@@ -130,14 +136,19 @@ public final class DraftStoreWriter {
     /// (address + display name) per account identity.
     public func senderRow(address: String, accountUUID: String) -> (rowId: Int64, displayName: String)? {
         var result: (Int64, String)?
-        query("""
-            SELECT a.ROWID, a.comment, count(*) AS c FROM messages m
-            JOIN addresses a ON a.ROWID = m.sender JOIN mailboxes mb ON mb.ROWID = m.mailbox
-            WHERE a.address = ? COLLATE NOCASE AND mb.url LIKE ?
-            GROUP BY a.ROWID ORDER BY c DESC LIMIT 1
-            """, [.text(address), .text("%://\(accountUUID)/%")]) { st in
-            let comment = sqlite3_column_text(st, 1).map { String(cString: $0) } ?? ""
-            result = (sqlite3_column_int64(st, 0), comment)
+        do {
+            try query("""
+                SELECT a.ROWID, a.comment, count(*) AS c FROM messages m
+                JOIN addresses a ON a.ROWID = m.sender JOIN mailboxes mb ON mb.ROWID = m.mailbox
+                WHERE a.address = ? COLLATE NOCASE AND mb.url LIKE ?
+                GROUP BY a.ROWID ORDER BY c DESC LIMIT 1
+                """, [.text(address), .text("%://\(accountUUID)/%")]) { st in
+                let comment = sqlite3_column_text(st, 1).map { String(cString: $0) } ?? ""
+                result = (sqlite3_column_int64(st, 0), comment)
+            }
+        } catch {
+            logReadFailure("sender", error)
+            return nil
         }
         return result
     }
@@ -222,6 +233,7 @@ public final class DraftStoreWriter {
 
     /// Exact reverse of `insert`. Refuses once a `server_messages` row exists:
     /// Mail has uploaded it, and cleanup must then go through Mail, not SQL.
+    /// A check that cannot be read refuses too, with the SQLite error (#618).
     public func rollback(_ ins: Inserted) throws {
         try exec("BEGIN IMMEDIATE")
         do {
@@ -307,27 +319,50 @@ public final class DraftStoreWriter {
     private func scalarInt(_ sql: String, _ args: [Value] = []) throws -> Int64? {
         let st = try prepare(sql, args)
         defer { sqlite3_finalize(st) }
-        guard sqlite3_step(st) == SQLITE_ROW, sqlite3_column_type(st, 0) != SQLITE_NULL else { return nil }
+        guard try stepHasRow(st), sqlite3_column_type(st, 0) != SQLITE_NULL else { return nil }
         return sqlite3_column_int64(st, 0)
     }
 
     private func scalarText(_ sql: String, _ args: [Value] = []) throws -> String? {
         let st = try prepare(sql, args)
         defer { sqlite3_finalize(st) }
-        guard sqlite3_step(st) == SQLITE_ROW, let c = sqlite3_column_text(st, 0) else { return nil }
+        guard try stepHasRow(st), let c = sqlite3_column_text(st, 0) else { return nil }
         return String(cString: c)
     }
 
-    private func query(_ sql: String, _ args: [Value], _ row: (OpaquePointer?) -> Void) {
-        guard let st = try? prepare(sql, args) else { return }
+    private func query(_ sql: String, _ args: [Value], _ row: (OpaquePointer?) -> Void) throws {
+        let st = try prepare(sql, args)
         defer { sqlite3_finalize(st) }
-        while sqlite3_step(st) == SQLITE_ROW { row(st) }
+        while try stepHasRow(st) { row(st) }
+    }
+
+    /// The gates answer nil or empty, which names no cause, so it goes to stderr.
+    private func logReadFailure(_ what: String, _ error: Error) {
+        // The throwing overload: a closed stderr must not abort the server (#346).
+        try? FileHandle.standardError.write(contentsOf: Data(
+            "DraftStoreWriter: \(what) read failed (\(error))\n".utf8))
+    }
+
+    /// A row, the end of the results, or a throw (#618). A failed read must not
+    /// look like an empty answer: to `rollback`, "no rows" means "not uploaded".
+    private func stepHasRow(_ st: OpaquePointer?) throws -> Bool {
+        let code = sqlite3_step(st)
+        switch code {
+        case SQLITE_ROW: return true
+        case SQLITE_DONE: return false
+        default: throw WriteError.sql("\(String(cString: sqlite3_errmsg(db))) (SQLite result code \(code))")
+        }
     }
 
     private func columns(_ table: String) -> [String] {
         var names: [String] = []
-        query("SELECT name FROM pragma_table_info(?)", [.text(table)]) { st in
-            names.append(String(cString: sqlite3_column_text(st, 0)))
+        do {
+            try query("SELECT name FROM pragma_table_info(?)", [.text(table)]) { st in
+                names.append(String(cString: sqlite3_column_text(st, 0)))
+            }
+        } catch {
+            logReadFailure("\(table) columns", error)
+            return []   // reads as drift, never as a partial column list
         }
         return names
     }

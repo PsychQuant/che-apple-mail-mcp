@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The `.mcpb` install can set the destination policy**
+  ([#574](https://github.com/PsychQuant/che-apple-mail-mcp/issues/574)). The
+  bundle's manifest had no way to set `CHE_MAIL_EXPORT_ALLOWED_ROOTS`, so a
+  Claude Desktop user could not save attachments or export outside the home
+  folder (an external disk, for example). The extension now has an optional
+  **Allowed save and export folders** setting that maps onto the variable; it
+  takes the same colon-separated absolute paths and, when set, replaces the
+  home default. The README lists where to set the variable for each install
+  method. A value that is exactly the manifest's placeholder counts as unset, so
+  a host that passes an unset setting through literally keeps the home default.
+  How Claude Desktop passes an empty setting was not checked on a real install;
+  the setting has an empty default, and the `save_attachment` and `output_dir`
+  descriptions state the limit. **Behaviour change:** any other entry that is not
+  an absolute path now matches nothing, with a note on stderr. A relative entry
+  used to be resolved against the server's working directory; a nonempty value
+  with no absolute path in it now denies every destination.
+
 ### Changed
 
 - **BREAKING: `reply_email` refuses `attachments` for now**
@@ -45,6 +64,154 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CHE_MAIL_ATTACHMENT_DELAY_TRAILING` are no longer read: they only paced that
   code, and compose attachments have gone through ⇧⌘A with the
   `CHE_MAIL_MAILTO_*` delays since #304.
+- **The four tools that can send mail declare it in their MCP annotations**
+  ([#601](https://github.com/PsychQuant/che-apple-mail-mcp/issues/601)).
+  `compose_email`, `reply_email`, `forward_email` and `redirect_email` now carry
+  `readOnlyHint: false`, `destructiveHint: true` (a sent message cannot be
+  recalled), `idempotentHint: false` (a retry sends a second message, #242) and
+  `openWorldHint: true` (mail leaves for third parties). These are the values a
+  client conforming to the MCP spec already assumes for a tool without
+  annotations, so such a client behaves the same; the change makes them explicit
+  and keeps them if a client or SDK default changes. Annotations are static, so
+  `reply_email` declares the send case even when it is called with
+  `save_as_draft: true`, so a client that asks before destructive tools will ask
+  before a draft-only reply too. Whether any client prompts on these hints was
+  not verified.
+- **Every tool now says what it does in its MCP annotations**
+  ([#621](https://github.com/PsychQuant/che-apple-mail-mcp/issues/621)). Without
+  them a client read every tool as possibly destructive, so it could not tell a
+  read from a delete. Each tool now sits in one class of a closed table
+  (`ToolAccess`), and a test fails on a new tool with no class. Reads of accounts
+  and settings are read-only and closed world. Reads of mail are read-only and
+  open world, because third parties wrote that text. `create_draft` and
+  `open_mailto` send nothing but are open world, because a draft syncs to the
+  server and `open_mailto` hands over to the default mail client. Tools that
+  change, move, remove or import are destructive, as are `save_attachment` and
+  the exports (an attachment of the same name is replaced). `update_draft` is
+  destructive and open world. The classification tools and `check_compose_length`
+  keep the annotations they already had.
+
+  **A client that runs `readOnlyHint` tools without asking will now read mail
+  without a prompt**, and text in a message can then steer what gets read next.
+  The hint states a fact about the tool: it changes no mailbox, though a read can
+  make Mail fetch a body from the server (#274). Acting on it is the client's
+  policy. The MCP specification tells clients to treat annotations as untrusted
+  unless the server is trusted, and `openWorldHint` does not make a client ask.
+  Whether any client acts on these hints was not verified.
+- **`get_mail_log_events` runs at most two reads at once and stops when the
+  client cancels** ([#467](https://github.com/PsychQuant/che-apple-mail-mcp/issues/467)).
+  Each call started its own `log show` child (237–350 MB) with no limit, and a
+  cancelled call left the child running until its 30-second deadline. A third
+  concurrent call now returns at once with `status: unavailable`,
+  `reason: busy` and starts nothing; a caller retries. A cancel stops reading
+  within one poll slice (250 ms), then terminates and reaps the child (at most
+  about 4 seconds for a child that ignores SIGTERM), and returns
+  `reason: cancelled`. The slot stays taken until then. A descendant
+  that holds the stderr pipe can still outlive the call, as before; putting the
+  child in its own process group is not part of this change.
+- **Removed attachment code that #402 left unused**
+  ([#575](https://github.com/PsychQuant/che-apple-mail-mcp/issues/575)).
+  `MailController.verifySavedAttachmentOnDisk`, `AttachmentWriteProblem.statFailed`
+  and `EmlxParser.saveAttachment(..., destination:)` had no production caller; the
+  last wrote to a plain URL with no containment, so any future caller would have
+  reopened #402. The #314 and #347 tests now run against `saveUsingScript`, the
+  step that does this work, and a new structural test pins that a Tier-1
+  publication failure ends the call instead of reaching AppleScript. The tool's
+  behaviour does not change.
+
+### Fixed
+
+- **Accounts added or renamed while the server runs resolve without a restart**
+  ([#554](https://github.com/PsychQuant/che-apple-mail-mcp/issues/554)). The
+  SQLite reader built its account mapping from AccountsMap.plist once, when it
+  opened, so a name-scoped read (`list_mailboxes`, `list_emails`,
+  `search_emails` with `account_name`) for an account added later failed with
+  `accountNotResolvable`, results named that account by its UUID, and a renamed
+  account resolved only under its old name. A lookup that misses now re-reads
+  the plist once and retries, at most once every 5 seconds, so a name that never
+  resolves costs one plist read per interval rather than one per call. A read
+  that returns no accounts (an unreadable plist) keeps the accounts already
+  known. The mapping is now guarded by a lock, because the reader is shared by
+  concurrent request handlers; the plist itself is read outside the lock.
+  Lookups by `account_id` were not affected. A lookup that finds what it asked
+  for also checks, at most once every 5 seconds, whether the plist's modification
+  date changed, and re-reads it if so
+  ([#615](https://github.com/PsychQuant/che-apple-mail-mcp/issues/615)), so an
+  account whose email changed gets its new name in results and its old name stops
+  resolving, without a miss. The names are the account emails taken from
+  AccountsMap.plist, so renaming an account's description in Mail does not
+  change them.
+- **A failed read in the direct-write draft path no longer reads as an empty
+  answer** ([#618](https://github.com/PsychQuant/che-apple-mail-mcp/issues/618)).
+  The check that refuses to roll back a draft Mail has already uploaded treated
+  a failed read as "not uploaded", so unless a later statement failed too, the
+  rollback went on to delete a draft that could be on the server. It now
+  refuses, and the result reports the draft as created with its upload not
+  confirmed. A mailbox scan that stops part-way answers nothing instead of
+  passing the single-mailbox gate on the rows it saw, with the SQLite error on
+  stderr, and a read that fails inside `insert` reports that error instead of
+  "row missing". Experimental path only (`CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`).
+- **A read that the Envelope Index stops part-way through is an error, not a
+  shorter answer** ([#549](https://github.com/PsychQuant/che-apple-mail-mcp/issues/549)).
+  Every SQLite read stepped through its rows with
+  `while sqlite3_step(stmt) == SQLITE_ROW`, so any result other than a row
+  (`SQLITE_BUSY` after the busy timeout, `SQLITE_IOERR`, `SQLITE_CORRUPT`)
+  read as "no more rows": a truncated mailbox list, search page or recipient
+  list came back as if complete, and an unread count or search count as `0`,
+  with nothing on stderr. Every multi-row read in the reader now checks that
+  SQLite reported the end of the results, and the one-row reads (unread count,
+  search count, message lookup, metadata, draft status) tell "no row" from a
+  failure; a failure throws `queryFailed` naming SQLite's message and result
+  code. A recipient read that fails now fails its search page, where it used to
+  leave the recipients empty.
+  `list_mailboxes`, `get_unread_count`, `list_attachments` and `search_emails`
+  (`projection: "full"`) used to pass index errors to the caller; on a failed
+  read they now log it to stderr and use the AppleScript path, like the other
+  read tools. The SQLite-only `search_emails` projections (`ids`, `count`,
+  `summary`) report the failure. Account and mailbox resolution errors are
+  answers, not failures, and still come back unchanged. The direct-write
+  `create_draft` path names a failed mailbox read as the reason it was not
+  attempted, where it used to report "no Drafts mailbox path"; it still uses
+  the GUI path in that case. More AppleScript fallbacks may now run when the
+  index is busy or damaged, which is slower but no longer wrong.
+- **The Automation pre-flight no longer takes one empty running-application
+  list as "Mail is not running"**
+  ([#499](https://github.com/PsychQuant/che-apple-mail-mcp/issues/499)). A test
+  harness saw `NSRunningApplication` come back empty for a running Mail under
+  load (1 to 4 runs in 33), which every GUI-path call would report as a false
+  "Mail is not running". An empty list is now re-read up to twice, 150 ms apart,
+  and only a list that stays empty reports not running, so a Mail that really is
+  closed gets that answer 300 ms later than before; nothing else about it changes.
+  A recovery goes to stderr, so the server's own rate can be seen; whether the
+  server sees this at all was not established.
+- **Saving an attachment works through a search-only folder, says less, cleans
+  up after a kill and drops inherited ACLs**
+  ([#576](https://github.com/PsychQuant/che-apple-mail-mcp/issues/576)). Four
+  edge cases in the publisher #402 added:
+  - The walk from `/` opened each directory with read access, so an ancestor at
+    `-wx--x--x` failed every save with `destination_write_failed`, where the
+    path-based write before #402 needed only search permission. It now opens
+    with `O_SEARCH`, and falls back to read access on a filesystem that refuses
+    that. `O_SEARCH` was not tested on network or FUSE mounts. The Markdown
+    export shares the walk and gets the same change.
+  - A refused path now gets one fixed message that names no path. It used to
+    carry the resolved path, so a caller could learn where a symlink points or
+    whether a protected folder exists. The reason stays on stderr. A path that
+    fails to resolve outside the policy gets the same message; inside the policy
+    it keeps its specific reason.
+  - A save now removes temporaries a killed server left in that folder: files
+    named by this writer, owned by this user, whose server is gone or which are
+    over a day old. Temporary names stay unique per save rather than fixed per
+    destination as the issue proposed, because concurrent saves must not touch
+    each other's file (#402); the name now carries the server's pid and a tag
+    for this Mac, so a shared or synced folder's file from another Mac goes by
+    age alone. A folder that cannot be listed is left alone.
+  - A saved file no longer keeps an ACL inherited from its folder: a folder's
+    inheritable read entry made the 0600 temporary, and so the published file,
+    readable through it. A save fails if the ACL cannot be read on a volume that
+    may hold ACLs, or will not clear. **Behaviour change:** a file saved into a
+    folder that shares through an inherited ACL, or over a file with its own ACL,
+    ends up with no ACL.
 
 ### Fixed
 

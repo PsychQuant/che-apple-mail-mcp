@@ -59,87 +59,80 @@ final class SaveAttachmentVerificationTests: XCTestCase {
         await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil)
     }
 
-    private func verify(_ p: String, allowEmpty: Bool = false) throws -> String {
-        try MailController.verifySavedAttachmentOnDisk(
-            "Attachment saved to \(p)", savePath: p, allowEmpty: allowEmpty)
+    /// The publication step #402 made the only one: `stage` stands in for Mail
+    /// and puts whatever it likes at the private stage path. `verifySavedAttachmentOnDisk`
+    /// is gone (#575), so these are the #347 contracts where they now hold.
+    private func save(_ p: String, allowEmpty: Bool = false,
+                      stage: (String) throws -> Void = { _ in }) throws -> String {
+        try destination(p).saveUsingScript({ stagePath in
+            try stage(stagePath)
+            return "Attachment saved to \(stagePath)"
+        }, allowEmpty: allowEmpty)
     }
 
-    // MARK: - (A) the stat must follow the link and land on a regular file
+    private func stageBytes(_ data: Data) -> (String) throws -> Void {
+        { stagePath in try data.write(to: URL(fileURLWithPath: stagePath)) }
+    }
 
-    /// The headline defect: the guard passes on the one state it exists to catch.
-    func testSymlinkToEmptyFile_isRejected() throws {
+    // MARK: - (A) what Mail left at the stage must be a regular file
+
+    /// The headline defect, in the form it takes since #402: what Mail leaves at
+    /// the stage is opened without following links, so a link is never published.
+    func testStagedSymlinkToEmptyFile_isRejected() throws {
         let target = path("target-empty.pdf")
-        let link = path("link.pdf")
         FileManager.default.createFile(atPath: target, contents: Data())
-        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: target)
-
-        XCTAssertThrowsError(try verify(link),
-            "a symlink onto a 0-byte file must NOT verify — attributesOfItem reports the "
-            + "link path's length as the size, which is non-zero and looks like a real file") { error in
-            XCTAssertTrue(error.localizedDescription.contains("0-byte"),
-                          "must name the real shape: \(error.localizedDescription)")
+        XCTAssertThrowsError(try save(path("out.pdf")) { stage in
+            try FileManager.default.createSymbolicLink(atPath: stage, withDestinationPath: target)
+        }) { error in
+            guard case AttachmentDestinationError.stage = error else { return XCTFail("\(error)") }
         }
     }
 
-    /// Even a correct write through a symlink reported the wrong number.
-    func testSymlinkToRealFile_reportsTargetSizeNotLinkLength() throws {
+    func testStagedSymlinkToRealFile_isRejectedNotCopied() throws {
         let target = path("target-real.pdf")
-        let link = path("link-real.pdf")
         FileManager.default.createFile(atPath: target, contents: Data(repeating: 3, count: 4096))
-        try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: target)
-
-        XCTAssertTrue(try verify(link).hasSuffix("(4096 bytes)"),
-            "the size must come from the link's TARGET; the link path's own length is "
-            + "meaningless and varies with where the temp dir happens to be")
+        let p = path("out.pdf")
+        XCTAssertThrowsError(try save(p) { stage in
+            try FileManager.default.createSymbolicLink(atPath: stage, withDestinationPath: target)
+        })
+        XCTAssertFalse(FileManager.default.fileExists(atPath: p), "bytes behind a link are not the stage's")
     }
 
-    /// Polling cannot turn a directory into a file, so this is terminal — and
-    /// under the old code a directory's non-zero `.size` passed verification.
-    func testDirectoryAtSavePath_isRejected() throws {
-        let p = path("a-directory.pdf")
-        try FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true)
-        XCTAssertThrowsError(try verify(p)) { error in
-            guard case MailError.attachmentWriteUnverified(_, let problem) = error else {
-                return XCTFail("expected attachmentWriteUnverified, got \(error)")
-            }
-            guard case .notRegular = problem else {
-                return XCTFail("a directory is a non-regular file, got \(problem)")
+    /// Polling cannot turn a directory into a file, so this is terminal.
+    func testStagedDirectory_isRejected() throws {
+        XCTAssertThrowsError(try save(path("out.pdf")) { stage in
+            try FileManager.default.createDirectory(atPath: stage, withIntermediateDirectories: true)
+        }) { error in
+            guard case MailError.attachmentWriteUnverified(_, .notRegular) = error else {
+                return XCTFail("a directory is a non-regular file, got \(error)")
             }
         }
     }
 
-    /// A FIFO is the case that argues for `stat` over `open` + `fstat`: opening
-    /// one blocks until a writer arrives, and this runs on the shared actor.
-    func testFifoAtSavePath_isRejectedPromptly() throws {
-        let p = path("a-fifo.pdf")
-        XCTAssertEqual(mkfifo(p, 0o600), 0, "could not create the fixture FIFO")
-
+    /// Opening a FIFO without `O_NONBLOCK` blocks until a writer arrives, and
+    /// this runs on the shared actor.
+    func testStagedFifo_isRejectedPromptly() throws {
         let start = Date()
-        XCTAssertThrowsError(try verify(p)) { error in
+        XCTAssertThrowsError(try save(path("out.pdf")) { stage in
+            XCTAssertEqual(mkfifo(stage, 0o600), 0, "could not create the fixture FIFO")
+        }) { error in
             guard case MailError.attachmentWriteUnverified(_, .notRegular) = error else {
                 return XCTFail("expected .notRegular, got \(error)")
             }
         }
         XCTAssertLessThan(Date().timeIntervalSince(start), 2.0,
-            "must reject at the stat, not block waiting for a writer to open the FIFO")
+            "must reject, not block waiting for a writer to open the FIFO")
     }
 
-    /// A path that EXISTS but cannot be examined is not "missing" (verify
-    /// round 1). Reporting `ELOOP` as `.missing` told the caller no file was
-    /// there, and made the call eligible for a download retry that cannot
-    /// possibly unpick a symlink loop.
-    func testSymlinkLoop_isStatFailedNotMissing() throws {
-        let a = path("loop-a.pdf"), b = path("loop-b.pdf")
-        try FileManager.default.createSymbolicLink(atPath: a, withDestinationPath: b)
-        try FileManager.default.createSymbolicLink(atPath: b, withDestinationPath: a)
-
-        XCTAssertThrowsError(try verify(a)) { error in
-            guard case MailError.attachmentWriteUnverified(_, .statFailed(let e)) = error else {
-                return XCTFail("expected .statFailed, got \(error)")
+    /// A link loop is not "missing": that would make the call eligible for a
+    /// download retry that cannot unpick it.
+    func testStagedSymlinkLoop_isAStageFailureNotMissing() throws {
+        XCTAssertThrowsError(try save(path("out.pdf")) { stage in
+            try FileManager.default.createSymbolicLink(atPath: stage, withDestinationPath: stage)
+        }) { error in
+            guard case AttachmentDestinationError.stage = error else {
+                return XCTFail("expected a stage failure, got \(error)")
             }
-            XCTAssertEqual(e, ELOOP, "the errno must be carried, not flattened away")
-            XCTAssertTrue(error.localizedDescription.lowercased().contains("symlink loop"),
-                          "the message must point at the real cause: \(error.localizedDescription)")
         }
     }
 
@@ -147,8 +140,7 @@ final class SaveAttachmentVerificationTests: XCTestCase {
 
     func testZeroByte_throwsTypedCaseNotTheGenericContainer() throws {
         let p = path("empty.pdf")
-        FileManager.default.createFile(atPath: p, contents: Data())
-        XCTAssertThrowsError(try verify(p)) { error in
+        XCTAssertThrowsError(try save(p, stage: stageBytes(Data()))) { error in
             guard case MailError.attachmentWriteUnverified(let path, let problem) = error else {
                 return XCTFail("#314 threw operationFailed, which no retry site matches — "
                                + "got \(error)")
@@ -159,8 +151,7 @@ final class SaveAttachmentVerificationTests: XCTestCase {
     }
 
     func testMissingFile_throwsTypedCase() {
-        let p = path("never-written.pdf")
-        XCTAssertThrowsError(try verify(p)) { error in
+        XCTAssertThrowsError(try save(path("never-written.pdf"))) { error in
             guard case MailError.attachmentWriteUnverified(_, .missing) = error else {
                 return XCTFail("expected .missing, got \(error)")
             }
@@ -179,10 +170,6 @@ final class SaveAttachmentVerificationTests: XCTestCase {
             shouldAttemptDownloadRetry(afterUnverifiedWrite: .notRegular("directory"),
                                        downloadIfMissing: true),
             "polling cannot turn a directory into a regular file — terminal, not retryable")
-        XCTAssertFalse(
-            shouldAttemptDownloadRetry(afterUnverifiedWrite: .statFailed(errno: ELOOP),
-                                       downloadIfMissing: true),
-            "nor unpick a symlink loop, a permissions problem, or an I/O error")
     }
 
     // MARK: - (B) the loop must consume an attempt, not abort on the first 0-byte
@@ -254,10 +241,7 @@ final class SaveAttachmentVerificationTests: XCTestCase {
     // MARK: - (C) allow_empty: an override that must leave a trace
 
     func testAllowEmpty_acceptsZeroBytesAndSaysSoInTheSuccessString() throws {
-        let p = path("legitimately-empty.txt")
-        FileManager.default.createFile(atPath: p, contents: Data())
-
-        let out = try verify(p, allowEmpty: true)
+        let out = try save(path("legitimately-empty.txt"), allowEmpty: true, stage: stageBytes(Data()))
         XCTAssertTrue(out.contains("0 bytes"), "got: \(out)")
         XCTAssertTrue(out.contains("allow_empty"),
             "the disclosure is the point, not decoration — an archive manifest must be able "
@@ -268,14 +252,14 @@ final class SaveAttachmentVerificationTests: XCTestCase {
     /// `allow_empty` relaxes emptiness ONLY. It must not become a way to accept
     /// a missing file or a directory.
     func testAllowEmpty_doesNotExcuseMissingOrNonRegular() throws {
-        XCTAssertThrowsError(try verify(path("absent.txt"), allowEmpty: true)) { error in
+        XCTAssertThrowsError(try save(path("absent.txt"), allowEmpty: true)) { error in
             guard case MailError.attachmentWriteUnverified(_, .missing) = error else {
                 return XCTFail("expected .missing, got \(error)")
             }
         }
-        let d = path("dir.txt")
-        try FileManager.default.createDirectory(atPath: d, withIntermediateDirectories: true)
-        XCTAssertThrowsError(try verify(d, allowEmpty: true)) { error in
+        XCTAssertThrowsError(try save(path("dir.txt"), allowEmpty: true) { stage in
+            try FileManager.default.createDirectory(atPath: stage, withIntermediateDirectories: true)
+        }) { error in
             guard case MailError.attachmentWriteUnverified(_, .notRegular) = error else {
                 return XCTFail("expected .notRegular, got \(error)")
             }
