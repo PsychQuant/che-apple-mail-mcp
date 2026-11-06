@@ -27,7 +27,7 @@ allowed-tools: Read, Write, Glob, Bash(mkdir:*)
 - `thread_query`: 要找的 thread key（必填）
 - `archive_dir`: archive 目錄，預設 `communication/emails`
 
-若無參數，提示：
+若無參數，提示（`status: bad-arguments`）：
 
 ```
 Usage: /archive-mail-view <thread-key> [archive-dir]
@@ -52,6 +52,7 @@ fi
 [ -f "${THREADS_FILE}" ] || {
   echo "ERROR: ${THREADS_FILE} not found (also no legacy ${archive_dir}/.threads.json)."
   echo "Run /archive-mail first to create the index, or /archive-mail-rebuild-threads to regenerate from existing md files."
+  echo "status: no-index"
   exit 1
 }
 ```
@@ -60,13 +61,13 @@ fi
 
 在 `.threads.json` 的 `threads` 物件中用 **case-insensitive substring match** 找符合的 key：
 
-- **0 個匹配**：列出前 20 個可用 thread key 給使用者參考，退出
+- **0 個匹配**：列出前 20 個可用 thread key 給使用者參考，退出（`status: no-match`）
 - **1 個匹配**：使用該 key
-- **多個匹配**：列出所有匹配的 thread key（含 message_count、last_message），讓使用者用更具體的 query 重跑
+- **多個匹配**：列出所有匹配的 thread key（含 message_count、last_message），讓使用者用更具體的 query 重跑（`status: ambiguous-match`）
 
 ### Step 4: 讀取 messages 並依時序排序
 
-**排序怎麼執行（#556）**：`thread_order`／`thread_bounds` 是 `archive-mail.md` 日期 recipe（標記 `archive-mail-date-recipe`）裡的純函式，這個指令不另寫一份。把該 recipe 存成固定腳本，腳本與輸入輸出檔都放在這次叫用用 `mktemp -d` 建的私有目錄（不用共用的固定路徑），輸入（每封信的 `date` 與 `file`）用 `Write` 寫成 JSON 檔，由腳本讀入後當函式引數，輸出寫成 JSON 檔再用 `Read` 讀回；信件衍生的字串只經 JSON 檔傳遞，不放進指令字串。本指令的 `allowed-tools` 沒有 python，執行 Python 時由宿主提示權限，不擴大 `allowed-tools`。**無人值守時不等待授權**：宿主沒有放行 Python（沒有人可以按允許）就視同拿不到執行能力，立刻停止，不卡住。**拿不到執行能力（宿主不放行、`python3` 不存在、recipe 執行失敗）就停止**，報 `status: order-unavailable` 與原因，不寫任何輸出、不改 `.threads.json`；**不得**退回手動比較字串或心算排序（那正是 #556 要消除的不確定性）。
+**排序怎麼執行（#556）**：`thread_order`／`thread_bounds` 是 `archive-mail.md` 日期 recipe（標記 `archive-mail-date-recipe`）裡的純函式，這個指令不另寫一份。把該 recipe 存成腳本，腳本與輸入輸出檔都放在這次叫用用 `mktemp -d` 建的私有目錄（規則見 `archive-mail.md` 的〈腳本與資料檔放在私有目錄〉），輸入（每封信的 `date` 與 `file`）用 `Write` 寫成 JSON 檔，由腳本讀入後當函式引數，輸出寫成 JSON 檔再用 `Read` 讀回；信件衍生的字串只經 JSON 檔傳遞，不放進指令字串。本指令的 `allowed-tools` 沒有 python，執行 Python 時由宿主提示權限，不擴大 `allowed-tools`。**無人值守時不等待授權**：宿主沒有放行 Python（沒有人可以按允許）就視同拿不到執行能力，立刻停止，不卡住。**拿不到執行能力（宿主不放行、`python3` 不存在、recipe 執行失敗）就停止**，報 `status: order-unavailable` 與原因，不寫任何輸出、不改 `.threads.json`；**不得**退回手動比較字串或心算排序（那正是 #556 要消除的不確定性）。
 
 對選定的 thread entry：
 
@@ -166,12 +167,26 @@ To：Ada 與 Cleo
 Thread View Generated
 ═══════════════════════════════════════════
 
+status: generated
 Thread key: Aster manuscript 2025
 Source: 17 messages across 40 days
 Output: communications/.threads/Aster-manuscript-2025.md
 
 ═══════════════════════════════════════════
 ```
+
+## 狀態詞（#635）
+
+這個指令結束時只有下面六個 `status`，只有這些，不得依性質相似類推。每個出口都用這些字報告，不另造詞。
+
+| status | 出口 | 意思 | 留下什麼 |
+|--------|------|------|----------|
+| `generated` | Step 6 | 聚合視圖已寫出 | 視圖檔 |
+| `bad-arguments` | Step 1 | 沒有 `thread_query` | 什麼都沒寫 |
+| `no-index` | Step 2 | `threads.json` 與 legacy `.threads.json` 都不存在 | 什麼都沒寫 |
+| `no-match` | Step 3 | 沒有符合的 thread key | 什麼都沒寫；Step 2 可能已搬移 legacy 檔 |
+| `ambiguous-match` | Step 3 | 符合的 thread key 超過一個 | 什麼都沒寫；Step 2 可能已搬移 legacy 檔 |
+| `order-unavailable` | Step 4 | 拿不到排序的執行能力 | 沒有視圖；Step 2 可能已搬移 legacy 檔 |
 
 ## 注意事項
 
