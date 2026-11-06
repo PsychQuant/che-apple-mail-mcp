@@ -56,10 +56,13 @@ sub probe {
     if (!defined $pid) { restore_signals($old_mask); close $reader; close $writer; debug("$stage fork unavailable"); return }
     if ($pid == 0) {
         close $reader;
-        # setpgid returns undef on failure; comparing undef with == warns under `use warnings`,
-        # and STDERR is still the hook's here (#605). Test definedness first.
+        # The parent makes the same call. When it wins the race this one fails with EPERM although
+        # the group is already right (measured under load, #605), so a failure counts only if the
+        # child is not its own group leader. setpgid returns undef on failure, and undef == 0 warns
+        # and is true: STDERR is still the hook's here, and that comparison used to wave every
+        # failure through.
         my $pgid_ok = POSIX::setpgid(0, 0);
-        (defined $pgid_ok && $pgid_ok == 0) or POSIX::_exit(125);
+        ((defined $pgid_ok && $pgid_ok == 0) || getpgrp() == POSIX::getpid()) or POSIX::_exit(125);
         $SIG{TERM} = $SIG{INT} = $SIG{HUP} = 'DEFAULT';
         restore_signals($old_mask);
         open STDIN, '<', '/dev/null' or POSIX::_exit(125);

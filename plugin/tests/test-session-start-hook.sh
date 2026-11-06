@@ -560,28 +560,53 @@ assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "stderr silent with CHE_MAIL_HOOK_DEBUG=0" "[ ! -s $TEST_DIR/hook.stderr ]"
 
 # ============================================================
-# Case 16b (#605): a failed setpgid in the probe child stays silent too.
+# Case 16b (#605): a failed setpgid in the probe child stays silent.
 #
-# POSIX::setpgid returns undef on failure, and the child compared it with
+# POSIX::setpgid returns undef on failure, and the child compared that with
 # `== 0` under `use warnings` before redirecting its STDERR, so a loaded machine
 # printed "Use of uninitialized value in numeric eq" on the hook's stderr. The
-# copy below makes every setpgid in the child fail.
+# parent makes the same call; under load it can win the race, and the child's
+# call then fails with EPERM although the group is already right.
+#
+# Each run below rewrites the installed copy of the helper. The first asserts
+# that the probe really got that far, because `run` alone cannot tell a silent
+# failure from a hook that never reached the helper.
 # ============================================================
-echo "Case 16b: a failed setpgid in the probe child keeps the hook silent"
-reset_state
-write_plugin_json "2.18.0"
-write_runtime_file "0" "2.18.0"
-write_mock_mcp_binary "2.28.0" 0
-cp "$FAKE_PLUGIN/scripts/fda-assist.pl" "$TEST_DIR/fda-assist.pl.orig"
-sed 's/POSIX::setpgid(0, 0)/undef/' "$TEST_DIR/fda-assist.pl.orig" > "$FAKE_PLUGIN/scripts/fda-assist.pl"
-assert "the copy really makes setpgid fail" \
-    "! grep -q 'POSIX::setpgid(0, 0)' $FAKE_PLUGIN/scripts/fda-assist.pl && grep -q 'undef' $FAKE_PLUGIN/scripts/fda-assist.pl"
-HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" CHE_MAIL_HOOK_DEBUG=0 \
-    "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
-EXIT=$?
-cp "$TEST_DIR/fda-assist.pl.orig" "$FAKE_PLUGIN/scripts/fda-assist.pl"
+run_with_setpgid_rewrite() {
+    local expression="$1" debug="$2"
+    reset_state
+    write_plugin_json "2.18.0"
+    write_runtime_file "0" "2.18.0"
+    write_mock_mcp_binary "2.28.0" 0
+    rm -f "$TEST_DIR/binary-calls.log"
+    cp "$FAKE_PLUGIN/scripts/fda-assist.pl" "$TEST_DIR/fda-assist.pl.orig"
+    sed -e "$expression" "$TEST_DIR/fda-assist.pl.orig" > "$FAKE_PLUGIN/scripts/fda-assist.pl"
+    assert "the rewrite changed the helper" \
+        "! cmp -s $TEST_DIR/fda-assist.pl.orig $FAKE_PLUGIN/scripts/fda-assist.pl"
+    HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" CHE_MAIL_HOOK_DEBUG="$debug" \
+        "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
+    EXIT=$?
+    cp "$TEST_DIR/fda-assist.pl.orig" "$FAKE_PLUGIN/scripts/fda-assist.pl"
+}
+
+echo "Case 16b: setpgid fails and the child is not its own group leader"
+# Neither call took effect as far as the child can see: the probe must not run.
+NOT_LEADER='s/POSIX::setpgid(0, 0)/undef/; s/getpgrp() == POSIX::getpid()/0/'
+run_with_setpgid_rewrite "$NOT_LEADER" 0
 assert "exit 0 when setpgid fails" "[ $EXIT -eq 0 ]"
 assert "stderr silent when setpgid fails" "[ ! -s $TEST_DIR/hook.stderr ]"
+run_with_setpgid_rewrite "$NOT_LEADER" 1
+assert "the child stops with 125 and the offer is kept" "grep -q 'exited 125; preserving offer' $TEST_DIR/hook.stderr"
+assert "no warning with debug on" "! grep -q 'uninitialized' $TEST_DIR/hook.stderr"
+assert "the binary was not run" "[ ! -e $TEST_DIR/binary-calls.log ]"
+
+echo "Case 16c: setpgid fails because the parent's call won the race"
+# The child's call really takes effect and then reports failure: the group is
+# right, so the probe goes on. This is what EPERM under load looks like.
+run_with_setpgid_rewrite 's/POSIX::setpgid(0, 0)/do { POSIX::setpgid(0, 0); undef }/' 0
+assert "exit 0 when the parent won the race" "[ $EXIT -eq 0 ]"
+assert "stderr silent when the parent won the race" "[ ! -s $TEST_DIR/hook.stderr ]"
+assert "the probe still ran the binary" "grep -Fxq -- '--version' $TEST_DIR/binary-calls.log"
 
 # ============================================================
 # Case 17: a feature after staleness still runs without either dependency.

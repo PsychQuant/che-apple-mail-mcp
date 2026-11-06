@@ -27,7 +27,7 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 
 ### Fixed
 
-- SessionStart hook 在 `setpgid` 失敗時不再把 Perl 警告印到 stderr。`fda-assist.pl` 的探測子行程在 `use warnings` 下拿 `POSIX::setpgid` 的回傳值比 `== 0`，失敗時回傳 undef，警告出現在 STDERR 轉向 `/dev/null` 之前，於是落在 hook 的 stderr；機器負載高時，即使 `CHE_MAIL_HOOK_DEBUG=0` 也看得到。現在先判斷是否 defined，失敗路徑不變（`_exit(125)`，呼叫端保留 offer）。（#605）
+- SessionStart hook 在 `setpgid` 失敗時不再把 Perl 警告印到 stderr。`fda-assist.pl` 的探測子行程在 `use warnings` 下拿 `POSIX::setpgid` 的回傳值比 `== 0`；失敗時回傳 undef，而 `undef == 0` 會警告且結果為真，警告又出現在 STDERR 轉向 `/dev/null` 之前，於是落在 hook 的 stderr，機器負載高時即使 `CHE_MAIL_HOOK_DEBUG=0` 也看得到。同一個比較也讓每一次失敗都被放行。父行程會做同一個呼叫，負載高時它先做完，子行程的呼叫就以 EPERM 失敗，但行程群組其實已經對了（實測兩次都是如此）。現在只有子行程確實不是自己群組的 leader 才 `_exit(125)`，呼叫端保留 offer；否則繼續探測。（#605）
 
 ## [4.0.0] - 2026-10-29
 
