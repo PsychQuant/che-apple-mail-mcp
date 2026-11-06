@@ -1213,6 +1213,17 @@ class ArchiveScanSopTests(unittest.TestCase):
         self.assertIn("the `index` / `both` branch keeps auditing every index entry", entry)
         self.assertNotIn("lists and the date audit.", entry)
 
+    def test_tombstone_advice_and_the_removed_step_2_check_stay_out_of_the_sop(self):
+        # #603 is a maintainer decision and its advice lives on that issue. Base had none of this wording.
+        text = DOCUMENT.read_text()
+        for word in ["不要移開", "不可移開", "index 覆蓋檢查", "index_coverage", "#603"]:
+            with self.subTest(word=word):
+                self.assertNotIn(word, text)
+        branch = text[text.index("本段只適用**未登錄**"):text.index("執行分**兩 phase**")]
+        for word in ["distributed_to", "墓碑"]:
+            with self.subTest(word=word, where="last_archived branch"):
+                self.assertNotIn(word, branch)
+
     def test_the_stale_index_stop_is_not_part_of_this_batch(self):
         text = DOCUMENT.read_text()
         self.assertNotIn("index_stale: N top-level files", text)   # #603 is a maintainer decision (stop vs recovery)
