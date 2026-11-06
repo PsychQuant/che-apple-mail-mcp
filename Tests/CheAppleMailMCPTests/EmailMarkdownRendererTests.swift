@@ -96,6 +96,25 @@ final class EmailMarkdownRendererTests: XCTestCase {
                        "2026-06-30T10:00:00+08:00", "four digits are literal")
     }
 
+    func testRfc822ToISO8601_obsoleteYearSurvivesExtraWhitespace() {
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("30 Jun         55 10:00:00 +0800"),
+                       "1955-06-30T10:00:00+08:00", "nine spaces before the year")
+        XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue,  30  Jun  55  10:00:00  +0800"),
+                       "1955-06-30T10:00:00+08:00")
+    }
+
+    func testRfc822ToISO8601_everyZoneTheRecipeAcceptsIsRead() {
+        for zone in ["UT", "UTC", "GMT", "Z"] {
+            XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue, 30 Jun 2026 10:00:00 \(zone)"),
+                           "2026-06-30T10:00:00Z", zone)
+        }
+        let hours = ["EST": 15, "EDT": 14, "CDT": 15, "MST": 17, "MDT": 16, "PST": 18, "PDT": 17]
+        for (zone, hour) in hours {
+            XCTAssertEqual(EmailMarkdownRenderer.rfc822ToISO8601("Tue, 30 Jun 2026 10:00:00 \(zone)"),
+                           "2026-06-30T\(hour):00:00Z", zone)
+        }
+    }
+
     func testRfc822ToISO8601_bareCSTKeepsTheOriginalHeader() {
         // US Central or China Standard Time: the recipe refuses to guess, and
         // keeps the day as written.

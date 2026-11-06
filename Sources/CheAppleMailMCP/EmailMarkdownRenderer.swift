@@ -192,13 +192,15 @@ enum EmailMarkdownRenderer {
     /// read `55` as the year 55. Only the year of a day-month-year date before
     /// its time matches; four-digit years are left alone.
     private static func expandingObsoleteYear(_ dateString: String) -> String {
-        guard let match = dateString.range(
-            of: #"(?<=[0-9]\s{1,8}[A-Za-z]{3,9}\s{1,8})[0-9]{2,3}(?=\s+[0-9]{1,2}:)"#,
-            options: .regularExpression),
-              let year = Int(dateString[match]) else { return dateString }
-        let digits = dateString.distance(from: match.lowerBound, to: match.upperBound)
+        guard let regex = try? NSRegularExpression(
+            pattern: #"[0-9]\s+[A-Za-z]{3,9}\s+([0-9]{2,3})\s+[0-9]{1,2}:"#),
+              let match = regex.firstMatch(
+                in: dateString, range: NSRange(dateString.startIndex..., in: dateString)),
+              let range = Range(match.range(at: 1), in: dateString),
+              let year = Int(dateString[range]) else { return dateString }
+        let digits = dateString.distance(from: range.lowerBound, to: range.upperBound)
         let expanded = digits == 3 ? year + 1900 : year + (year <= 49 ? 2000 : 1900)
-        return dateString.replacingCharacters(in: match, with: String(expanded))
+        return dateString.replacingCharacters(in: range, with: String(expanded))
     }
 
     /// Extract the numeric zone token (`+0800` / `-0530`) from an RFC 2822
