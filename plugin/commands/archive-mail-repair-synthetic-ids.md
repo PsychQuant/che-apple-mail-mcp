@@ -320,7 +320,7 @@ Step 2 階段 4 把每個候選的 `get_email_headers` 回傳交給下面的區�
 `parse_message_id(headers_text)` 依 parser 的順序處理一個候選：
 
 1. 在第一個 `\r\n\r\n`（沒有才用第一個 `\n\n`）截斷；其後的文字不是 header。
-2. 區塊內出現 VT、FF、U+0085、U+2028、U+2029 任何一個，整塊 `unusable`（`ambiguous-line-boundary`），不論出現在哪個標頭。parser 把它們當行界、RFC 5322 不當；寄件人控制的 `Subject` 可藉此塞進偽造的 `Message-ID` 行（#555），所以不復刻 parser 的切法。
+2. 區塊內出現 VT、FF、U+0085、U+2028、U+2029 任何一個，整塊 `unusable`（`ambiguous-line-boundary`），不論出現在哪個標頭。RFC 5322 只認 CR／LF 為行界。#555 之後 `RFC822Parser` 也只在 CR／LF 切行，但**已安裝的舊版 binary（早於 #555 的修正）仍會在這些字元切行**，寄件人控制的 `Subject` 可藉此塞進偽造的 `Message-ID` 行；用 Python 的 `str.splitlines()` 讀 header 也會在這些字元切行。recipe 無法知道匯出該檔的是哪一版 binary，所以仍一律拒絕：被拒的檔案原樣保留，不是靜默損失（#614 的選項 1，維護者尚未決定是否改為接受；改為接受要先解決新舊 binary 算出的 key 不同的問題）。
 3. 依序展開四種 folding（CRLF 加空白、CRLF 加 tab、LF 加空白、LF 加 tab），再以 CR 或 LF 切行；單獨的 CR 加空白不是 folding。
 4. 標頭名稱（小寫比對）與值的外圍只修剪 `TRIMMED_CHARACTERS`。這是 Foundation 的 `.whitespaces`，與 Python 的 `str.strip()` 預設值不同（後者多剪 U+001C 到 U+001F、U+0085），與 Unicode 的 Zs 也不同（Foundation 另含 U+200B）；Swift 端的測試逐一核對這份字元表。
 5. 恰一個 Message-ID 標頭。沒有、或值為空是 `absent`；兩個以上是 `duplicate-header`（parser 取最後一個，recipe 不取）；值含 `=?` 是 `encoded-word`（parser 會解碼，落盤值會變）；以 `synthetic:` 開頭是 `synthetic`；其餘必須是 `<id-left@id-right>` 或沒有角括號的 `id-left@id-right`，兩側都是 RFC 5322 的 dot-atom（不接受引號、空白與控制字元、domain literal、非 ASCII、連續句點、多個 `@`），否則是 `malformed`。這些 `unusable` 一律保守：寧可留給人工，也不產生與 export 不同的 key。
