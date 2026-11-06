@@ -125,7 +125,7 @@ return try await mailController.fallback(...)
 任何 read 路徑（shipped code、live test、ad-hoc 驗證）**絕不可**用 `messages ... whose content contains "<x>"`。這是 O(corpus) predicate：Mail 必須把**每封信的 body 反序列化**才能比對，在大信箱（~80k）會 OOM 直接拖垮 Mail.app（#218 spike 實證）。
 
 安全替代：
-- **subject / sender 比對**（`whose subject contains ... or sender contains ...`）—— shipped `searchEmails`（`MailController.swift`，predicate 由 `searchEmailsWhoseSuffix` 組出）就是這樣，不碰 content。
+- **subject / sender 比對**（`whose subject contains ... or sender contains ...`）—— shipped `searchEmails`（`AppleScript/MailController.swift`，predicate 由 `searchEmailsWhoseSuffix` 組出）就是這樣，不碰 content。
 - **scope 到特定小信箱**（如某帳號的 Drafts，~10s 封）再逐封讀 `content of m` —— 有界，可接受。
 - **id-delta 清理**：要刪測試草稿用「snapshot ids before → 刪 not-in-before」，不要靠 content 比對找。
 - live-test 找已存草稿的 .emlx：用 disk `grep`（檔案系統，不載入 Mail body）或 subject-match，不要 `whose content contains`。
