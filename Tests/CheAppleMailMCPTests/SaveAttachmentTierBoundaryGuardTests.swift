@@ -32,7 +32,9 @@ final class SaveAttachmentTierBoundaryGuardTests: XCTestCase {
                 if character == "}", !stack.isEmpty { stack.removeLast() }
             }
         }
-        throw XCTSkip("needle not found: \(needle)")
+        // Not a skip: a rename must fail here, or the guard silently stops guarding.
+        struct NeedleNotFound: Error { let needle: String }
+        throw NeedleNotFound(needle: needle)
     }
 
     private static func stripped(_ line: String) -> String {
@@ -80,6 +82,25 @@ final class SaveAttachmentTierBoundaryGuardTests: XCTestCase {
             """.components(separatedBy: "\n")
         let blocks = try enclosingBlocks(of: "destination.publish(", in: moved)
         XCTAssertFalse(blocks.filter(isCatchOrDo).isEmpty, "\(blocks)")
+    }
+
+    func testTheCheckNoticesAPublishInsideACatchArm() throws {
+        let moved = """
+            if let reader = indexReader, let rowId = Int(id) {
+                do {
+                    localData = try read()
+                } catch {
+                    return try destination.publish(localData, allowEmpty: allowEmpty)
+                }
+            }
+            """.components(separatedBy: "\n")
+        let blocks = try enclosingBlocks(of: "destination.publish(", in: moved)
+        XCTAssertTrue(blocks.contains { $0.hasPrefix("} catch") }, "\(blocks)")
+        XCTAssertFalse(blocks.filter(isCatchOrDo).isEmpty, "\(blocks)")
+    }
+
+    func testAMissingNeedleFailsRatherThanPassing() {
+        XCTAssertThrowsError(try enclosingBlocks(of: "renamed.publish(", in: ["do {", "}"]))
     }
 
     func testPublishIsTheOnlyTier1Write() throws {
