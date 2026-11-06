@@ -456,6 +456,40 @@ final class EnvelopeIndexReaderTests: XCTestCase {
         XCTAssertEqual(source.reads, 0, "an unchanged stamp reads nothing")
     }
 
+    func testAMissStatsNoMoreThanAHit() throws {
+        let clock = FakeClock(), stamp = StampSource()
+        let source = MappingSource(["UUID-A": "Alice"])
+        let reader = try makeStampedReader(source, stamp: stamp, clock: clock)
+        let afterInit = stamp.reads
+
+        clock.now += 5
+        _ = reader.accountName(for: "UUID-B")
+        XCTAssertEqual(source.reads, 1, "the miss read the source")
+        XCTAssertEqual(stamp.reads, afterInit + 1, "one stat per interval, on a miss too")
+    }
+
+    func testAChangedStampWaitsOutTheSourceCooldownAfterAMissRead() throws {
+        let clock = FakeClock(), stamp = StampSource()
+        let source = MappingSource(["UUID-A": "Alice"])
+        let reader = try makeStampedReader(source, stamp: stamp, clock: clock)
+
+        clock.now += 5
+        _ = reader.accountName(for: "UUID-A")     // the stamp check, at t=5
+        clock.now += 1
+        _ = reader.accountName(for: "UUID-B")     // a miss read, at t=6
+        XCTAssertEqual(source.reads, 1)
+
+        source.mapping = ["UUID-A": "Alicia"]
+        stamp.stamp = Date(timeIntervalSince1970: 2_000)
+        clock.now += 4
+        XCTAssertEqual(reader.accountName(for: "UUID-A"), "Alice", "t=10 is 4 s after the last read")
+        XCTAssertEqual(source.reads, 1, "the source is read at most once per cooldown, whichever path asks")
+
+        clock.now += 5
+        XCTAssertEqual(reader.accountName(for: "UUID-A"), "Alicia", "the stamp stayed unrecorded, so the check retries")
+        XCTAssertEqual(source.reads, 2)
+    }
+
     func testAnUnreadableStampChangesNothing() throws {
         let clock = FakeClock(), stamp = StampSource()
         let source = MappingSource(["UUID-A": "Alice"])

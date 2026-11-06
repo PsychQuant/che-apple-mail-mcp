@@ -128,8 +128,8 @@ public final class EnvelopeIndexReader {
     ///   - accountMapping: UUID → account name mapping. Defaults to reading
     ///     `accountMappingSource`, which defaults to AccountsMap.plist via
     ///     `AccountMapper.buildMapping()` (no AppleScript).
-    ///   - accountMappingSource: Re-read when a name or UUID lookup misses, at
-    ///     most once per `mappingRefreshCooldown` (#554). Defaults to
+    ///   - accountMappingSource: Re-read when a name or UUID lookup misses or the
+    ///     stamp changed, at most once per `mappingRefreshCooldown` (#554, #615). Defaults to
     ///     `AccountMapper.buildMapping()` when `accountMapping` is `nil`, and to
     ///     no source (the injected mapping is never replaced) when it is given.
     ///   - accountMappingStamp: When the source last changed, compared at most
@@ -394,7 +394,8 @@ public final class EnvelopeIndexReader {
 
     /// Resolve an account UUID to a human-readable name.
     /// Falls back to the UUID itself if no mapping exists. A miss re-reads the
-    /// mapping source once (subject to the cooldown) before falling back (#554).
+    /// mapping source once (subject to the cooldown) before falling back (#554),
+    /// and a hit is re-checked against the source's stamp once per cooldown (#615).
     public func accountName(for uuid: String) -> String {
         refreshMappingIfSourceChanged()
         if let name = withMappingLock({ accountMap[uuid] }) { return name }
@@ -429,19 +430,15 @@ public final class EnvelopeIndexReader {
     /// it keeps the mapping already known instead of forgetting every account.
     private func refreshMappingAfterMiss() {
         guard mappingSource != nil else { return }
-        let claimed: Int? = withMappingLock {
-            let now = clock()
-            if let last = lastMappingRead, now - last < mappingRefreshCooldown { return nil }
-            lastMappingRead = now
-            return mappingGeneration
-        }
-        guard let generation = claimed else { return }
-        readAndInstallMapping(generation: generation, stamp: mappingStamp?())
+        guard let generation = withMappingLock({ claimSourceRead() }) else { return }
+        readAndInstallMapping(generation: generation, stamp: nil)
     }
 
     /// Re-read the mapping when its source changed since it was read (#615), so
     /// a lookup that hits does not keep an answer the source no longer gives.
-    /// Claimed under the lock, so per-row lookups cost one `stat` per cooldown.
+    /// Claimed under the lock, so per-row lookups cost one `stat` per cooldown;
+    /// this is the only `stat` after `init`. A change that lands inside the
+    /// cooldown of the last read stays unrecorded, and a later check retries it.
     private func refreshMappingIfSourceChanged() {
         guard let mappingStamp else { return }
         let due: Bool = withMappingLock {
@@ -452,16 +449,26 @@ public final class EnvelopeIndexReader {
         }
         guard due, let stamp = mappingStamp() else { return }
         let generation: Int? = withMappingLock {
-            guard stamp != mappingStampRead else { return nil }
-            lastMappingRead = clock()
-            return mappingGeneration
+            stamp == mappingStampRead ? nil : claimSourceRead()
         }
         guard let generation else { return }
         readAndInstallMapping(generation: generation, stamp: stamp)
     }
 
+    /// Call under the lock. One claim for both paths, so the source is read at
+    /// most once per cooldown whichever path asks, and two paths racing for it
+    /// cause one read. Returns the generation to install against.
+    private func claimSourceRead() -> Int? {
+        let now = clock()
+        if let last = lastMappingRead, now - last < mappingRefreshCooldown { return nil }
+        lastMappingRead = now
+        return mappingGeneration
+    }
+
     /// The stamp was taken before this read and is recorded only with a good
-    /// mapping, so a read that failed or raced a change is tried again.
+    /// mapping, so a read that failed or raced a change is tried again. A miss
+    /// read passes no stamp: if the source had changed, the next stamp check
+    /// reads it once more, which is cheaper than a second `stat` per cooldown.
     private func readAndInstallMapping(generation: Int, stamp: Date?) {
         guard let source = mappingSource else { return }
         let fresh = source()
@@ -470,7 +477,7 @@ public final class EnvelopeIndexReader {
             guard mappingGeneration == generation else { return }
             accountMap = fresh
             reverseAccountMap = Self.buildReverseMap(from: fresh)
-            mappingStampRead = stamp
+            if let stamp { mappingStampRead = stamp }
             mappingGeneration += 1
         }
     }
