@@ -48,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A quoted-printable soft break at the very end of a part no longer leaves a
+  stray `=`** ([#626](https://github.com/PsychQuant/che-apple-mail-mcp/issues/626)).
+  The decoder's end-of-input guard ran before its soft-break test, so `=` plus a
+  line break that was the last thing in the input was written out verbatim.
+  Multipart text keeps the line break before the boundary (#546), which made this
+  visible at the end of a body. A lone `=` or a truncated escape such as `=4`
+  still stays literal.
+
 - **A header value no longer ends at a Unicode line character**
   ([#555](https://github.com/PsychQuant/che-apple-mail-mcp/issues/555)).
   The header parser split lines with `CharacterSet.newlines`, which besides CR
