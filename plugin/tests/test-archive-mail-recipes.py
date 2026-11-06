@@ -496,6 +496,28 @@ class ArchiveSkipDraftsSopTests(unittest.TestCase):
         self.assertNotIn("部分 item `status:\"error\"` → 該 id 走 Step 5.1 補抓，其餘", self.text)
         self.assertIn("**不是**以 `draft_status_unknown:` 開頭", self.text)
 
+    def test_the_8b_denominator_is_subtracted_per_thread_only(self):
+        text = DOCUMENT.read_text()
+        note = text[text.index("**草稿與分母（#580）**"):]
+        note = note[:note.index("\n")]
+        for word in ["**不可**拿全 run 的 `drafts_skipped`", "只能減「能對應到這個 thread」的", "`_bare_subject`",
+                     "就**不扣**", "無法判定（可能含草稿）", "揭露這個稽核限制"]:
+            with self.subTest(word=word):
+                self.assertIn(word, note)
+
+    def test_the_call_block_is_not_an_unconditional_template(self):
+        text = DOCUMENT.read_text()
+        block = text[text.index('opts: { filename_style: "archive-mail", skip_partial: true, skip_drafts: true }'):]
+        block = block[:block.index("\n)")]
+        self.assertIn("依 tool schema 決定", block)
+        self.assertIn("不是無條件照抄的範本", block)
+
+    def test_a_null_is_draft_is_looked_up_again_and_never_guessed(self):
+        text = DOCUMENT.read_text()
+        self.assertIn("缺席或 `null`", text)
+        self.assertIn("計入「草稿狀態不明」，不當成草稿也不當成非草稿", text)
+        self.assertIn("走 fallback 的小批次可能比以前少歸檔幾封", text)
+
     def test_per_email_path_requires_is_draft_false(self):
         self.assertIn("只有值恰為 `false` 才歸檔", self.text)
 

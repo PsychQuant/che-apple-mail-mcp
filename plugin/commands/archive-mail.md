@@ -1335,6 +1335,8 @@ batch_export_emails_markdown(
   ids: [<corpus 全部 ids>],
   output_dir: "${output_dir}",
   opts: { filename_style: "archive-mail", skip_partial: true, skip_drafts: true }
+  # 兩個選項都依 tool schema 決定：schema 沒宣告 `filename_style`／`skip_drafts` 就把該鍵拿掉（見下方兩段能力檢查）；
+  # 舊 binary 會靜默忽略不認得的 opts 鍵，所以這一行不是無條件照抄的範本。
 )
 ```
 
@@ -1379,7 +1381,7 @@ batch_export_emails_markdown(
 
 以下為 fallback 路徑（< 5 封 / enriched template / batch 失敗）。對每封新郵件，建立 Markdown 檔案。
 
-> **草稿檢查（#580）**：這條路徑沒有批次的 `skip_drafts`，所以 `get_email` 之前先看該信在 `search_emails`（full 或 summary）列上的 `is_draft`（沒有就用 `get_email_metadata`）。**只有值恰為 `false` 才歸檔**；`true` 與缺席／無法判斷都不歸檔，Step 7 只報 id／數量。mailbox 名稱 drop-set（Step 3）仍照常先套，兩者是疊加不是取代。
+> **草稿檢查（#580）**：這條路徑沒有批次的 `skip_drafts`，所以 `get_email` 之前先看該信在 `search_emails`（full 或 summary）列上的 `is_draft`（沒有就用 `get_email_metadata`）。**只有值恰為 `false` 才歸檔**；`true` 不歸檔、計入「草稿排除」；缺席或 `null`（AppleScript fallback 的列沒有這個欄位時常見）先用 `get_email_metadata` 再查一次，仍不是 `false` 就不歸檔、計入「草稿狀態不明」，不當成草稿也不當成非草稿。代價：走 fallback 的小批次可能比以前少歸檔幾封，Step 7 的「草稿狀態不明」就是這個數字。mailbox 名稱 drop-set（Step 3）仍照常先套，兩者是疊加不是取代。
 
 > **⚠️ 再次提醒（來自 Step 3）**：在 Step 5 呼叫 `mcp__plugin_che-apple-mail-mcp_mail__get_email` 讀取內文時，同樣要用 **display name（email 地址）**作為 `account_name`，不可用 `list_accounts` 回的 `ews://` URL 或 UUID——否則 AppleScript error -1728。
 
@@ -1898,7 +1900,7 @@ Thread 索引行（v2.6.0+）：永遠顯示，即使沒新 thread。
    `search_emails(field: "subject", query: bare_subject, projection: "summary", dedup: "logical", limit: N)`
    —— **必須 `projection: "summary"`**（唯一同時回 `mailbox` 又支援 `dedup` 的 projection：`count` 無 row 無法套 drop-set、`full` 不支援 `dedup`，plugins#208）；**`dedup: "logical"`** 在伺服器端塌陷同一封信的多匣副本（Gmail INBOX + 全部郵件 等）——否則含 dual-stored 的信會被重複計數，即使**零草稿**也 `archived < total` 每次誤報（plugins#112 的真正根因，不只是草稿）。`N` 取遠大於該 subject 預期兄弟數（**預設 limit 僅 50，通常不足**）。`dedup: logical` 依 (subject, sender, date_received) 分組，是分子 Message-ID 基礎的**近似**（勿宣稱逐 Message-ID 對等）。誠實揭露方向：此粗粒度 dedup 對 completeness 稽核偏「**少算**」而非「多算」——極罕見情形下兩封**真正不同**的信共用相同 subject+sender+同秒收信時戳會塌成一筆，若其中一封正是缺失的兄弟，`archived < total` 就不觸發而**漏報**（不是誤報）。正常郵件流下此三元組完全碰撞機率可忽略，且 `search_emails` 無 Message-ID 級 dedup，此為工具限制、非本步引入。
 2. **對結果每筆的 `mailbox` 套用 Step 3 的統一 drop-set**（丟 Drafts / Trash 實名 + `exclude_mailboxes`（角色名先用 dropset recipe 的 `expand_exclude` 展開成該帳號實名，分子與分母用同一份展開結果，#594），比對規則見 Step 3 的 `matchesSpecial`，**勿裸 `==`**），數過濾後的存活筆數為 total —— 分子（已歸檔 count）已經 Step 3 Message-ID 去重且排除草稿/垃圾桶；分母同時經 `dedup: logical` 去重（步驟 1）＋ drop-set 排除（本步），兩邊才同基礎。
-   > **草稿與分母（#580）**：批次匯出以 `is_draft` 排除的草稿（含 Gmail 全部郵件內、mailbox 名稱看不出來的副本）不在分子裡，但仍可能留在由 mailbox 名稱 drop-set 算出的分母裡，這會讓 `archived < total` 變成假警報。分母若有這類缺口，把 Step 5.0 manifest 的 `drafts_skipped`（加 Step 5.1 逐信排除數）從 total 扣掉再比，並在報告註明扣了多少；不要把缺口當成漏歸檔去補抓。
+   > **草稿與分母（#580）**：批次匯出以 `is_draft` 排除的草稿（含 Gmail 全部郵件內、mailbox 名稱看不出來的副本）不在分子裡，但仍可能留在由 mailbox 名稱 drop-set 算出的分母裡，造成 `archived < total` 的假警報。**不可**拿全 run 的 `drafts_skipped` 去減單一 thread 的分母（那會把別的 thread 的草稿算進來，真正缺的兄弟被減掉而漏報）。只能減「能對應到這個 thread」的：Step 5.0 manifest 每個 `draft_skipped` item 的 `id`（以及 Step 5.1 逐信排除的 id），去 Step 3／4 留在記憶體裡的 corpus 列查它的 `subject`，用同一個 bare subject 規則（`_bare_subject`）與本 thread 比對，相符的才算這個 thread 的草稿，從 total 扣掉並在報告寫出扣了幾封。有任何一個被排除的 id 在 corpus 找不到列，或 `dedup: logical` 之後對不到 id，就**不扣**，這個 thread 的稽核結果標為「無法判定（可能含草稿）」，並照實揭露這個稽核限制；不要把缺口當成漏歸檔去補抓，也不要靜默當成通過。
    > **實作註（drop-set 套在代表匣上）**：`dedup: logical` 去重後每筆只剩一個代表 `mailbox`，drop-set 即套在該代表匣。此在 Gmail 模型下安全——dual-storage 對（INBOX/全部郵件、寄件備份/全部郵件）全是**非 drop** 匣，而 Drafts/Trash 副本因 sender/date 不同不會與收件塌成同一筆，故代表匣不會誤把該保留的信丟掉。非 Gmail provider 若存在「同一信橫跨 kept + dropped 匣」的儲存模型，需另行驗證代表匣選取不會漏丟。
 3. **檢查步驟 1 回傳的 `truncated`**：若 `truncated: true`（配對數超過 `limit`），過濾後的頁面只是**被截斷的一頁**，**不得**當成完整分母 —— 據此比對會把「其實缺兄弟」誤判成 complete（false-negative，比誤報更糟，因為它**靜默隱藏真正的缺口**）。改提高 `limit` 重取直到 `truncated: false`；若仍無法取全，發出 `⚠️ Thread "{subject}": 稽核分母被截斷（配對數 > limit），無法證明完整`，並**略過**此 thread 的 archived/total 比對（不得回報 complete）。
 4. `truncated: false` 時比對已歸檔的 count：若 `archived < total` → 發出 warning：`⚠️ Thread "{subject}": {差額} potential missing siblings (archived {已歸檔}/{total})`。該 subject 若在 Step 4 的 `refinement_dropped` 裡（用 recipe 的 `_bare_subject` 正規化後比對每筆記錄的 `thread_key`，不拿原始主旨比對），警告後面補上 `(該 thread 被 refinement 丟棄:<reason 欄位名>)`，讓使用者看得出缺的信不是搜尋或去重的問題（#509）
