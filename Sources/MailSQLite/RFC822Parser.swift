@@ -340,7 +340,7 @@ public enum RFC822Parser {
     /// `String` overload would re-encode each of them as UTF-8 (#561).
     static func decodeQuotedPrintableBytes(_ raw: Data) -> Data? {
         decodeQuotedPrintable(ByteDecoding.latin1String(raw)) { out, literal in
-            for scalar in literal.unicodeScalars { out.append(UInt8(scalar.value)) }
+            for scalar in literal.unicodeScalars { out.append(UInt8(truncatingIfNeeded: scalar.value)) }
         }
     }
 
