@@ -425,10 +425,11 @@ class ArchiveRecipesTests(unittest.TestCase):
 class ArchiveTrustBoundarySourcesTests(unittest.TestCase):
     def section(self):
         text = DOCUMENT.read_text()
-        return text[text.index("## Trust boundary（#395）"):text.index("### Safe leaf filename（#395）")]
+        return text[text.index("## Trust boundary（#395）"):text.index("### 腳本與資料檔放在私有目錄（#635）")]
 
     def test_the_four_sources_are_named(self):
-        for word in ("歸檔目錄裡既有的檔名", "從磁碟讀回的 frontmatter 值（`message_id`、`date`）", "`Date` header",
+        for word in ("歸檔目錄裡既有的檔名", "從磁碟讀回的 frontmatter 值（`message_id`、`date` 與其他欄位）",
+                     "索引檔裡的值（例如 `threads.json` 的 `file`）", "`Date` header",
                      "工具回傳的錯誤字串（例如 `draft_status_unknown` 的 `error`）"):
             with self.subTest(word=word):
                 self.assertIn(word, self.section())
@@ -448,7 +449,7 @@ class ArchiveTrustBoundarySourcesTests(unittest.TestCase):
 class ArchivePrivateDirectorySopTests(unittest.TestCase):
     COMMANDS = DOCUMENT.parent
     POINTER = "〈腳本與資料檔放在私有目錄〉"
-    FIXED = re.compile(r"固定腳本|固定的暫存|固定暫存|固定的資料檔|固定的 JSON")
+    FIXED = re.compile(r"固定腳本|固定的腳本|固定的暫存|固定暫存|固定的資料檔|固定的 JSON")
 
     def line(self, start):
         text = DOCUMENT.read_text()
@@ -462,22 +463,36 @@ class ArchivePrivateDirectorySopTests(unittest.TestCase):
     def test_the_rule_is_named_once_in_the_sop(self):
         text = DOCUMENT.read_text()
         section = text[text.index("### 腳本與資料檔放在私有目錄（#635）"):text.index("### Safe leaf filename（#395）")]
-        for word in ("`mktemp -d`", "這次叫用", "共用、可預測的路徑", "`allowed-tools`", "#556", "不退回固定路徑"):
+        for word in ("`mktemp -d`", "這次叫用", "共用、可預測的路徑", "`allowed-tools`", "#556", "不退回固定路徑",
+                     "`tempfile.mkdtemp()`", "等於這一步的 Python 跑不了", "步驟沒有寫的，停下來告訴使用者",
+                     "進指令字串時加引號"):
             with self.subTest(word=word):
                 self.assertIn(word, section)
 
     def test_every_site_points_at_the_rule(self):
         for start in ("- 含這三個字元時，執行下面的 recipe", "**`last_archived` 界線檢查（#600）**", "實際呼叫時把上述程式存成",
-                      "呼叫方式與 index recipe 相同", "實際呼叫時先用 `Write` 把 HTML", "**目錄掃描 recipe(#604"):
+                      "呼叫方式與 index recipe 相同", "實際呼叫時先用 `Write` 把 HTML", "**目錄掃描 recipe(#604",
+                      "5. 更新 `first_message`／`last_message`（#556）"):
             with self.subTest(start=start):
                 self.assertIn(self.POINTER, self.line(start))
+
+    def test_the_other_commands_point_at_the_rule(self):
+        for name in ("archive-mail-rebuild-threads.md", "archive-mail-view.md", "archive-mail-repair-synthetic-ids.md"):
+            with self.subTest(name=name):
+                self.assertIn(self.POINTER, (self.COMMANDS / name).read_text())
 
     def test_the_repair_command_says_where_its_files_go_and_how_it_stops(self):
         text = (self.COMMANDS / "archive-mail-repair-synthetic-ids.md").read_text()
         paragraph = text[text.index("**JSON 檔與程式放在私有目錄（#635）**"):].split("\n", 1)[0]
-        for word in ("`mktemp -d`", "Step 1 的 apply-unavailable", "不退回固定路徑", "私有目錄自己的路徑"):
+        for word in ("`mktemp -d`", "Step 1 的 apply-unavailable（`stage: file-inspection`）", "`lookup-unavailable`",
+                     "不退回固定路徑", "私有目錄自己的路徑"):
             with self.subTest(word=word):
                 self.assertIn(word, paragraph)
+
+    def test_the_repair_prompt_check_is_about_archive_paths(self):
+        text = (self.COMMANDS / "archive-mail-repair-synthetic-ids.md").read_text()
+        self.assertIn("命令字串不含歸檔裡的任何路徑（這些路徑只在 JSON 檔裡）", text)
+        self.assertNotIn("命令字串不含任何路徑", text)
 
     def test_mktemp_is_not_pre_approved(self):
         for path in sorted(self.COMMANDS.glob("archive-mail*.md")):
@@ -510,12 +525,14 @@ class ThreadCommandStatusTableTests(unittest.TestCase):
                 rows = dict(re.findall(r"^\| `([a-z-]+)` \| (Step \d) \|", section, re.M))
                 self.assertEqual(rows, {status: heading[4:] for status, heading in exits.items()})
                 self.assertIn("只有這些，不得依性質相似類推", section)
+                self.assertIn("工具本身失敗", section)
+                self.assertIn("不寫 `status:` 行", section)
 
     def test_every_status_in_the_text_is_in_the_table(self):
         for name, exits in self.EXITS.items():
             _, rest = self.split((self.ROOT / name).read_text())
             with self.subTest(name=name):
-                self.assertEqual(set(re.findall(r"status: ([a-z-]+)", rest)) - set(exits), set())
+                self.assertEqual(set(re.findall(r"status[:：] ?([a-z-]+)", rest)) - set(exits), set())
 
     def test_every_exit_names_its_status_in_its_own_step(self):
         for name, exits in self.EXITS.items():
