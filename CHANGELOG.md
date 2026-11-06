@@ -127,9 +127,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   action as uploaded, and a failed read of the queued action counted as "none".
   A failed read now counts as still queued, so the wait keeps looking and ends as
   pending unless a later read confirms the upload. Both reads now say why they
-  failed on stderr, up to two lines per poll during the 10-second wait. If the
-  read keeps failing, a draft Mail did upload is reported as pending. The 10-second
-  limit and the read repair after a confirmed upload are unchanged.
+  failed on stderr, up to two lines per poll, about 200 lines per draft if they
+  keep failing. A read that keeps failing costs more than it did: the draft takes
+  the full wait instead of ending at once, longer if a held lock makes each read
+  wait out the 5-second busy timeout. A draft Mail did upload is then reported as
+  pending, and the read repair, which runs only after a confirmed upload, does not
+  run, so its local copy can stay unread. The 10-second limit itself is unchanged.
 - **A refused export path no longer says where it resolved**
   ([#625](https://github.com/PsychQuant/che-apple-mail-mcp/issues/625)). When
   `batch_export_emails_markdown` refused `output_dir` or

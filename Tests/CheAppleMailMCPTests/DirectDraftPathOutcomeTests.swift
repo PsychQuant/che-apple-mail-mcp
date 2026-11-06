@@ -232,21 +232,27 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
     }
 
     /// A failure that clears inside the deadline is not a verdict: the loop keeps looking, and
-    /// the upload it then observes is reported, with the read repair after it (rule item 7).
+    /// the upload it then observes is reported, with the read repair after it (rule item 7). It
+    /// must not be reported before the read recovers: that is the failed read counting as "none".
     func testAnActionReadThatRecoversStillConfirmsTheUpload() async throws {
         let store = try XCTUnwrap(self.store)
+        let recovery = RecoveryTask()
         let mail = FakeDirectDraftMail { rowId in
             try store.setRemoteId(rowId)
             try store.hideQueuedActions()
-            Task.detached {
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                try? store.showQueuedActions()
-                try? store.markUploaded(rowId)
+            recovery.task = Task.detached {
+                try await Task.sleep(nanoseconds: 300_000_000)
+                try store.showQueuedActions()
+                try store.markUploaded(rowId)
             }
         }
         var direct = try path(mail)
         direct.uploadDeadline = 5
+        let started = Date()
         let (text, gui, rows) = try await run(direct)
+        let elapsed = Date().timeIntervalSince(started)
+        try await recovery.task?.value
+        XCTAssertGreaterThanOrEqual(elapsed, 0.3, "confirmed before the read recovered")
         XCTAssertEqual(gui, 0)
         XCTAssertTrue(text.contains("uploaded"), text)
         XCTAssertEqual(rows.direct.map { $0.label }, Self.steps + ["trigger_sent", "uploaded", "read_ensured", "returned"])
@@ -291,6 +297,11 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
         XCTAssertTrue(log.contains("messages.remote_id read failed"), log)
     }
 
+}
+
+/// The background work of a Mail stand-in, kept so a test can await it and see it fail.
+final class RecoveryTask: @unchecked Sendable {
+    var task: Task<Void, Error>?
 }
 
 /// One `direct` row of a timing CSV.
