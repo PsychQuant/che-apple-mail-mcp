@@ -91,7 +91,7 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
         XCTAssertEqual(Set(rows.direct.map { $0.outcome }), ["created:upload_pending"])
     }
 
-    /// Rule item 2: a failed upload request is rolled back exactly, and only then is the GUI path run.
+    /// Rule item 2: a failed upload request is rolled back, and only then is the GUI path run.
     func testFailedTriggerRollsBackThenFallsBack() async throws {
         let before = try store.rowCounts()
         let mail = FakeDirectDraftMail { _ in throw MailError.scriptFailed(message: "fixture: Mail did not answer", code: -1) }

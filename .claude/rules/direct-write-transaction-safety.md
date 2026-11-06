@@ -96,7 +96,7 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
   - 觸發失敗且還原因其他原因失敗 → `created:upload_pending`，回報上傳未確認；
   - 上傳後仍未讀 → 補設已讀一次；補設無效 → 帶 note，沒有 `read_ensured`。
 
-  另有純函式的單元測試（`outcomeAfterFailedTrigger` 三條、`readOutcome`）、`createDraft` 層的一條（`testACreatedDirectDraftSkipsTheGuiPath`），以及 writer 端的兩條：提交後的 `rollback()` 會還原全部（`testInsertWritesEveryRowAndTheFileThenRollbackRestoresAll`）、Mail 已上傳就拒絕還原（`testRollbackRefusesOnceTheServerHasTheMessage`）。這批測試證明的是 `attemptSteps` 的分支，不是 Mail 的真實行為；後者仍靠 live 驗證。
+  另有純函式的單元測試（`outcomeAfterFailedTrigger` 三條、`readOutcome`）、`createDraft` 層的一條（`testACreatedDirectDraftSkipsTheGuiPath`），以及 writer 端的兩條：提交後的 `rollback()` 會還原它涵蓋的資料列與 `.emlx`（`testInsertWritesEveryRowAndTheFileThenRollbackRestoresAll`，不涵蓋的見 #628）、Mail 已上傳就拒絕還原（`testRollbackRefusesOnceTheServerHasTheMessage`）。這批測試證明的是 `attemptSteps` 的分支，不是 Mail 的真實行為；後者仍靠 live 驗證。
 - **第 4 項**：`DirectDraftPathTests` 有三種寫入前結果的行為測試：旗標關、一種不符條件（cc/bcc）、版本閘門（讀不到 Mail 版本）；`DirectDraftPathOutcomeTests` 另有三種（作業系統版本不符、帳號有簽名、store schema 漂移），都斷言 store 沒有被動過、沒有觸發。其餘條件與閘門只測了結果代碼與文字，也沒有測試證明每次呼叫都依序跑完全部閘門。「cache 不能取代閘門」要等 cache 存在才有東西可測（#487）。
 - **第 5 項**：沒有測試，見 #491。
 
