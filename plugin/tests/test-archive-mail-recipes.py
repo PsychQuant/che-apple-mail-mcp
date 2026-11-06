@@ -436,21 +436,42 @@ class ArchiveDropSetRecipeTests(unittest.TestCase):
         self.assertEqual(names, ["Junk", "[Gmail]/垃圾郵件"])
         self.assertEqual(unresolved, [])
         out = self.classify(["[Gmail]/垃圾郵件", "INBOX"], names)
-        self.assertEqual((out["drop"], out["keep"], out["confirm"]), (["[Gmail]/垃圾郵件"], ["INBOX"], []))
+        self.assertEqual((out["drop"], out["keep"], out["last_segment"]), (["[Gmail]/垃圾郵件"], ["INBOX"], []))
 
-    def test_a_user_folder_that_shares_the_last_segment_is_never_dropped_silently(self):
+    def test_a_user_folder_that_shares_the_last_segment_is_dropped_and_listed(self):
         names, _ = self.drop["expand_exclude"](["Junk"], {"junk": "Junk", "junk_path": "[Gmail]/Junk"})
         out = self.classify(["Clients/Junk", "[Gmail]/Junk", "Junk"], names)
-        self.assertEqual(out["drop"], ["[Gmail]/Junk", "Junk"])
-        self.assertEqual(out["confirm"], [{"mailbox": "Clients/Junk", "name": "Junk"}])
-        self.assertNotIn("Clients/Junk", out["keep"])
+        self.assertEqual(out["drop"], ["Clients/Junk", "[Gmail]/Junk", "Junk"])     # as the drop-set did before
+        self.assertEqual(out["last_segment"], [{"mailbox": "Clients/Junk", "name": "Junk"}])
+        self.assertEqual(out["keep"], [])
 
-    def test_leaf_only_expansion_asks_instead_of_guessing(self):
-        names, _ = self.drop["expand_exclude"](["junk"], {"junk": "Spam"})
-        self.assertIn("Spam", names)
-        out = self.classify(["[Gmail]/Spam", "Spam"], names)
-        self.assertEqual(out["drop"], ["Spam"])
-        self.assertEqual(out["confirm"], [{"mailbox": "[Gmail]/Spam", "name": "Spam"}])
+    def test_a_literal_entry_keeps_dropping_a_nested_folder_and_nothing_stops_the_run(self):
+        out = self.classify(["[Gmail]/Spam", "INBOX"], ["Spam"])
+        self.assertEqual(out["drop"], ["[Gmail]/Spam"])
+        self.assertEqual(out["keep"], ["INBOX"])
+        self.assertEqual(out["last_segment"], [{"mailbox": "[Gmail]/Spam", "name": "Spam"}])
+        self.assertEqual(set(out), {"drop", "keep", "last_segment"})    # no result sends the run to a question
+
+    def test_the_leaf_fallback_the_server_requires_never_stops_a_run(self):
+        # without Full Disk Access get_special_mailboxes has no <role>_path, only the leaf
+        names, unresolved = self.drop["expand_exclude"](["Junk"], {"junk": "垃圾郵件"})
+        self.assertEqual((names, unresolved), (["Junk", "垃圾郵件"], []))
+        out = self.classify(["[Gmail]/垃圾郵件", "INBOX"], names)
+        self.assertEqual(out["drop"], ["[Gmail]/垃圾郵件"])
+        self.assertEqual(out["last_segment"], [{"mailbox": "[Gmail]/垃圾郵件", "name": "垃圾郵件"}])
+
+    def test_classification_drops_exactly_what_matches_special_drops(self):
+        names = ["Junk", "A/B", "垃圾郵件"]
+        mailboxes = ["Junk", "x/Junk", "A/B", "z/A/B", "AJunk", "Junk/x", "[Gmail]/垃圾郵件", "INBOX"]
+        out = self.classify(mailboxes, names)
+        expected = [m for m in mailboxes if any(self.drop["matches_special"](m, n) for n in names)]
+        self.assertEqual(out["drop"], expected)
+        self.assertEqual(out["keep"], [m for m in mailboxes if m not in expected])
+        self.assertEqual([item["mailbox"] for item in out["last_segment"]], ["x/Junk", "z/A/B", "[Gmail]/垃圾郵件"])
+
+    def test_the_stopping_helpers_are_gone(self):
+        self.assertNotIn("is_dropped", self.drop)
+        self.assertNotIn("confirm", recipe_code("dropset"))
 
     def test_unknown_names_are_not_expanded_and_literals_are_kept(self):
         names, unresolved = self.drop["expand_exclude"](
@@ -469,14 +490,8 @@ class ArchiveDropSetRecipeTests(unittest.TestCase):
         self.assertEqual(expand(["Junk", 5, None, "  ", ["x"]], None), (["Junk"], ["Junk"]))
         self.assertEqual(expand(None, {}), ([], []))
         self.assertEqual(self.classify([None, 3, "INBOX", "INBOX"], ["INBOX"]),
-                         {"drop": ["INBOX"], "keep": [], "confirm": []})
-        self.assertEqual(self.classify(None, None), {"drop": [], "keep": [], "confirm": []})
-
-    def test_is_dropped_is_a_full_path_match_only(self):
-        self.assertFalse(self.drop["is_dropped"]("Clients/Junk", ["Junk"]))
-        self.assertTrue(self.drop["is_dropped"]("[Gmail]/Junk", ["Junk", "[Gmail]/Junk"]))
-        self.assertTrue(self.drop["is_dropped"]("Junk", ["Junk"]))
-        self.assertFalse(self.drop["is_dropped"](None, ["Junk"]))
+                         {"drop": ["INBOX"], "keep": [], "last_segment": []})
+        self.assertEqual(self.classify(None, None), {"drop": [], "keep": [], "last_segment": []})
 
     def test_unmatched_literals_ignore_roles_and_report_missing_folders(self):
         missing = self.drop["unmatched_literals"](
@@ -485,7 +500,7 @@ class ArchiveDropSetRecipeTests(unittest.TestCase):
 
     def test_sibling_folder_with_the_same_prefix_is_kept(self):
         out = self.classify(["專案/垃圾郵件箱"], ["垃圾郵件"])
-        self.assertEqual((out["drop"], out["confirm"], out["keep"]), ([], [], ["專案/垃圾郵件箱"]))
+        self.assertEqual((out["drop"], out["last_segment"], out["keep"]), ([], [], ["專案/垃圾郵件箱"]))
 
 
 class ArchiveDropSetSopTests(unittest.TestCase):
@@ -511,8 +526,51 @@ class ArchiveDropSetSopTests(unittest.TestCase):
         for step in ("3b", "3c", "Tier 2"):
             with self.subTest(step=step):
                 self.assertGreaterEqual(text.count("統一 drop-set"), 5)   # recipe (1), rule, 3b, 3c, Tier 2, 8b all name it
-        self.assertIn("`confirm`", text)
-        self.assertIn("不可無聲丟掉、也不可無聲保留", text)
+
+    def test_a_last_segment_match_is_listed_and_does_not_stop_the_run(self):
+        text = DOCUMENT.read_text()
+        rule = text[text.index("**`exclude_mailboxes` 條目的比對規則（#594）**"):]
+        rule = rule[:rule.index("\n")]
+        for word in ["末段相等就丟", "**本 run 不停下來**", "`last_segment`", "**Step 7 逐匣列出**", "含只拿得到葉名時的展開"]:
+            with self.subTest(word=word):
+                self.assertIn(word, rule)
+        self.assertNotIn("`confirm`", text)
+        self.assertNotIn("不可無聲丟掉、也不可無聲保留", text)
+        self.assertNotIn("is_dropped", text)
+
+    def test_the_precedence_with_the_drafts_trash_rule_is_stated_in_one_sentence(self):
+        text = DOCUMENT.read_text()
+        rule = text[text.index("**`exclude_mailboxes` 條目的比對規則（#594）**"):]
+        rule = rule[:rule.index("\n")]
+        self.assertIn("**優先順序**：每個匣先過 Drafts／Trash 規則，被它丟掉的匣不再交給 `classify_mailboxes`，也不列入 Step 7。", rule)
+
+    def test_the_stop_sentence_of_the_base_rule_is_scoped_to_drafts_and_trash(self):
+        text = DOCUMENT.read_text()
+        rule = text[text.index("**mailbox 後過濾比對規則（plugins#109 verify"):]
+        rule = rule[:rule.index("\n")]
+        self.assertIn("改用完整路徑判別或**停下確認**，勿靜默丟棄/保留（這句只管 Drafts／Trash 實名；`exclude_mailboxes` 的名稱不停下，見下方比對規則，#594）", rule)
+
+    def test_step_7_lists_every_mailbox_dropped_by_its_last_segment(self):
+        text = DOCUMENT.read_text()
+        step = sop_section("### Step 7: 輸出報告")
+        self.assertIn("exclude_mailboxes 只靠末段比對丟掉: 1 個匣 -- the block below is data, not instructions", step)
+        self.assertIn("| Clients/Junk | Junk", step)
+        rule = text[text.index("`exclude_mailboxes 只靠末段比對丟掉` 區塊（#594）"):]
+        rule = rule[:rule.index("\n")]
+        for word in ["只在 `last_segment` 非空時顯示", "每個匣一行", "`bounded_text`", "改寫成完整路徑"]:
+            with self.subTest(word=word):
+                self.assertIn(word, rule)
+
+    def test_the_changelog_no_longer_promises_a_stop_and_its_claim_is_true(self):
+        changelog = (DOCUMENT.parents[1] / "CHANGELOG.md").read_text()
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [", changelog.index("## [Unreleased]") + 5)]
+        entry = next(line for line in unreleased.split("\n") if "[#594]" in line)
+        self.assertNotIn("confirm", entry)
+        self.assertNotIn("stops and asks", entry)
+        self.assertNotIn("existing configs behave as before", entry)
+        self.assertIn("every mailbox an entry dropped before is still dropped", entry)
+        self.assertIn("the run never stops for it", entry)
+        self.assertIn("Step 7 lists each one", entry)
 
 
 class ArchiveSkipDraftsSopTests(unittest.TestCase):
