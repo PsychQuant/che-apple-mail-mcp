@@ -267,26 +267,6 @@ final class ExportHandlerTests: XCTestCase {
         }
     }
 
-    /// Runs `body` with fd 2 pointed at a file and returns what landed there. A
-    /// file, not a pipe, so a chatty server cannot fill a buffer and hang the test.
-    private func capturingStderr(during body: () async throws -> Void) async throws -> String {
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("export625-stderr-\(UUID().uuidString)")
-        addTeardownBlock { try? FileManager.default.removeItem(at: file) }
-        let saved = dup(STDERR_FILENO)
-        guard saved >= 0 else { throw NSError(domain: "ExportHandlerFixture", code: 3) }
-        defer { close(saved) }
-        let sink = open(file.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
-        guard sink >= 0 else { throw NSError(domain: "ExportHandlerFixture", code: 4) }
-        let redirected = dup2(sink, STDERR_FILENO)
-        close(sink)
-        guard redirected == STDERR_FILENO else { throw NSError(domain: "ExportHandlerFixture", code: 5) }
-        var failure: Error?
-        do { try await body() } catch { failure = error }
-        XCTAssertEqual(dup2(saved, STDERR_FILENO), STDERR_FILENO, "fd 2 was not restored")
-        if let failure { throw failure }
-        return try String(contentsOf: file, encoding: .utf8)
-    }
-
     /// Resolution runs before the check, so an interpolated error told a caller
     /// with only MCP tools where a link inside the allowed root points.
     func testARefusalDoesNotSayWhereALinkPoints() async throws {

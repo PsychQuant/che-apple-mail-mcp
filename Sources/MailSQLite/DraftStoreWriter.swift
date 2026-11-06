@@ -158,10 +158,25 @@ public final class DraftStoreWriter {
         (try? scalarInt("SELECT read FROM messages WHERE ROWID = \(ins.messageRowId)"))?.map { $0 != 0 } ?? nil
     }
 
+    /// What the upload wait loop acts on. A failed read is not an answer: `remoteId`
+    /// stays nil and `actionQueued` stays true, so the loop keeps looking and ends as
+    /// pending instead of reporting an upload nobody observed (#630). Only a read that
+    /// worked and found no row means "not queued".
     public func uploadState(_ ins: Inserted) -> (remoteId: Int64?, actionQueued: Bool) {
-        let remote = try? scalarInt("SELECT remote_id FROM messages WHERE ROWID = \(ins.messageRowId)")
-        let queued = ((try? scalarInt("SELECT count(*) FROM local_message_actions WHERE ROWID = \(ins.actionRowId)")) ?? 0) > 0
-        return (remote ?? nil, queued)
+        var remote: Int64?
+        do {
+            remote = try scalarInt("SELECT remote_id FROM messages WHERE ROWID = \(ins.messageRowId)")
+        } catch {
+            logReadFailure("messages.remote_id", error)
+        }
+        let queued: Bool
+        do {
+            queued = (try scalarInt("SELECT count(*) FROM local_message_actions WHERE ROWID = \(ins.actionRowId)") ?? 0) > 0
+        } catch {
+            logReadFailure("local_message_actions", error)
+            queued = true
+        }
+        return (remote, queued)
     }
 
     // MARK: - Write

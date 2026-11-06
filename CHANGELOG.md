@@ -121,6 +121,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A draft is not reported as uploaded when its queued action could not be read**
+  ([#630](https://github.com/PsychQuant/che-apple-mail-mcp/issues/630)). While
+  waiting for the upload, the direct-write path treats a remote id with no queued
+  action as uploaded, and a failed read of the queued action counted as "none".
+  A failed read now counts as still queued, so the wait keeps looking and ends as
+  pending unless a later read confirms the upload. Both reads now say why they
+  failed on stderr, up to two lines per poll during the 10-second wait. If the
+  read keeps failing, a draft Mail did upload is reported as pending. The 10-second
+  limit and the read repair after a confirmed upload are unchanged.
 - **A refused export path no longer says where it resolved**
   ([#625](https://github.com/PsychQuant/che-apple-mail-mcp/issues/625)). When
   `batch_export_emails_markdown` refused `output_dir` or

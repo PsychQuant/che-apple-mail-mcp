@@ -209,6 +209,88 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
                                                      attachments: nil, format: .plain, fromAddress: FixtureDraftStore.sender)
         guard case .notAttempted(.schemaDrift) = outcome else { return XCTFail("expected schema drift, got \(outcome)") }
     }
+
+    // MARK: - A failed read of the upload state (#630)
+
+    /// A remote id with the queued action unreadable: the second signal was never observed, so
+    /// reporting uploaded here would claim what nobody saw (rule item 6). The path must end as
+    /// pending and must not fall back (rule item 3).
+    func testAFailedActionReadEndsAsPendingNotUploaded() async throws {
+        let mail = FakeDirectDraftMail { rowId in
+            try self.store.setRemoteId(rowId)
+            try self.store.hideQueuedActions()
+        }
+        var direct = try path(mail)
+        direct.uploadDeadline = 0.3
+        let (text, gui, rows) = try await run(direct)
+        XCTAssertEqual(gui, 0, "the upload request succeeded: no GUI path")
+        XCTAssertTrue(text.contains("upload pending"), text)
+        XCTAssertTrue(text.contains("not confirmed"), text)
+        XCTAssertFalse(text.contains("uploaded "), text)
+        XCTAssertEqual(rows.direct.map { $0.label }, Self.steps + ["trigger_sent", "returned"])
+        XCTAssertEqual(Set(rows.direct.map { $0.outcome }), ["created:upload_pending"])
+    }
+
+    /// A failure that clears inside the deadline is not a verdict: the loop keeps looking, and
+    /// the upload it then observes is reported, with the read repair after it (rule item 7).
+    func testAnActionReadThatRecoversStillConfirmsTheUpload() async throws {
+        let store = try XCTUnwrap(self.store)
+        let mail = FakeDirectDraftMail { rowId in
+            try store.setRemoteId(rowId)
+            try store.hideQueuedActions()
+            Task.detached {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                try? store.showQueuedActions()
+                try? store.markUploaded(rowId)
+            }
+        }
+        var direct = try path(mail)
+        direct.uploadDeadline = 5
+        let (text, gui, rows) = try await run(direct)
+        XCTAssertEqual(gui, 0)
+        XCTAssertTrue(text.contains("uploaded"), text)
+        XCTAssertEqual(rows.direct.map { $0.label }, Self.steps + ["trigger_sent", "uploaded", "read_ensured", "returned"])
+        XCTAssertEqual(Set(rows.direct.map { $0.outcome }), ["created"])
+    }
+
+    /// The fixture's own message with a remote id, and the writer the path would use.
+    private func writerFacingUpload(actionRowId: Int64) throws -> (DraftStoreWriter, DraftStoreWriter.Inserted) {
+        try store.setRemoteId(1)
+        return (try DraftStoreWriter(databasePath: store.databasePath),
+                DraftStoreWriter.Inserted(messageRowId: 1, conversationId: 0, globalDataRowId: 0,
+                                          actionRowId: actionRowId, messageIdHash: 0, emlxPath: ""))
+    }
+
+    /// The other side of the fix: a read that worked and found no row still means not queued.
+    func testAnActionReadThatFindsNoRowIsNotQueued() throws {
+        let (writer, inserted) = try writerFacingUpload(actionRowId: 999)
+        let state = writer.uploadState(inserted)
+        XCTAssertEqual(state.remoteId, 4242)
+        XCTAssertFalse(state.actionQueued)
+    }
+
+    func testAFailedActionReadCountsAsQueuedAndNamesTheCause() async throws {
+        let (writer, inserted) = try writerFacingUpload(actionRowId: 999)
+        try store.hideQueuedActions()
+        var state: (remoteId: Int64?, actionQueued: Bool)?
+        let log = try await capturingStderr { state = writer.uploadState(inserted) }
+        XCTAssertEqual(state?.remoteId, 4242)
+        XCTAssertEqual(state?.actionQueued, true)
+        XCTAssertTrue(log.contains("local_message_actions read failed"), log)
+    }
+
+    func testAFailedRemoteIdReadIsUnknownAndNamesTheCause() async throws {
+        try store.exec("INSERT INTO local_message_actions (ROWID) VALUES (7)")
+        let (writer, inserted) = try writerFacingUpload(actionRowId: 7)
+        try store.exec("ALTER TABLE messages RENAME TO messages_hidden")
+        var state: (remoteId: Int64?, actionQueued: Bool)?
+        let log = try await capturingStderr { state = writer.uploadState(inserted) }
+        XCTAssertNotNil(state)
+        XCTAssertNil(state?.remoteId)
+        XCTAssertEqual(state?.actionQueued, true)
+        XCTAssertTrue(log.contains("messages.remote_id read failed"), log)
+    }
+
 }
 
 /// One `direct` row of a timing CSV.
@@ -367,6 +449,20 @@ final class FixtureDraftStore: @unchecked Sendable {
             UPDATE messages SET remote_id = 4242 WHERE ROWID = \(rowId);
             DELETE FROM local_message_actions WHERE ROWID = (SELECT action FROM action_messages WHERE destination_message = \(rowId));
             """)
+    }
+
+    /// A remote id alone, as when Mail set it and the action could not be read.
+    func setRemoteId(_ rowId: Int64) throws {
+        try exec("UPDATE messages SET remote_id = 4242 WHERE ROWID = \(rowId)")
+    }
+
+    /// Makes every read of the queued actions fail, the way a failing store would.
+    func hideQueuedActions() throws {
+        try exec("ALTER TABLE local_message_actions RENAME TO local_message_actions_hidden")
+    }
+
+    func showQueuedActions() throws {
+        try exec("ALTER TABLE local_message_actions_hidden RENAME TO local_message_actions")
     }
 
     func addServerRow(_ rowId: Int64) throws {
