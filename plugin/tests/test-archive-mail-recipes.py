@@ -422,6 +422,50 @@ class ArchiveRecipesTests(unittest.TestCase):
             self.assertFalse((root / "PWNED").exists())
 
 
+class ArchiveDropSetRecipeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.drop = recipe("dropset")
+
+    def test_role_name_expands_to_the_localized_path(self):
+        names, unresolved = self.drop["expand_exclude"](
+            ["Junk"], {"junk": "垃圾郵件", "junk_path": "[Gmail]/垃圾郵件"})
+        self.assertEqual(names, ["Junk", "[Gmail]/垃圾郵件"])
+        self.assertEqual(unresolved, [])
+        self.assertTrue(self.drop["is_dropped"]("[Gmail]/垃圾郵件", names))
+
+    def test_leaf_fallback_when_path_is_absent_and_case_is_ignored(self):
+        names, _ = self.drop["expand_exclude"](["junk"], {"junk": "Spam"})
+        self.assertIn("Spam", names)
+        self.assertTrue(self.drop["is_dropped"]("[Gmail]/Spam", names))
+
+    def test_unknown_names_are_not_expanded_and_literals_are_kept(self):
+        names, unresolved = self.drop["expand_exclude"](
+            ["專案/垃圾", "Archive"], {"junk": "Junk", "trash": "Trash"})
+        self.assertEqual(names, ["專案/垃圾", "Archive"])
+        self.assertEqual(unresolved, [])
+
+    def test_role_without_a_mailbox_is_reported_unresolved(self):
+        names, unresolved = self.drop["expand_exclude"](["Junk"], {"trash": "Trash"})
+        self.assertEqual(unresolved, ["Junk"])
+        self.assertEqual(names, ["Junk"])
+
+    def test_unmatched_literals_ignore_roles_and_report_missing_folders(self):
+        missing = self.drop["unmatched_literals"](
+            ["Junk", "Old", "A/B"], [["INBOX", "X/B"], ["Old"]])
+        self.assertEqual(missing, ["A/B"])
+
+    def test_sibling_folder_with_the_same_prefix_is_not_dropped(self):
+        self.assertFalse(self.drop["is_dropped"]("專案/垃圾郵件箱", ["垃圾郵件"]))
+
+
+class ArchiveDropSetSopTests(unittest.TestCase):
+    def test_every_drop_set_use_points_at_the_recipe(self):
+        text = DOCUMENT.read_text()
+        self.assertIn("角色名先展開成該帳號實名", text)
+        self.assertIn("不以搜尋零命中判定", text)
+
+
 class RepairCommandPointerTests(unittest.TestCase):
     """Every place that points users at the repair command carries its prerequisite (#527 for Step 8.5, #551 for all).
 
