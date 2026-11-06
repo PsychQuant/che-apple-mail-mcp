@@ -110,6 +110,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other zone name the recipe refuses now stays as written in `date`, and its
   default filename uses `unknown-date`. Files already exported are not repaired.
 
+### Documentation
+
+- **`r-must-direct-db.md` no longer teaches the banned stderr call**
+  ([#553](https://github.com/PsychQuant/che-apple-mail-mcp/issues/553)). Both
+  Hybrid pattern examples used the non-throwing `FileHandle.write(_:)`, which
+  `NoNonThrowingStderrWriteGuardTests` forbids because it aborts the process on
+  a bad descriptor; they now use `Diagnostics.emit`. Stale `file:line`
+  references became symbol names.
+
 ## [4.0.0] - 2026-10-29
 
 ### Added
