@@ -17,8 +17,9 @@ ROOT = Path(__file__).resolve().parents[2]
 # POLL_SECONDS: a slow start only costs time, and a real failure still fails the assertion after it.
 # `assertLess(elapsed, ...)`, `run_hook(timeout=5)` and `communicate(timeout=2)` measure the 2.0 s
 # probe deadline in fda-assist.pl, so they assume an idle machine and stay as they are; that deadline
-# does not change for test convenience. They can still fail under heavy CPU load, as can a hook whose
-# first probe times out before it reaches a barrier.
+# does not change for test convenience. They can still fail under heavy CPU load. So can the concurrent
+# test: a wider poll does not widen the deadline, so a hook that times out before or at the barrier
+# ends with no offer, and the failure moves to the offer assertion.
 POLL_SECONDS = 10
 
 class FDALifecycleTests(unittest.TestCase):
@@ -79,9 +80,21 @@ sys.exit(mode.get('status',1))
             if pids or time.monotonic()>=deadline:return pids
             time.sleep(.01)
 
-    def assert_fixture_group_gone(self,grace=1):
+    def fixture_processes(self,wait):
+        # The path holds this test's temporary directory, so this finds the fixture and nothing else.
+        # A killed process takes a moment to go, hence the poll: free on success, slow only on a survivor.
+        deadline=time.monotonic()+wait
+        while True:
+            found=subprocess.run(['/usr/bin/pgrep','-f',str(self.binary)],capture_output=True,text=True).stdout.split()
+            if not found or time.monotonic()>=deadline:return found
+            time.sleep(.05)
+
+    def assert_fixture_group_gone(self,elapsed,grace=1,wait=POLL_SECONDS):
+        # #624: no pid means the deadline beat the fixture's pid line. That is only true of a full
+        # probe timeout, and load can only lengthen elapsed, so this lower bound holds under load too.
         pids=self.recorded_pids(grace)
-        if not pids:print('note: the probe timed out before the fixture recorded a pid, so there is no group to check (#624)',file=sys.stderr)
+        if not pids:self.assertGreaterEqual(elapsed,2.0,'no pid recorded and the probe ended before its 2.0 s deadline')
+        self.assertEqual(self.fixture_processes(wait),[])
         for pid in pids:
             status=subprocess.run(['/bin/ps','-o','stat=','-p',pid],capture_output=True,text=True).stdout.strip()
             self.assertTrue(not status or status.startswith('Z'),status)
@@ -114,23 +127,35 @@ sys.exit(mode.get('status',1))
                 self.assertIn('timeout',p.stderr)
                 self.assertFalse(self.marker.exists())
                 self.assertEqual(self.count_setups(),0)
-                self.assert_fixture_group_gone()
+                self.assert_fixture_group_gone(elapsed)
         self.assert_retry()
 
     # #624: under load the 2.0 s deadline can expire before the fixture records a pid. The group is
     # killed and `pids` never appears, which the product does correctly and the tests must accept.
     def test_probe_timeout_before_the_fixture_records_a_pid(self):
         self.configure(slow_start='--version')
-        p,_=self.run_hook()
+        p,elapsed=self.run_hook()
         self.assertIn('timeout',p.stderr)
-        self.assert_fixture_group_gone()
+        self.assert_fixture_group_gone(elapsed)
 
     def test_a_pid_recorded_late_is_still_checked(self):
         survivor=subprocess.Popen(['/bin/sh','-c','sleep .2; echo $$ >"$1"; exec sleep 30','sh',str(self.root/'pids')])
         self.addCleanup(survivor.wait)
         self.addCleanup(survivor.kill)
         with self.assertRaises(AssertionError):
-            self.assert_fixture_group_gone(grace=POLL_SECONDS)
+            self.assert_fixture_group_gone(elapsed=2.0,grace=POLL_SECONDS)
+
+    def test_a_survivor_with_no_pid_recorded_is_found(self):
+        self.configure(slow_start='--version')
+        survivor=subprocess.Popen([str(self.binary),'--version'],env=self.env)
+        self.addCleanup(survivor.wait)
+        self.addCleanup(survivor.kill)
+        with self.assertRaises(AssertionError):
+            self.assert_fixture_group_gone(elapsed=2.0,grace=0,wait=.2)
+
+    def test_no_pid_before_the_deadline_is_a_failure(self):
+        with self.assertRaises(AssertionError):
+            self.assert_fixture_group_gone(elapsed=1.9,grace=0)
 
     def test_exited_leader_with_stdout_descendant_times_out(self):
         for flag in ['--version','--check-fda']:
@@ -139,7 +164,7 @@ sys.exit(mode.get('status',1))
             self.assertLess(elapsed,3.5)
             self.assertIn('timeout',p.stderr)
             self.assertFalse(self.marker.exists())
-            self.assert_fixture_group_gone()
+            self.assert_fixture_group_gone(elapsed)
         self.assert_retry()
 
     def test_malformed_version_never_runs_quiet(self):
