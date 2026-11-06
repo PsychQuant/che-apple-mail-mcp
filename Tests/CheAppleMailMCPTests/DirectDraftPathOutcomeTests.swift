@@ -150,6 +150,22 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
         XCTAssertEqual(Set(rows.direct.map { $0.outcome }), ["created"])
     }
 
+    /// #492, evasion 3: a `Task` declared inside `DirectDraftPath` would turn every sleep into nothing,
+    /// and the guard tests still read the same text. Mail takes a moment to apply the repair, so looks
+    /// that do not wait use up their tries first.
+    func testTheReadRepairGivesMailTimeBetweenItsLooks() async throws {
+        let mail = FakeDirectDraftMail(onMarkRead: { rowId in
+            let store = self.store!
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.6) { try? store.setRead(rowId, true) }
+        }) { rowId in
+            try self.store.setRead(rowId, false)
+            try self.store.markUploaded(rowId)
+        }
+        let (text, _, rows) = try await run(path(mail))
+        XCTAssertFalse(text.contains("[note:"), text)
+        XCTAssertEqual(rows.direct.map { $0.label }, Self.steps + ["trigger_sent", "uploaded", "read_ensured", "returned"])
+    }
+
     func testUploadedAndStillUnreadSaysSoAndIsNotReadEnsured() async throws {
         let mail = FakeDirectDraftMail { rowId in
             try self.store.setRead(rowId, false)
