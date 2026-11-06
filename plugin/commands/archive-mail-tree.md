@@ -65,6 +65,6 @@ manifest messages 必須恰好對應 plan 的新信。不要把 filesystem 路�
 
 ## 5. 最終 reconcile 與報告
 
-遍歷 executor 回傳的 `reconcile_targets`，逐一使用該目標的 config、output_dir 與 index_file，引用原 Step 5.7／6／8.5：重建 threads、核對 Markdown→index、保留來源 tombstone、更新日期 audit／last_updated。registry 明確 index_file 為權威，不從另一個 slug 猜新 index。threads.json 位於該 index 同目錄。呼叫 `/archive-mail-rebuild-threads <registered-output-dir> --index-dir <registered-index-parent>`，不可省略 --index-dir 回到另一個 slug 推導位置。後續 Step 6／8.5 的 INDEX_FILE、THREADS_FILE 均使用這份明確綁定。
+遍歷 executor 回傳的 `reconcile_targets`，逐一使用該目標的 config、output_dir 與 index_file，引用原 Step 5.7／6／8.5：重建 threads、核對 Markdown→index 與 index→檔案（#559，唯讀回報）、保留來源 tombstone、更新日期 audit／last_updated。registry 明確 index_file 為權威，不從另一個 slug 猜新 index。threads.json 位於該 index 同目錄。呼叫 `/archive-mail-rebuild-threads <registered-output-dir> --index-dir <registered-index-parent>`，不可省略 --index-dir 回到另一個 slug 推導位置。後續 Step 6／8.5 的 INDEX_FILE、THREADS_FILE 均使用這份明確綁定。
 
 只有所有 gate 完成才回報成功。報告包含捕捉數、每個目的地數量、留 intake 的未分類／歧義信、既有歷史跳過數、index-only 數、attachment 錯誤、journal/job id，以及仍待 reconcile 的目標。executor 的 complete 不等於整個 archive workflow 已成功。

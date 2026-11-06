@@ -192,7 +192,8 @@ fi
 [ -f "${INDEX_DIR}/email_index.json" ] && echo "✓ ${INDEX_DIR}/email_index.json"
 
 # Check JSON valid
-python3 -c "import json; json.load(open('${INDEX_DIR}/email_index.json'))" \
+# 路徑走 argv，不放進 python 原始碼：INDEX_DIR 由磁碟上的目錄名組成，目錄名可以帶引號（#602）
+python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "${INDEX_DIR}/email_index.json" \
   && echo "  JSON valid" \
   || echo "  ⚠ JSON invalid"
 ```
