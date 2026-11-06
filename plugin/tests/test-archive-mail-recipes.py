@@ -466,6 +466,31 @@ class ArchiveDropSetSopTests(unittest.TestCase):
         self.assertIn("不以搜尋零命中判定", text)
 
 
+class ArchiveSkipDraftsSopTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.text = DOCUMENT.read_text()
+
+    def test_call_block_passes_skip_drafts_behind_a_schema_check(self):
+        self.assertIn('opts: { filename_style: "archive-mail", skip_partial: true, skip_drafts: true }', self.text)
+        self.assertIn("草稿排除能力檢查（#580）", self.text)
+        self.assertIn("把新選項傳給未宣告它的工具並假設生效", self.text)
+
+    def test_both_new_statuses_are_named(self):
+        self.assertIn("draft_skipped", self.text)
+        self.assertIn("draft_status_unknown:", self.text)
+
+    def test_unknown_status_is_classified_before_the_error_fallback(self):
+        unknown = self.text.index("`draft_status_unknown`（#580，必須在下一條")
+        generic = self.text.index("其餘 `status: \"error\"` item")
+        self.assertLess(unknown, generic)
+        self.assertNotIn("部分 item `status:\"error\"` → 該 id 走 Step 5.1 補抓，其餘", self.text)
+        self.assertIn("**不是**以 `draft_status_unknown:` 開頭", self.text)
+
+    def test_per_email_path_requires_is_draft_false(self):
+        self.assertIn("只有值恰為 `false` 才歸檔", self.text)
+
+
 class RepairCommandPointerTests(unittest.TestCase):
     """Every place that points users at the repair command carries its prerequisite (#527 for Step 8.5, #551 for all).
 
