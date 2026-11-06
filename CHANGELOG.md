@@ -48,6 +48,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`reply_email` and `forward_email` no longer say the send keystroke fired
+  when the GUI flow timed out**
+  ([#550](https://github.com/PsychQuant/che-apple-mail-mcp/issues/550)). After
+  a 90-second timeout of the send flow, both tools reported "the send keystroke
+  was already dispatched", but the script had not finished, so the keystroke may
+  not have been pressed. A timeout now gets the same statement `compose_email`
+  already made: the keystroke may or may not have fired, the send state is
+  UNKNOWN, NOT retrying, check the Sent mailbox, Outbox, the original thread and
+  any leftover compose window. A failure after the keystroke (POSTDISPATCH) keeps
+  its wording unchanged. Neither tool retries, and the error's classification is
+  unchanged.
 - **`TemplateExtractorTests` no longer fails on a loaded machine**
   ([#502](https://github.com/PsychQuant/che-apple-mail-mcp/issues/502)).
   `testTheDataShapeBackstopIsBoundedAndSharesTheRedactionPattern` timed two

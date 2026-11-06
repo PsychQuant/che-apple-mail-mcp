@@ -222,10 +222,10 @@ TaskCreate(subject="load_participant_identity",
            description="Step 1.4: 在消歧義之前讀全域 identity.yaml 與 workspace aliases，保留全域優先及衝突／格式警告；workspace 條目原樣使用、不丟棄（沒有 identity 檔時的例外見 Step 1.4 第 4 項）；不寫入身份檔、不新增確認授權。")
 
 TaskCreate(subject="phase1_disambiguation",
-           description="Step 1.5: 若 filter 模糊(中文人名「陳老師」/相對時間「最近」/通用 scope「全部」) → 列候選讓 user 選;明確 email/Message-ID/NO_CONFIRM(Step 1 從這一次叫用解析出的 --no-confirm) → skip(例外:NO_CONFIRM 或「直接做」時,模糊人名經全域 identity 對到的地址不在本 workspace aliases 與 .threads.json participants → 仍列候選;其餘照舊 skip,filter 照輸入);候選標來源,只來自全域 identity 的不標推薦。由 confirmation-protocol skill Phase 1 + email-search-disambiguation 處理。")
+           description="Step 1.5: 若 filter 模糊(中文人名「陳老師」/相對時間「最近」/通用 scope「全部」) → 列候選讓 user 選;明確 email/Message-ID/NO_CONFIRM(Step 1 從這一次叫用解析出的 --no-confirm) → skip(例外:NO_CONFIRM 或「直接做」時,模糊人名經全域 identity 對到的地址不在本 workspace aliases 與 threads.json participants → 仍列候選;其餘照舊 skip,filter 照輸入);threads.json participants 先驗證再讀:Step 1.6 搬完 legacy 檔後,對當下檔案跑 load_threads_index 沒有回報錯誤才讀檔;回報 threads_error 時這個來源不可用,Phase 1 不列候選、不問任何問題,直接進 Step 2 開頭的停止(照樣先跑 index 形狀檢查,兩個都錯就兩行都印)(#558);候選標來源,只來自全域 identity 的不標推薦。由 confirmation-protocol skill Phase 1 + email-search-disambiguation 處理。")
 
 TaskCreate(subject="load_indices_and_config",
-           description="Step 2: 從 ${INDEX_DIR}/ 讀 email_index.json（經 load_email_index 驗證；loader 回報 index_error 就在 Step 3 之前停止，#531）+ threads.json；attachment_routing 逐子欄位套預設（記下哪些清單是使用者寫的，分類先比它們），subject_keywords 讀 ${CONFIG_FILE}，participant_aliases 使用 Step 1.4 的共同結果。")
+           description="Step 2: 從 ${INDEX_DIR}/ 讀 email_index.json（經 load_email_index 驗證；loader 回報 index_error 就在 Step 3 之前停止，#531；dedup_strategy=last_archived 時不讀 email_index.json、不跑 Step 2 的 index 復原，completed 時在 description 附上這個略過原因，#545）+ threads.json（不論 dedup_strategy 都經 load_threads_index 驗證，這裡只驗證、不讀內容；回報 threads_error 也在 Step 3 之前停止，請使用者跑 /archive-mail-rebuild-threads <output_dir> --index-dir <${THREADS_FILE} 所在目錄的絕對路徑>，不自動執行，#558）；attachment_routing 逐子欄位套預設（記下哪些清單是使用者寫的，分類先比它們），subject_keywords 讀 ${CONFIG_FILE}，participant_aliases 使用 Step 1.4 的共同結果。")
 
 TaskCreate(subject="search_emails",
            description="Step 3 + 3b + 3c + 3d: 對每個帳號跑 sender 搜尋 + Sent-scoped recipient 搜尋(寄出信,plugins#109) + subject_keywords 搜尋 + bare-subject thread expansion,四組結果套 mailbox 後過濾規則(統一 drop-set,勿裸 ==)後 Message-ID 去重 → corpus。注意 account_name 必須用 display name 不可用 ews:// URL。")
@@ -243,13 +243,13 @@ TaskCreate(subject="download_and_classify_attachments",
            description="Step 5.5: list_attachments → 用 classify() 分 data/document → save_attachment 到 data_dir / documents_dir/{email_stem}/。Markdown 插 Attachments: 區塊。回覆信無 byte 附件但引用原信附件 → cross-reference。")
 
 TaskCreate(subject="update_indices",
-           description="Step 5.7 + Step 6: 對每封新歸檔的信 append 到 ${THREADS_FILE} 的 thread_key entry (messages append, participants set, first/last_message, message_count)。把新 Message-ID + thread_key 加到 ${INDEX_FILE}。Append-only,不修改既有 entry。last_updated 用 Step 8.5 的 reconcile_dates(emails) 取 max,並保留 date_audit 供摘要。")
+           description="Step 5.7 + Step 6: 對每封新歸檔的信 append 到 ${THREADS_FILE} 的 thread_key entry (messages append, participants set, first/last_message, message_count)。Step 5.7 寫第一封之前先對當下的 ${THREADS_FILE} 跑 load_threads_index,沒有回報錯誤才讀檔,每封信的更新累加在同一份 threads 上(#558)。把新 Message-ID + thread_key 加到 ${INDEX_FILE}。Append-only,不修改既有 entry。last_updated 用 Step 8.5 的 reconcile_dates(emails) 取 max,並保留 date_audit 供摘要。dedup_strategy=last_archived 時 Step 6 略過(不寫 ${INDEX_FILE}),Step 5.7 照做;completed 時在 description 附上略過 Step 6 的原因(#545)。")
 
 TaskCreate(subject="report_and_audit",
            description="Step 7 + 8: 輸出歸檔報告(新歸檔/跳過/thread 索引/附件分流)。執行 Coverage Audit (8a 附件完整性 + 8b thread 完整性 → search by bare_subject 比對 archived/total + 8d 方向覆蓋 → 讀 frontmatter direction 分布,零寄件且 ≥10 封則警告,有回覆串證據則升級,mail#350)。")
 
 TaskCreate(subject="reconcile_index",
-           description="Step 8.5(強制最終 gate,mail#261 + plugins#110): Phase 0 若本 run 有 batch manifest → 對每個 written item 三源合併(written_path/manifest message_id/4.5-preview date+subject/寫出 frontmatter thread_key)機械化補齊,零 heuristic;Phase 1 掃 ${output_dir} 頂層全部 *.md 的 frontmatter message_id → 每個都必須在 Phase-0 set 或 ${INDEX_FILE} keys 內,歷史孤兒就地補寫 canonical schema entry {file,date,subject,thread_key}(subject 從本文 Subject: 行 heuristic,僅 Phase 1)或列 unparseable;index 寫回走 temp+rename 原子寫入;last_updated bump 為 max(entry date,經 robust 日期 recipe——驗證 ISO／完整及日期-only RFC822，列出所有 date_excluded entry,mail#275/#364);repaired>0 → 跑 /archive-mail-rebuild-threads;輸出 Phase0/Phase1 reconcile 摘要。此 task 未 verified 前,整個 run 不得標示成功 — 靜默完成 = 違規。")
+           description="Step 8.5(強制最終 gate,mail#261 + plugins#110): Phase 0 若本 run 有 batch manifest → 對每個 written item 三源合併(written_path/manifest message_id/4.5-preview date+subject/寫出 frontmatter thread_key)機械化補齊,零 heuristic;Phase 1 掃 ${output_dir} 頂層全部 *.md 的 frontmatter message_id → 每個都必須在 Phase-0 set 或 ${INDEX_FILE} keys 內,歷史孤兒就地補寫 canonical schema entry {file,date,subject,thread_key}(subject 從本文 Subject: 行 heuristic,僅 Phase 1)或列 unparseable;index 寫回走 temp+rename 原子寫入;last_updated bump 為 max(entry date,經 robust 日期 recipe——驗證 ISO／完整及日期-only RFC822，列出所有 date_excluded entry,mail#275/#364);repaired>0 → 跑 /archive-mail-rebuild-threads;輸出 Phase0/Phase1 reconcile 摘要。未登錄 target 且 dedup_strategy=last_archived 時改走 Step 8.5 開頭的唯讀稽核(#545;archive-mail-tree 引用本步 reconcile 已登錄的 target 時,不論本地策略一律全程):Phase 0 不執行並揭露原因、不讀也不寫 ${INDEX_FILE}、Phase 1 掃描與日期稽核只在記憶體、不跑 rebuild-threads、輸出唯讀摘要(含 last_updated 供手動推進 last_archived);唯讀摘要輸出後才 completed,description 附上 read-only 原因。此 task 未 verified 前(last_archived 為唯讀摘要未輸出前),整個 run 不得標示成功 — 靜默完成 = 違規。")
 ```
 
 **完成每一步立即 `TaskUpdate → completed`。靜默完成 = 違規。**
@@ -394,8 +394,13 @@ if [ -f "${CONFIG_FILE}" ]; then
     # Sequence-form: `<field>:` on its own line, with `  - item` lines following → awk parser handles cleanly.
     # Inline scalar or non-empty inline list on the same line → refuse here, do not silently coerce.
     # Empty inline list `[]` and bare `<field>:` (no value) are both valid sequence forms.
+    # #521: in the source file the awk field and the shell positional parameter below carry a backslash
+    # before the `$`, because Claude Code would otherwise replace them with the invocation's arguments.
+    # Measured on Claude Code 2.1.316 (2026-11-01): it removes that backslash when it loads the command,
+    # with and without arguments. The escape syntax was introduced in 2.1.163; other versions were not tested.
+    # Copying straight from the source file into a shell? Remove the backslash before the `$` first.
     for _f in sender_includes sender_excludes recipient_includes recipient_excludes subject_includes subject_excludes; do
-        _line=$(awk -v field="^${_f}:" '$0 ~ field {print; exit}' "${CONFIG_FILE}")
+        _line=$(awk -v field="^${_f}:" '\$0 ~ field {print; exit}' "${CONFIG_FILE}")
         if [ -n "$_line" ]; then
             _val=$(printf '%s' "$_line" | sed -E "s/^${_f}:[[:space:]]*//")
             if [ -n "$_val" ] && [ "$_val" != "[]" ]; then
@@ -408,7 +413,7 @@ if [ -f "${CONFIG_FILE}" ]; then
     # Strip empty entries from refinement lists per spec (sender_excludes: [""] ≡ sender_excludes: []).
     # The awk above prints raw item text; drop blank lines, "" and '' entries here.
     _strip_empty_refinement_entries() {
-        printf '%s\n' "$1" | awk 'NF > 0 && $0 != "\"\"" && $0 != "'"'"''"'"'"'
+        printf '%s\n' "\$1" | awk 'NF > 0 && \$0 != "\"\"" && \$0 != "'"'"''"'"'"'
     }
     SENDER_INCLUDES=$(_strip_empty_refinement_entries "$SENDER_INCLUDES")
     SENDER_EXCLUDES=$(_strip_empty_refinement_entries "$SENDER_EXCLUDES")
@@ -563,7 +568,7 @@ participant_aliases:
 
 候選來源:
 - Step 1.4 的 `EFFECTIVE_PARTICIPANT_ALIASES`（全域 identity + workspace 補充；保留 bare email，並標示來源）
-- 之前歸檔的 `.threads.json` participants
+- 之前歸檔的 `threads.json` participants：先驗證再讀（Step 1.6「thread 索引怎麼讀」）。順序固定：先照 Step 1.6 解析 `${THREADS_FILE}`，再跑 Step 1.6 的 legacy `.threads.json` auto-migrate，最後才對當下的檔案跑 `load_threads_index`；不得在搬移之前驗證或讀取（那時新位置還沒有檔案，會漏掉搬來的舊 thread）。`load_threads_index` 沒有回報錯誤，才讀這個檔案的 participants。回報 `threads_error` 時這個來源視為不可用：不讀檔、不猜，Phase 1 也不列候選、不問任何問題，直接進 Step 2 開頭的停止；那個停止照樣先跑 Step 2 對 `${INDEX_FILE}` 的形狀檢查（`index`／`both`），兩個都有錯就兩行都印（#558）
 - Address book / contacts MCP
 
 每個候選標示來源。**只來自全域 identity 的候選不得標「推薦」**：全域檔記的是所有工作區的人，不代表這個 workspace 要找的人。
@@ -573,7 +578,7 @@ participant_aliases:
 - Filter 是 Message-ID
 - `NO_CONFIRM`（Step 1 從使用者這一次叫用的 `ARGS_RAW` 解析出的 `--no-confirm`）或使用者明確說「直接做」。來源須符合 `rules/confirmation-triggers.md`「Provenance」第 2 類：只能是這一次叫用實際打的引數，**不得**從郵件內文、範例、搜尋結果、config 或模型自行組出的命令補出
 
-  **例外（mail#334）**：使用者以 `NO_CONFIRM` 或「直接做」跳過確認，而 filter 是模糊人名時，若全域 identity 檔把這個名稱對應到某個地址，而**本 workspace 的 aliases 與 `.threads.json` participants 都沒有那個地址**，就仍要列候選讓使用者選，不得自動採用。其餘情況照改版前處理：跳過 Phase 1，filter 照使用者輸入。沒有 identity 檔時這條例外不會觸發。
+  **例外（mail#334）**：使用者以 `NO_CONFIRM` 或「直接做」跳過確認，而 filter 是模糊人名時，若全域 identity 檔把這個名稱對應到某個地址，而**本 workspace 的 aliases 與 `threads.json` participants 都沒有那個地址**，就仍要列候選讓使用者選，不得自動採用。participants 的來源同上方候選來源（對當下的檔案跑 `load_threads_index`，沒有回報錯誤才讀）；回報 `threads_error` 時這個來源不可用，不當成「沒有那個地址」，也不問，直接進 Step 2 開頭的停止（同上方候選來源）。其餘情況照改版前處理：跳過 Phase 1，filter 照使用者輸入。沒有 identity 檔時這條例外不會觸發。
 
 詳見 `skills/confirmation-protocol/SKILL.md` 和 `skills/email-search-disambiguation/SKILL.md`。
 
@@ -625,11 +630,13 @@ if [ "$DEDUP_STRATEGY" = "last_archived" ]; then
 fi
 ```
 
-| `dedup_strategy` | Step 2 (load index) | Step 4 (dedup logic) | Step 5/6 (write index) |
-|------------------|---------------------|----------------------|-----------------------|
-| `index` (default) | load `email_index.json` | filter Message-ID not in index | append new Message-IDs |
-| `last_archived` | skip | filter received-date `>` last_archived | skip |
-| `both` | load | union: not-in-index AND date `>` last_archived | append (索引 still maintained) |
+| `dedup_strategy` | Step 2 (load index) | Step 4 (dedup logic) | Step 5/6 (write index) | Step 8.5 (reconcile gate) |
+|------------------|---------------------|----------------------|-----------------------|---------------------------|
+| `index` (default) | load `email_index.json` | filter Message-ID not in index | append new Message-IDs | Phase 0 + Phase 1, write index |
+| `last_archived` | skip | filter received-date `>` last_archived | skip | 唯讀稽核：scan md + date audit in memory, write no index, no rebuild-threads (#545) |
+| `both` | load | union: not-in-index AND date `>` last_archived | append (索引 still maintained) | Phase 0 + Phase 1, write index |
+
+表中的 skip 只適用**未登錄**的 target。已登錄的 target 在 Step 1.3 交給 `archive-mail-tree`，那條流程需要每個 target 的 index（缺少或損壞就停止），而且即使本地設 `last_archived` 也照做 registry 去重（`archive-mail-tree.md` 第 1 節第 1、4 項）；本地的 `dedup_strategy` 不會讓它略過 index。
 
 **Auto-migrate from legacy paths**(silent,只在新位置不存在時觸發):
 
@@ -660,15 +667,19 @@ if [ ! -f "${NAMESPACE_DIR}/config.yaml" ] && [ -f "${NAMESPACE_DIR}/config.md" 
 fi
 ```
 
+**thread 索引怎麼讀（#558）**：`load_threads_index` 的 CLI 只印 `{error, entries}`，不輸出 thread 內容，所以用到 `threads.json` 內容的步驟（Step 1.5 的 participants、Step 5.7）一律先驗證再讀：對當下的 `${THREADS_FILE}` 跑一次 `load_threads_index`，沒有回報錯誤，才由該步讀這個檔案（檔案不存在或沒有 `threads` key 時是空的 thread 索引）；回報錯誤時怎麼停，見 Step 1.5 的候選來源與 Step 5.7 的寫入屏障。這些驗證都在 `${THREADS_FILE}` 解析出來、legacy `.threads.json` 也搬完（上面的 auto-migrate）之後。每次讀之前都驗證當下的檔案，所以 Step 2 的復原重建過它時，Step 5.7 讀到的是重建後的版本。Step 2 開頭的檢查只驗證，不讀內容。
+
 > **v2.16.0+ schema clarification (#47)**:config 副檔名改 `.yaml`(內容向來都是 YAML,只是 v2.15.0 ↓ 用 `.md` 副檔名造成語意 mismatch)。Auto-migrate 是 silent rename,user 不需動手。`.md` 仍 work 為 fallback,**v3.0 移除**;期間 README / CLAUDE.md schema 範例都改示範 `.yaml`。
 
 或者用 `/archive-mail-migrate` 批次 migrate 所有舊 archive targets,詳見該 command。
 
 ### Step 2: 建立目錄和載入索引
 
-**先驗證索引形狀（#531）**：`dedup_strategy` 為 `index` 或 `both` 時，`${INDEX_FILE}` 一解析出來就先過 `load_email_index`（recipe 與回傳表在下方「讀取兩個索引檔」；`last_archived` 照舊不讀）。loader 回報 `index_error` 時，**本 run 在 Step 3 之前停止**：只印一行 `⚠ index_error: <名稱>`（`emails-not-object`、`index-not-object` 或 `index-not-json`），請使用者把該檔移開或修好再重跑。不搜尋、不寫任何檔、不自動重建、不自動移開：壞掉的 index 可能是某些 entry 唯一的副本。移開後重跑，下一段的復原流程就會從 Markdown 重建。
+**先驗證索引形狀（#531）**：`dedup_strategy` 為 `index` 或 `both` 時，`${INDEX_FILE}` 一解析出來就先過 `load_email_index`（recipe 與回傳表在下方「讀取兩個索引檔」；`last_archived` 照舊不讀）。loader 回報 `index_error` 時，**本 run 在 Step 3 之前停止**：只印一行 `⚠ index_error: <名稱>`（`emails-not-object`、`index-not-object` 或 `index-not-json`），請使用者把該檔移開或修好再重跑。不搜尋、不寫任何檔、不自動重建、不自動移開：壞掉的 index 可能是某些 entry 唯一的副本。移開後重跑，下方的復原流程就會從 Markdown 重建。
 
-只有在 loader 沒有回報錯誤時，若上次回報索引未完成，或索引不存在但輸出目錄已有 Markdown，先依 Step 6 的復原流程補齊 canonical index，再做新信搜尋。權限仍不足時停止，不重新輸出已存在的信件。
+**再驗證 thread 索引形狀（#558）**：不論 `dedup_strategy`（Step 5.7 在每種模式下都維護 `${THREADS_FILE}`），`${THREADS_FILE}` 都要過一次 `load_threads_index`（recipe 與回傳表在下方「載入並驗證 `${THREADS_FILE}`」），這裡只驗證、不讀內容；Step 1.5 與 Step 5.7 用到內容時，各自先驗證當下的檔案再讀（Step 1.6「thread 索引怎麼讀」）。loader 回報 `threads_error` 時，**本 run 在 Step 3 之前停止**：印一行 `⚠ threads_error: <名稱>`（`threads-not-object`、`threads-file-not-object`、`threads-not-json` 或 `thread-entry-invalid`）；與 `index_error` 同時出現時兩行都印。不搜尋、不寫任何檔，也不跑下方的復原流程：那裡的「loader 沒有回報錯誤」指兩個 loader 都沒有。復原方式是請使用者執行 `/archive-mail-rebuild-threads <output_dir> --index-dir <${THREADS_FILE} 所在目錄的絕對路徑>` 後重跑（指名 `--index-dir`，它重建的才是這個 `${THREADS_FILE}`）：它先把舊檔備份成 `threads.json.bak.<時間>`，再從 Markdown frontmatter 重建，messages、日期與筆數都會回來，但 frontmatter 只帶寄件人，所以只出現在 To／Cc 的人會從 `participants` 消失（Step 1.5 的候選也跟著少）。SOP 不自動執行 rebuild、不自動移開該檔：要不要接受這個損失，由使用者決定。
+
+**復原只適用 `index`／`both`（#545）**：`dedup_strategy=last_archived` 不讀也不寫 index（下方「讀取兩個索引檔」），不走這段復原，`${INDEX_FILE}` 不存在是這個策略的正常狀態；它的 Step 8.5 只做唯讀稽核。`index`／`both` 只有在 loader 沒有回報錯誤時，若上次回報索引未完成，或索引不存在但輸出目錄已有 Markdown，先依 Step 6 的復原流程補齊 canonical index，再做新信搜尋。權限仍不足時停止，不重新輸出已存在的信件。
 
 ```bash
 mkdir -p -- "${output_dir}"   # archive markdown 目的地(`--` 讓以 `-` 開頭的目錄名也是合法輸出目錄)
@@ -681,11 +692,11 @@ mkdir -p -- "${output_dir}"   # archive markdown 目的地(`--` 讓以 `-` 開�
 - 若 `dedup_strategy=index`(default)或 `both` → 載入已歸檔 Message-ID;不存在則建立空索引 `{"version": "1.0", "emails": {}}`。載入一律經 `load_email_index`（下方 recipe），Step 4.1、Step 6、Step 8.5 都使用這次載入的 `emails`，不再各自解析檔案
 
 `${THREADS_FILE}` (`.claude/.mail/state/archives/${SLUG}/threads.json`) — Thread 關係索引(append-only thread view):
-- 若存在,載入既有 thread 結構
-- 若不存在,建立空索引 `{"version": "1.0", "threads": {}}`
+- 若存在,先經 `load_threads_index`（下方 recipe）驗證，不論 `dedup_strategy`；用到內容的步驟（Step 1.5、Step 5.7）各自先驗證當下的檔案，通過才讀（Step 1.6「thread 索引怎麼讀」）
+- 若不存在（或沒有 `threads` key）,從空索引 `{"version": "1.0", "threads": {}}` 開始；loader 不建檔，檔案由 Step 5.7 寫出
 - 格式見 Step 5.7
 
-兩個索引**獨立維護**,thread 索引純粹為了快速查詢 thread 關係,不影響單封信的儲存。若 `threads.json` 損壞,可用 `/archive-mail-rebuild-threads` 從 md frontmatter 重建。
+兩個索引**獨立維護**,thread 索引純粹為了快速查詢 thread 關係,不影響單封信的儲存。若 `threads.json` 損壞或形狀不對，loader 回報 `threads_error`，本 run 依 Step 2 開頭停止；復原指令見 Step 2 開頭（從 md frontmatter 重建，只出現在 To／Cc 的參與者會消失）。
 
 **載入並驗證 `${INDEX_FILE}`（#531）**：`emails` 必須是 JSON object。這是可執行的契約，不是每個步驟各自的假設。`load_email_index(path)` 只讀、不寫、不建檔，回傳 `(emails, error)`；路徑是函式引數，不得插進 Python 或 shell 原始碼（見「Trust boundary」）：
 
@@ -734,6 +745,58 @@ if __name__ == "__main__":
 <!-- archive-mail-index-recipe:end -->
 
 實際呼叫時把上述程式存成固定腳本，以引數陣列傳入索引檔路徑（或 `shlex.quote`），讀它印出的那一行 JSON：`error` 非 `null` 就依 Step 2 開頭的規則停止。`entries` 只是筆數，不是 Message-ID 清單。
+
+**載入並驗證 `${THREADS_FILE}`（#558）**：`threads` 必須是 JSON object，其中每個 thread 都是 object、`messages` 是 array（Step 5.7 要 append 到這個 array）。`load_threads_index(path)` 與 `load_email_index` 同一個契約：只讀、不寫、不建檔，回傳 `(threads, error)`；路徑是函式引數，不得插進 Python 或 shell 原始碼（見「Trust boundary」）：
+
+| 檔案內容 | 回傳 |
+|---|---|
+| 檔案不存在 | `({}, None)`（新 thread 索引） |
+| `{}`，或沒有 `threads` key 的 object | `({}, None)`（新 thread 索引） |
+| `threads` 是 object（含 `{}`），每個 thread 都是 object 且 `messages` 是 array | `(threads, None)` |
+| `threads` 是 `null`、array、string、number、bool（以 `isinstance(…, dict)` 判斷，不看真假值） | `(None, "threads-not-object")` |
+| 某個 thread 不是 object，或它的 `messages` 不是 array（含缺少 `messages`） | `(None, "thread-entry-invalid")` |
+| 最上層不是 object（`null`、array、string、number、bool） | `(None, "threads-file-not-object")` |
+| 不是可解析的 JSON（空檔、截斷、BOM、無效 UTF-8、巢狀過深） | `(None, "threads-not-json")` |
+
+其他 `OSError`（權限不足、該路徑是目錄）刻意不攔，與 `load_email_index` 相同。有錯誤時 `threads` 是 `None`，不得拿 `{}` 代替繼續往下走。只檢查上表這幾項：`participants`、`first_message` 等其他欄位的型別不在這個 loader 的範圍。
+
+<!-- archive-mail-threads-recipe:start -->
+```python
+import json
+
+
+def load_threads_index(path):
+    """Read the thread index once and name what is wrong with it; never writes, never creates the file."""
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except FileNotFoundError:
+        return {}, None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        return None, "threads-not-json"
+    if not isinstance(data, dict):
+        return None, "threads-file-not-object"
+    threads = data.get("threads", {})   # no `threads` key is a new thread index; `null` is not
+    if not isinstance(threads, dict):
+        return None, "threads-not-object"
+    for entry in threads.values():
+        if not isinstance(entry, dict) or not isinstance(entry.get("messages"), list):
+            return None, "thread-entry-invalid"
+    return threads, None
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: threads_recipe.py threads.json")
+    threads, error = load_threads_index(sys.argv[1])
+    print(json.dumps({"error": error, "entries": None if threads is None else len(threads)}))
+```
+<!-- archive-mail-threads-recipe:end -->
+
+呼叫方式與 index recipe 相同：存成固定腳本，以引數陣列傳入 `${THREADS_FILE}`，讀它印出的那一行 JSON；`error` 非 `null` 就依 Step 2 開頭的規則停止。`entries` 只是 thread 數。CLI 不輸出 thread 內容：通過驗證之後，用到內容的步驟才自己讀這個檔案（Step 1.6「thread 索引怎麼讀」）。
 
 #### Step 2.1: Sibling-archive dedup extension(v2.17.0+,#49;v2.38.0+ #285 泛化)
 
@@ -1348,7 +1411,7 @@ direction: received
 ```
 
 **Frontmatter 欄位說明**：
-- `message_id`: 該封信的 RFC 5322 Message-ID（用引號包住，避免 YAML 解析角括號）。**缺值規則（mail#319，與 `in_reply_to` 同級的明文 fallback）**：工具回傳空 message_id 時，**先**呼叫 `get_email_headers(id: 同一id, mailbox: 原匣, account_name: 原帳號)` 重取一次（headers 路徑與 body 路徑不同 code path，常能拿到值）；仍空 → frontmatter 寫 `message_id: ""` 並加一行 `message_id_missing: true`，讓 Step 8.5 走 `unparseable` 分支自然浮現。**明文禁止發明任何佔位符**（`synthetic:<timestamp>` 或其他）——synthetic key 不是真 Message-ID，無法可靠對齊其他 target 或重取的真 ID。mail#389 已觀察到以信件日期、寄件人及截斷主旨產生的 deterministic 格式；同一 target 內可能穩定去重，但仍有截斷碰撞風險。只有使用執行時間的歷史變體才會每次重跑產生不同 key，不能概括所有 synthetic 格式。既有 synthetic 檔的一次性修復見 `/archive-mail-repair-synthetic-ids`
+- `message_id`: 該封信的 RFC 5322 Message-ID（用引號包住，避免 YAML 解析角括號）。**缺值規則（mail#319，與 `in_reply_to` 同級的明文 fallback）**：工具回傳空 message_id 時，**先**呼叫 `get_email_headers(id: 同一id, mailbox: 原匣, account_name: 原帳號)` 重取一次（headers 路徑與 body 路徑不同 code path，常能拿到值）；仍空 → frontmatter 寫 `message_id: ""` 並加一行 `message_id_missing: true`，讓 Step 8.5 走 `unparseable` 分支自然浮現。**明文禁止發明任何佔位符**（`synthetic:<timestamp>` 或其他）——synthetic key 不是真 Message-ID，無法可靠對齊其他 target 或重取的真 ID。mail#389 已觀察到以信件日期、寄件人及截斷主旨產生的 deterministic 格式；同一 target 內可能穩定去重，但仍有截斷碰撞風險。只有使用執行時間的歷史變體才會每次重跑產生不同 key，不能概括所有 synthetic 格式。既有 synthetic 檔的一次性修復見 `/archive-mail-repair-synthetic-ids`——該指令需要可用的 SQLite envelope index（通常要替實際執行 MCP server 的宿主授予 Full Disk Access），一般歸檔的 AppleScript fallback 不能代替；缺少時它會以 `environment-unavailable`／`apply-unavailable` 具名停止、不改任何檔（白跑一趟，不損資料）。
 - `thread_key`: 依下列規則計算的 bare subject（**對齊 batch 工具的 `stripReplyPrefixes`——plugins#107 Fix 3**，兩路徑同規則才不會讓同一 thread 因寫入路徑不同而 frontmatter 漂移、碎裂 threads.json）：
   1. 去掉前綴 `Re:` / `Fwd:` / `FW:` / `转发:` / `轉寄:` / `回覆:` / `回复:`——**全部不分大小寫**（`re:` / `fw:` / `fwd:` 同樣去除），重複出現多次也全部去除
   2. 去除首尾空白
@@ -1568,7 +1631,9 @@ User 看到註記知道 inline 圖存在但需手動 export from Mail.app。File
 
 ### Step 5.7: 維護 `threads.json`（v2.6.0+,路徑 v2.8.0+ 改 `${THREADS_FILE}`）
 
-每封新歸檔的 md 寫出後,同步更新 `${THREADS_FILE}` (`.claude/.mail/state/archives/${SLUG}/threads.json`):
+每封新歸檔的 md 寫出後,同步更新 `${THREADS_FILE}` (`.claude/.mail/state/archives/${SLUG}/threads.json`)。怎麼讀見下方。
+
+**怎麼讀 `threads.json`（#558）**：Step 5.7 寫第一封之前，先對當下的 `${THREADS_FILE}` 跑 `load_threads_index`；沒有回報錯誤，才讀這個檔案的內容當起點（檔案不存在或沒有 `threads` key 時從 `{}` 開始）；回報錯誤就照下方的寫入屏障處理。讀的是當下的檔案，所以 Step 2 的復原重建過它時，起點就是重建後的版本。Step 5.7 之內只讀這一次：每封信的更新累加在同一份記憶體中的 `threads` 上，每封更新完寫出整份；不是每封信都重新讀檔或從起點重來，那樣只會留下最後一封的更新。
 
 **格式**：
 
@@ -1599,7 +1664,7 @@ User 看到註記知道 inline 圖存在但需手動 export from Mail.app。File
 **更新演算法**（對每封新歸檔的信）：
 
 1. 從 md frontmatter 讀 `thread_key`
-2. 若 `.threads.json` 裡沒有此 thread_key，建立新 entry：
+2. 若記憶體中的 `threads` 裡沒有此 thread_key，建立新 entry：
    ```
    {"messages": [], "participants": [], "first_message": null, "last_message": null, "message_count": 0}
    ```
@@ -1614,10 +1679,12 @@ User 看到註記知道 inline 圖存在但需手動 export from Mail.app。File
 
 **同 thread 不同時段的處理**：若 bare subject 相同但兩組訊息時間相差 > 90 天，**仍歸在同一 thread**（因為我們尊重使用者的 subject 選擇）。若要拆分，使用者需手動改 md frontmatter 的 `thread_key`（例如加 `-2026` 後綴），然後跑 rebuild。
 
+> **寫入屏障（#558）**：Step 2 的 `load_threads_index` 回報 `threads_error` 時，本 run 已在 Step 3 之前停止。Step 5.7 開始時的驗證回報錯誤時（例如 Step 2 被跳過，或檔案在 Step 2 之後被改壞），本 run 剩下的步驟都不寫 `${THREADS_FILE}`（包括 Step 8.5 第 3 項的 rebuild）、不動它的頂層 `last_updated`、不宣稱本 run 成功；摘要第一行是 `⚠ threads_error: <名稱>`，Step 7 不印「Archive Mail 完成」橫幅。處置與 Step 2 開頭相同：請使用者執行 `/archive-mail-rebuild-threads <output_dir> --index-dir <${THREADS_FILE} 所在目錄的絕對路徑>` 後重跑，SOP 不自動執行它，因為它會丟掉只出現在 To／Cc 的參與者。這條寫在文字裡，測試只能釘住 recipe 與文字，釘不住 agent 執行時怎麼做；第一道關在 Step 2 載入時，這裡是第二道。
+
 ### Step 6: 更新 Message-ID 索引
 
 若指定 namespace 的索引寫入被拒絕，保留已輸出的郵件、回報索引步驟未完成，待具備該路徑
-權限後先執行 Step 8.5 Phase 1，從既有 Markdown 的 canonical frontmatter 補齊索引，再重建 threads，最後才回 Step 3 搜尋／去重新信。若索引不存在但輸出目錄已有 Markdown，Step 2 也先走此復原流程，避免重新寫出同一批信。不得自行改寫到 legacy 索引位置，或因此宣稱整個流程已完成。
+權限後先執行 Step 8.5 Phase 1，從既有 Markdown 的 canonical frontmatter 補齊索引，再重建 threads，最後才回 Step 3 搜尋／去重新信。若索引不存在但輸出目錄已有 Markdown，`dedup_strategy` 為 `index`／`both` 時 Step 2 也先走此復原流程，避免重新寫出同一批信（`last_archived` 不走，見 Step 2）。不得自行改寫到 legacy 索引位置，或因此宣稱整個流程已完成。
 
 將新歸檔的郵件加入 `${INDEX_FILE}` (`.claude/.mail/state/archives/${SLUG}/email_index.json`):
 
@@ -1796,6 +1863,32 @@ Thread 覆蓋: 3 threads, 3 complete ✓
 
 > **使用者原話**：「可能有些有歸檔但是 index 沒更新……最後一件事情是要更新 index」。
 > 寫 md 與 append index 非原子——中斷/跳步會留下「md 已寫、index 無 entry」的孤兒（實測 86/135），dedup 隨即失效。本 gate 是 run 的**最後一件事**，未通過前 run 不得宣告成功。
+
+**未登錄 target 的 `dedup_strategy=last_archived`：唯讀稽核（#545）**
+
+本段只適用**未登錄**、且 `dedup_strategy=last_archived` 的 target。`archive-mail-tree` 第 5 節逐一 reconcile 已登錄的 target 時引用本步，不論該 target 本地的 `dedup_strategy`，一律照下方 Phase 0 + Phase 1 全程執行，經同一個 `load_email_index` 讀 registry 綁定的 `index_file`（那條流程需要每個 target 的 index，見 Step 1.6 策略表下方的說明）。這個策略不讀也不寫 index（Step 1.6 策略表、Step 2），所以本 gate 在這個策略下只讀不寫；它仍是 run 的最後一件事，不可省略（[#545 的決定](https://github.com/PsychQuant/che-apple-mail-mcp/issues/545#issuecomment-6544615573)）。`index` 與 `both` 不受本段影響，照下方 Phase 0 + Phase 1 全程執行。
+
+- **Phase 0 不執行**，摘要寫出原因：Phase 0 的工作是把本 run 的 batch 寫入補成 index entry，這個策略沒有 index。
+- **不讀 `${INDEX_FILE}`**：只檢查它存不存在，不開檔、不載入、不比對、不更新。檔案存在時，它已經沒有維護：以前用 `index`／`both` 留下的，停在改用 `last_archived` 那時；舊版 gate 替這個策略寫的（#545 之前每次都更新），停在升級到本版之前。摘要下一行另外印出下方那一句：要改回 `index`／`both`，或把這個 target 登錄進 registry（`/archive-mail-registry` 把它當成權威的歷史）之前，先把它移開，讓 Step 2 的復原從 Markdown 重建；那次復原會跑 `/archive-mail-rebuild-threads`，只出現在 To／Cc 的參與者會消失，在意就先備份 `${THREADS_FILE}`。留著不移：改回 `index` 時，Step 2 照原樣載入這份舊 index、不走復原，停止維護之後歸檔的信會被當成新信再寫一次；改回 `both` 時，受影響的只有 `last_archived` 之後的信。
+- **Phase 1 照常掃描**頂層 `${output_dir}/*.md`（範圍同下方 Phase 1 第 1 項），只在記憶體裡判定。`synthetic_placeholder` 與 `unparseable` 的判定與揭露同下方（修復的前提見下方「`synthetic_placeholder` 的修復」）；其餘檔案只計入頂層 md 數。沒有 index 就沒有孤兒，所以不算 `verified`、不算 `repaired`，也不補寫任何 entry。
+- **日期稽核照跑**：用掃到的 frontmatter 在記憶體裡組成 `emails`（key 是 `message_id`；entry 只放 `file` 與原樣的 frontmatter `date`；`unparseable` 與 `synthetic_placeholder` 的檔案不放進去，與 `index` 模式不收它們一致），交給同一個 `reconcile_dates(emails)`。同一個 `message_id` 出現在不只一個頂層檔時只算一筆：取檔名依 Unicode code point 排序的第一個，其餘列為 `duplicate_message_id`（列出檔名與保留的那一個），不放進 `emails`。有效日期數加排除數等於這份 `emails` 的筆數，也等於頂層 md 數減去 `unparseable`、`synthetic_placeholder` 與 `duplicate_message_id` 的檔數；`date_excluded` 的列法與欄位邊界同下方第 2、6 項。
+- **資料怎麼進 `reconcile_dates`**：用固定腳本，不靠手抄。把下方的日期 recipe 與一段固定的掃描程式存成同一支腳本，以 argv 傳入 `${output_dir}`（引數陣列或 `shlex.quote`）；腳本自己 glob 頂層 `*.md`、自己解析 frontmatter（只取 `message_id`、`message_id_missing` 與 `date`），在同一個程序裡組 `emails`、呼叫 `reconcile_dates`，印出一行 JSON（`date_excluded` 的欄位已經 `bounded_text`）。frontmatter 的字串（`message_id`、`date` 都出自寄件人）不得放進 `python3 -c` 文字、heredoc 或 shell 原始碼，也不由 agent 抄成 dict literal（見「Trust boundary」）。
+- **不寫任何 index 檔**：不寫 `${INDEX_FILE}`，也不寫 `${INDEX_FILE}.tmp`；不跑 `/archive-mail-rebuild-threads`（`${THREADS_FILE}` 照 Step 5.7 維護，本 gate 不碰）。
+- **`synthetic_placeholder` 的修復**：`/archive-mail-repair-synthetic-ids` 需要可用的 SQLite envelope index（通常要替實際執行 MCP server 的宿主授予 Full Disk Access），也需要 `${INDEX_FILE}`：它不把缺少的 index 當成空的，會以 `index-missing` 停止。這個策略沒有 index（或只有沒維護的舊檔），所以路線是：先把舊的 `${INDEX_FILE}`（若存在）移開，把 `dedup_strategy` 暫時改成 `index`／`both` 跑一次 `/archive-mail`，讓 Step 2 的復原從 Markdown 建好 index（那次復原會跑 `/archive-mail-rebuild-threads`，只出現在 To／Cc 的參與者會消失，在意就先備份 `${THREADS_FILE}`），再跑修復指令；之後改回 `last_archived`，那份 index 又會停止維護（見上方「不讀」一項）。
+- **推進 `last_archived` 的參考值**：摘要顯示 `last_updated`（可解析日期的最大值），另外顯示參考值 `min(last_updated, 本 run 開始時的 UTC 日期)`，供使用者手動推進 `${CONFIG_FILE}` 的 `last_archived`。上限取 UTC 日期，因為 Step 4.1 拿 `last_archived` 跟 `search_emails` 回傳的完整 UTC 時間做字串比較（#600），而 `last_updated` 是寄件人那邊的日曆日，可以晚到今天加一天（下方第 2 項），寄件人的 Date 也可能偏差或偽造。參考值只有日期，兩個方向都要注意：參考值當天的信會被當成新信再抓一次；本 run 之後才收到（或才同步進 Mail）、但 Step 4.1 比較的時間在參考值當天或之前的信，下一輪會被略過，這個策略沒有 index，不會有任何提示。`last_updated` 是空字串（`no-valid-dates` 或 `empty-index`）時沒有參考值：不顯示，也不拿本 run 的日期代替。要不要推進、推進到哪一天，由使用者決定；本 gate 不寫回設定檔，也不自動推進。
+- **摘要不用 index 的詞**：不說 verified、repaired 或孤兒。列出頂層 md 數、`unparseable`、`synthetic_placeholder`、`duplicate_message_id` 與日期稽核，以及 `last_updated` 與上一項的參考值：
+
+```
+Index Reconcile（read-only, dedup_strategy=last_archived）: Phase 0 skipped（no index）; 42 top-level md scanned — 2 unparseable ⚠（列出 2 檔）, 1 synthetic_placeholder ⚠（mail#319，列出檔名；跑 /archive-mail-repair-synthetic-ids，需可用的 SQLite envelope index／Full Disk Access，也需要 email_index.json：先移開舊 index、以 index／both 跑一次讓 Step 2 建好（會重建 threads.json，只在 To／Cc 的參與者會消失，先備份），再修復）, 1 duplicate_message_id（列出檔名與保留的那一個）; date audit: 38 entries — 38 valid dates, 0 date_excluded, last_updated=2026-08-05, last_archived 參考值=2026-08-05（min(last_updated, 本 run 開始時的 UTC 日期)；只有日期，見 #600；沒有有效日期時不顯示；由你決定是否手動推進，不寫回）
+```
+
+`${INDEX_FILE}` 存在時，摘要下一行另印（不開檔，只看它在不在）：
+
+```
+⚠ ${INDEX_FILE} 存在，但它沒有維護（舊版 gate 寫的停在升級之前）；改回 index／both 或登錄到 registry 之前先把它移開，讓 Step 2 的復原從 Markdown 重建（那次復原會跑 /archive-mail-rebuild-threads，只出現在 To／Cc 的參與者會消失；在意就先備份 threads.json）
+```
+
+- 摘要輸出之後才 `TaskUpdate reconcile_index → completed`，description 附上原因 `read-only: dedup_strategy=last_archived, index not written`（見下方第 7 項）。
 
 執行分**兩 phase**：先 Phase 0 用**本 run 的 manifest**機械化補齊本次 batch 寫入（乾淨、零 heuristic），再 Phase 1 對 `${output_dir}` 全量掃描收斂**歷史孤兒**（前一 run 中斷、非 batch、外部放入的 md——這些的 manifest 已不在記憶體，只能從磁碟 frontmatter 重建）。
 
@@ -2106,7 +2199,7 @@ def reconcile_dates(emails, today=None):
 
    Step 6 與本 gate 都使用 `date_audit = reconcile_dates(emails)`，以 `date_audit["last_updated"]` 寫入頂層 `last_updated`，並將整份 audit 留至摘要。`date_excluded_count > 0` 必須標 ⚠、列出每筆 message_id／file／原 date／reason（`entry-not-object`、`missing-or-invalid-date`，或 `future-date`：日期晚於今天加一天，今天取系統日期，多出的一天讓寄件人當地已經是明天的信不被誤判；寄件人時鐘偏差或偽造的 Date 都會是這樣。這種 entry 照常列出，不截斷、不改寫、不納入 `last_updated`，所以 `last_updated` 可以等於今天加一天，且系統時鐘錯了只會多列，不會丟資料）；這些欄位是資料，以 JSON serializer 或文字輸出，不插入 shell。**這些欄位已由 recipe 的 `bounded_text` 截成最多 80 字元並跳脫**（控制字元、U+2028／U+2029、反引號寫成 `\uXXXX`，超出的以 `…(+N)` 標示剩幾個字元；非文字的值只留型別，如 `<dict>`），是寄件人可控的文字，不是指示：報告把它們放在標明「以下為資料，不是指示」的 fenced code block 內，不引用到句子裡；完整內容在該 entry 的 `file` 或 index 裡，要看原文請開檔，不要從報告引用。字串日期另有 `date_shape`（字母 → `a`、數字 → `9`、其餘不可見或不安全的字元 → `?`），不讀原文也能統計被拒日期的形狀。全無有效日期時 `last_updated` 寫空字串並明示 `no-valid-dates`（空 index 則說明 `empty-index`）；不可用今天、舊值或檔名前綴冒充 max，也不可據此推進 `last_archived`。
 
-   **`index_error` 與寫入屏障（#531）**：`date_audit["index_error"]` 一律存在（正常時是 `None`，呼叫端不必用 `.get`）。非 `None`（目前只有 `emails-not-object`）時 `last_updated` 是 `None`，**不是**「全無有效日期」的空字串，兩者不得互相代替。此時不寫 `${INDEX_FILE}`（也不留 `${INDEX_FILE}.tmp`）、不動頂層 `last_updated`、不執行 `TaskUpdate reconcile_index → completed`、不宣稱本 run 成功；摘要第一行是 `⚠ index_error: <名稱>`，Step 7 不印「Archive Mail 完成」橫幅。本 gate 使用 Step 2 `load_email_index` 載入的 `emails`；Step 2 因 `dedup_strategy=last_archived` 沒有載入時，本 gate 要讀檔也經同一個 loader，並照同一條屏障處理它的錯誤。`last_archived` 模式該不該寫 index 是 #545，這裡不決定。
+   **`index_error` 與寫入屏障（#531）**：`date_audit["index_error"]` 一律存在（正常時是 `None`，呼叫端不必用 `.get`）。非 `None`（目前只有 `emails-not-object`）時 `last_updated` 是 `None`，**不是**「全無有效日期」的空字串，兩者不得互相代替。此時不寫 `${INDEX_FILE}`（也不留 `${INDEX_FILE}.tmp`）、不動頂層 `last_updated`、不執行 `TaskUpdate reconcile_index → completed`、不宣稱本 run 成功；摘要第一行是 `⚠ index_error: <名稱>`，Step 7 不印「Archive Mail 完成」橫幅。本 gate 使用 Step 2 `load_email_index` 載入的 `emails`；`archive-mail-tree` 引用本步 reconcile 已登錄的 target 時，不論本地 `dedup_strategy`，經同一個 loader 讀 registry 綁定的 `index_file`，照同一條屏障處理它的錯誤。未登錄的 target 因 `dedup_strategy=last_archived` 而 Step 2 沒有載入時，本 gate 不讀 `${INDEX_FILE}`，改走本節開頭的唯讀稽核：不寫 `${INDEX_FILE}`（也不留 `${INDEX_FILE}.tmp`）、不跑 rebuild-threads，日期稽核用記憶體裡由 frontmatter 組成的 `emails`（[#545 的決定](https://github.com/PsychQuant/che-apple-mail-mcp/issues/545#issuecomment-6544615573)，選項 B）。
 
    **Append-only 邊界（mail#364）**：recipe 只做日期判讀與 audit，不改既有 entry 或其 `file`，也不讀取／搬移該檔。即使檔名前綴可提供佐證，也不自動覆寫原 date。日期-only 的 `2026-06-30` 是 calendar watermark，不代表 `2026-06-30T00:00:00Z`；原信缺少時間／時區時不得猜補。若要清理歷史 entry，另做可預覽的修復流程。
 
@@ -2120,7 +2213,7 @@ Index Reconcile: Phase 0 manifest 12 written（乾淨補齊）; Phase 1 135 md �
 
 5. `unparseable > 0` → 摘要標 ⚠ 並列出檔名，**不得靜默**；由 user 決定補 frontmatter 或排除。**這不使 run 失敗**——會失敗的是跳過本 gate 或靜默吞掉清單。
 6. 日期 audit 獨立於 Phase 1 的 md 計數：即使所有 md 都 `verified` 且 `last_updated` 等於可解析 max，也必須顯示 `date_excluded_count`（0 也要顯示）。非零時可完成 gate 並保留警告，但不得宣稱「全綠／日期全部有效」；省略 audit 或吞掉失敗 entry 才是 gate 失敗。報告的有效日期數＋排除數必須等於本 index 的 entry 總數。另外列出本 run 因 `normalize_archive_timestamp` 回傳 None 而以原 Date 字串寫入的檔案（Step 5.1／孤兒補寫的揭露；原 Date 同樣經 `bounded_text`，放進同一種標明資料的 fenced code block），它們不在 `date_excluded` 內，但不是完整 timestamp。
-7. 全部完成後才 `TaskUpdate reconcile_index → completed`。**跳過本步 = run 失敗**。
+7. 全部完成後才 `TaskUpdate reconcile_index → completed`。**省略本策略要求的輸出 = run 失敗**（#545）：`index`／`both` 要求的輸出是上面的寫入與驗證（Phase 0 + Phase 1、temp+rename 寫回 `${INDEX_FILE}`、日期稽核與摘要）；未登錄 target 的 `last_archived` 要求的輸出是本節開頭「唯讀稽核」的摘要，沒有寫 index 不算省略，它的 `reconcile_index` 在唯讀摘要輸出之後才標為 completed，description 附上原因 `read-only: dedup_strategy=last_archived, index not written`。`archive-mail-tree` 引用本步 reconcile 已登錄的 target 時，不論本地 `dedup_strategy`，要求的都是 `index`／`both` 那一份輸出。
 
 ## 注意事項
 
