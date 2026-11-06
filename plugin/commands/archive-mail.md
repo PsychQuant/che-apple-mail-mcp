@@ -2130,7 +2130,7 @@ def read_frontmatter(path):
         line = line.rstrip("\r")
         for key in ("message_id_missing", "message_id", "date"):
             if line.startswith(key + ":"):
-                fields[key] = _frontmatter_value(line[len(key) + 1:])
+                fields.setdefault(key, _frontmatter_value(line[len(key) + 1:]))   # first wins
                 break
     return fields, None
 

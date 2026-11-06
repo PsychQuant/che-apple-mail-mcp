@@ -1237,6 +1237,14 @@ class ArchiveScanRecipeTests(unittest.TestCase):
         directory = self.make({"open.md": '---\nmessage_id: "<a>"\n'})
         self.assertEqual(self.ns["read_frontmatter"](str(Path(directory) / "open.md")), ({}, "no-frontmatter"))
 
+    def test_the_first_occurrence_of_a_key_wins(self):
+        # the writer puts message_id on the first line, so a line a later field could add cannot replace it
+        directory = self.make({"dup.md": '---\nmessage_id: "<first>"\ndate: "2026-01-01"\n'
+                                         'message_id: "<second>"\ndate: "2030-01-01"\n---\n'})
+        fields, reason = self.ns["read_frontmatter"](str(Path(directory) / "dup.md"))
+        self.assertIsNone(reason)
+        self.assertEqual((fields["message_id"], fields["date"]), ("<first>", "2026-01-01"))
+
     def test_a_closing_marker_without_a_final_newline_still_closes(self):
         directory = self.make({"tail.md": '---\nmessage_id: "<a>"\r\n---'})
         self.assertEqual(self.ns["read_frontmatter"](str(Path(directory) / "tail.md")), ({"message_id": "<a>"}, None))
