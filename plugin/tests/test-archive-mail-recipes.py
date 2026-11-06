@@ -779,6 +779,17 @@ class ArchiveWatermarkTests(unittest.TestCase):
         self.assertTrue(self.after("2026-01-01T00:00:01", "2026-01-01"))   # naive: read in the boundary's zone
         self.assertFalse(self.after("2025-12-31T23:59:59", "2026-01-01"))
 
+    def test_config_scalars_with_quotes_or_a_comment_are_accepted(self):
+        for text in ('"2026-01-01"', "'2026-01-01'", "2026-01-01 # note", ' "2026-01-01T00:00:00+08:00" # x'):
+            with self.subTest(text=text):
+                self.assertIsNotNone(self.dates["watermark_instant"](text, self.utc8).tzinfo)
+
+    def test_out_of_range_boundaries_raise_the_documented_error(self):
+        for text in ("0001-01-01", "9999-12-31"):
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError):
+                    self.dates["watermark_instant"](text, None)
+
     def test_unreadable_boundary_raises_and_unreadable_mail_is_kept(self):
         with self.assertRaises(ValueError):
             self.dates["watermark_instant"]("soon", self.utc8)
@@ -886,6 +897,39 @@ class ArchiveScanRecipeTests(unittest.TestCase):
         self.assertEqual((out["missing_count"], out["tombstone_count"]), (1, 1))
         self.assertEqual(index["<moved>"], {"file": "moved.md", "distributed_to": ["other"]})   # read-only
 
+    def test_a_distributed_to_key_counts_as_a_tombstone_whatever_its_value(self):
+        directory = self.make({"a.md": self.md("<a>")})
+        classified = self.ns["classify_scan"](self.ns["scan_top_level"](directory)[0])
+        for value in ([], "", None, {"x": 1}):
+            with self.subTest(value=value):
+                out = self.ns["index_coverage"](classified, {"<m>": {"file": "m.md", "distributed_to": value}})
+                self.assertEqual(out["tombstone_count"], 1)
+
+    def test_remedy_a_gets_raw_uncapped_file_names(self):
+        names = {"%s%02d.md" % ("x" * 90, i): self.md("<%d>" % i) for i in range(25)}
+        out = self.ns["index_coverage"](self.ns["classify_scan"](self.ns["scan_top_level"](self.make(names))[0]), {})
+        self.assertEqual(sorted(out["missing_files"]), sorted(names))
+        self.assertEqual(len(out["missing"]), 20)
+
+    def test_missing_directory_is_nothing_to_scan_and_vanishing_files_are_unparseable(self):
+        self.assertEqual(self.ns["scan_top_level"]("/nonexistent-lane4-dir"), ([], []))
+        directory = self.make({"a.md": self.md("<a>")}, links=[("dangling.md", "gone.md")])
+        out = self.ns["scan_report"](directory)
+        self.assertEqual(out["excluded_paths"], [{"file": "dangling.md", "reason": "symlink"}])
+
+    def test_a_symlink_is_never_followed_by_the_reader(self):
+        directory = self.make({"real.md": self.md("<a>")}, links=[("link.md", "real.md")])
+        fields, reason = self.ns["read_frontmatter"](str(Path(directory) / "link.md"))
+        self.assertEqual((fields, reason), ({}, "not-readable"))
+
+    def test_an_oversized_header_is_not_trusted(self):
+        directory = self.make({"big.md": '---\nmessage_id: "<a>"\n' + "x: y\n" * 20000})
+        self.assertEqual(self.ns["scan_report"](directory)["unparseable"], ["big.md"])
+
+    def test_scan_report_emits_the_usable_inventory(self):
+        out = self.report({"a.md": self.md("<a>"), "b.md": self.md("synthetic:x")})
+        self.assertEqual(out["usable"], [{"file": "a.md", "message_id": "<a>"}])
+
     def test_coverage_listing_is_capped(self):
         directory = self.make({"f%02d.md" % i: self.md("<%d>" % i) for i in range(25)})
         records, _ = self.ns["scan_top_level"](directory)
@@ -901,6 +945,10 @@ class ArchiveScanSopTests(unittest.TestCase):
         self.assertNotIn("一段固定的掃描程式", text)
         self.assertIn("不得指示會遺失 `distributed_to` 墓碑的做法", text)
         self.assertIn("只有 `tombstone_count` 為 0 時才可提出 (B)", text)
+        # every older "move the index aside" instruction carries the tombstone qualifier (#603 verify DA-1)
+        self.assertGreaterEqual(text.count("不可移開"), 2)
+        self.assertGreaterEqual(text.count("distributed_to 墓碑時不要移開"), 2)
+        self.assertIn("`index_stale` 停止優先", text)
         self.assertIn("append-only，既有 entry 含墓碑原樣保留", text)
         registry = (DOCUMENT.parent / "archive-mail-registry.md").read_text()
         self.assertIn("index_stale", registry)
