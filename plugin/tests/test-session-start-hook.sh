@@ -560,6 +560,30 @@ assert "exit 0" "[ $EXIT -eq 0 ]"
 assert "stderr silent with CHE_MAIL_HOOK_DEBUG=0" "[ ! -s $TEST_DIR/hook.stderr ]"
 
 # ============================================================
+# Case 16b (#605): a failed setpgid in the probe child stays silent too.
+#
+# POSIX::setpgid returns undef on failure, and the child compared it with
+# `== 0` under `use warnings` before redirecting its STDERR, so a loaded machine
+# printed "Use of uninitialized value in numeric eq" on the hook's stderr. The
+# copy below makes every setpgid in the child fail.
+# ============================================================
+echo "Case 16b: a failed setpgid in the probe child keeps the hook silent"
+reset_state
+write_plugin_json "2.18.0"
+write_runtime_file "0" "2.18.0"
+write_mock_mcp_binary "2.28.0" 0
+cp "$FAKE_PLUGIN/scripts/fda-assist.pl" "$TEST_DIR/fda-assist.pl.orig"
+sed 's/POSIX::setpgid(0, 0)/undef/' "$TEST_DIR/fda-assist.pl.orig" > "$FAKE_PLUGIN/scripts/fda-assist.pl"
+assert "the copy really makes setpgid fail" \
+    "! grep -q 'POSIX::setpgid(0, 0)' $FAKE_PLUGIN/scripts/fda-assist.pl && grep -q 'undef' $FAKE_PLUGIN/scripts/fda-assist.pl"
+HOME="$TEST_DIR" XDG_STATE_HOME="$TEST_DIR/.local/state" CHE_MAIL_HOOK_DEBUG=0 \
+    "$FAKE_PLUGIN/hooks/session-start.sh" 2>"$TEST_DIR/hook.stderr"
+EXIT=$?
+cp "$TEST_DIR/fda-assist.pl.orig" "$FAKE_PLUGIN/scripts/fda-assist.pl"
+assert "exit 0 when setpgid fails" "[ $EXIT -eq 0 ]"
+assert "stderr silent when setpgid fails" "[ ! -s $TEST_DIR/hook.stderr ]"
+
+# ============================================================
 # Case 17: a feature after staleness still runs without either dependency.
 # ============================================================
 echo "Case 17: dependency skips remain scoped to the staleness feature"

@@ -25,6 +25,10 @@ manifest commit 的 committer timestamp，換算 Asia/Taipei；它不是可獨�
 
 - compose-wrapper-free 規則與 `plugin/CLAUDE.md`：封閉的失敗原因由八類改為九類。第 9 類是暫時的，只適用 `reply_email`：帶非空 `attachments` 的回信一律拒絕，因為附件那一步會洗掉貼上的內文與引用原信卻回報成功；替代做法是以 `save_as_draft: true` 且不帶 `attachments` 回信，再在 Mail 把檔案拖進草稿。#608 落地時移除這一類。這條行為由 binary 執行，要等下一版 binary 才生效。（#534）
 
+### Fixed
+
+- SessionStart hook 在 `setpgid` 失敗時不再把 Perl 警告印到 stderr。`fda-assist.pl` 的探測子行程在 `use warnings` 下拿 `POSIX::setpgid` 的回傳值比 `== 0`，失敗時回傳 undef，警告出現在 STDERR 轉向 `/dev/null` 之前，於是落在 hook 的 stderr；機器負載高時，即使 `CHE_MAIL_HOOK_DEBUG=0` 也看得到。現在先判斷是否 defined，失敗路徑不變（`_exit(125)`，呼叫端保留 offer）。（#605）
+
 ## [4.0.0] - 2026-10-29
 
 - `binary_version` 3.4.0 → 4.0.0. What the binary brings: the new tools `check_compose_length` ([#388](https://github.com/PsychQuant/che-apple-mail-mcp/issues/388)) and four email-classification tools ([#356](https://github.com/PsychQuant/che-apple-mail-mcp/issues/356)); a `signature` choice on `compose_email` / `create_draft` / `update_draft` ([#322](https://github.com/PsychQuant/che-apple-mail-mcp/issues/322)); per-message `is_draft` and `opts.skip_drafts` for exports ([#374](https://github.com/PsychQuant/che-apple-mail-mcp/issues/374)); export direction decided against every configured address, and `opts.filename_style` ([#375](https://github.com/PsychQuant/che-apple-mail-mcp/issues/375), [#340](https://github.com/PsychQuant/che-apple-mail-mcp/issues/340)); special-mailbox paths confirmed through Mail ([#376](https://github.com/PsychQuant/che-apple-mail-mcp/issues/376)); a server that shuts down on stdin EOF while a Mail call is blocked ([#329](https://github.com/PsychQuant/che-apple-mail-mcp/issues/329)). The full list is the server CHANGELOG's [4.0.0].

@@ -56,7 +56,10 @@ sub probe {
     if (!defined $pid) { restore_signals($old_mask); close $reader; close $writer; debug("$stage fork unavailable"); return }
     if ($pid == 0) {
         close $reader;
-        POSIX::setpgid(0, 0) == 0 or POSIX::_exit(125);
+        # setpgid returns undef on failure; comparing undef with == warns under `use warnings`,
+        # and STDERR is still the hook's here (#605). Test definedness first.
+        my $pgid_ok = POSIX::setpgid(0, 0);
+        (defined $pgid_ok && $pgid_ok == 0) or POSIX::_exit(125);
         $SIG{TERM} = $SIG{INT} = $SIG{HUP} = 'DEFAULT';
         restore_signals($old_mask);
         open STDIN, '<', '/dev/null' or POSIX::_exit(125);
