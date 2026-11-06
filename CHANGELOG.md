@@ -76,8 +76,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reply_email` declares the send case even when it is called with
   `save_as_draft: true`, so a client that asks before destructive tools will ask
   before a draft-only reply too. Whether any client prompts on these hints was
-  not verified. The other tools are unchanged (most still carry no annotations;
-  #621 tracks the rest).
+  not verified.
+- **Every tool now says what it does in its MCP annotations**
+  ([#621](https://github.com/PsychQuant/che-apple-mail-mcp/issues/621)). Without
+  them a client read every tool as possibly destructive, so it could not tell a
+  read from a delete. Each tool now sits in one class of a closed table
+  (`ToolAccess`), and a test fails on a new tool with no class: reads of
+  accounts and settings, reads of mail (open world, because third parties wrote
+  that text), tools that only add something, tools that fetch from the server,
+  tools that change or remove what exists, tools that write files, and the four
+  that send. The classification tools and `check_compose_length` keep the
+  annotations they already had. **A client that runs `readOnlyHint` tools without
+  asking will now read mail without a prompt**: the hint states a fact about the
+  tool, and that policy is the client's. Whether any client does this was not
+  verified.
 - **`get_mail_log_events` runs at most two reads at once and stops when the
   client cancels** ([#467](https://github.com/PsychQuant/che-apple-mail-mcp/issues/467)).
   Each call started its own `log show` child (237–350 MB) with no limit, and a
