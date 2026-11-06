@@ -112,13 +112,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DraftIDBaselineTests` and `RecipientReceiptMetadataFailureTests` now checks
   the text it executes with `OsascriptFixtureGuard`. Handlers that really use the
   Foundation bridge pass through an explicit allowance: `use framework
-  "Foundation"`, `use scripting additions`, `current application` and plain piped
-  names only, with the classes that reach other applications or run other code
-  (`NSWorkspace`, `NSAppleScript`, `NSTask` and others) refused by name, and so
-  are the ways to name a class in a string (`class "…"`, `NSClassFromString`).
-  Handlers
-  a test does not call lose their `tell application` blocks before the script
-  runs. It is still a deny list. Test-only change.
+  "Foundation"`, `use scripting additions`, `current application's` followed by a
+  closed list of the names these handlers use, and plain piped names. `NSPredicate`
+  passes only with the one format string they use, because a format string can run
+  code. Any other class-shaped name, selectors by name, and the ways to name a class
+  in a string are refused. Handlers a test does not call lose their `tell
+  application` blocks before the script runs. The list bounds which classes run, not
+  what the methods of those classes do. Test-only change.
 - **A server built in a test can take an account mapping**
   ([#612](https://github.com/PsychQuant/che-apple-mail-mcp/issues/612)).
   `CheAppleMailMCPServer.init` gained an optional `accountMapping`, passed to

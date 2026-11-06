@@ -54,6 +54,10 @@ final class OsascriptFixtureGuardTests: XCTestCase {
         XCTAssertNoThrow(try OsascriptFixtureGuard.check("use (* x *) framework \"Foundation\"\nreturn 1", foundationBridge: true),
                          "a comment does not change which framework it is")
         XCTAssertNoThrow(try OsascriptFixtureGuard.check(
+            "return current application's NSPredicate's predicateWithFormat:\"SELF MATCHES %@\" argumentArray:{\"x\"}",
+            foundationBridge: true), "the one format the handlers use")
+        XCTAssertNoThrow(try OsascriptFixtureGuard.check("if class of x is text then return 1", foundationBridge: true))
+        XCTAssertNoThrow(try OsascriptFixtureGuard.check(
             "return current application's NSJSONSerialization's dataWithJSONObject:x options:0 |error|:(missing value)",
             foundationBridge: true), "a keyword label the bridge needs")
         XCTAssertThrowsError(try OsascriptFixtureGuard.check("set |a\\| \" | to 1", foundationBridge: true), "any other |…| stays refused")
@@ -79,6 +83,19 @@ final class OsascriptFixtureGuardTests: XCTestCase {
             "return x's valueForKey:\"y\"",
             "return current application's nstask",
             "return current\napplication \"Mail\"",
+            // #617 verify: a format string is code. These are read, never run.
+            "use framework \"Foundation\"\nset e to current application's NSExpression's expressionWithFormat:\"FUNCTION(CAST('NSTask', 'Class'), 'x')\" argumentArray:{}",
+            "return current application's NSPredicate's predicateWithFormat:\"FUNCTION(CAST('NSTask', 'Class'), 'x') == 1\" argumentArray:{}",
+            "return current application's NSPredicate's predicateWithFormat:aFormat argumentArray:{}",
+            "set p to current application's NSPredicate\nreturn p's predicateWithFormat:\"SELF MATCHES %@\" argumentArray:{}",
+            // A closed list: Foundation or not, loaded or not.
+            "return current application's NSSharingService",
+            "return its NSFileManager's defaultManager()",
+            "return its CIFilter",
+            "return its OSAScript's alloc()",
+            "set ca to current application\nreturn ca's NSString",
+            "return current application's class (\"NS\" & \"Task\")",
+            "return x's makeObjectsPerformSelector:\"y\"",
         ]
         for fragment in refused {
             XCTAssertThrowsError(try OsascriptFixtureGuard.check(fragment, foundationBridge: true), "must refuse: \(fragment.debugDescription)")

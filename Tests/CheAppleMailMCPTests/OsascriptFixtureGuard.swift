@@ -1,8 +1,7 @@
 import Foundation
 
-/// #572: the check the osascript fixtures in `ComposeCleanupSheetTests` and
-/// `PostIdentificationCleanupTests` run on the exact text they hand to `/usr/bin/osascript`
-/// (other fixtures still use their own literal checks; #617). Unit tests must not reach Mail or System Events, and AppleScript can
+/// #572: the check the osascript fixtures run on the exact text they hand to `/usr/bin/osascript`
+/// (the list of files grew in #617). Unit tests must not reach Mail or System Events, and AppleScript can
 /// address an application without the literal `tell application`: `tell app "Mail"`,
 /// `… of application "Mail"`, `activate application "Mail"`, `application id "…"`,
 /// `tell process "Mail"`, or indirectly through `run script` / `do shell script`.
@@ -34,10 +33,27 @@ enum OsascriptFixtureGuard {
         ("|…| identifier", #"\|"#),
     ]
 
-    /// What `foundationBridge` still refuses by name: the classes that reach another application or
-    /// run other code, and the ways to name a class in a string, which `code(of:)` empties. Any other
-    /// Foundation class is data handling (#617).
-    static let bridgeRefusals = #"\bNS(Workspace|AppleScript|Task|Process|RunningApplication|UserScriptTask|UserAppleScriptTask|UserUnixTask|UserAutomatorTask|AppleEventDescriptor|AppleEventManager|Bundle|Pasteboard|DistributedNotificationCenter|ConnectionToApplication|XPCConnection|ClassFromString|ProtocolFromString|SelectorFromString|Invocation)\b|\bSBApplication\b|\bperformSelector|\bvalueForKey|\bclass\s+"""#
+    /// The only class-shaped names `foundationBridge` lets through: the ones the handlers under test
+    /// use. It is a closed list because a list of dangerous classes has to be right about every
+    /// class: `NSExpression` runs a format string that can name `NSTask`, and AppKit is already linked
+    /// into osascript, so `use framework "Foundation"` does not limit what resolves (#617 verify).
+    /// A handler that needs another name adds it here, with a reviewer's eye on what it can reach.
+    static let bridgeNames: Set<String> = [
+        "NSCharacterSet", "NSData", "NSDate", "NSJSONSerialization", "NSMutableArray", "NSMutableDictionary",
+        "NSMutableSet", "NSNotFound", "NSPredicate", "NSString", "NSUTF8StringEncoding",
+    ]
+
+    /// Any `NS…` word in either case, or the shape of an Objective-C class of another prefix
+    /// (`SBApplication`, `OSAScript`).
+    static let classShaped = #"\b(?:[Nn][Ss][A-Za-z0-9_]*|[A-Z]{2,}[a-z0-9][A-Za-z0-9_]*)\b"#
+
+    /// What reaches code by a name in a string, on any receiver, and any `class` other than
+    /// `class of x`: `class "NSTask"` and `class ("NS" & "Task")` name one at run time.
+    static let bridgeRefusals = #"Selector|valueForKey|\bclass\b(?!\s+of\b)"#
+
+    /// `NSPredicate` evaluates `FUNCTION` and `CAST` in its format string, so it is let through only
+    /// for the one format the handlers use.
+    static let bridgePredicate = #"NSPredicate's predicateWithFormat:"SELF MATCHES %@""#
 
     /// Throws `ApplicationReference` if the fragment could address an application.
     ///
@@ -46,8 +62,9 @@ enum OsascriptFixtureGuard {
     /// address anything; `application "Mail"` becomes `application ""` and is still refused.
     ///
     /// `foundationBridge` is for handlers that really use the AppleScript-Objective-C bridge. It lets
-    /// through exactly `use framework "Foundation"`, `use scripting additions` and
-    /// `current application`, and refuses the classes in `bridgeRefusals` instead (#617).
+    /// through exactly `use framework "Foundation"`, `use scripting additions`,
+    /// `current application's` followed by a name in `bridgeNames`, and plain words in pipes (#617).
+    /// That bounds which classes run, not what the methods of those classes do.
     static func check(_ fragment: String, foundationBridge: Bool = false) throws {
         var code = code(of: fragment)
         if foundationBridge {
@@ -65,24 +82,38 @@ enum OsascriptFixtureGuard {
 
     private static func removingFoundationBridge(from code: String, fragment: String) throws -> String {
         if code.range(of: bridgeRefusals, options: [.regularExpression, .caseInsensitive]) != nil {
-            throw ApplicationReference(pattern: "a Foundation class that reaches other code", fragment: fragment)
+            throw ApplicationReference(pattern: "a name that reaches other code", fragment: fragment)
         }
-        // Literals are emptied in `code`, so the framework's name is read from the same lexer with
-        // literals kept. The raw fragment would disagree with `code` about comments and `¬`: a
+        var rest = code[...]
+        while let range = rest.range(of: classShaped, options: .regularExpression) {
+            let name = String(rest[range])
+            guard bridgeNames.contains(name) else {
+                throw ApplicationReference(pattern: "\(name) is not in bridgeNames", fragment: fragment)
+            }
+            rest = rest[range.upperBound...]
+        }
+        // Literals are emptied in `code`, so what has to be read inside them comes from the same lexer
+        // with literals kept. The raw fragment would disagree with `code` about comments and `¬`: a
         // `use (* x *) framework "AppKit"` is no `use framework` line there (#617 verify).
-        let lines = Self.code(of: fragment, keepingLiterals: true).components(separatedBy: CharacterSet.newlines)
-        for line in lines where line.range(of: #"^\s*use\s+framework\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
+        let kept = Self.code(of: fragment, keepingLiterals: true)
+        if kept.replacingOccurrences(of: bridgePredicate, with: "").range(of: "predicate", options: .caseInsensitive) != nil {
+            throw ApplicationReference(pattern: "a predicate other than \(bridgePredicate)", fragment: fragment)
+        }
+        for line in kept.components(separatedBy: CharacterSet.newlines)
+        where line.range(of: #"^\s*use\s+framework\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
             guard line.range(of: #"^\s*use\s+framework\s+"Foundation"\s*$"#, options: .regularExpression) != nil else {
                 throw ApplicationReference(pattern: "a framework other than Foundation", fragment: fragment)
             }
         }
+        // Any other `current application` stays in the text, and the `application` check refuses it.
+        let names = bridgeNames.sorted().joined(separator: "|")
         return code
             // Bridge calls put keyword-like names in pipes (`… |error|:missing value`, `… |set|()`). A
             // plain word between pipes has no escape, quote or comment marker for the lexer to misread.
             .replacingOccurrences(of: #"\|[A-Za-z_][A-Za-z0-9_]*\|"#, with: "pipedName", options: .regularExpression)
             .replacingOccurrences(of: #"(?m)^[ \t]*use[ \t]+framework[ \t]+""[ \t]*$"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"(?m)^[ \t]*use[ \t]+scripting[ \t]+additions[ \t]*$"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\bcurrent[ \t]+application\b"#, with: "currentBridge", options: .regularExpression)
+            .replacingOccurrences(of: "\\bcurrent[ \\t]+application's[ \\t]+(\(names))\\b", with: "$1", options: .regularExpression)
     }
 
     /// For a test that replaced a GUI handler's statements with fixtures and calls that handler: its
