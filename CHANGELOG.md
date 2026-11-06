@@ -109,6 +109,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as US Central and could move the calendar day; a date ending in `CST` or any
   other zone name the recipe refuses now stays as written in `date`, and its
   default filename uses `unknown-date`. Files already exported are not repaired.
+- **`skip_message_ids_path` no longer splits a Message-ID at a Unicode line
+  character** ([#613](https://github.com/PsychQuant/che-apple-mail-mcp/issues/613)).
+  The skip file was read with `CharacterSet.newlines`, so an ID holding U+2028
+  or a similar character (kept by the header parser since #555) became two
+  entries that matched nothing, and the mail was exported again. Lines now end
+  only at CR or LF.
 
 ### Documentation
 

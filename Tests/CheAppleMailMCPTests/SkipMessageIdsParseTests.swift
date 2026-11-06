@@ -1,4 +1,5 @@
 import XCTest
+@testable import MailSQLite
 @testable import CheAppleMailMCP
 
 /// #177: `parseSkipMessageIds` must handle any line ending. The CRLF case is the
@@ -37,5 +38,30 @@ final class SkipMessageIdsParseTests: XCTestCase {
     func testEmptyAndWhitespaceOnly() {
         XCTAssertTrue(CheAppleMailMCPServer.parseSkipMessageIds("").isEmpty)
         XCTAssertTrue(CheAppleMailMCPServer.parseSkipMessageIds("\n\n   \r\n").isEmpty)
+    }
+
+    // MARK: - #613: only CR and LF end a line
+
+    /// `RFC822Parser` keeps these characters inside a value since #555, so a
+    /// stored Message-ID can hold them and the skip file must not split it.
+    func testUnicodeLineCharactersStayInsideAnEntry() {
+        for scalar in ["\u{000B}", "\u{000C}", "\u{0085}", "\u{2028}", "\u{2029}"] {
+            let id = "<a\(scalar)b@x>"
+            XCTAssertEqual(CheAppleMailMCPServer.parseSkipMessageIds("\(id)\n<c@x>\n"), [id, "<c@x>"])
+        }
+    }
+
+    func testAnEntryMatchesWhatTheHeaderParserStores() {
+        let stored = RFC822Parser.parseHeaders(from: Data("Message-ID: <a\u{2028}b@x>\r\n\r\n".utf8))["message-id"]
+        XCTAssertEqual(stored, "<a\u{2028}b@x>")
+        XCTAssertEqual(CheAppleMailMCPServer.parseSkipMessageIds("# archive\r\n\(stored ?? "")\r\n"), [stored ?? ""])
+    }
+
+    func testUnicodeLineCharactersAtTheEndsOfAnEntryAreKept() {
+        XCTAssertEqual(CheAppleMailMCPServer.parseSkipMessageIds("\u{2028}<a@x>\u{0085}\n"), ["\u{2028}<a@x>\u{0085}"])
+    }
+
+    func testBareCarriageReturnStillEndsALine() {
+        XCTAssertEqual(CheAppleMailMCPServer.parseSkipMessageIds("<a@x>\r<b@x>\r\n<c@x>"), ["<a@x>", "<b@x>", "<c@x>"])
     }
 }

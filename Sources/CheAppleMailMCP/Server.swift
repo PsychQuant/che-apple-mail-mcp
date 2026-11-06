@@ -2621,14 +2621,17 @@ class CheAppleMailMCPServer {
 
     /// #177: parse a `skip_message_ids_path` file body into the dedup Message-ID
     /// set. Pure (no I/O) so the CRLF/line-ending handling is unit-testable.
-    /// Splits on **any** newline (LF / CR / CRLF — a CRLF file is a single `\r\n`
-    /// grapheme, so a bare `split("\n")` mis-parses the whole file as one entry),
-    /// trims surrounding whitespace + newlines, and ignores blank lines and `#`
-    /// comments. Matching is exact on the trimmed full Message-ID string.
+    /// Splits on LF, CR and CRLF only (a CRLF file is a single `\r\n` grapheme, so
+    /// a bare `split("\n")` mis-parses the whole file as one entry, and the split
+    /// here is scalar based). Not on `.newlines`: U+000B, U+000C, U+0085, U+2028
+    /// and U+2029 can sit inside a stored Message-ID since #555, and an entry must
+    /// stay equal to it (#613). Trims the set `RFC822Parser` trims, and ignores
+    /// blank lines and `#` comments. Matching is exact on the trimmed full
+    /// Message-ID string.
     static func parseSkipMessageIds(_ contents: String) -> Set<String> {
         var set: Set<String> = []
-        for line in contents.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        for line in contents.components(separatedBy: CharacterSet(charactersIn: "\r\n")) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
             set.insert(trimmed)
         }
