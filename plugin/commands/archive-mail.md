@@ -623,11 +623,17 @@ esac
 if [ "$DEDUP_STRATEGY" = "last_archived" ]; then
     LAST_ARCHIVED=$(awk '/^last_archived:[ \t]*/{sub(/^last_archived:[ \t]*/,"");print;exit}' "${CONFIG_FILE}" 2>/dev/null)
     if [ -z "$LAST_ARCHIVED" ]; then
-        echo "Error: dedup_strategy=last_archived requires '${CONFIG_FILE}' to have a 'last_archived: YYYY-MM-DD' field." >&2
+        echo "Error: dedup_strategy=last_archived requires '${CONFIG_FILE}' to have a 'last_archived' field: a date (YYYY-MM-DD), or a date and time with Z or an offset." >&2
         echo "Either set last_archived (manually or after first archive run) or use dedup_strategy: index | both." >&2
         exit 1
     fi
 fi
+```
+
+**`last_archived` 界線檢查（#600）**：`DEDUP_STRATEGY` 是 `last_archived` 或 `both` 且 `LAST_ARCHIVED` 非空時，這裡就用日期 recipe 的 `watermark_instant(LAST_ARCHIVED)` 算出 Step 4.1 要用的 `watermark`（recipe 存成固定腳本，值走 argv，不放進程式文字）。Step 3 會把同一個字串傳給 `date_from`，伺服器讀不懂時靜默不加界線，所以要在搜尋之前檢查。它 raise `ValueError` 就停止本 run，不進 Step 2，印出下面這行（`<值>` 是設定檔裡的原文）：
+
+```
+Error: last_archived in '${CONFIG_FILE}' must be a date (YYYY-MM-DD), or a date and time with Z or an offset. Got: <值>
 ```
 
 | `dedup_strategy` | Step 2 (load index) | Step 4 (dedup logic) | Step 5/6 (write index) | Step 8.5 (reconcile gate) |
@@ -1209,7 +1215,7 @@ def refinement_report(config, stats, dropped, limit=LIST_LIMIT):
 ```
 <!-- archive-mail-refinement-recipe:end -->
 
-呼叫順序(沒有循環):先定義 Step 4.1 的 `known_ids` 與 `is_new`(它們只讀 `known_ids` 與 Step 1 已算好的界線,不依賴 refinement 結果;`last_archived` 讀不出來的情況在 Step 1 就停止了,所以 `is_new` 不會因界線而在這裡 raise),再呼叫下面兩行,最後 Step 4.1 的 dedup 吃 refinement 之後的 `refined`。萬一 `is_new` 仍 raise,recipe 把該信算作「尚未歸檔」(出現在清單上,不讓 refinement 輸出消失):
+呼叫順序(沒有循環):先定義 Step 4.1 的 `known_ids` 與 `is_new`(它們只讀 `known_ids` 與 Step 1.6 已算好的界線,不依賴 refinement 結果;`last_archived` 讀不出來的情況在 Step 1.6 就停止了,所以 `is_new` 不會因界線而在這裡 raise),再呼叫下面兩行,最後 Step 4.1 的 dedup 吃 refinement 之後的 `refined`。萬一 `is_new` 仍 raise,recipe 把該信算作「尚未歸檔」(出現在清單上,不讓 refinement 輸出消失):
 
 ```python
 refined, refinement_stats, refinement_dropped = apply_refinement(fetched, config, is_new)
@@ -1237,9 +1243,9 @@ def is_new(email):
     if email["message_id"] in known_ids:
         return False
     # Extra gate for last_archived / both: also require date > last_archived
-    # #600: compare instants, never strings. `watermark` was computed in Step 1 (right after the config is read,
-    # BEFORE Step 3 searches): watermark = watermark_instant(LAST_ARCHIVED) if the strategy is last_archived/both
-    # and LAST_ARCHIVED is non-empty, else None. An unreadable value already stopped the run naming `last_archived`.
+    # #600: compare instants, never strings. `watermark` was computed in Step 1.6, BEFORE Step 3 searches:
+    # watermark = watermark_instant(LAST_ARCHIVED) if the strategy is last_archived/both and LAST_ARCHIVED is
+    # non-empty, else None. An unreadable value already stopped the run naming `last_archived`.
     if DEDUP_STRATEGY in ("last_archived", "both") and LAST_ARCHIVED:
         # search_emails rows: `date_received` in the default `full` projection, `date` in `summary`
         if not is_after_watermark(email.get("date_received") or email.get("date"), watermark):
@@ -1249,7 +1255,7 @@ def is_new(email):
 new_emails = [e for e in refined if is_new(e)]   # `refined` from Step 4.0 (#509); unrefined configs: refined == fetched
 ```
 
-**`last_archived` 界線（#600）**：`DEDUP_STRATEGY` 是 `last_archived` 或 `both` 且 `LAST_ARCHIVED` 非空時，界線時刻在 **Step 1 讀完設定之後、Step 3 搜尋之前**就用日期 recipe 的 `watermark_instant(LAST_ARCHIVED)` 算一次（Step 3 也把同一個字串傳給 `date_from`，伺服器讀不懂時會靜默不加界線，所以不能等到這裡才驗證）：只有日期的值讀成**本機時區**當天的 00:00（與伺服器對 date-only `date_from` 的規則相同），`Z` 或帶 offset 的值讀成該時刻。**帶時間但沒有時區的值（`2026-06-30T10:00:00`）不接受**：伺服器的 `parseDate` 只認帶時區的 ISO8601 與 `yyyy-MM-dd`，會把它丟掉，Step 3 就會完全沒有界線地搜尋；讀不出來或缺時區時**停止並點名 `last_archived`**，訊息告訴使用者補上 `Z`／offset，或改成只有日期，不略過這道閘（這個策略沒有 index，略過會把已歸檔的信再歸檔一次）。每封信用 `is_after_watermark(date_received 或 date, 界線)` 比時刻，**不可**對字串用 `<=`（`2025-12-31T17:30:00Z` 對 `2026-01-01T00:00:00+08:00` 字串上較小、時間上其實較晚，舊寫法會靜默漏信）。`search_emails` 的預設 `full` projection 只有 `date_received`，沒有 `date`（`summary` 才有），所以兩個欄位都要讀。信件日期讀不出來的當作較晚、保留：`both` 下 index 的 Message-ID 閘仍會擋住已歸檔的信，**`last_archived` 沒有 index，這種信每次執行都會重抓**（Step 5 的 collision guard 寫出 `-N` 重複檔），這是已知代價，Step 7 要列出讀不出日期而被保留的信數。
+**`last_archived` 界線（#600）**：`DEDUP_STRATEGY` 是 `last_archived` 或 `both` 且 `LAST_ARCHIVED` 非空時，界線時刻已在 **Step 1.6** 算好（日期 recipe 的 `watermark_instant(LAST_ARCHIVED)`，見該步的界線檢查；Step 3 也把同一個字串傳給 `date_from`，伺服器讀不懂時會靜默不加界線，所以不能等到這裡才驗證）：只有日期的值讀成**本機時區**當天的 00:00（與伺服器對 date-only `date_from` 的規則相同），`Z` 或帶 offset 的值讀成該時刻。**帶時間但沒有時區的值（`2026-06-30T10:00:00`）不接受**：伺服器的 `parseDate` 只認帶時區的 ISO8601 與 `yyyy-MM-dd`，會把它丟掉，Step 3 就會完全沒有界線地搜尋；讀不出來或缺時區時**停止並點名 `last_archived`**（Step 1.6 的那行錯誤），訊息告訴使用者補上 `Z`／offset，或改成只有日期，不略過這道閘（這個策略沒有 index，略過會把已歸檔的信再歸檔一次）。每封信用 `is_after_watermark(date_received 或 date, 界線)` 比時刻，**不可**對字串用 `<=`（`2025-12-31T17:30:00Z` 對 `2026-01-01T00:00:00+08:00` 字串上較小、時間上其實較晚，舊寫法會靜默漏信）。`search_emails` 的預設 `full` projection 只有 `date_received`，沒有 `date`（`summary` 才有），所以兩個欄位都要讀。信件日期讀不出來的當作較晚、保留：`both` 下 index 的 Message-ID 閘仍會擋住已歸檔的信，**`last_archived` 沒有 index，這種信每次執行都會重抓**（Step 5 的 collision guard 寫出 `-N` 重複檔），這是已知代價，Step 7 要列出讀不出日期而被保留的信數。
 
 `INDEX_FILE` 不存在，或存在但沒有 `emails` key，都是新 index（`emails` 為 `{}`），不是錯誤；以前這個情形在這裡是 `KeyError`（#531）。`emails` 不是 object 則 Step 2 已經停止，這裡不會看到。
 
@@ -2536,6 +2542,9 @@ def thread_bounds(messages):
     return {"first_message": keyed[0]["date"], "last_message": keyed[-1]["date"]}
 
 
+LAST_ARCHIVED_FORMS = "a date (YYYY-MM-DD), or a date and time with Z or an offset"
+
+
 def watermark_instant(text, local_tz=None):
     """The `last_archived` boundary as an aware datetime (#600). A date-only value is read as 00:00 in the machine's
     local zone, which is the rule the server applies to a date-only `date_from`. A datetime WITHOUT a zone is
@@ -2547,16 +2556,16 @@ def watermark_instant(text, local_tz=None):
             text = text[1:-1].strip()
     parsed = parse_archive_date(text)
     if parsed is None:
-        raise ValueError("last_archived is not a readable date")
+        raise ValueError("last_archived is not readable: use " + LAST_ARCHIVED_FORMS)
+    if isinstance(parsed, datetime):
+        if parsed.tzinfo is None:
+            raise ValueError("last_archived has a time but no time zone: use " + LAST_ARCHIVED_FORMS)
+        return parsed
     try:
-        if isinstance(parsed, datetime):
-            if parsed.tzinfo is None:
-                raise ValueError("last_archived has a time but no time zone: add Z or an offset, or use a date only")
-            return parsed
         parsed = datetime(parsed.year, parsed.month, parsed.day)
         return parsed.replace(tzinfo=local_tz) if local_tz is not None else parsed.astimezone()
-    except OverflowError:
-        raise ValueError("last_archived is not a readable date")
+    except (OverflowError, ValueError):
+        raise ValueError("last_archived is not readable: use " + LAST_ARCHIVED_FORMS)
 
 
 def is_after_watermark(email_date, watermark):

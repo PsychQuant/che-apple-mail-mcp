@@ -995,6 +995,39 @@ class ArchiveWatermarkTests(unittest.TestCase):
             self.dates["watermark_instant"]("soon", self.utc8)
         self.assertTrue(self.after("not a date", "2026-01-01"))
 
+    def test_every_refusal_names_the_same_accepted_forms(self):
+        forms = "a date (YYYY-MM-DD), or a date and time with Z or an offset"
+        for text in ("soon", "2026-01-01T00:00:00", "0001-01-01"):
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError) as caught:
+                    self.dates["watermark_instant"](text, None)
+                self.assertIn(forms, str(caught.exception))
+        document = DOCUMENT.read_text()
+        self.assertNotIn("'last_archived: YYYY-MM-DD'", document)
+        self.assertIn("requires '${CONFIG_FILE}' to have a 'last_archived' field: " + forms, document)
+        self.assertIn("Error: last_archived in '${CONFIG_FILE}' must be " + forms, document)
+
+    def test_the_boundary_is_checked_in_step_1_6_before_any_search(self):
+        step = sop_section("### Step 1.6: 解析 namespace 路徑")
+        check = step[step.index("**`last_archived` 界線檢查（#600）**"):]
+        self.assertIn("`watermark_instant(LAST_ARCHIVED)`", check)
+        self.assertIn("停止本 run", check)
+        self.assertLess(step.index("**`last_archived` 界線檢查（#600）**"), step.index("| `dedup_strategy` | Step 2"))
+        document = DOCUMENT.read_text()
+        self.assertNotIn("Step 1 讀完設定之後", document)
+        self.assertNotIn("`watermark` was computed in Step 1 (", document)
+        self.assertNotIn("讀不出來的情況在 Step 1 就停止了", document)
+        self.assertIn("界線時刻已在 **Step 1.6** 算好", document)
+
+    def test_the_changelog_says_where_the_refusal_lives_and_that_it_is_a_behaviour_change(self):
+        changelog = (DOCUMENT.parents[1] / "CHANGELOG.md").read_text()
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [", changelog.index("## [Unreleased]") + 5)]
+        entry = next(line for line in unreleased.split("\n") if "[#600]" in line and line.startswith("- `/archive-mail` Step 4.1"))
+        self.assertIn("checked in Step 1.6, before Step 3 searches", entry)
+        self.assertIn("**Behaviour change**", entry)
+        self.assertNotIn("validated in Step 1 ", unreleased)
+        self.assertNotIn("validated in Step 1)", unreleased)
+
     def test_sop_reads_date_received_and_no_longer_compares_strings(self):
         text = DOCUMENT.read_text()
         self.assertIn('email.get("date_received") or email.get("date")', text)
