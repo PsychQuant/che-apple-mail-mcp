@@ -70,15 +70,24 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 就是 `buildDirectDraftTriggerScript` 在同一個 `timing` 下的輸出）與 `uploadState`（`DraftStoreWriterTests`），
 `readFlag` 與 `createdText` 由 `DirectDraftPathOutcomeTests` 走過（#484），`markDirectDraftRead` 在那裡是替身，真的那個沒有測試。
 
-結構檢查擋不住所有削弱方式。#490 第 4 輪驗證找到下列六種寫法，這兩條守門測試都不會轉紅（#492）：
+結構檢查擋不住所有削弱方式。#490 第 4 輪驗證找到下列六種寫法，這兩條守門測試都不會轉紅。#492 之後，每一種都有別的測試會轉紅，列在各項後面，都實際改過原始碼確認：
 
-1. 在 `timer.mark("inserted")` 之前提早回報；
-2. 讓 `triggerDirectDraftUpload` 送出 `buildDirectDraftTriggerScript` 以外的 script，或在送出前改寫它
-   （#489 之後由 `DirectDraftTriggerTimingTests` 擋下，但不屬於這兩條守門測試）；
-3. 在 `DirectDraftPath` 裡宣告與凍結段所用名稱同名的型別或函式（例如 `Task`）；
-4. 用 `set the read status of` 之類的寫法多加一次切換；
-5. 用 `if` 等控制流程包住兩次切換；
-6. 另寫一條名稱不同、不經 `attemptSteps` 的平行路徑。
+1. 在 `timer.mark("inserted")` 之前提早回報：`DirectDraftPathOutcomeTests` 的結果與步驟序列；
+2. 讓 `triggerDirectDraftUpload` 送出 `buildDirectDraftTriggerScript` 以外的 script，或在送出前改寫它：
+   `testTriggerSendsTheBuildersScriptForItsTimingFlag`；
+3. 在 `DirectDraftPath` 裡宣告與凍結段所用名稱同名的型別或函式（例如 `Task`）：
+   把 `Task.sleep` 變成空的，`testTheReadRepairGivesMailTimeBetweenItsLooks` 會轉紅；
+4. 用 `set the read status of` 之類的寫法多加一次切換：`testUntimedTriggerScriptIsUnchanged`；
+   只在計時時才多加的，`testTimedTriggerIsTheUntimedOnePlusItsMarks`；
+5. 用 `if` 等控制流程包住兩次切換：同第 4 項；
+6. 另寫一條名稱不同、不經 `attemptSteps` 的平行路徑：再開一次 `DraftStoreWriter(` 或再寫一次 `writer.insert(`，
+   `testTheStoreIsOpenedAndWrittenInOnePlace` 會轉紅。
+
+這些測試已知還抓不到下列寫法，不代表只有這些：
+
+- 第 1 項：條件只在測試情境以外成立的提早回報；
+- 第 3 項：只讓上傳輪詢不等待的宣告（補設已讀的等待照舊），或宣告 `Task` 以外的名稱；
+- 第 6 項：用別的名字沿用已開的 writer，或不經 `DraftStoreWriter` 寫入 store。
 
 測試轉紅時，先取得上面要求的證據並更新本規則，再改測試；不要只改門檻或凍結副本。
 

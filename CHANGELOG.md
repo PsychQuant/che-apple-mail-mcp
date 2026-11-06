@@ -106,6 +106,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`NSWorkspace`, `NSAppleScript`, `NSTask` and others) refused by name. Handlers
   a test does not call lose their `tell application` blocks before the script
   runs. It is still a deny list. Test-only change.
+- **The six ways around the direct-write guard tests now fail a test**
+  ([#492](https://github.com/PsychQuant/che-apple-mail-mcp/issues/492)). A new
+  outcome test has Mail apply the read repair 0.6 s later, so looks that do not
+  wait, as with a declared `Task` that turns the sleeps into nothing, use up their
+  tries. The timed trigger script has to equal the pinned untimed one plus its
+  marks, and the store is opened and written in one place. Each evasion was made
+  in the source and turned a test red. Test-only change; the frozen text is
+  untouched.
 - **More timing assertions kept clear of machine load**
   ([#611](https://github.com/PsychQuant/che-apple-mail-mcp/issues/611)). The
   four assertions left over from #502 use a monotonic clock and a 5 s ceiling.
