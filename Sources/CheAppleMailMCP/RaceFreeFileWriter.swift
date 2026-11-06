@@ -185,26 +185,36 @@ enum RaceFreeFileWriter {
     /// removes it. A running copy keeps its file's modification time current.
     static let staleTemporaryAge: TimeInterval = 24 * 60 * 60
 
+    /// A short tag for this Mac, or `nil` if the system will not say. A pid means
+    /// nothing on another machine, and a destination can be a shared or synced
+    /// folder, so a dead-owner verdict needs to know the file is from here.
+    static let hostTag: String? = {
+        var uuid = [UInt8](repeating: 0, count: 16)
+        var noWait = timespec(tv_sec: 0, tv_nsec: 0)
+        guard gethostuuid(&uuid, &noWait) == 0 else { return nil }
+        return uuid.prefix(4).map { String(format: "%02x", $0) }.joined()
+    }()
+
     /// The sibling temporary for one save. Unique, not fixed per destination:
     /// concurrent saves must never unlink or publish each other's file (#402).
-    /// The pid is what lets a later save tell an abandoned file from a live
-    /// one (#576).
-    static func temporaryName(pid: Int32 = getpid()) -> String {
-        ".attachment-\(pid)-\(UUID().uuidString).tmp"
+    /// The pid and host tag are what let a later save tell an abandoned file
+    /// from a live one (#576).
+    static func temporaryName(pid: Int32 = getpid(), host: String? = hostTag) -> String {
+        ".attachment-\(pid)-\(host ?? "unknown")-\(UUID().uuidString).tmp"
     }
 
-    /// What `temporaryName` wrote, or `nil` for any other name. The pid is `nil`
-    /// for the form before #576, which named no owner.
-    static func parseTemporaryName(_ name: String) -> (isTemporary: Bool, pid: Int32?) {
+    /// What `temporaryName` wrote; `isTemporary` is false for any other name.
+    /// The pid and host are `nil` for the form before #576, which named no owner.
+    static func parseTemporaryName(_ name: String) -> (isTemporary: Bool, pid: Int32?, host: String?) {
         let prefix = ".attachment-", suffix = ".tmp"
         guard name.hasPrefix(prefix), name.hasSuffix(suffix),
-              name.count > prefix.count + suffix.count else { return (false, nil) }
+              name.count > prefix.count + suffix.count else { return (false, nil, nil) }
         let middle = String(name.dropFirst(prefix.count).dropLast(suffix.count))
-        if UUID(uuidString: middle) != nil { return (true, nil) }
-        guard let dash = middle.firstIndex(of: "-"),
-              let pid = Int32(middle[..<dash]), pid > 0,
-              UUID(uuidString: String(middle[middle.index(after: dash)...])) != nil else { return (false, nil) }
-        return (true, pid)
+        if UUID(uuidString: middle) != nil { return (true, nil, nil) }
+        let parts = middle.split(separator: "-", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count == 3, let pid = Int32(parts[0]), pid > 0, !parts[1].isEmpty,
+              UUID(uuidString: String(parts[2])) != nil else { return (false, nil, nil) }
+        return (true, pid, String(parts[1]))
     }
 
     static func processIsAlive(_ pid: Int32) -> Bool {
@@ -214,21 +224,22 @@ enum RaceFreeFileWriter {
     /// Removes temporaries a killed server left behind in this directory: a
     /// `SIGKILL` skips the `defer` that normally removes them, and their names
     /// are never used again (#576). Only regular files of this user with a name
-    /// `temporaryName` wrote, and only when the owner is dead or the file is
-    /// older than `staleTemporaryAge`. Best effort: a directory that cannot be
-    /// listed, which a search-only one cannot, is left alone and never fails a save.
-    static func sweepStaleTemporaries(dirFd: Int32, now: Date = Date(),
+    /// `temporaryName` wrote, and only when the file is older than
+    /// `staleTemporaryAge` or its owner is a dead process on this Mac. Best effort:
+    /// a directory that cannot be listed, which a search-only one cannot, is left
+    /// alone and never fails a save.
+    static func sweepStaleTemporaries(dirFd: Int32, now: Date = Date(), thisHost: String? = hostTag,
                                       isAlive: (Int32) -> Bool = RaceFreeFileWriter.processIsAlive) {
         let listFd = openat(dirFd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard listFd >= 0 else { return }
         guard let directory = fdopendir(listFd) else { close(listFd); return }
-        var candidates: [(name: String, pid: Int32?)] = []
+        var candidates: [(name: String, pid: Int32?, host: String?)] = []
         while let entry = readdir(directory) {
             let name = withUnsafePointer(to: &entry.pointee.d_name) {
                 $0.withMemoryRebound(to: CChar.self, capacity: Int(entry.pointee.d_namlen) + 1) { String(cString: $0) }
             }
             let parsed = parseTemporaryName(name)
-            if parsed.isTemporary { candidates.append((name, parsed.pid)) }
+            if parsed.isTemporary { candidates.append((name, parsed.pid, parsed.host)) }
         }
         closedir(directory)
         for candidate in candidates {
@@ -236,7 +247,8 @@ enum RaceFreeFileWriter {
             guard fstatat(dirFd, candidate.name, &info, AT_SYMLINK_NOFOLLOW) == 0,
                   (info.st_mode & S_IFMT) == S_IFREG, info.st_uid == geteuid() else { continue }
             let modified = TimeInterval(info.st_mtimespec.tv_sec)
-            let ownerGone = candidate.pid.map { !isAlive($0) } ?? false
+            let isLocal = thisHost != nil && candidate.host == thisHost
+            let ownerGone = isLocal && candidate.pid.map { !isAlive($0) } == true
             if ownerGone || now.timeIntervalSince1970 - modified >= staleTemporaryAge {
                 _ = unlinkat(dirFd, candidate.name, 0)
             }
@@ -251,7 +263,9 @@ enum RaceFreeFileWriter {
     /// fails the save rather than publishing a file others may read.
     private static func clearInheritedACL(fd: Int32, name: String) throws {
         guard let inherited = acl_get_fd_np(fd, ACL_TYPE_EXTENDED) else {
-            guard errno == ENOENT || errno == ENOTSUP else {
+            // No ACL, or a filesystem with no ACLs to read; which errno that
+            // gives varies by filesystem.
+            guard [ENOENT, ENOTSUP, EOPNOTSUPP, EINVAL].contains(errno) else {
                 throw RaceFreeWriteError.writeFailed(name: name, errno: errno)
             }
             return

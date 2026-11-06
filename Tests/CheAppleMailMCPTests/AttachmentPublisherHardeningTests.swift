@@ -156,10 +156,13 @@ final class AttachmentPublisherHardeningTests: XCTestCase {
     // MARK: - 3. temporaries after a kill
 
     func testTemporaryNamesCarryThePidAndRoundTrip() throws {
-        let name = RaceFreeFileWriter.temporaryName(pid: 4242)
-        XCTAssertTrue(name.hasPrefix(".attachment-4242-"), name)
-        XCTAssertEqual(RaceFreeFileWriter.parseTemporaryName(name).pid, 4242)
-        XCTAssertTrue(RaceFreeFileWriter.parseTemporaryName(name).isTemporary)
+        let name = RaceFreeFileWriter.temporaryName(pid: 4242, host: "abcd0123")
+        XCTAssertTrue(name.hasPrefix(".attachment-4242-abcd0123-"), name)
+        let parsed = RaceFreeFileWriter.parseTemporaryName(name)
+        XCTAssertTrue(parsed.isTemporary)
+        XCTAssertEqual(parsed.pid, 4242)
+        XCTAssertEqual(parsed.host, "abcd0123")
+        XCTAssertNotNil(RaceFreeFileWriter.hostTag, "this Mac has a host id")
         XCTAssertNotEqual(RaceFreeFileWriter.temporaryName(), RaceFreeFileWriter.temporaryName(),
                           "unique per save, so concurrent saves cannot touch each other's file (#402)")
 
@@ -167,18 +170,20 @@ final class AttachmentPublisherHardeningTests: XCTestCase {
         XCTAssertTrue(RaceFreeFileWriter.parseTemporaryName(legacy).isTemporary)
         XCTAssertNil(RaceFreeFileWriter.parseTemporaryName(legacy).pid)
 
-        for other in [".attachment-notes.tmp", ".attachment-12-notes.tmp", ".attachment--\(UUID().uuidString).tmp",
-                      ".attachment-0-\(UUID().uuidString).tmp", "attachment-1-\(UUID().uuidString).tmp",
-                      ".attachment-1-\(UUID().uuidString).pdf", ".attachment-.tmp", "report.pdf"] {
+        for other in [".attachment-notes.tmp", ".attachment-12-notes.tmp", ".attachment--h-\(UUID().uuidString).tmp",
+                      ".attachment-0-h-\(UUID().uuidString).tmp", ".attachment-1--\(UUID().uuidString).tmp",
+                      ".attachment-1-\(UUID().uuidString).tmp", "attachment-1-h-\(UUID().uuidString).tmp",
+                      ".attachment-1-h-\(UUID().uuidString).pdf", ".attachment-.tmp", "report.pdf"] {
             XCTAssertFalse(RaceFreeFileWriter.parseTemporaryName(other).isTemporary, other)
         }
     }
 
-    private func sweep(_ root: URL, alive: Set<Int32>, now: Date = Date()) throws {
+    private func sweep(_ root: URL, alive: Set<Int32>, now: Date = Date(), thisHost: String? = "here") throws {
         let fd = open(root.path, O_RDONLY | O_DIRECTORY)
         XCTAssertGreaterThanOrEqual(fd, 0)
         defer { close(fd) }
-        RaceFreeFileWriter.sweepStaleTemporaries(dirFd: fd, now: now, isAlive: { alive.contains($0) })
+        RaceFreeFileWriter.sweepStaleTemporaries(dirFd: fd, now: now, thisHost: thisHost,
+                                                 isAlive: { alive.contains($0) })
     }
 
     private func touch(_ url: URL, modified: Date? = nil) throws {
@@ -188,8 +193,8 @@ final class AttachmentPublisherHardeningTests: XCTestCase {
 
     func testASweepRemovesADeadOwnersFileAndKeepsALiveOne() throws {
         let root = try fixtureRoot()
-        let dead = root.appendingPathComponent(RaceFreeFileWriter.temporaryName(pid: 111))
-        let live = root.appendingPathComponent(RaceFreeFileWriter.temporaryName(pid: 222))
+        let dead = root.appendingPathComponent(RaceFreeFileWriter.temporaryName(pid: 111, host: "here"))
+        let live = root.appendingPathComponent(RaceFreeFileWriter.temporaryName(pid: 222, host: "here"))
         let report = root.appendingPathComponent("report.pdf")
         let lookalike = root.appendingPathComponent(".attachment-notes.tmp")
         for url in [dead, live, report, lookalike] { try touch(url) }
@@ -199,11 +204,28 @@ final class AttachmentPublisherHardeningTests: XCTestCase {
         XCTAssertEqual(names, [live.lastPathComponent, "report.pdf", ".attachment-notes.tmp"])
     }
 
+    func testAPidFromAnotherMacIsNotJudgedByThisMacsProcessTable() throws {
+        // A shared or synced folder: that pid may be running over there.
+        let root = try fixtureRoot()
+        let elsewhere = root.appendingPathComponent(RaceFreeFileWriter.temporaryName(pid: 111, host: "there"))
+        let oldElsewhere = root.appendingPathComponent(RaceFreeFileWriter.temporaryName(pid: 112, host: "there"))
+        try touch(elsewhere)
+        try touch(oldElsewhere, modified: Date().addingTimeInterval(-RaceFreeFileWriter.staleTemporaryAge - 60))
+
+        try sweep(root, alive: [])
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), [elsewhere.lastPathComponent],
+                       "only age removes another Mac's file")
+
+        try sweep(root, alive: [], thisHost: nil)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), [elsewhere.lastPathComponent],
+                       "without a host id nothing counts as local")
+    }
+
     func testASweepRemovesAnOldFileWhoseOwnerLooksAliveOrIsUnknown() throws {
         // A pid can be reused, and the form before #576 named no owner.
         let root = try fixtureRoot()
         let old = Date().addingTimeInterval(-RaceFreeFileWriter.staleTemporaryAge - 60)
-        let reused = root.appendingPathComponent(RaceFreeFileWriter.temporaryName(pid: 333))
+        let reused = root.appendingPathComponent(RaceFreeFileWriter.temporaryName(pid: 333, host: "here"))
         let legacyOld = root.appendingPathComponent(".attachment-\(UUID().uuidString).tmp")
         let legacyNew = root.appendingPathComponent(".attachment-\(UUID().uuidString).tmp")
         try touch(reused, modified: old)
@@ -219,8 +241,8 @@ final class AttachmentPublisherHardeningTests: XCTestCase {
         let root = try fixtureRoot()
         let target = root.appendingPathComponent("target.txt")
         try Data("keep".utf8).write(to: target)
-        let link = root.appendingPathComponent(RaceFreeFileWriter.temporaryName(pid: 444))
-        let folder = root.appendingPathComponent(RaceFreeFileWriter.temporaryName(pid: 445))
+        let link = root.appendingPathComponent(RaceFreeFileWriter.temporaryName(pid: 444, host: "here"))
+        let folder = root.appendingPathComponent(RaceFreeFileWriter.temporaryName(pid: 445, host: "here"))
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
 

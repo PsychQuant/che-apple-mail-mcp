@@ -765,8 +765,10 @@ parents are created, and existing regular files are atomically replaced. A new
 file gets 0644 as allowed by the umask, as before; a replaced file keeps its read
 and write bits; execute bits are never kept, because the bytes come from the
 sender. The temporary file is created 0600 and keeps that mode until it is
-renamed into place; an ACL that the destination folder passes on to new files
-still applies to it. Path forms that were previously
+renamed into place. An ACL the destination folder passes on to new files is
+removed before any bytes are written, so a saved file has no ACL even in a folder
+that shares through an inherited one, and a replaced file's ACL is not kept
+([#576](https://github.com/PsychQuant/che-apple-mail-mcp/issues/576)). Path forms that were previously
 normalized, such as `a//b`, `a/./b` or a trailing `/.`, are now refused.
 AppleScript saves each attempt to a fresh private temporary file, then the server
 streams it to the authorized destination. `destination_rejected` and

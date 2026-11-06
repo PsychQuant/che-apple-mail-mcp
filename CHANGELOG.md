@@ -161,8 +161,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     named by this writer, owned by this user, whose server is gone or which are
     over a day old. Temporary names stay unique per save rather than fixed per
     destination as the issue proposed, because concurrent saves must not touch
-    each other's file (#402); the name now carries the server's pid. A folder
-    that cannot be listed is left alone.
+    each other's file (#402); the name now carries the server's pid and a tag
+    for this Mac, so a shared or synced folder's file from another Mac goes by
+    age alone. A folder that cannot be listed is left alone.
   - A saved file no longer keeps an ACL inherited from its folder: a folder's
     inheritable read entry made the 0600 temporary, and so the published file,
     readable through it. **Behaviour change:** a file saved into a folder that
