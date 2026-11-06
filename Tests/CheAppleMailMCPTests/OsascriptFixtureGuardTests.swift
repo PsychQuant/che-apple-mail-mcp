@@ -95,6 +95,8 @@ final class OsascriptFixtureGuardTests: XCTestCase {
             "return its OSAScript's alloc()",
             "set ca to current application\nreturn ca's NSString",
             "return current application's class (\"NS\" & \"Task\")",
+            "return its class \"NSTask\"",
+            "return its class (\"NS\" & \"Task\")",
             "return x's makeObjectsPerformSelector:\"y\"",
         ]
         for fragment in refused {
