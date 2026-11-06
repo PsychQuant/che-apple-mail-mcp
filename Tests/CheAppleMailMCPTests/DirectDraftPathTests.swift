@@ -309,7 +309,9 @@ final class DirectDraftPathTests: XCTestCase {
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Sources/CheAppleMailMCP/DirectDraft/DirectDraftPath.swift"), encoding: .utf8)
         let account = try XCTUnwrap(source.range(of: "return .notAttempted(.account(count: uuids.count))"))
-        let gate = try XCTUnwrap(source.range(of: "guard DirectDraft.signatureAllowsDirectWrite(signature, accountSignatureIDs: AccountMapper.localSignatureIDs(forAccount: account)) else {\n            return .notAttempted(.accountSignature)"))
+        let gate = try XCTUnwrap(source.range(of: "guard DirectDraft.signatureAllowsDirectWrite(signature, accountSignatureIDs: accountSignatureIDs(account)) else {\n            return .notAttempted(.accountSignature)"))
+        // #484: the gate reads through a seam; its default must still be Mail's own list.
+        XCTAssertTrue(source.contains("var accountSignatureIDs: @Sendable (String) -> [String]? = { AccountMapper.localSignatureIDs(forAccount: $0) }"))
         let reader = try XCTUnwrap(source.range(of: "guard let reader else { return .notAttempted(.index) }"))
         XCTAssertLessThan(account.upperBound, gate.lowerBound)
         XCTAssertLessThan(gate.upperBound, reader.lowerBound)

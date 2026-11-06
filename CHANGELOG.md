@@ -85,6 +85,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Four other test files still use literal checks
   ([#617](https://github.com/PsychQuant/che-apple-mail-mcp/issues/617)).
   Test-only change.
+- **The direct-write path's outcomes after the write are tested without Mail**
+  ([#484](https://github.com/PsychQuant/che-apple-mail-mcp/issues/484)).
+  `DirectDraftPath` now reaches Mail through a small protocol, and takes the OS
+  version and the account lookups as settable values. No behaviour changes, and
+  the code after the write is untouched. `DirectDraftPathOutcomeTests` runs the
+  real path and the real `DraftStoreWriter` against a test SQLite store with a
+  stand-in for Mail: upload confirmed, upload not confirmed in time, failed
+  trigger rolled back, failed trigger after Mail already uploaded, failed trigger
+  that cannot be rolled back, and the read repair, each with its outcome code and
+  `direct` step sequence. Two new tests take the timing CSV's `flock` from a
+  separate process. These show the branches, not what the real Mail does.
 - **The stdio shutdown probe starts with an allow-listed environment and checks its own assumptions**
   ([#578](https://github.com/PsychQuant/che-apple-mail-mcp/issues/578)). The
   probe now starts with a small allow-listed environment (`PATH`, `HOME`,

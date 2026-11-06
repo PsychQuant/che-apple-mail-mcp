@@ -6,7 +6,7 @@ import XCTest
 /// weakens it turns the suite red instead of shipping silently.
 ///
 /// These are STRUCTURAL checks of the trigger script and of the Swift source,
-/// not behavioural tests (those need the controller/writer seam of #484). The
+/// not behavioural tests (those are in `DirectDraftPathOutcomeTests`, #484). The
 /// rule lists exactly which edits they catch; anything outside that list is not
 /// guarded, however similar it looks.
 ///

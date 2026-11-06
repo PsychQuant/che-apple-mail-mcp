@@ -346,6 +346,53 @@ final class ComposeTimingTests: XCTestCase {
         XCTAssertTrue(thrown.map { "\($0)".contains("flock") } ?? false, String(describing: thrown))
     }
 
+    // MARK: - #484: the lock across processes
+
+    /// Starts a perl child that takes the same `flock`, says so, and then runs `afterLock`.
+    /// A second descriptor in this process (the tests above) shows the lock is per open file
+    /// description; only another process shows it works between two servers.
+    private func lockHolder(on path: String, afterLock: String) throws -> Process {
+        let child = Process(), output = Pipe()
+        child.executableURL = URL(fileURLWithPath: "/usr/bin/perl")
+        child.arguments = ["-e", """
+            use Fcntl qw(:flock); $| = 1;
+            open(my $f, '>>', $ARGV[0]) or die $!;
+            flock($f, LOCK_EX) or die $!;
+            print "locked\\n";
+            \(afterLock)
+            flock($f, LOCK_UN);
+            """, path, ComposeTiming.csvHeader]
+        child.standardOutput = output
+        try child.run()
+        let line = output.fileHandleForReading.readData(ofLength: 7)
+        XCTAssertEqual(String(decoding: line, as: UTF8.self), "locked\n", "the child never took the lock")
+        return child
+    }
+
+    func testAWriterInAnotherProcessIsWaitedForAndNotTruncated() throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let child = try lockHolder(on: path, afterLock: """
+            select(undef, undef, undef, 0.3);
+            syswrite($f, "$ARGV[1]\\nCHILD_ROW\\n");
+            """)
+        defer { if child.isRunning { child.terminate() }; child.waitUntilExit() }
+        try ComposeTiming.append(rows: ["PARENT_ROW"], toCSVAt: path)
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8),
+                       ComposeTiming.csvHeader + "\nCHILD_ROW\nPARENT_ROW\n",
+                       "the write waited for the other process and kept what it wrote")
+    }
+
+    func testAWriterInAnotherProcessThatKeepsTheLockMakesThisOneGiveUp() throws {
+        let path = tempCSV()
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let child = try lockHolder(on: path, afterLock: "sleep 30;")
+        defer { child.terminate(); child.waitUntilExit() }
+        XCTAssertThrowsError(try ComposeTiming.append(rows: ["r"], toCSVAt: path)) { error in
+            XCTAssertTrue("\(error)".contains("flock"), String(describing: error))
+        }
+    }
+
     func testMarksWithEqualTimestampsKeepTheirInputOrder() {
         let rows = ComposeTiming.csvRows(runId: "R", segments: [
             ComposeTiming.Segment(path: "direct", outcome: "created", config: [:], marks: [
