@@ -37,6 +37,8 @@ enum LogReadEnd: Equatable {
     case scanCap
     case deadline
     case spawnFailed(String)
+    /// The client cancelled the call (#467).
+    case cancelled
 }
 
 /// Seam between the service and whatever produces ndjson lines. Production is
@@ -47,4 +49,24 @@ protocol LogEventSource {
     /// Streams raw ndjson lines (no trailing newline) to `onLine` until it
     /// returns `false`, the source ends, or a bound is hit.
     func read(_ request: LogReadRequest, onLine: (Data) -> Bool) -> LogReadEnd
+
+    /// The same, stopping with `.cancelled` once `cancellation` is set (#467).
+    func read(_ request: LogReadRequest, cancellation: LogReadCancellation,
+              onLine: (Data) -> Bool) -> LogReadEnd
+}
+
+extension LogEventSource {
+    /// For a source with nothing to wait on: it stops at the next line. A
+    /// source that can sit silently, as `LogShowRunner` can behind a quiet
+    /// child, must implement this itself.
+    func read(_ request: LogReadRequest, cancellation: LogReadCancellation,
+              onLine: (Data) -> Bool) -> LogReadEnd {
+        if cancellation.isCancelled { return .cancelled }
+        var cancelled = false
+        let end = read(request) { line in
+            if cancellation.isCancelled { cancelled = true; return false }
+            return onLine(line)
+        }
+        return cancelled ? .cancelled : end
+    }
 }

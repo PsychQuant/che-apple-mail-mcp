@@ -67,6 +67,12 @@ final class LogShowRunner: LogEventSource {
     // MARK: - Read
 
     func read(_ request: LogReadRequest, onLine: (Data) -> Bool) -> LogReadEnd {
+        read(request, cancellation: LogReadCancellation(), onLine: onLine)
+    }
+
+    func read(_ request: LogReadRequest, cancellation: LogReadCancellation,
+              onLine: (Data) -> Bool) -> LogReadEnd {
+        if cancellation.isCancelled { return .cancelled }
         let process = Process()
         process.executableURL = executableURL
         process.arguments = makeArguments(request)
@@ -97,7 +103,8 @@ final class LogShowRunner: LogEventSource {
             stderrDone.signal()
         }
 
-        let stopped = pump(fd: stdout.fileHandleForReading.fileDescriptor, onLine: onLine)
+        let stopped = pump(fd: stdout.fileHandleForReading.fileDescriptor,
+                           cancellation: cancellation, onLine: onLine)
 
         let end: LogReadEnd
         if let stopped {
@@ -117,7 +124,8 @@ final class LogShowRunner: LogEventSource {
 
     /// Streams lines until the handler stops, a cap or the deadline is hit, or
     /// EOF. Returns the forced-stop reason, or `nil` for a natural EOF.
-    private func pump(fd: Int32, onLine: (Data) -> Bool) -> LogReadEnd? {
+    private func pump(fd: Int32, cancellation: LogReadCancellation,
+                      onLine: (Data) -> Bool) -> LogReadEnd? {
         let deadlineAt = Date().addingTimeInterval(deadline)
         var pending = Data()
         var total = 0
@@ -125,6 +133,9 @@ final class LogShowRunner: LogEventSource {
         var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
 
         while true {
+            // Checked every slice, so a cancel reaches a silent child within one
+            // poll slice; the caller then terminates and reaps it (#467).
+            if cancellation.isCancelled { return .cancelled }
             let remaining = deadlineAt.timeIntervalSinceNow
             if remaining <= 0 { return .deadline }
             let slice = min(Int32(remaining * 1000) + 1, Self.pollSliceMillis)
