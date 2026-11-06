@@ -469,6 +469,7 @@ class ArchiveDropSetSopTests(unittest.TestCase):
                        "對結果每筆的 `mailbox` 套用 Step 3 的統一 drop-set"]:
             with self.subTest(marker=marker):
                 self.assertIn(marker, text)
+        self.assertGreaterEqual(text.count("統一 drop-set"), 5)   # recipe (1), 3b, 3c, Tier 2, Step 8b all name it
         start = text.index("**統一 drop-set** = Drafts")
         self.assertIn("dropset recipe", text[start:start + 200])
         self.assertIn("角色名先展開成該帳號實名", text[start:start + 200])
@@ -735,6 +736,9 @@ class ArchiveReverseInventorySopTests(unittest.TestCase):
         self.assertIn("3b. **反向盤點(#559", text)
         self.assertIn("不改變 gate 的通過條件", text)
         self.assertIn("reverse check:", text)
+        item = text[text.index("3b. **反向盤點(#559"):text.index("<!-- archive-mail-reverse-recipe:start -->")]
+        self.assertIn("`index_error` 不為 `None` 時(寫入屏障)略過", item)
+        self.assertIn("`last_archived` 唯讀稽核沒有 index,也略過", item)
 
 
 class ArchiveWatermarkTests(unittest.TestCase):
@@ -762,6 +766,18 @@ class ArchiveWatermarkTests(unittest.TestCase):
         self.assertTrue(self.after("2026-01-01T00:00:01Z", "2026-01-01T00:00:00Z"))
         self.assertFalse(self.after("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"))
         self.assertFalse(self.after("2025-12-31T15:59:00Z", "2026-01-01T00:00:00"))
+
+    def test_production_path_without_local_tz_gives_an_aware_instant(self):
+        mark = self.dates["watermark_instant"]("2026-01-01")
+        self.assertIsNotNone(mark.tzinfo)
+        self.assertEqual((mark.year, mark.month, mark.day, mark.hour, mark.minute), (2026, 1, 1, 0, 0))
+        self.assertTrue(self.dates["is_after_watermark"]("2026-01-01T00:00:01" + mark.strftime("%z")[:3] + ":" + mark.strftime("%z")[3:], mark))
+
+    def test_date_only_and_naive_mail_dates_use_the_boundary_zone(self):
+        self.assertTrue(self.after("2026-01-02", "2026-01-01"))
+        self.assertFalse(self.after("2026-01-01", "2026-01-01"))     # date-only mail = start of that day = boundary
+        self.assertTrue(self.after("2026-01-01T00:00:01", "2026-01-01"))   # naive: read in the boundary's zone
+        self.assertFalse(self.after("2025-12-31T23:59:59", "2026-01-01"))
 
     def test_unreadable_boundary_raises_and_unreadable_mail_is_kept(self):
         with self.assertRaises(ValueError):
@@ -861,6 +877,15 @@ class ArchiveScanRecipeTests(unittest.TestCase):
         self.assertEqual((out["missing_count"], out["missing"]), (1, ["b.md"]))
         self.assertEqual(self.ns["index_coverage"](classified, {"<a>": {}, "<b>": {}})["missing_count"], 0)
 
+    def test_coverage_counts_tombstones_so_the_remedy_can_refuse_a_rebuild(self):
+        directory = self.make({"a.md": self.md("<a>"), "b.md": self.md("<b>")})
+        records, _ = self.ns["scan_top_level"](directory)
+        classified = self.ns["classify_scan"](records)
+        index = {"<a>": {"file": "a.md"}, "<moved>": {"file": "moved.md", "distributed_to": ["other"]}}
+        out = self.ns["index_coverage"](classified, index)
+        self.assertEqual((out["missing_count"], out["tombstone_count"]), (1, 1))
+        self.assertEqual(index["<moved>"], {"file": "moved.md", "distributed_to": ["other"]})   # read-only
+
     def test_coverage_listing_is_capped(self):
         directory = self.make({"f%02d.md" % i: self.md("<%d>" % i) for i in range(25)})
         records, _ = self.ns["scan_top_level"](directory)
@@ -874,6 +899,9 @@ class ArchiveScanSopTests(unittest.TestCase):
         self.assertIn("index_stale: N top-level files are not in the index", text)
         self.assertLess(text.index("**index 覆蓋檢查（#603"), text.index("**復原只適用 `index`／`both`（#545）**"))
         self.assertNotIn("一段固定的掃描程式", text)
+        self.assertIn("不得指示會遺失 `distributed_to` 墓碑的做法", text)
+        self.assertIn("只有 `tombstone_count` 為 0 時才可提出 (B)", text)
+        self.assertIn("append-only，既有 entry 含墓碑原樣保留", text)
         registry = (DOCUMENT.parent / "archive-mail-registry.md").read_text()
         self.assertIn("index_stale", registry)
         self.assertIn("index_coverage", registry)
