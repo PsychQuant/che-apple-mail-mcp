@@ -186,16 +186,25 @@ sys.exit(mode.get('status',1))
         with self.assertRaises(AssertionError):
             self.assert_every_hook_timed_out([timed_out]*11+[quiet],2.0)
 
-    def test_a_hook_that_reached_the_barrier_is_never_a_skip(self):
-        self.configure(barrier=True,status=1,slow_start='--version')
-        (self.root/'ready-other').touch()
+    def assert_never_a_skip(self):
         try:
             self.run_concurrent_hooks()
         except AssertionError:
             return
         except unittest.SkipTest:
             pass
-        self.fail('a run in which a hook reached the barrier was excused')
+        self.fail('a run that does not qualify was excused')
+
+    def test_a_hook_that_reached_the_barrier_is_never_a_skip(self):
+        self.configure(barrier=True,status=1,slow_start='--version')
+        (self.root/'ready-other').touch()
+        self.assert_never_a_skip()
+
+    def test_a_hook_that_fails_after_its_timeout_is_never_a_skip(self):
+        self.configure(barrier=True,status=1,slow_start='--version')
+        hook=self.root/'plugin/hooks/session-start.sh'
+        hook.write_text('#!/bin/bash\ntrap \'exit 3\' EXIT\n'+hook.read_text())
+        self.assert_never_a_skip()
 
     def test_the_fixture_path_is_matched_literally(self):
         directory=self.root/'with[bracket'
@@ -308,6 +317,7 @@ sub fixture_pause {
             if all(p.poll() is not None for p in processes):
                 errors=[p.communicate(timeout=5)[1] for p in processes]
                 self.assertEqual(len(list(self.root.glob('ready-*'))),0,errors)
+                self.assertEqual([p.returncode for p in processes],[0]*12,errors)
                 self.assert_every_hook_timed_out(errors,time.monotonic()-started)
                 self.skipTest('every --version probe hit the 2.0 s deadline, so no hook reached the barrier')
             self.assertEqual(len(list(self.root.glob('ready-*'))),12)
