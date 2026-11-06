@@ -63,7 +63,7 @@ python3 "<plugin-root>/scripts/archive_registry.py" plan --target "target-id" --
 }
 ```
 
-所有路徑為絕對路徑，父子關係明確宣告。父節點的 output_dir 就是其 intake，不要求目錄恰好叫 intake。`attachment_roots` 可選，用於確實位於 workspace／output 外的附件目錄；不填代表沒有額外目錄。每個目標的 index 所在目錄須不同，確保 threads.json 不互相覆寫；config／output／index 不得共用同一實體路徑（包含大小寫、symlink 與 hard link 別名）。新目標必須先有使用者明確初始化的 config、output 目錄與 `{"version":"1.0","emails":{}}` index；遺失舊 index 不可自動補空檔。
+所有路徑為絕對路徑，父子關係明確宣告。父節點的 output_dir 就是其 intake，不要求目錄恰好叫 intake。`attachment_roots` 可選，用於確實位於 workspace／output 外的附件目錄；不填代表沒有額外目錄。每個目標的 index 所在目錄須不同，確保 threads.json 不互相覆寫；config／output／index 不得共用同一實體路徑（包含大小寫、symlink 與 hard link 別名）。新目標必須先有使用者明確初始化的 config、output 目錄與 `{"version":"1.0","emails":{}}` index；遺失舊 index 不可自動補空檔。登錄既有目錄為新目標時，那份 index 還必須涵蓋輸出目錄頂層的 Markdown：用 `archive-mail.md`「目錄掃描 recipe」的 `index_coverage` 檢查（#603），有缺漏就具名拒絕登錄（`index_stale`，列出缺漏的檔名），不自動補；曾經是 `last_archived` 的目錄最容易這樣，處置同 `/archive-mail` Step 2 的 index 覆蓋檢查。
 
 修改登錄時先顯示具體差異，依本次使用者授權寫入，再 validate。只讀命令不會建立上述目錄。
 

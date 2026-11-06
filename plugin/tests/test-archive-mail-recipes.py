@@ -757,6 +757,100 @@ class ArchiveWatermarkTests(unittest.TestCase):
         self.assertIn("停止並點名 `last_archived`", text)
 
 
+class ArchiveScanRecipeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.ns = {"__name__": "archive_recipe"}
+        for name in ("date", "scan"):
+            exec(compile(recipe_code(name), name, "exec"), cls.ns)
+
+    def make(self, files, links=()):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(directory, ignore_errors=True))
+        for name, content in files.items():
+            path = Path(directory) / name
+            if isinstance(content, bytes):
+                path.write_bytes(content)
+            elif content is None:
+                path.mkdir()
+            else:
+                path.write_text(content, encoding="utf-8")
+        for name, target in links:
+            (Path(directory) / name).symlink_to(target)
+        return directory
+
+    @staticmethod
+    def md(message_id, date="2026-06-30T10:00:00Z", extra=""):
+        return '---\nmessage_id: "%s"\ndate: "%s"\n%s---\nbody\n' % (message_id, date, extra)
+
+    def report(self, files, links=()):
+        return self.ns["scan_report"](self.make(files, links))
+
+    def test_valid_files_feed_the_date_audit(self):
+        out = self.report({"a.md": self.md("<a>"), "b.md": self.md("<b>", "Tue, 30 Jun 2026")})
+        self.assertEqual((out["scanned"], out["date_audit"]["valid_date_count"], out["date_audit"]["date_excluded_count"]), (2, 2, 0))
+
+    def test_exclusion_order_is_unparseable_then_synthetic_then_duplicates(self):
+        out = self.report({
+            "a.md": self.md("<same>"), "b.md": self.md("<same>"),
+            "c.md": self.md("synthetic:x"), "d.md": self.md("synthetic:x"),
+            "e.md": "no frontmatter here\n", "f.md": "---\nmessage_id_missing: true\n---\n",
+        })
+        self.assertEqual(sorted(out["unparseable"]), ["e.md", "f.md"])
+        self.assertEqual(sorted(out["synthetic_placeholder"]), ["c.md", "d.md"])   # not also counted as duplicates
+        self.assertEqual(out["duplicate_message_id"], [{"file": "b.md", "kept": "a.md"}])
+        usable = out["date_audit"]["valid_date_count"] + out["date_audit"]["date_excluded_count"]
+        self.assertEqual(out["scanned"], usable + 2 + 2 + 1)
+
+    def test_symlinks_and_directories_are_listed_and_never_read(self):
+        out = self.report({"a.md": self.md("<a>"), "dir.md": None}, links=[("link.md", "a.md")])
+        reasons = {item["file"]: item["reason"] for item in out["excluded_paths"]}
+        self.assertEqual(reasons, {"dir.md": "not-a-regular-file", "link.md": "symlink"})
+        self.assertEqual(out["scanned"], 1)
+
+    def test_subdirectories_are_not_entered(self):
+        directory = self.make({"a.md": self.md("<a>")})
+        (Path(directory) / "sub").mkdir()
+        (Path(directory) / "sub" / "x.md").write_text(self.md("<x>"), encoding="utf-8")
+        self.assertEqual(self.ns["scan_report"](directory)["scanned"], 1)
+
+    def test_yaml_tags_stay_inert_text_and_non_utf8_is_unparseable(self):
+        out = self.report({"a.md": '---\nmessage_id: !!python/object/apply:os.system ["echo hi"]\ndate: "2026-06-30"\n---\n',
+                           "b.md": b"---\nmessage_id: \xff\xfe\n---\n"})
+        self.assertEqual(out["unparseable"], ["b.md"])
+        self.assertEqual(out["scanned"], 2)   # a.md is read as plain text and never executed
+
+    def test_an_unreadable_quoted_value_is_unparseable_not_guessed(self):
+        out = self.report({"a.md": '---\nmessage_id: "unterminated\ndate: "2026-06-30"\n---\n'})
+        self.assertEqual(out["unparseable"], ["a.md"])
+
+    def test_coverage_names_usable_files_missing_from_the_index(self):
+        directory = self.make({"a.md": self.md("<a>"), "b.md": self.md("<b>"), "c.md": self.md("synthetic:z"),
+                               "d.md": "nothing"})
+        records, _ = self.ns["scan_top_level"](directory)
+        classified = self.ns["classify_scan"](records)
+        out = self.ns["index_coverage"](classified, {"<a>": {}})
+        self.assertEqual((out["missing_count"], out["missing"]), (1, ["b.md"]))
+        self.assertEqual(self.ns["index_coverage"](classified, {"<a>": {}, "<b>": {}})["missing_count"], 0)
+
+    def test_coverage_listing_is_capped(self):
+        directory = self.make({"f%02d.md" % i: self.md("<%d>" % i) for i in range(25)})
+        records, _ = self.ns["scan_top_level"](directory)
+        out = self.ns["index_coverage"](self.ns["classify_scan"](records), {})
+        self.assertEqual((out["missing_count"], len(out["missing"]), out["omitted"]), (25, 20, 5))
+
+
+class ArchiveScanSopTests(unittest.TestCase):
+    def test_step_2_stops_on_a_stale_index_before_step_3(self):
+        text = DOCUMENT.read_text()
+        self.assertIn("index_stale: N top-level files are not in the index", text)
+        self.assertLess(text.index("**index 覆蓋檢查（#603"), text.index("**復原只適用 `index`／`both`（#545）**"))
+        self.assertNotIn("一段固定的掃描程式", text)
+        registry = (DOCUMENT.parent / "archive-mail-registry.md").read_text()
+        self.assertIn("index_stale", registry)
+        self.assertIn("index_coverage", registry)
+
+
 class RepairCommandPointerTests(unittest.TestCase):
     """Every place that points users at the repair command carries its prerequisite (#527 for Step 8.5, #551 for all).
 
@@ -2027,8 +2121,12 @@ class ArchiveLastArchivedGateTests(unittest.TestCase):
         # Finding 7: frontmatter values are sender-controlled, so they never become program text.
         _, branch = self.read_only_branch()
         bullet = next(line for line in branch.split("\n") if line.startswith("- **資料怎麼進 `reconcile_dates`**"))
-        for word in ["固定腳本", "argv", "`${output_dir}`", "自己解析 frontmatter", "`python3 -c`", "heredoc", "shell 原始碼"]:
+        for word in ["`scan_report(output_dir)`", "唯一來源", "不另寫掃描程式"]:   # #604: the script is the single source
             self.assertIn(word, bullet)
+        text = DOCUMENT.read_text()
+        paragraph = text[text.index("**目錄掃描 recipe(#604"):text.index("<!-- archive-mail-scan-recipe:start -->")]
+        for word in ["argv", "`python3 -c`", "heredoc", "shell 原始碼", "不使用 YAML loader", "`os.lstat`"]:
+            self.assertIn(word, paragraph)
 
     def test_the_last_archived_hint_is_capped_and_cautioned(self):
         # Findings 18, 29: never later than the run date, date only, the #600 boundary, sender-controlled dates.

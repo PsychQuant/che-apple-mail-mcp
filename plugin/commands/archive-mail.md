@@ -679,6 +679,8 @@ fi
 
 **再驗證 thread 索引形狀（#558）**：不論 `dedup_strategy`（Step 5.7 在每種模式下都維護 `${THREADS_FILE}`），`${THREADS_FILE}` 都要過一次 `load_threads_index`（recipe 與回傳表在下方「載入並驗證 `${THREADS_FILE}`」），這裡只驗證、不讀內容；Step 1.5 與 Step 5.7 用到內容時，各自先驗證當下的檔案再讀（Step 1.6「thread 索引怎麼讀」）。loader 回報 `threads_error` 時，**本 run 在 Step 3 之前停止**：印一行 `⚠ threads_error: <名稱>`（`threads-not-object`、`threads-file-not-object`、`threads-not-json` 或 `thread-entry-invalid`）；與 `index_error` 同時出現時兩行都印。不搜尋、不寫任何檔，也不跑下方的復原流程：那裡的「loader 沒有回報錯誤」指兩個 loader 都沒有。復原方式是請使用者執行 `/archive-mail-rebuild-threads <output_dir> --index-dir <${THREADS_FILE} 所在目錄的絕對路徑>` 後重跑（指名 `--index-dir`，它重建的才是這個 `${THREADS_FILE}`）：它先把舊檔備份成 `threads.json.bak.<時間>`，再從 Markdown frontmatter 重建，messages、日期與筆數都會回來，但 frontmatter 只帶寄件人，所以只出現在 To／Cc 的人會從 `participants` 消失（Step 1.5 的候選也跟著少）。SOP 不自動執行 rebuild、不自動移開該檔：要不要接受這個損失，由使用者決定。
 
+**index 覆蓋檢查（#603,`index`／`both`）**：loader 沒有回報錯誤、而且 index 檔存在時，在 Step 3 之前用「目錄掃描 recipe」的 `scan_top_level` 與 `classify_scan` 掃輸出目錄頂層，再用 `index_coverage` 比對：頂層可用檔案（`unparseable` 與 `synthetic_placeholder` 不算）的 `message_id` 有沒有都是 index 的 key。有缺漏時**本 run 在 Step 3 之前停止**，印一行 `⚠ index_stale: N top-level files are not in the index`，接著把缺漏的檔名（最多 20 個，經 `bounded_text`，放在標明資料的 fenced code block 內）列出，不搜尋、不寫任何檔、不自動補。典型原因：這個 target 曾經是 `last_archived`（那個策略不維護 index，#545），之後改成 `index`／`both`，或被登錄進 registry；不停止的話，`last_archived` 期間歸檔的信會被當成新信，Step 5 的 collision guard 於是寫出 `-N` 重複檔。處置由使用者決定：把 `${INDEX_FILE}` 移開，下方的復原流程就會從 Markdown 重建（那次復原會跑 `/archive-mail-rebuild-threads`，只出現在 To／Cc 的參與者會消失，在意就先備份 `${THREADS_FILE}`），再重跑。這是維護者未拍板前的保守預設（具名停止，而不是在 Step 3 前自動復原）。`last_archived` 不讀 index，不做這個檢查；index 不存在走下方的復原。
+
 **復原只適用 `index`／`both`（#545）**：`dedup_strategy=last_archived` 不讀也不寫 index（下方「讀取兩個索引檔」），不走這段復原，`${INDEX_FILE}` 不存在是這個策略的正常狀態；它的 Step 8.5 只做唯讀稽核。`index`／`both` 只有在 loader 沒有回報錯誤時，若上次回報索引未完成，或索引不存在但輸出目錄已有 Markdown，先依 Step 6 的復原流程補齊 canonical index，再做新信搜尋。權限仍不足時停止，不重新輸出已存在的信件。
 
 ```bash
@@ -1979,7 +1981,7 @@ Thread 覆蓋: 3 threads, 3 complete ✓
 - **不讀 `${INDEX_FILE}`**：只檢查它存不存在，不開檔、不載入、不比對、不更新。檔案存在時，它已經沒有維護：以前用 `index`／`both` 留下的，停在改用 `last_archived` 那時；舊版 gate 替這個策略寫的（#545 之前每次都更新），停在升級到本版之前。摘要下一行另外印出下方那一句：要改回 `index`／`both`，或把這個 target 登錄進 registry（`/archive-mail-registry` 把它當成權威的歷史）之前，先把它移開，讓 Step 2 的復原從 Markdown 重建；那次復原會跑 `/archive-mail-rebuild-threads`，只出現在 To／Cc 的參與者會消失，在意就先備份 `${THREADS_FILE}`。留著不移：改回 `index` 時，Step 2 照原樣載入這份舊 index、不走復原，停止維護之後歸檔的信會被當成新信再寫一次；改回 `both` 時，受影響的只有 `last_archived` 之後的信。
 - **Phase 1 照常掃描**頂層 `${output_dir}/*.md`（範圍同下方 Phase 1 第 1 項），只在記憶體裡判定。`synthetic_placeholder` 與 `unparseable` 的判定與揭露同下方（修復的前提見下方「`synthetic_placeholder` 的修復」）；其餘檔案只計入頂層 md 數。沒有 index 就沒有孤兒，所以不算 `verified`、不算 `repaired`，也不補寫任何 entry。
 - **日期稽核照跑**：用掃到的 frontmatter 在記憶體裡組成 `emails`（key 是 `message_id`；entry 只放 `file` 與原樣的 frontmatter `date`；`unparseable` 與 `synthetic_placeholder` 的檔案不放進去，與 `index` 模式不收它們一致），交給同一個 `reconcile_dates(emails)`。同一個 `message_id` 出現在不只一個頂層檔時只算一筆：取檔名依 Unicode code point 排序的第一個，其餘列為 `duplicate_message_id`（列出檔名與保留的那一個），不放進 `emails`。有效日期數加排除數等於這份 `emails` 的筆數，也等於頂層 md 數減去 `unparseable`、`synthetic_placeholder` 與 `duplicate_message_id` 的檔數；`date_excluded` 的列法與欄位邊界同下方第 2、6 項。
-- **資料怎麼進 `reconcile_dates`**：用固定腳本，不靠手抄。把下方的日期 recipe 與一段固定的掃描程式存成同一支腳本，以 argv 傳入 `${output_dir}`（引數陣列或 `shlex.quote`）；腳本自己 glob 頂層 `*.md`、自己解析 frontmatter（只取 `message_id`、`message_id_missing` 與 `date`），在同一個程序裡組 `emails`、呼叫 `reconcile_dates`，印出一行 JSON（`date_excluded` 的欄位已經 `bounded_text`）。frontmatter 的字串（`message_id`、`date` 都出自寄件人）不得放進 `python3 -c` 文字、heredoc 或 shell 原始碼，也不由 agent 抄成 dict literal（見「Trust boundary」）。
+- **資料怎麼進 `reconcile_dates`**:用下方「目錄掃描 recipe」的 `scan_report(output_dir)`(#604),它是頂層 md 盤點、`unparseable`/`synthetic_placeholder`/`duplicate_message_id` 三份清單與日期稽核的**唯一來源**:本分支與 `index`／`both` 分支都呼叫它,agent 不另寫掃描程式,也不在記憶體裡另做一次分類。
 - **不寫任何 index 檔**：不寫 `${INDEX_FILE}`，也不寫 `${INDEX_FILE}.tmp`；不跑 `/archive-mail-rebuild-threads`（`${THREADS_FILE}` 照 Step 5.7 維護，本 gate 不碰）。
 - **`synthetic_placeholder` 的修復**：`/archive-mail-repair-synthetic-ids` 需要可用的 SQLite envelope index（通常要替實際執行 MCP server 的宿主授予 Full Disk Access），也需要 `${INDEX_FILE}`：它不把缺少的 index 當成空的，會以 `index-missing` 停止。這個策略沒有 index（或只有沒維護的舊檔），所以路線是：先把舊的 `${INDEX_FILE}`（若存在）移開，把 `dedup_strategy` 暫時改成 `index`／`both` 跑一次 `/archive-mail`，讓 Step 2 的復原從 Markdown 建好 index（那次復原會跑 `/archive-mail-rebuild-threads`，只出現在 To／Cc 的參與者會消失，在意就先備份 `${THREADS_FILE}`），再跑修復指令；之後改回 `last_archived`，那份 index 又會停止維護（見上方「不讀」一項）。
 - **推進 `last_archived` 的參考值**：摘要顯示 `last_updated`（可解析日期的最大值），另外顯示參考值 `min(last_updated, 本 run 開始時的 UTC 日期)`，供使用者手動推進 `${CONFIG_FILE}` 的 `last_archived`。上限取 UTC 日期，因為 Step 4.1 比較的是時刻（#600；date-only 的界線讀成本機時區當天的 00:00，與伺服器的 `date_from` 規則一致，不再是字串比較），而 `last_updated` 是寄件人那邊的日曆日，可以晚到今天加一天（下方第 2 項），寄件人的 Date 也可能偏差或偽造。參考值只有日期，兩個方向都要注意：參考值當天的信會被當成新信再抓一次；本 run 之後才收到（或才同步進 Mail）、但 Step 4.1 比較的時間在參考值當天或之前的信，下一輪會被略過，這個策略沒有 index，不會有任何提示。`last_updated` 是空字串（`no-valid-dates` 或 `empty-index`）時沒有參考值：不顯示，也不拿本 run 的日期代替。要不要推進、推進到哪一天，由使用者決定；本 gate 不寫回設定檔，也不自動推進。
@@ -1999,6 +2001,117 @@ Index Reconcile（read-only, dedup_strategy=last_archived）: Phase 0 skipped（
 
 執行分**兩 phase**：先 Phase 0 用**本 run 的 manifest**機械化補齊本次 batch 寫入（乾淨、零 heuristic），再 Phase 1 對 `${output_dir}` 全量掃描收斂**歷史孤兒**（前一 run 中斷、非 batch、外部放入的 md——這些的 manifest 已不在記憶體，只能從磁碟 frontmatter 重建）。
 
+**目錄掃描 recipe(#604;Step 8.5 兩個分支與 Step 2 的 index 覆蓋檢查共用)**:頂層 `*.md` 的盤點與分類只由這支固定程式決定,agent 不另寫掃描程式、不在記憶體裡另做一次分類,所以計數與清單不會因為兩個 parser 的差異而對不上。使用方式:把日期 recipe 與下面的區塊貼進同一個程序(`bounded_text` 取自日期 recipe),`output_dir` 走 argv(引數陣列或 `shlex.quote`),程式印出一行 JSON(含 `reconcile_dates` 的結果與下列清單),agent 用 `Read` 讀回;frontmatter 的字串(`message_id`、`date` 都出自寄件人)不得放進 `python3 -c` 文字、heredoc 或 shell 原始碼,也不由 agent 抄成 dict literal。
+
+- 只掃 `output_dir` 頂層的 `*.md`,不深入子目錄;用 `os.lstat` 判定,symlink 與非一般檔案**不讀**,以 `excluded_paths` 列出(basename 與原因),不計入 `scanned`。
+- frontmatter 用只認三個鍵(`message_id`、`message_id_missing`、`date`)的逐行 parser,**不使用 YAML loader**(沒有 `yaml.load`,沒有 `eval`),所以標籤(`!!python/object`)只是無意義的字串。讀不懂的行、非 UTF-8、沒有 frontmatter、沒有 `message_id` 或 `message_id_missing: true`,一律歸 `unparseable`,**不猜**。
+- **排除順序固定**:先 `unparseable`,再 `synthetic_placeholder`(`message_id` 以 `synthetic:` 開頭),最後才在**剩下的**檔案裡找 `duplicate_message_id`。保留的是檔名依 Unicode code point 排序的第一個,其餘列為重複並寫出保留的那一個。所以一個檔案只會落在一個清單裡,兩個共用同一個 `synthetic:` id 的檔案都是 `synthetic_placeholder`,不會再被算成重複。
+- 恆等式:`scanned` = 可用檔數 + `unparseable` + `synthetic_placeholder` + `duplicate_message_id`;有效日期數加排除數 = 可用檔數。
+
+<!-- archive-mail-scan-recipe:start -->
+```python
+import json
+import os
+import stat
+
+
+def _frontmatter_value(raw):
+    value = raw.strip()
+    if value[:1] == '"':
+        return json.loads(value)            # the writers serialize strings as JSON-quoted scalars
+    if value[:1] == "'":
+        if len(value) < 2 or value[-1] != "'":
+            raise ValueError("unterminated single quote")
+        return value[1:-1].replace("''", "'")
+    return value
+
+
+def read_frontmatter(path):
+    """-> ({"message_id", "message_id_missing", "date"} subset, reason). reason is None when readable."""
+    try:
+        with open(path, "rb") as handle:
+            text = handle.read().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {}, "not-readable"
+    lines = text.split("\n")
+    if not lines or lines[0].rstrip("\r") != "---":
+        return {}, "no-frontmatter"
+    fields = {}
+    for line in lines[1:]:
+        line = line.rstrip("\r")
+        if line == "---":
+            return fields, None
+        for key in ("message_id_missing", "message_id", "date"):
+            if line.startswith(key + ":"):
+                try:
+                    fields[key] = _frontmatter_value(line[len(key) + 1:])
+                except ValueError:
+                    return {}, "unreadable-line"
+                break
+    return {}, "no-frontmatter"
+
+
+def scan_top_level(output_dir):
+    """Only the top level; symlinks and non-regular files are listed, never read."""
+    records, excluded = [], []
+    for name in sorted(os.listdir(output_dir)):
+        if not name.endswith(".md"):
+            continue
+        path = os.path.join(output_dir, name)
+        mode = os.lstat(path).st_mode
+        if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
+            excluded.append({"file": bounded_text(name), "reason": "symlink" if stat.S_ISLNK(mode) else "not-a-regular-file"})
+            continue
+        fields, reason = read_frontmatter(path)
+        records.append({"file": name, "fields": fields, "reason": reason})
+    return records, excluded
+
+
+def classify_scan(records):
+    """Exclusion order is fixed: unparseable, then synthetic, then duplicates among what remains."""
+    usable, unparseable, synthetic = [], [], []
+    for record in records:
+        fields = record["fields"]
+        message_id = fields.get("message_id")
+        if (record["reason"] or not isinstance(message_id, str) or not message_id.strip()
+                or str(fields.get("message_id_missing", "")).strip().lower() == "true"):
+            unparseable.append(record["file"])
+        elif message_id.startswith("synthetic:"):
+            synthetic.append(record["file"])
+        else:
+            usable.append((record["file"], message_id, fields.get("date")))
+    kept, duplicates = {}, []
+    for name, message_id, raw_date in sorted(usable, key=lambda item: item[0]):
+        if message_id in kept:
+            duplicates.append({"file": name, "kept": kept[message_id][0]})
+        else:
+            kept[message_id] = (name, raw_date)
+    emails = {message_id: {"file": name, "date": raw_date} for message_id, (name, raw_date) in kept.items()}
+    return {"emails": emails, "unparseable": unparseable, "synthetic_placeholder": synthetic,
+            "duplicate_message_id": duplicates, "scanned": len(records)}
+
+
+def index_coverage(classified, index_emails, limit=20):
+    """Top-level usable files whose message_id is not a key of the index (#603). Read-only."""
+    missing = sorted((entry["file"], message_id) for message_id, entry in classified["emails"].items()
+                     if message_id not in index_emails)
+    return {"missing_count": len(missing), "missing": [bounded_text(name) for name, _ in missing[:limit]],
+            "omitted": max(0, len(missing) - limit)}
+
+
+def scan_report(output_dir):
+    records, excluded = scan_top_level(output_dir)
+    classified = classify_scan(records)
+    audit = reconcile_dates(classified["emails"])
+    return {"scanned": classified["scanned"], "excluded_paths": excluded,
+            "unparseable": [bounded_text(n) for n in classified["unparseable"]],
+            "synthetic_placeholder": [bounded_text(n) for n in classified["synthetic_placeholder"]],
+            "duplicate_message_id": [{"file": bounded_text(d["file"]), "kept": bounded_text(d["kept"])}
+                                     for d in classified["duplicate_message_id"]],
+            "date_audit": audit}
+```
+<!-- archive-mail-scan-recipe:end -->
+
 **Phase 0：manifest-driven（plugins#110，僅本 run 的 Step 5.0 batch 寫入）**
 
 若本 run 走了 Step 5.0 batch 路徑、manifest 仍在記憶體：對每個 `status:"written"` item，**三源合併**補齊 index entry（`message_id` 已在 `${INDEX_FILE}` keys 則跳過、算 `verified`）：
@@ -2017,6 +2130,7 @@ Index Reconcile（read-only, dedup_strategy=last_archived）: Phase 0 skipped（
 **Phase 1：full-scan fallback（歷史孤兒 + 非 manifest 來源）**
 
 1. 對每個 `${output_dir}/*.md`（**僅頂層 glob**，不深入子目錄、不追 Step 2.1 的 symlink 兄弟歸檔——那些只是 read-only 去重來源，絕不寫進本 index）：讀 frontmatter `message_id`。
+   > 盤點與分類(哪些檔是 `unparseable`、`synthetic_placeholder`、重複)取自「目錄掃描 recipe」的結果(#604),下列各項是這份結果的處置規則,不是第二套判定。
    - message_id 已在 Phase 0 set 或 `${INDEX_FILE}` keys → `verified` +1（不重複補寫）。
    - **`message_id` 匹配 `^synthetic:`（mail#319）→ 記入獨立的 `synthetic_placeholder` 清單**（列檔名報告，不 `verified` 不 `repaired` 不補寫 index）——synthetic key 是過去 session 發明的佔位符，不是真 Message-ID；即使內容衍生格式在本 target 內穩定，也無法可靠對齊真 ID 且可能碰撞，不能當合法 key 收進 index。修復走 `/archive-mail-repair-synthetic-ids`——該指令需要可用的 SQLite envelope index（通常要替實際執行 MCP server 的宿主授予 Full Disk Access），一般歸檔的 AppleScript fallback 不能代替；缺少時它會以 `environment-unavailable`／`apply-unavailable` 具名停止、不改任何檔（白跑一趟，不損資料）。
    - 無 frontmatter / 無 `message_id` / `message_id_missing: true` → 記入 `unparseable` 清單（列檔名報告，不修改該檔）。
