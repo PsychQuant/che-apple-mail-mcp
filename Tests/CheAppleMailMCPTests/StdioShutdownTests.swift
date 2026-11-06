@@ -2,8 +2,11 @@ import XCTest
 import Foundation
 @testable import CheAppleMailMCP
 
-/// Link the actual app objects into an async-main probe. Only its database path
-/// and existing script runner seam differ from production; SDK/stdio are real.
+/// Link the actual app objects into an async-main probe. Only its database path,
+/// its existing script runner seam and its environment differ from production;
+/// SDK/stdio are real. `openURL`, the Automation probe, `/usr/bin/log` and the
+/// direct-write path stay real too, which is safe only while the probe is sent
+/// nothing past `initialize` (#578, tracked in #623).
 final class StdioShutdownTests: XCTestCase {
     private static var probeDirectory: URL?
 
@@ -196,11 +199,13 @@ final class StdioShutdownTests: XCTestCase {
     }
 
     func testProbeEnvironmentIsAMinimalAllowList() {
-        let inherited = ["PATH": "/usr/bin", "HOME": "/h", "TMPDIR": "/t", "DYLD_LIBRARY_PATH": "/d",
-                         "CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT": "1", "MAIL_APP_INTEGRATION_TESTS": "1",
-                         "LIBDISPATCH_COOPERATIVE_POOL_STRICT": "1", "XCTestConfigurationFilePath": "/x"]
+        let inherited = ["PATH": "/usr/bin", "HOME": "/h", "TMPDIR": "/t", "USER": "u", "LOGNAME": "l",
+                         "DYLD_LIBRARY_PATH": "/d", "CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT": "1",
+                         "MAIL_APP_INTEGRATION_TESTS": "1", "LIBDISPATCH_COOPERATIVE_POOL_STRICT": "1",
+                         "XCTestConfigurationFilePath": "/x"]
         XCTAssertEqual(Self.probeEnvironment(from: inherited, strict: false),
-                       ["PATH": "/usr/bin", "HOME": "/h", "TMPDIR": "/t", "DYLD_LIBRARY_PATH": "/d"])
+                       ["PATH": "/usr/bin", "HOME": "/h", "TMPDIR": "/t", "USER": "u", "LOGNAME": "l",
+                        "DYLD_LIBRARY_PATH": "/d"])
         XCTAssertEqual(Self.probeEnvironment(from: inherited, strict: true)["LIBDISPATCH_COOPERATIVE_POOL_STRICT"], "1")
     }
 
@@ -211,21 +216,36 @@ final class StdioShutdownTests: XCTestCase {
         XCTAssertEqual(try poolWidth(strict: true), 1,
                        "LIBDISPATCH_COOPERATIVE_POOL_STRICT no longer narrows the pool; the strict shutdown tests lost their meaning")
         // The canary must be able to see a wider pool, or a broken canary would always say 1.
-        XCTAssertGreaterThan(try poolWidth(strict: false), 1, "the canary cannot tell a wide pool from a narrow one")
+        // The ordinary pool is one thread per CPU, so this half needs two of them.
+        if ProcessInfo.processInfo.activeProcessorCount > 1 {
+            XCTAssertGreaterThan(try poolWidth(strict: false), 1, "the canary cannot tell a wide pool from a narrow one")
+        }
     }
 
     private func poolWidth(strict: Bool) throws -> Int {
-        let process = Process(), stderr = Pipe()
-        process.executableURL = try probe()
+        let executable = try probe()
+        let stderrURL = executable.deletingLastPathComponent().appendingPathComponent("canary-\(UUID().uuidString)")
+        FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
+        defer { try? FileManager.default.removeItem(at: stderrURL) }
+        let stderr = try FileHandle(forWritingTo: stderrURL)
+        defer { try? stderr.close() }
+        let process = Process()
+        process.executableURL = executable
         process.arguments = ["canary", "unused"]
         process.environment = Self.probeEnvironment(from: ProcessInfo.processInfo.environment, strict: strict)
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = stderr
         try process.run()
-        let data = stderr.fileHandleForReading.readDataToEndOfFile()
+        // The same bounded wait as the compile step: a stalled canary fails, it does not hang the suite.
+        let deadline = ProcessInfo.processInfo.systemUptime + 30
+        while process.isRunning && ProcessInfo.processInfo.systemUptime < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
         process.waitUntilExit()
-        let text = String(decoding: data, as: UTF8.self)
+        let text = try String(contentsOf: stderrURL)
+        XCTAssertEqual(process.terminationReason, .exit, "the canary did not finish: \(text)")
         XCTAssertEqual(process.terminationStatus, 0, text)
         let line = try XCTUnwrap(text.split(separator: "\n").first { $0.hasPrefix("PROBE_POOL_WIDTH ") }, text)
         return try XCTUnwrap(Int(line.dropFirst("PROBE_POOL_WIDTH ".count)), text)
