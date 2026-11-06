@@ -117,7 +117,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in a string are refused. Handlers a test does not call lose their `tell
   application` blocks before the script runs. The list bounds which classes run, not
   what the methods of those classes do: they can read and write files and fetch
-  URLs. Test-only change.
+  URLs. `OsascriptFixtureGuardScanTests` scans `Tests/`, so a new osascript run that
+  skips the guard fails a test; the two helpers gated by `CHE_MAIL_LIVE_TEST` are
+  listed by name with their reason. Test-only change.
 - **A server built in a test can take an account mapping**
   ([#612](https://github.com/PsychQuant/che-apple-mail-mcp/issues/612)).
   `CheAppleMailMCPServer.init` gained an optional `accountMapping`, passed to
