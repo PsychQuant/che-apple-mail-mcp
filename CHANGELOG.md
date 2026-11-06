@@ -114,7 +114,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Foundation bridge pass through an explicit allowance: `use framework
   "Foundation"`, `use scripting additions`, `current application` and plain piped
   names only, with the classes that reach other applications or run other code
-  (`NSWorkspace`, `NSAppleScript`, `NSTask` and others) refused by name. Handlers
+  (`NSWorkspace`, `NSAppleScript`, `NSTask` and others) refused by name, and so
+  are the ways to name a class in a string (`class "…"`, `NSClassFromString`).
+  Handlers
   a test does not call lose their `tell application` blocks before the script
   runs. It is still a deny list. Test-only change.
 - **A server built in a test can take an account mapping**

@@ -35,8 +35,9 @@ enum OsascriptFixtureGuard {
     ]
 
     /// What `foundationBridge` still refuses by name: the classes that reach another application or
-    /// run other code. Any other Foundation class is data handling (#617).
-    static let bridgeRefusals = #"\bNS(Workspace|AppleScript|Task|Process|RunningApplication|UserScriptTask|UserAppleScriptTask|UserUnixTask|UserAutomatorTask|AppleEventDescriptor|AppleEventManager|Bundle|Pasteboard|DistributedNotificationCenter|ConnectionToApplication|XPCConnection)\b|\bperformSelector"#
+    /// run other code, and the ways to name a class in a string, which `code(of:)` empties. Any other
+    /// Foundation class is data handling (#617).
+    static let bridgeRefusals = #"\bNS(Workspace|AppleScript|Task|Process|RunningApplication|UserScriptTask|UserAppleScriptTask|UserUnixTask|UserAutomatorTask|AppleEventDescriptor|AppleEventManager|Bundle|Pasteboard|DistributedNotificationCenter|ConnectionToApplication|XPCConnection|ClassFromString|ProtocolFromString|SelectorFromString|Invocation)\b|\bSBApplication\b|\bperformSelector|\bvalueForKey|\bclass\s+"""#
 
     /// Throws `ApplicationReference` if the fragment could address an application.
     ///
@@ -63,12 +64,13 @@ enum OsascriptFixtureGuard {
     }
 
     private static func removingFoundationBridge(from code: String, fragment: String) throws -> String {
-        if code.range(of: bridgeRefusals, options: .regularExpression) != nil {
+        if code.range(of: bridgeRefusals, options: [.regularExpression, .caseInsensitive]) != nil {
             throw ApplicationReference(pattern: "a Foundation class that reaches other code", fragment: fragment)
         }
-        // Literals are emptied in `code`, so the framework's name is read from the fragment: every
-        // `use framework` there must name Foundation.
-        let lines = fragment.components(separatedBy: CharacterSet.newlines)
+        // Literals are emptied in `code`, so the framework's name is read from the same lexer with
+        // literals kept. The raw fragment would disagree with `code` about comments and `¬`: a
+        // `use (* x *) framework "AppKit"` is no `use framework` line there (#617 verify).
+        let lines = Self.code(of: fragment, keepingLiterals: true).components(separatedBy: CharacterSet.newlines)
         for line in lines where line.range(of: #"^\s*use\s+framework\b"#, options: [.regularExpression, .caseInsensitive]) != nil {
             guard line.range(of: #"^\s*use\s+framework\s+"Foundation"\s*$"#, options: .regularExpression) != nil else {
                 throw ApplicationReference(pattern: "a framework other than Foundation", fragment: fragment)
@@ -78,9 +80,9 @@ enum OsascriptFixtureGuard {
             // Bridge calls put keyword-like names in pipes (`… |error|:missing value`, `… |set|()`). A
             // plain word between pipes has no escape, quote or comment marker for the lexer to misread.
             .replacingOccurrences(of: #"\|[A-Za-z_][A-Za-z0-9_]*\|"#, with: "pipedName", options: .regularExpression)
-            .replacingOccurrences(of: #"(?m)^\s*use\s+framework\s+""\s*$"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"(?m)^\s*use\s+scripting\s+additions\s*$"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\bcurrent\s+application\b"#, with: "currentBridge", options: .regularExpression)
+            .replacingOccurrences(of: #"(?m)^[ \t]*use[ \t]+framework[ \t]+""[ \t]*$"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"(?m)^[ \t]*use[ \t]+scripting[ \t]+additions[ \t]*$"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\bcurrent[ \t]+application\b"#, with: "currentBridge", options: .regularExpression)
     }
 
     /// For a test that replaced a GUI handler's statements with fixtures and calls that handler: its
@@ -116,12 +118,13 @@ enum OsascriptFixtureGuard {
     /// A `|` is copied as written and `check` refuses it: a `|…|` identifier has escapes of its own,
     /// so lexing it here could only disagree with AppleScript about where it ends, and no fixture
     /// needs one (#572 verify, rounds 1 and 2). A `¬` continuation and its line break become one
-    /// space, so `do ¬⏎ shell script` is still seen as `do shell script`.
+    /// space, so `do ¬⏎ shell script` is still seen as `do shell script`. `keepingLiterals` keeps what
+    /// is inside the quotes, for the one caller that has to read a name there.
     ///
     /// Works on Unicode scalars, not `Character`s: Swift treats `\r\n` as ONE `Character`, so a
     /// `Character` loop never sees the `\r` or `\n` that ends a comment and swallows every later line
     /// (#572 verify).
-    static func code(of text: String) -> String {
+    static func code(of text: String, keepingLiterals: Bool = false) -> String {
         let chars = Array(text.unicodeScalars)
         var out = String.UnicodeScalarView()
         var i = 0
@@ -149,8 +152,13 @@ enum OsascriptFixtureGuard {
             if c == "\"" {
                 out.append(c); i += 1
                 while i < chars.count {
-                    if chars[i] == "\\" { i += 2; continue }
+                    if chars[i] == "\\" {
+                        if keepingLiterals { out.append(contentsOf: chars[i..<min(i + 2, chars.count)]) }
+                        i += 2
+                        continue
+                    }
                     if chars[i] == "\"" { out.append("\""); i += 1; break }
+                    if keepingLiterals { out.append(chars[i]) }
                     i += 1
                 }
                 continue

@@ -51,6 +51,8 @@ final class OsascriptFixtureGuardTests: XCTestCase {
             """
         XCTAssertThrowsError(try OsascriptFixtureGuard.check(handler), "without the allowance it is refused")
         XCTAssertNoThrow(try OsascriptFixtureGuard.check(handler, foundationBridge: true))
+        XCTAssertNoThrow(try OsascriptFixtureGuard.check("use (* x *) framework \"Foundation\"\nreturn 1", foundationBridge: true),
+                         "a comment does not change which framework it is")
         XCTAssertNoThrow(try OsascriptFixtureGuard.check(
             "return current application's NSJSONSerialization's dataWithJSONObject:x options:0 |error|:(missing value)",
             foundationBridge: true), "a keyword label the bridge needs")
@@ -64,6 +66,19 @@ final class OsascriptFixtureGuardTests: XCTestCase {
             "use framework \"Foundation\"\ntell application \"Mail\" to activate",
             "use framework \"Foundation\"\ntell app \"Mail\" to activate",
             "use framework \"Foundation\"\nreturn current application's NSString's performSelector:\"x\"",
+            // #617 verify: the framework's name is read the way the import is removed.
+            "use (* x *) framework \"AppKit\"\nreturn 1",
+            "(* x *) use framework \"ScriptingBridge\"\nreturn 1",
+            "use ¬\nframework \"AppKit\"\nreturn 1",
+            "return current application's SBApplication's applicationWithBundleIdentifier:\"com.apple.mail\"",
+            // A class named in a string: the literal is empty by the time the list is read.
+            "return current application's class \"NSWorkspace\"",
+            "return current application's NSClassFromString(\"NSTask\")",
+            "return current application's NSSelectorFromString(\"x\")",
+            "return current application's NSInvocation",
+            "return x's valueForKey:\"y\"",
+            "return current application's nstask",
+            "return current\napplication \"Mail\"",
         ]
         for fragment in refused {
             XCTAssertThrowsError(try OsascriptFixtureGuard.check(fragment, foundationBridge: true), "must refuse: \(fragment.debugDescription)")
