@@ -2,6 +2,7 @@
 """Execute the shipped SOP recipes, rather than a second implementation."""
 import copy
 from datetime import date, timedelta, timezone
+import importlib.util
 import itertools
 import json
 from pathlib import Path
@@ -2702,6 +2703,49 @@ def between(text, start, end):
     return text.split(start, 1)[1].split(end, 1)[0]
 
 
+def _load_placeholder_checks():
+    """test-command-placeholders.py, loaded by path: one definition of "escaped" for both suites (#651, B3)."""
+    path = PLUGIN / "tests/test-command-placeholders.py"
+    spec = importlib.util.spec_from_file_location("command_placeholder_checks", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+backslashes_before = _load_placeholder_checks().backslashes_before
+
+
+def unescaped_arguments(text):
+    """Offsets of each `$ARGUMENTS` that Claude Code would still replace: not escaped by exactly one backslash."""
+    return [m.start() for m in re.finditer(r"\$ARGUMENTS", text) if backslashes_before(text, m.start()) != 1]
+
+
+class ArgumentsEscapeCountTests(unittest.TestCase):
+    """#651: a doubled backslash does not escape, so the /archive-mail guard must count it as a placeholder.
+
+    The guard used a `(?<!\\)` lookbehind, which reads `\\\\$ARGUMENTS` as escaped. Under the substitution
+    rule (#521) one backslash escapes and two or more are all kept with the placeholder still replaced.
+    """
+
+    def test_escaped_and_unescaped_placeholders(self):
+        # spec-example: archive-mail-view-arguments / escaped and unescaped placeholders
+        for text, want in [("$ARGUMENTS", 1), ("\\$ARGUMENTS", 0), ("\\\\$ARGUMENTS", 1), ("\\\\\\$ARGUMENTS", 1)]:
+            with self.subTest(text=text):
+                self.assertEqual(len(unescaped_arguments(text)), want)
+
+    def test_a_doubled_backslash_does_not_hide_a_second_placeholder(self):
+        self.assertEqual(len(unescaped_arguments("ARGS_RAW: $ARGUMENTS\nsee \\\\$ARGUMENTS\n")), 2)
+
+    def test_the_helper_is_the_one_the_placeholder_suite_defines(self):
+        self.assertEqual(backslashes_before.__module__, "command_placeholder_checks")
+
+    def test_a_doubled_backslash_line_added_to_the_real_file_is_caught_where_the_lookbehind_missed_it(self):
+        # Mutation on the real file: the old `(?<!\\)` guard counted one placeholder here and passed.
+        mutated = DOCUMENT.read_text() + "\nsee \\\\$ARGUMENTS\n"
+        self.assertEqual(len(re.findall(r"(?<!\\)\$ARGUMENTS", mutated)), 1)
+        self.assertEqual(len(unescaped_arguments(mutated)), 2)
+
+
 class ArchiveArgsStructureTests(unittest.TestCase):
     """#540: the command file may read the typed arguments in exactly one place."""
 
@@ -2712,7 +2756,9 @@ class ArchiveArgsStructureTests(unittest.TestCase):
     def test_the_only_argument_placeholder_is_the_ARGS_RAW_line(self):
         # Claude Code replaces every unescaped placeholder with the typed text before the agent reads
         # the file, so each extra one re-creates the failure this fixes: the flag showing up as a positional.
-        hits = list(re.finditer(r"(?<!\\)\$ARGUMENTS", self.document))
+        # Escaped means exactly one backslash (#651): `\\$ARGUMENTS` is still replaced, so it counts.
+        hits = [h for h in re.finditer(r"\$ARGUMENTS", self.document)
+                if backslashes_before(self.document, h.start()) != 1]
         self.assertEqual(len(hits), 1, [self.document.count("\n", 0, h.start()) + 1 for h in hits])
         start = self.document.rfind("\n", 0, hits[0].start()) + 1
         self.assertEqual(self.document[start:self.document.find("\n", start)], "ARGS_RAW: $ARGUMENTS")

@@ -228,6 +228,15 @@ https://github.com/PsychQuant/che-apple-mail-mcp
 目前 shell 版本與 binary pin 見 [plugin.json](.claude-plugin/plugin.json)。
 Shell 沿革見 [CHANGELOG.md](CHANGELOG.md)，binary/server 沿革見 [根目錄 CHANGELOG.md](../CHANGELOG.md)。
 
+### 測過的 Claude Code 版本（#651）
+
+`/archive-mail` 的 awk 篩選與幾個指令的引數讀取，依賴 Claude Code 代入引數時的兩個行為：
+
+1. 找不到對應引數的位置參數（例如沒帶引數時的 `$1`）照原樣留在內容裡；
+2. 只有 `$` 前恰好一個反斜線會跳脫（`\$0` 交給模型時是 `$0`），兩個以上的反斜線全部保留，參數仍會被代入。
+
+這兩個行為只在 Claude Code 2.1.316 實際測過（#521：同一個探測指令帶引數、不帶引數各跑一次）。這是測過的版本，不是最低版本，其他版本沒有測過。外掛的 manifest 沒有欄位可以宣告需要哪個 Claude Code 版本，所以這裡只能寫成說明，Claude Code 不會檢查它。
+
 ### SessionStart FDA assist diagnostics (#422)
 
 The first-run helper probes `--version` and `--check-fda --quiet` for at most
