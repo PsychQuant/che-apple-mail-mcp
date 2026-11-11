@@ -41,7 +41,7 @@ We do NOT defend against:
 
 ## Attachment Path Policy (since #38)
 
-`compose_email` and `create_draft` accept an `attachments` parameter — a list
+`compose_email`, `create_draft` and `update_draft` accept an `attachments` parameter — a list
 of POSIX file paths to attach to the outgoing message. Without input
 validation, a malicious / hallucinated MCP caller could pass
 `attachments=["~/.ssh/id_ed25519"]` and have it silently attached to a draft
@@ -52,11 +52,23 @@ list is refused before a file is read, so no reply attaches a file and the
 checks below do not run on that path. When #608 restores reply attachments, it
 must run the reply's paths through the same checks (`validateAttachmentPaths`).
 
-The server defends against this with five layers, applied in order:
+The server defends against this with the layers below, applied in order.
+
+### 0. No `.` or `..` components
+
+A path with a `.` or `..` component is rejected first, as
+`contains a '.' or '..' path component`
+([#543](https://github.com/PsychQuant/che-apple-mail-mcp/issues/543)). Mail
+does not receive the path this validator resolves: the GUI step pastes the
+caller's text into the open panel's Go-to-folder field, and how that field reads
+`..` after a symbolic link has not been observed. Without such a component, the
+textual and the physical reading of the path name the same file, so the
+verdict below is about the file Mail opens either way.
 
 ### 1. Existence
 
-Each path must point to an existing file. `MailError.invalidParameter` thrown
+Each path, as the caller gave it, must point to an existing file (the kernel's
+lookup: a trailing slash after a file is not found). `MailError.invalidParameter` thrown
 on miss with a list of all missing paths (so the LLM can self-correct on retry
 without one-at-a-time iteration).
 
@@ -65,12 +77,10 @@ without one-at-a-time iteration).
 Every path is made absolute (a relative path counts from the server's working
 directory) and resolved with `URL(fileURLWithPath:).resolvingSymlinksInPath()`
 **before** the deny-list check. This defeats the
-`~/Documents/decoy_pdf → ~/.ssh/id_ed25519` symlink-bypass. The path is not
-`.standardized` first: that removed `..` from the text before links were
-followed, so `link/../file` was judged at `dir/file` while the kernel opened the
-`file` next to the link's target, which let a decoy pass every layer
-([#543](https://github.com/PsychQuant/che-apple-mail-mcp/issues/543)). All later
-layers judge this one resolved path.
+`~/Documents/decoy_pdf → ~/.ssh/id_ed25519` symlink-bypass. Layers 3–5 judge
+this one resolved path. (Before #543 the path was `.standardized` first, which
+removed `..` from the text before links were followed; layer 0 now keeps `..`
+out of the question entirely.)
 
 ### 3. Hardcoded deny-list (default-on)
 
@@ -115,11 +125,17 @@ check at validation time does not cover a path swapped afterwards.
 ### Known limitations
 
 - **TOCTOU**: validation runs in this server, but Mail opens the attachment in
-  its own process after the compose window is up, seconds later (each
-  attachment adds a few seconds of GUI steps, so with 50 attachments the last
-  one is attached minutes after validation). Anything able to replace the path
-  in that window defeats every layer, the regular-file check included. Not
-  mitigated; an in-process reader (#479) must re-check the opened descriptor.
+  its own process after the compose window is up, seconds later: each
+  attachment adds about 3 s of GUI steps, and the whole flow runs under a 90 s
+  deadline, so the window is bounded near 90 s (see #672 for the count cap).
+  Anything able to replace the path in that window defeats every layer, the
+  regular-file check included. Not mitigated; an in-process reader (#479) must
+  re-check the opened descriptor.
+- **The deny-list matches by string prefix.** Hard links to a deny-listed file,
+  and root-level path prefixes that resolution keeps, are not recognised as the
+  deny-listed file (#671). `/dev/fd/N` names whatever the server's own
+  descriptor N is (#669). The `MAIL_MCP_ATTACHMENT_ROOTS` allow-list fails
+  closed for these.
 - **macOS sandboxing interaction**: if the MCP server runs with restricted
   entitlements, some deny-list paths may already be unreadable. Defense in
   depth — our check fires before FileManager attempts the read.

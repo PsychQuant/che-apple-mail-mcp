@@ -1625,12 +1625,12 @@ actor MailController {
     }
 
     /// Issues #38 and #543: harden attachment path validation against prompt-injection
-    /// exfil vectors. Five layers of defense applied in order, all on ONE resolved path:
-    ///   1. Existence (preserved from validateFilePaths)
+    /// exfil vectors. Layers applied in order:
+    ///   0. No `.` or `..` component (#543 fix round 2): Mail receives the caller's text, and only without such a
+    ///      component does every reading of it name the same file.
+    ///   1. Existence, on the caller's path (preserved from validateFilePaths)
     ///   2. Symlink resolution (defeats `~/Documents/decoy → ~/.ssh` bypass). The path is made absolute against the
-    ///      working directory and then resolved with `resolvingSymlinksInPath()` alone: `.standardized` first would
-    ///      drop `..` from the string before the links are followed, so `L/../x` would name `dir/x` while the kernel
-    ///      opens the `x` next to L's target (#543 verify round 1).
+    ///      working directory and then resolved with `resolvingSymlinksInPath()` alone; layers 3–5 judge that path.
     ///   3. Deny-list of sensitive directories (default-on, hardcoded)
     ///   4. Optional allow-list via `MAIL_MCP_ATTACHMENT_ROOTS` env var
     ///      (colon-separated, `~` expanded). If unset, only deny-list applies.
@@ -1690,6 +1690,18 @@ actor MailController {
         var failures: [String] = []
 
         for path in paths {
+            // #543 fix round 2: refuse a `.` or `..` component before anything else. Mail never receives the
+            // resolved path: the GUI step pastes the caller's text into the open panel's Go-to-folder field, and
+            // nobody has observed whether that field reads `..` after a symbolic link textually or physically.
+            // Without such a component both readings name the same file, so the verdict here is the file Mail
+            // opens either way, and the caller's file name is kept.
+            if path.split(separator: "/", omittingEmptySubsequences: false).contains(where: { $0 == "." || $0 == ".." }) {
+                failures.append("'\(path)' rejected: contains a '.' or '..' path component")
+                continue
+            }
+            // Existence is checked on the caller's path, with the kernel's semantics: the safer side, because
+            // `resolvingSymlinksInPath()` falls back to collapsing text when a component is missing or a link chain
+            // is too long, and a trailing slash after a file is ENOTDIR here.
             guard FileManager.default.fileExists(atPath: path) else {
                 failures.append("'\(path)' not found")
                 continue

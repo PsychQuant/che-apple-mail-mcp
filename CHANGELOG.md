@@ -50,13 +50,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regular file after symlink resolution is now rejected as
   `not a regular file (<kind>)`, in the same aggregated error and before Mail is
   touched; the type is read without opening the path. `update_draft` gets the
-  same check, now before its draft scans. Resolution no longer applies
-  `.standardized` first: it removed `..` from the path text before following
-  links, so for `link/../file` every layer, the deny-list and the allow-list
-  included, judged a different file from the one the kernel opens. A relative
-  path still counts from the server's working directory. **Behaviour change:**
-  directories are rejected too, including package documents such as `.rtfd` or
-  `.app` bundles that Mail might have attached before.
+  same checks, now before its draft scans. A path with a `.` or `..` component
+  is refused as `contains a '.' or '..' path component`: Mail receives the
+  caller's text through the open panel's Go-to-folder field, and without such
+  components every reading of the path names the same file. Resolution no
+  longer applies `.standardized` first (it removed `..` from the text before
+  following links, so the deny-list, the allow-list and the type check could
+  judge a different file from the one named). A relative path still counts from
+  the server's working directory. **Behaviour change:** directories are rejected
+  too, including package documents such as `.rtfd` or `.app` bundles that Mail
+  might have attached before, and so are paths with `.` or `..` components.
 
 - **A handler test with an address as `account_name` no longer reads the machine's
   accounts** ([#633](https://github.com/PsychQuant/che-apple-mail-mcp/issues/633)).
