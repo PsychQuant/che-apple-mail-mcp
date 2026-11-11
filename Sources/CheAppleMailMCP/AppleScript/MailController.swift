@@ -1603,25 +1603,11 @@ actor MailController {
         return result
     }
 
-    /// Issue #38: harden attachment path validation against prompt-injection
-    /// exfil vectors. Three layers of defense applied in order:
-    ///   1. Existence (preserved from validateFilePaths)
-    ///   2. Symlink resolution (defeats `~/Documents/decoy → ~/.ssh` bypass)
-    ///   3. Deny-list of sensitive directories (default-on, hardcoded)
-    ///   4. Optional allow-list via `MAIL_MCP_ATTACHMENT_ROOTS` env var
-    ///      (colon-separated, `~` expanded). If unset, only deny-list applies.
-    ///
-    /// Without these checks, a malicious / hallucinated MCP caller could pass
-    /// `attachments=["/Users/X/.ssh/id_ed25519"]` and have it attached to a
-    /// silent draft (combined with `save_as_draft=true` post-#33).
-    ///
-    /// `internal` (not `private`) so `@testable import` can exercise the helper
-    /// in unit tests without going through Mail.app.
     /// #543: nil for a regular file; otherwise the name of what the path is. Reads the type without following a
     /// final symlink and without opening the path.
     static func nonRegularFileKind(atResolvedPath path: String) -> String? {
         guard let type = (try? FileManager.default.attributesOfItem(atPath: path))?[.type] as? FileAttributeType else {
-            return "unreadable type"
+            return "type could not be read"
         }
         switch type {
         case .typeRegular: return nil
@@ -1638,6 +1624,24 @@ actor MailController {
         }
     }
 
+    /// Issues #38 and #543: harden attachment path validation against prompt-injection
+    /// exfil vectors. Five layers of defense applied in order, all on ONE resolved path:
+    ///   1. Existence (preserved from validateFilePaths)
+    ///   2. Symlink resolution (defeats `~/Documents/decoy → ~/.ssh` bypass). The path is made absolute against the
+    ///      working directory and then resolved with `resolvingSymlinksInPath()` alone: `.standardized` first would
+    ///      drop `..` from the string before the links are followed, so `L/../x` would name `dir/x` while the kernel
+    ///      opens the `x` next to L's target (#543 verify round 1).
+    ///   3. Deny-list of sensitive directories (default-on, hardcoded)
+    ///   4. Optional allow-list via `MAIL_MCP_ATTACHMENT_ROOTS` env var
+    ///      (colon-separated, `~` expanded). If unset, only deny-list applies.
+    ///   5. Regular files only (#543): directories, FIFOs, sockets and devices are rejected.
+    ///
+    /// Without these checks, a malicious / hallucinated MCP caller could pass
+    /// `attachments=["/Users/X/.ssh/id_ed25519"]` and have it attached to a
+    /// silent draft (combined with `save_as_draft=true` post-#33).
+    ///
+    /// `internal` (not `private`) so `@testable import` can exercise the helper
+    /// in unit tests without going through Mail.app.
     func validateAttachmentPaths(_ paths: [String]) throws {
         guard !paths.isEmpty else { return }
 
@@ -1691,10 +1695,12 @@ actor MailController {
                 continue
             }
 
-            let resolved = URL(fileURLWithPath: path)
-                .standardized
-                .resolvingSymlinksInPath()
-                .path
+            // Absolute first (a relative path counts from the working directory, as before), then resolve WITHOUT
+            // `.standardized`: `resolvingSymlinksInPath()` follows each link before applying the `..` after it, as the
+            // kernel does, and still strips a leading `/private` (#543 verify round 1, row 1).
+            let absolute = (path as NSString).isAbsolutePath
+                ? path : (FileManager.default.currentDirectoryPath as NSString).appendingPathComponent(path)
+            let resolved = URL(fileURLWithPath: absolute).resolvingSymlinksInPath().path
 
             if let denied = denyList.first(where: { resolved == $0 || resolved.hasPrefix("\($0)/") }) {
                 failures.append("'\(path)' rejected: resolves under sensitive directory '\(denied)'")
@@ -2182,6 +2188,10 @@ actor MailController {
                 "update_draft requires exactly one of draft_id or subject_match (got "
                 + (hasId ? "both" : "neither") + ")")
         }
+
+        // #543: attachments are validated before the read-only locate and pre-receipt scans, like the #411 recipient
+        // checks below; `createDraft` validates them again (pure, idempotent).
+        if let attachments { try validateAttachmentPaths(attachments) }
 
         // 1. Locate (read-only) — account-scoped when a selector was given,
         //    unified all-accounts scan otherwise.

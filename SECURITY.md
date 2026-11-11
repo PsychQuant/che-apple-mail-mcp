@@ -62,9 +62,15 @@ without one-at-a-time iteration).
 
 ### 2. Symlink resolution
 
-Every path is canonicalized via `URL(fileURLWithPath:).standardized.resolvingSymlinksInPath()`
+Every path is made absolute (a relative path counts from the server's working
+directory) and resolved with `URL(fileURLWithPath:).resolvingSymlinksInPath()`
 **before** the deny-list check. This defeats the
-`~/Documents/decoy_pdf → ~/.ssh/id_ed25519` symlink-bypass.
+`~/Documents/decoy_pdf → ~/.ssh/id_ed25519` symlink-bypass. The path is not
+`.standardized` first: that removed `..` from the text before links were
+followed, so `link/../file` was judged at `dir/file` while the kernel opened the
+`file` next to the link's target, which let a decoy pass every layer
+([#543](https://github.com/PsychQuant/che-apple-mail-mcp/issues/543)). All later
+layers judge this one resolved path.
 
 ### 3. Hardcoded deny-list (default-on)
 
@@ -96,7 +102,9 @@ When unset (default), only the deny-list applies.
 
 ### 5. Regular files only
 
-The resolved path must be a regular file ([#543](https://github.com/PsychQuant/che-apple-mail-mcp/issues/543)).
+The resolved path must be a regular file ([#543](https://github.com/PsychQuant/che-apple-mail-mcp/issues/543)),
+for `compose_email`, `create_draft` and `update_draft` (which checks before it
+scans for the draft to replace).
 Directories (including package directories such as `.rtfd` or `.app`), FIFOs,
 sockets, character and block devices, and a path that is still a symbolic link
 after resolution are rejected as `not a regular file (<kind>)`. The type is read
@@ -106,9 +114,12 @@ check at validation time does not cover a path swapped afterwards.
 
 ### Known limitations
 
-- **TOCTOU**: a sufficiently fast attacker could swap a symlink between
-  validation and AppleScript-attach. Practical risk is microseconds; same-
-  process synchronous gap. Not mitigated.
+- **TOCTOU**: validation runs in this server, but Mail opens the attachment in
+  its own process after the compose window is up, seconds later (each
+  attachment adds a few seconds of GUI steps, so with 50 attachments the last
+  one is attached minutes after validation). Anything able to replace the path
+  in that window defeats every layer, the regular-file check included. Not
+  mitigated; an in-process reader (#479) must re-check the opened descriptor.
 - **macOS sandboxing interaction**: if the MCP server runs with restricted
   entitlements, some deny-list paths may already be unreadable. Defense in
   depth — our check fires before FileManager attempts the read.
@@ -150,5 +161,5 @@ runtime validation is strictly stronger than the schema.
 |------|-------|-----|
 | 2026-05-03 | [#48](https://github.com/PsychQuant/che-apple-mail-mcp/issues/48) | SECURITY.md created — RFC 3676 nested quote forgery limitation documented |
 | 2026-05-03 | [#38](https://github.com/PsychQuant/che-apple-mail-mcp/issues/38) | Attachment path validation: deny-list + symlink resolution + opt-in allow-list |
-| 2026-11-11 | [#543](https://github.com/PsychQuant/che-apple-mail-mcp/issues/543) | Attachment path validation: reject anything that is not a regular file after symlink resolution |
 | 2026-05-03 | [#50](https://github.com/PsychQuant/che-apple-mail-mcp/issues/50) | `id` injection at msgRef AppleScript interpolation — Int validation at handler boundary |
+| 2026-11-11 | [#543](https://github.com/PsychQuant/che-apple-mail-mcp/issues/543) | Attachment path validation: reject anything that is not a regular file after symlink resolution; resolve `..` after a symlink from the link's target (no `.standardized`); `update_draft` validates before scanning drafts |

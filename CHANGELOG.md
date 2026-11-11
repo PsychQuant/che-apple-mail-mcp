@@ -49,7 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory, a FIFO or a device such as `/dev/zero` passed. A path that is not a
   regular file after symlink resolution is now rejected as
   `not a regular file (<kind>)`, in the same aggregated error and before Mail is
-  touched; the type is read without opening the path. **Behaviour change:**
+  touched; the type is read without opening the path. `update_draft` gets the
+  same check, now before its draft scans. Resolution no longer applies
+  `.standardized` first: it removed `..` from the path text before following
+  links, so for `link/../file` every layer, the deny-list and the allow-list
+  included, judged a different file from the one the kernel opens. A relative
+  path still counts from the server's working directory. **Behaviour change:**
   directories are rejected too, including package documents such as `.rtfd` or
   `.app` bundles that Mail might have attached before.
 
