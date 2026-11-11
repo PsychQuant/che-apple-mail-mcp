@@ -20,4 +20,4 @@
 
 - [x] 3.1 `testInsertRemovesThePlacedFileWhenALaterStepFails` 改用放檔掛點證明放檔已執行（掛點在檔案放好時看到檔案存在），並改為斷言新建的目錄已被移除。驗證：該測試綠；拿掉 ROLLBACK、拿掉刪檔、把失敗移到放檔之前、拿掉目錄清理這四個 mutation 各自讓它或 1.x 測試轉紅。
 - [x] 3.2 `.claude/rules/direct-write-transaction-safety.md` 第 1 項的覆蓋說明：移除「失敗後會留下空的 `Messages` 目錄（#503）」的缺口與「測試靠這個目錄證明放檔已執行」的敘述，改寫為目錄清理與新測試的覆蓋。驗證：內容審閱，`DirectWriteSafetyGuardTests` 仍綠。
-- [ ] 3.3 全部測試：`swift test` 的 MailSQLite 與 CheAppleMailMCP 兩個 bundle 都 0 failures。驗證：分別讀兩個 bundle 的 `Executed N tests` 行。
+- [x] 3.3 全部測試：`swift test` 的 MailSQLite 與 CheAppleMailMCP 兩個 bundle 都 0 failures。驗證：分別讀兩個 bundle 的 `Executed N tests` 行。

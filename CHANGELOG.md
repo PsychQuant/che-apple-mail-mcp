@@ -127,6 +127,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A failed direct write no longer leaves empty directories behind**
+  ([#503](https://github.com/PsychQuant/che-apple-mail-mcp/issues/503)). When the
+  opt-in direct write failed after placing the `.emlx` (or while placing it), or
+  was reversed after the upload request failed, it removed its rows and the file
+  but left the `Messages` directory, and any hash directories above it, that it
+  had created for a new 1,000-row block. It now removes the directories it
+  created, deepest first, and only while they are empty: a level that existed
+  before, or that another process created first, is never removed, and a
+  directory Mail wrote into meanwhile stays. The error a failed write reports and
+  the outcome of a reversal are unchanged. A removal that fails for a reason other
+  than the directory not being empty is noted on stderr.
 - **A draft is not reported as uploaded when its queued action could not be read**
   ([#630](https://github.com/PsychQuant/che-apple-mail-mcp/issues/630)). While
   waiting for the upload, the direct-write path treats a remote id with no queued
