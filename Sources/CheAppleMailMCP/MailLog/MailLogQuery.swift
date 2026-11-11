@@ -27,6 +27,9 @@ struct MailLogQuery: Equatable {
     /// Continuation only: how many matching events at exactly `start` (to the millisecond) were
     /// already returned by the previous page. See `MailLogService` for the cursor.
     var offset: Int = 0
+    /// #466: keep only events whose DISPLAYED `event` name (`MailLogService.displayedEventName`) equals one
+    /// of these exactly. Normalized: 1 to 20 values, duplicates collapsed, first occurrence kept. `nil` = no filter.
+    var events: [String]? = nil
 
     static let defaultMinutes = 10
     static let maxWindowSeconds: TimeInterval = 3600
@@ -36,8 +39,13 @@ struct MailLogQuery: Equatable {
     /// these (pinned by `MailLogToolTests`), so the two cannot drift apart.
     static let allowedParameters: Set<String> = [
         "detail", "last_minutes", "since", "until", "around", "radius_seconds",
-        "categories", "limit", "contains", "redact_identifiers", "offset",
+        "categories", "limit", "contains", "redact_identifiers", "offset", "events",
     ]
+
+    /// #466: an `events` value may be no longer than the longest template that can be DISPLAYED — a longer
+    /// `formatString` is always withheld (`TemplateExtractor.looksLikeData`), so it could never match.
+    static let maxEventNameBytes = 1024
+    static let maxEventNames = 20
 
     static func parse(_ arguments: [String: Value], now: Date) throws -> MailLogQuery {
         func invalid(_ message: String) -> MailError { MailError.invalidParameter(message) }
@@ -161,7 +169,30 @@ struct MailLogQuery: Equatable {
             redact = flag
         }
 
+        // #466: event-name filter, in both details. Exact equality on the DISPLAYED name, so it can only
+        // select among events the output would show anyway: no oracle, unlike `contains` on brief output.
+        var events: [String]?
+        if let v = present("events") {
+            guard case .array(let items) = v else { throw invalid("events must be an array of event names") }
+            guard !items.isEmpty else { throw invalid("events must not be empty when provided") }
+            guard items.count <= maxEventNames else { throw invalid("events accepts at most \(maxEventNames) entries") }
+            var names: [String] = []
+            for item in items {
+                guard case .string(let text) = item else { throw invalid("events must contain only strings") }
+                guard (1...maxEventNameBytes).contains(text.utf8.count) else {
+                    throw invalid("each events entry must be 1 to \(maxEventNameBytes) bytes of UTF-8 (a longer template is always withheld)")
+                }
+                // A misspelled known-event name would otherwise read as "the event did not happen".
+                if text.hasPrefix("imap."), !KnownEvents.names.contains(text) {
+                    throw invalid("unknown known-event name \(text.debugDescription) — the known events are: "
+                        + KnownEvents.names.sorted().joined(separator: ", "))
+                }
+                if !names.contains(where: { $0.utf8.elementsEqual(text.utf8) }) { names.append(text) }
+            }
+            events = names
+        }
+
         return MailLogQuery(detail: detail, start: start, end: end, categories: categories,
-                            contains: contains, redactIdentifiers: redact, limit: limit, offset: offset)
+                            contains: contains, redactIdentifiers: redact, limit: limit, offset: offset, events: events)
     }
 }

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`get_mail_log_events` can filter by event name**
+  ([#466](https://github.com/PsychQuant/che-apple-mail-mcp/issues/466)). The new
+  `events` parameter (1 to 20 values) keeps only events whose `event` field is
+  exactly one of the values: a template, `imap.append_uid_received`, or
+  `<template withheld>`. It works in brief and detailed output, so the upload
+  receipt no longer has to be paged out of hundreds of `IMAPConnection` lines.
+  The comparison is against the name the output shows, by the same function, so
+  a withheld template cannot be selected by its own text, and nothing but exact
+  equality selects an event. An `imap.` value that is not a known event is an
+  error, so a typo does not read as "the event did not happen". Paging counts
+  only matching events, and the response echoes the filter as `events`.
+
 - **The `.mcpb` install can set the destination policy**
   ([#574](https://github.com/PsychQuant/che-apple-mail-mcp/issues/574)). The
   bundle's manifest had no way to set `CHE_MAIL_EXPORT_ALLOWED_ROOTS`, so a

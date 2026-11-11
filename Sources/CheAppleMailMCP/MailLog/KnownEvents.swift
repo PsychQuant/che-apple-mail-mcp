@@ -22,6 +22,8 @@ import Foundation
 /// Only digits, commas and whitespace may sit inside the parentheses.
 enum KnownEvents {
     static let appendUIDReceived = "imap.append_uid_received"
+    /// Every name `name(for:)` can return. The `events` filter (#466) rejects an `imap.` value outside it.
+    static let names: Set<String> = [appendUIDReceived]
 
     /// Anchored at the line's OWN `Read: `: the one right after Mail's connection header
     /// `[server] <connection id:[Mailbox name=…]> `, or at the very start when there is no header.
