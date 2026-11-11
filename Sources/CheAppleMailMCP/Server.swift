@@ -30,7 +30,8 @@ class CheAppleMailMCPServer {
          initialSync: Bool = true,
          classificationDirectory: URL = ClassificationPolicyStore.defaultDirectory,
          classificationLoader: (@Sendable (String) async throws -> ClassificationMessage)? = nil,
-         accountMapping: [String: String]? = nil) async throws {
+         accountMapping: [String: String]? = nil,
+         vipMailboxesPath: String? = nil) async throws {
         self.accountMapping = accountMapping
         self.classificationStore = ClassificationPolicyStore(directory: classificationDirectory)
         self.classificationEngine = ClassificationPlanEngine(store: self.classificationStore)
@@ -60,7 +61,8 @@ class CheAppleMailMCPServer {
         // The FDA probe reads the same path as the open, so a probe started
         // against a test-owned path never touches the user's index (#329 verify).
         self.indexProvider = IndexReaderProvider(
-            open: { try EnvelopeIndexReader(databasePath: databasePath, accountMapping: accountMapping) },
+            open: { try EnvelopeIndexReader(databasePath: databasePath, accountMapping: accountMapping,
+                                            vipMailboxesPath: vipMailboxesPath) },
             probe: { FDAStatus.probeDetail(path: databasePath) },
             log: { Diagnostics.emit($0) })
         _ = indexProvider.current()

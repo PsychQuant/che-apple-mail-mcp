@@ -77,6 +77,12 @@ public final class EnvelopeIndexReader {
         return "\(home)/Library/Mail/\(mailDataVersion)"
     }
 
+    /// Where `listVIPSenders()` reads when no VIP list path was given (#656): the
+    /// user's `MailData/VIPMailboxes.plist`, following `mailStoragePathOverride` in tests.
+    public static var defaultVIPMailboxesPath: String {
+        "\(mailStoragePath)/MailData/VIPMailboxes.plist"
+    }
+
     // MARK: - Properties
 
     private var db: OpaquePointer?
@@ -119,6 +125,9 @@ public final class EnvelopeIndexReader {
     private var mappingGeneration = 0
     private let mappingLock = NSLock()
 
+    /// The VIP list a test gave `init`; nil reads `defaultVIPMailboxesPath` (#656).
+    private let vipMailboxesPath: String?
+
     // MARK: - Initialization
 
     /// Open the Envelope Index database in read-only mode.
@@ -141,6 +150,8 @@ public final class EnvelopeIndexReader {
     ///     `accountMapping` given), that read starts the cooldown; an injected
     ///     mapping does not, so the first miss reads the source at once.
     ///   - clock: Monotonic seconds, injected for tests.
+    ///   - vipMailboxesPath: The VIP list `listVIPSenders()` reads (#656). Defaults to
+    ///     `defaultVIPMailboxesPath`, the user's list; a test passes its own file.
     /// - Throws: `MailSQLiteError.databaseNotAccessible` if the file
     ///   does not exist or cannot be opened (e.g., missing Full Disk Access).
     public init(databasePath: String,
@@ -148,7 +159,9 @@ public final class EnvelopeIndexReader {
                 accountMappingSource: (() -> [String: String])? = nil,
                 accountMappingStamp: (() -> Date?)? = nil,
                 mappingRefreshCooldown: TimeInterval = EnvelopeIndexReader.defaultMappingRefreshCooldown,
-                clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) throws {
+                clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+                vipMailboxesPath: String? = nil) throws {
+        self.vipMailboxesPath = vipMailboxesPath
         // Checked before the account mapping, so an absent path (a test-owned
         // fixture, #329) never reads the user's AccountsMap.plist.
         guard FileManager.default.fileExists(atPath: databasePath) else {
@@ -806,10 +819,9 @@ public final class EnvelopeIndexReader {
         ]
     }
 
-    /// List VIP senders from VIPMailboxes.plist.
+    /// List VIP senders from VIPMailboxes.plist (the injected path, if any; #656).
     public func listVIPSenders() -> [[String: Any]] {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let path = "\(home)/Library/Mail/V10/MailData/VIPMailboxes.plist"
+        let path = vipMailboxesPath ?? Self.defaultVIPMailboxesPath
         guard let data = FileManager.default.contents(atPath: path),
               let plist = try? PropertyListSerialization.propertyList(
                   from: data, options: [], format: nil

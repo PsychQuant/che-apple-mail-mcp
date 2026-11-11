@@ -1,3 +1,4 @@
+import SQLite3
 import XCTest
 @testable import MailSQLite
 
@@ -101,5 +102,45 @@ final class FilesystemQueryTests: XCTestCase {
         let vips = reader.listVIPSenders()
         // VIP list may be empty; just verify it returns an array without crashing
         _ = vips // successfully returned without error
+    }
+
+    /// #656: a reader over a throwaway index (it only needs a file SQLite can read), with the
+    /// account mapping injected so it reads no AccountsMap.plist either.
+    private func readerWithVIPList(at vipPath: String) throws -> EnvelopeIndexReader {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("vip656-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let index = root.appendingPathComponent("Envelope Index").path
+        var db: OpaquePointer?
+        defer { sqlite3_close(db) }
+        XCTAssertEqual(sqlite3_open(index, &db), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, "CREATE TABLE messages (ROWID INTEGER PRIMARY KEY)", nil, nil, nil), SQLITE_OK)
+        return try EnvelopeIndexReader(databasePath: index, accountMapping: [:], vipMailboxesPath: vipPath)
+    }
+
+    // spec-example: sqlite-query-engine / an injected VIP list is the one listed
+    func testAnInjectedVIPListIsTheOneListed() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vip656-list-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        let plist = dir.appendingPathComponent("VIPMailboxes.plist")
+        try PropertyListSerialization.data(fromPropertyList: [["address": "vip@example.invalid"]], format: .xml, options: 0)
+            .write(to: plist)
+
+        let listed = try readerWithVIPList(at: plist.path).listVIPSenders()
+        XCTAssertEqual(listed.count, 1)
+        XCTAssertEqual(listed.first?["address"] as? String, "vip@example.invalid")
+
+        let missing = try readerWithVIPList(at: dir.appendingPathComponent("absent.plist").path).listVIPSenders()
+        XCTAssertTrue(missing.isEmpty, "\(missing)")
+    }
+
+    // spec-example: sqlite-query-engine / without an injected path the user's VIP list is read
+    func testWithoutAnInjectedPathTheUsersVIPListIsRead() {
+        let original = EnvelopeIndexReader.mailStoragePathOverride
+        EnvelopeIndexReader.mailStoragePathOverride = nil
+        defer { EnvelopeIndexReader.mailStoragePathOverride = original }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        XCTAssertEqual(EnvelopeIndexReader.defaultVIPMailboxesPath, "\(home)/Library/Mail/V10/MailData/VIPMailboxes.plist")
     }
 }
