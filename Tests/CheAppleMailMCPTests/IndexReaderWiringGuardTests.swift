@@ -81,7 +81,18 @@ final class IndexReaderWiringGuardTests: XCTestCase {
                        ["var path = DirectDraftPath(controller: mailController, reader: indexReader)"])
         XCTAssertEqual(code.filter { $0.contains("directDraftPath()") },
                        ["let directPath = directDraftPath()", "func directDraftPath() -> DirectDraftPath {"])
-        XCTAssertTrue(source.contains("path.accountUUIDs = { AccountMapper.uuids(forEmail: $0, in: accountMapping) }"))
-        XCTAssertTrue(source.contains("path.accountSignatureIDs = { _ in nil }"))
+        // The whole factory body, in order (#654 verify): a line placed above the guard would run in
+        // production, so nothing may be added, removed or moved without changing this list.
+        let start = try XCTUnwrap(code.firstIndex(of: "func directDraftPath() -> DirectDraftPath {"))
+        let end = try XCTUnwrap(code[start...].firstIndex(of: "}"))
+        XCTAssertEqual(Array(code[start...end]), [
+            "func directDraftPath() -> DirectDraftPath {",
+            "var path = DirectDraftPath(controller: mailController, reader: indexReader)",
+            "guard let accountMapping else { return path }",
+            "path.accountUUIDs = { AccountMapper.uuids(forEmail: $0, in: accountMapping) }",
+            "path.accountSignatureIDs = { _ in nil }",
+            "return path",
+            "}",
+        ])
     }
 }

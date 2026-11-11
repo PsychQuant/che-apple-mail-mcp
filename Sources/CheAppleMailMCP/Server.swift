@@ -2703,7 +2703,8 @@ class CheAppleMailMCPServer {
     }
 
     /// The direct-write path `create_draft` uses (#654). Without `accountMapping` this is the
-    /// plain path, whose gates read AccountsMap.plist on each call. With one, the account gate
+    /// plain path: on each call the account gate reads AccountsMap.plist, and the signature gate
+    /// reads it too unless iCloud-synced signatures exist (then the list is unknown). With one, the account gate
     /// answers from the mapping alone, and the signature gate reads the list as unreadable (the
     /// mapping holds none), so `mail_default` takes the GUI path. Internal for the tests.
     func directDraftPath() -> DirectDraftPath {
