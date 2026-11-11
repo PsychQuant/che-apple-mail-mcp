@@ -1282,16 +1282,59 @@ class ArchiveDedupRecipeTests(unittest.TestCase):
         self.assertEqual(read("Subject: Message-ID: <no@b.test>"), None)       # text inside another header
         self.assertEqual(read("Message-ID:\r <a@b.test>\r"), None)             # a lone CR is no fold (server parity)
 
-    def test_message_ids_from_a_header_file(self):
+    def fetched(self, entries, files):
         directory = tempfile.mkdtemp()
         self.addCleanup(lambda: __import__("shutil").rmtree(directory, ignore_errors=True))
-        path = os.path.join(directory, "rows.json")
-        rows = [{"key": 0, "headers": "Message-ID: <a@b.test>\n"}, {"key": 1, "headers": None},
-                {"key": 2, "headers": "Subject: s\n"}, "not a row"]
-        Path(path).write_text(json.dumps({"rows": rows}), encoding="utf-8")
-        self.assertEqual(self.ns["message_ids_from_header_file"](path),
-                         [{"key": 0, "message_id": "<a@b.test>"}, {"key": 1, "message_id": None},
-                          {"key": 2, "message_id": None}])
+        for name, text in files.items():
+            Path(directory, name).write_text(text, encoding="utf-8")
+        path = os.path.join(directory, "fetched.json")
+        Path(path).write_text(json.dumps({"fetched": entries}), encoding="utf-8")
+        return path
+
+    def test_fill_message_ids_from_header_files(self):
+        # spec-example: archive-mail-dedup / message ids filled from header files
+        manifest = self.fetched([{"account_name": "acc", "id": "1", "headers_file": "h-0.txt"},
+                                 {"account_name": "acc", "id": "2", "headers_file": None},
+                                 {"account_name": "acc", "id": "3", "headers_file": "h-1.txt"},
+                                 {"account_name": "acc", "id": "4", "headers_file": "../h-0.txt"}],
+                                {"h-0.txt": "Message-ID: <a@b.test>\n", "h-1.txt": "Subject: s\n"})
+        rows = [{"account_name": "acc", "id": "1"}, {"account_name": "acc", "id": 1},
+                {"account_name": "acc", "id": "2"}, {"account_name": "acc", "id": "3"},
+                {"account_name": "acc", "id": "4"}, {"account_name": "acc", "id": "5"},
+                {"account_name": "acc", "id": "6", "message_id": "<kept@b.test>"}, "not a row"]
+        counts = self.ns["fill_message_ids"](rows, manifest)
+        self.assertEqual([r.get("message_id") for r in rows[:7]],
+                         ["<a@b.test>", "<a@b.test>", None, None, None, None, "<kept@b.test>"])
+        self.assertEqual([bool(r.get("message_id_fetch_failed")) for r in rows[:7]],
+                         [False, False, True, False, True, False, False])
+        self.assertEqual(counts, {"filled": 2, "no_message_id": 2, "fetch_failed": 2})
+
+    def test_an_unreadable_manifest_marks_rows_failed_and_never_raises(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(directory, ignore_errors=True))
+        bad = os.path.join(directory, "fetched.json")
+        for content in ("{not json", "[1, 2]", '{"fetched": 3}'):
+            with self.subTest(content=content):
+                Path(bad).write_text(content, encoding="utf-8")
+                rows = [{"account_name": "acc", "id": "1"}]
+                self.assertEqual(self.ns["fill_message_ids"](rows, bad),
+                                 {"filled": 0, "no_message_id": 0, "fetch_failed": 1})
+        rows = [{"account_name": "acc", "id": "1"}]
+        self.ns["fill_message_ids"](rows, os.path.join(directory, "missing.json"))
+        self.assertTrue(rows[0]["message_id_fetch_failed"])
+
+    def test_crafted_non_ascii_next_to_a_colon_or_fold_gives_none(self):
+        # Classes where the server reads characters as grapheme clusters: combining marks, joiners, variation
+        # selectors, spacing marks. Whatever the server does with them, the recipe must not return an id it may not store.
+        read = self.ns["message_id_from_headers"]
+        for code in (0x0301, 0x200D, 0xFE0F, 0x0903, 0x00E9, 0x3042):
+            character = chr(code)
+            with self.subTest(code=hex(code)):
+                self.assertIsNone(read("Message-ID:" + character + "<a@b.test>"))
+                self.assertIsNone(read("Message-ID: <a@b.test>\nMessage-ID:" + character + "<b@b.test>"))
+                self.assertIsNone(read("Message-ID:\r\n " + character + "<a@b.test>"))
+                self.assertIsNone(read("Subject: x\n\t" + character + "y\nMessage-ID: <a@b.test>"))
+        self.assertEqual(read("Subject: caf\u00e9\nMessage-ID: <a@b.test>"), "<a@b.test>")   # elsewhere it is fine
 
     def test_rows_merged_by_step_3d(self):
         # spec-example: archive-mail-dedup / rows merged by Step 3d
@@ -1303,6 +1346,9 @@ class ArchiveDedupRecipeTests(unittest.TestCase):
         n3 = {"account_name": "other", "id": "7"}
         bare1, bare2 = {"id": "9"}, {"id": "9"}
         self.assertEqual(merge([a1, a2, n1, n2, n3, bare1, bare2, "x"]), [a1, n1, n3, bare1, bare2, "x"])
+        twin = {"account_name": "acc", "id": "1"}          # the same Envelope row, still without an id
+        self.assertEqual(merge([twin, a1]), [a1])            # either order: the id-less twin goes
+        self.assertEqual(merge([a1, twin]), [a1])
 
     def test_rows_decided_by_step_4_1(self):
         # spec-example: archive-mail-dedup / rows decided by Step 4.1
@@ -1403,9 +1449,10 @@ class ArchiveDedupSopTests(unittest.TestCase):
     def test_step_3d_names_the_source_of_message_id_and_its_hand_off(self):
         text = DOCUMENT.read_text()
         step3d = text[text.index("**3d. 合併去重**"):text.index("### Step 4: 過濾新郵件")]
-        for needle in ("get_email_headers", "message_ids_from_header_file", "merge_rows", '"headers": null',
-                       "message_id_fetch_failed", "不要讀它、不要引用它", "只補日期過得了界線的列"):
+        for needle in ("get_email_headers", "fill_message_ids", "merge_rows", '"headers_file": null',
+                       "message_id_fetch_failed", "不要讀它、不要引用它、不要改寫它", "fetched.json", "#682"):
             self.assertIn(needle, step3d)
+        self.assertNotIn("message_ids_from_header_file", DOCUMENT.read_text())
 
     def test_step_4_1_uses_the_recipe_and_no_longer_indexes_message_id(self):
         text = DOCUMENT.read_text()
@@ -1424,7 +1471,7 @@ class ArchiveDedupSopTests(unittest.TestCase):
         report = text[text.index("### Step 7: 輸出報告"):text.index("### Step 8:")]
         for section in (preview, report):
             self.assertIn("held_out_lines", section)
-        for needle in ("held_out_earliest", "標頭取得失敗", "Step 3d 沒有取得任何 Message-ID", "`跳過（已歸檔）: N 封` 一行"):
+        for needle in ("held_out_earliest", "標頭取得失敗", "Step 3d 沒有取得任何可用的 Message-ID", 'fetch_counts["fetch_failed"]'):
             self.assertIn(needle, report)
         self.assertIn("有 held out 的信", text[text.index("### Step 8.5:"):])
 
@@ -1474,7 +1521,10 @@ class ArchiveArchivedSetTests(unittest.TestCase):
         archived, stats = self.ns["archived_set"](not_a_dir)
         self.assertEqual((archived, stats["scanned"]), (frozenset(), 0))
         self.assertEqual(stats["error"], "NotADirectoryError")
-        self.assertEqual(self.ns["archived_set"](os.path.join(directory, "missing"))[1]["error"], None)
+        self.assertEqual(self.ns["archived_set"](os.path.join(directory, "missing")),
+                         (frozenset(), self.ns["archived_set"](os.path.join(directory, "missing"))[1]))
+        missing_set, missing_stats = self.ns["archived_set"](os.path.join(directory, "missing"))
+        self.assertEqual((missing_set, missing_stats["error"]), (frozenset(), None))
         saved = self.ns["scan_report"]
         try:
             def boom(_):
@@ -1506,36 +1556,73 @@ class ArchiveArchivedSetTests(unittest.TestCase):
         out3 = write(frozenset(), state)
         self.assertEqual((Path(out3["skip_file"]).read_text(encoding="utf-8"), out3["written"], out3["left_out"]),
                          ("", 0, 0))
+        self.assertEqual(json.loads(Path(out3["set_file"]).read_text(encoding="utf-8")), [])
+        self.assertIsNone(out3["error"])
+
+    def test_an_unwritable_state_directory_is_reported_not_raised(self):
+        not_a_dir = os.path.join(self.tempdir(), "file")
+        Path(not_a_dir).write_text("x", encoding="utf-8")
+        out = self.ns["write_skip_file"]({"<a@x.test>"}, os.path.join(not_a_dir, "state"))
+        self.assertEqual((out["dir"], out["skip_file"], out["set_file"]), (None, None, None))
+        self.assertIn(out["error"], ("NotADirectoryError", "FileExistsError"))
 
     def test_ids_the_server_would_read_back_differently_are_left_out(self):
         out = self.ns["write_skip_file"]({"<a@x.test>", "  "}, self.tempdir())
         self.assertEqual((out["written"], out["left_out"]), (1, 1))
         trim = self.ns["HEADER_TRIM"]
-        padded = {trim[2] + "<b@x.test>", "<c@x.test>" + trim[-1], trim[2] + "#d@x.test"}
+        padded = {trim[2] + "<b@x.test>", "<c@x.test>" + trim[-1], trim[2] + "#d@x.test", "\ufeff<e@x.test>"}
         out = self.ns["write_skip_file"](padded | {"<a@x.test>"}, self.tempdir())
-        self.assertEqual((out["written"], out["left_out"]), (1, 3))
+        self.assertEqual((out["written"], out["left_out"]), (1, 4))
 
-    def test_is_archived_reads_the_set_file(self):
-        out = self.ns["write_skip_file"]({"<a@x.test>", " <b@x.test>"}, self.tempdir())
-        check = self.ns["is_archived"]
-        self.assertTrue(check(out["set_file"], "<a@x.test>"))
-        self.assertTrue(check(out["set_file"], " <b@x.test>"))   # left out of the skip file, still in the set
-        self.assertFalse(check(out["set_file"], "<z@x.test>"))
-        self.assertFalse(check(out["set_file"], None))
+    def query(self, directory, message_id=None, headers=None):
+        payload = {"message_id": message_id, "headers_file": None}
+        if headers is not None:
+            Path(directory, "q-h.txt").write_text(headers, encoding="utf-8")
+            payload["headers_file"] = "q-h.txt"
+        path = os.path.join(directory, "query.json")
+        Path(path).write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def test_is_archived_reads_the_message_id_from_a_file(self):
+        # spec-example: archive-mail-dedup / Step 5.1 check through a query file
+        out = self.ns["write_skip_file"]({"<a@x.test>", " <b@x.test>", "<c$(x)`y`;@x.test>"}, self.tempdir())
+        check, work = self.ns["is_archived"], self.tempdir()
+        self.assertEqual(check(out["set_file"], self.query(work, "<a@x.test>")), {"has_message_id": True, "archived": True})
+        self.assertEqual(check(out["set_file"], self.query(work, " <b@x.test>")), {"has_message_id": True, "archived": True})
+        self.assertEqual(check(out["set_file"], self.query(work, "<c$(x)`y`;@x.test>")),
+                         {"has_message_id": True, "archived": True})   # shell metacharacters stay data
+        self.assertEqual(check(out["set_file"], self.query(work, "<z@x.test>")), {"has_message_id": True, "archived": False})
+        self.assertEqual(check(out["set_file"], self.query(work, None, "Message-ID: <a@x.test>\n")),
+                         {"has_message_id": True, "archived": True})   # the mail#319 re-read
+        self.assertEqual(check(out["set_file"], self.query(work, None, "Subject: s\n")),
+                         {"has_message_id": False, "archived": False})
+        self.assertEqual(check(out["set_file"], os.path.join(work, "missing.json")),
+                         {"has_message_id": False, "archived": False})
 
     def test_the_skip_directory_is_removed_after_step_5(self):
         # spec-example: archive-mail-dedup / skip directory cleanup
         state = self.tempdir()
         out = self.ns["write_skip_file"]({"<a@x.test>"}, state)
-        self.ns["remove_skip_dir"](out["dir"])
+        self.ns["remove_skip_dir"](out["dir"], state)
         self.assertEqual(os.listdir(state), [])
         out = self.ns["write_skip_file"]({"<a@x.test>"}, state)
         Path(out["dir"], "other.txt").write_text("x", encoding="utf-8")
         with self.assertRaises(ValueError):
-            self.ns["remove_skip_dir"](out["dir"])
-        self.assertTrue(os.path.isdir(out["dir"]))
+            self.ns["remove_skip_dir"](out["dir"], state)
+        self.assertEqual(sorted(os.listdir(out["dir"])), ["archived_ids.json", "other.txt", "skip_message_ids.txt"])
         with self.assertRaises(ValueError):
-            self.ns["remove_skip_dir"](state)
+            self.ns["remove_skip_dir"](state, os.path.dirname(state))
+
+    def test_cleanup_refuses_a_link_or_a_directory_elsewhere(self):
+        state, elsewhere = self.tempdir(), self.tempdir()
+        target = self.ns["write_skip_file"]({"<a@x.test>"}, elsewhere)
+        link = os.path.join(state, "skip-ids-link")
+        os.symlink(target["dir"], link)
+        with self.assertRaises(ValueError):
+            self.ns["remove_skip_dir"](link, state)
+        with self.assertRaises(ValueError):
+            self.ns["remove_skip_dir"](target["dir"], state)
+        self.assertEqual(sorted(os.listdir(target["dir"])), ["archived_ids.json", "skip_message_ids.txt"])
 
     def test_rows_decided_with_the_archived_set(self):
         # spec-example: archive-mail-dedup / rows decided with the archived set
@@ -1574,11 +1661,13 @@ class ArchiveArchivedSetSopTests(unittest.TestCase):
                        "不印出任何 id"):
             self.assertIn(needle, step41)
         step50 = text[text.index("#### Step 5.0:"):text.index("#### Step 5.1:")]
-        for needle in ('SKIP["skip_file"]', "skip_message_ids_path", "改為不帶它重送一次", 'remove_skip_dir(SKIP["dir"])'):
+        for needle in ('SKIP["skip_file"]', "skip_message_ids_path", "改為不帶它重送一次", 'remove_skip_dir(SKIP["dir"], INDEX_DIR)'):
             self.assertIn(needle, step50)
         step51 = text[text.index("#### Step 5.1:"):text.index("### Step 5.5:")]
-        self.assertIn('is_archived(SKIP["set_file"]', step51)
-        self.assertIn("message_id_from_headers", step51)
+        self.assertIn('is_archived(SKIP["set_file"], <查詢檔>)', step51)
+        self.assertIn("**不得放進命令列**", step51)
+        self.assertIn("argv 只有這兩個路徑", step51)
+        self.assertNotIn("兩者走 argv", text)
         step7 = text[text.index("### Step 7: 輸出報告"):text.index("### Step 8:")]
         for needle in ("頂層已有而未重寫", "掃描", "hits_lines", 'ARCHIVED_SCAN["error"]'):
             self.assertIn(needle, step7)
@@ -1594,6 +1683,91 @@ class ArchiveArchivedSetSopTests(unittest.TestCase):
         claude = (DOCUMENT.parents[1] / "CLAUDE.md").read_text()
         self.assertIn("#652", claude)
         self.assertIn("skip-ids-*/", claude)
+
+
+class ArchiveStep4ProgramTests(unittest.TestCase):
+    """Step 4.0 and 4.1 are one program: the date, refinement, scan and dedup recipes pasted in that order (#643, #652).
+    A name two of them define silently replaces the other's, which is how round 2 of the #643 verify found every run
+    stopping in Step 4; so the recipes are composed here exactly as the SOP says, and one realistic pass is run."""
+
+    ORDER = ("date", "refinement", "scan", "dedup")
+
+    def test_the_sop_names_this_paste_order(self):
+        text = DOCUMENT.read_text()
+        intro = text[text.index("#### Step 4.1: Dedup"):text.index("<!-- archive-mail-dedup-recipe:start -->")]
+        self.assertIn("日期、refinement、目錄掃描（Step 8.5 的 `archive-mail-scan-recipe`）與下面的 dedup recipe 依序貼進去", intro)
+
+    def test_no_top_level_name_is_defined_by_two_of_these_recipes(self):
+        import ast
+        owners = {}
+        for name in self.ORDER:
+            for node in ast.parse(recipe_code(name)).body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    defined = [node.name]
+                elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    defined = [target.id for target in targets if isinstance(target, ast.Name)]
+                else:
+                    continue
+                for item in defined:
+                    owners.setdefault(item, []).append(name)
+        self.assertEqual({item: where for item, where in owners.items() if len(where) > 1}, {})
+
+    def test_one_realistic_pass_through_step_3d_4_0_and_4_1(self):
+        ns = {"__name__": "archive_recipe"}
+        for name in self.ORDER:
+            exec(compile(recipe_code(name), name, "exec"), ns)
+        work = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(work, ignore_errors=True))
+        output_dir, index_dir = os.path.join(work, "emails"), os.path.join(work, "state", "slug")
+        os.makedirs(output_dir)
+        Path(output_dir, "2026-06-30_old.md").write_text(
+            '---\nmessage_id: "<old@x.test>"\ndate: "2026-06-30T10:00:00Z"\n---\nbody\n', encoding="utf-8")
+        fetched_dir = os.path.join(work, "private")
+        os.makedirs(fetched_dir)
+        headers = {"h-0.txt": "Message-ID: <old@x.test>\n", "h-1.txt": "Message-ID: <new@x.test>\n",
+                   "h-2.txt": "Subject: no id\n"}
+        for name, text in headers.items():
+            Path(fetched_dir, name).write_text(text, encoding="utf-8")
+        manifest = os.path.join(fetched_dir, "fetched.json")
+        Path(manifest).write_text(json.dumps({"fetched": [
+            {"account_name": "acc", "id": "1", "headers_file": "h-0.txt"},
+            {"account_name": "acc", "id": "2", "headers_file": "h-1.txt"},
+            {"account_name": "acc", "id": "3", "headers_file": "h-2.txt"},
+            {"account_name": "acc", "id": "4", "headers_file": None}]}), encoding="utf-8")
+        def row(ident, subject):
+            return {"id": ident, "account_name": "acc", "subject": subject, "sender": "Peer <peer@x.test>",
+                    "to": ["me@x.test"], "mailbox": "INBOX", "date_received": "2026-07-01T00:00:00Z"}
+        rows = [row("1", "Old"), row("2", "New"), row("3", "No id"), row("4", "Failed"), row("2", "Re: New"),
+                row("5", "Dropped by refinement")]
+        config = {"subject_excludes": ["dropped"]}
+        for strategy, boundary in (("index", ""), ("last_archived", "2026-06-01T00:00:00Z"), ("both", "2026-06-01")):
+            with self.subTest(strategy=strategy):
+                run_rows = copy.deepcopy(rows)
+                counts = ns["fill_message_ids"](run_rows, manifest)
+                self.assertEqual(counts, {"filled": 3, "no_message_id": 2, "fetch_failed": 1})
+                fetched = ns["merge_rows"](run_rows)
+                watermark = ns["watermark_instant"](boundary) if boundary else None
+                existing = {"<old@x.test>"} if strategy in ("index", "both") else set()
+                archived, scan = (ns["archived_set"](output_dir) if strategy == "last_archived"
+                                  else (frozenset(), None))
+                skip = ns["write_skip_file"](archived, index_dir) if strategy == "last_archived" else None
+                is_new = ns["make_is_new"](existing | archived, strategy, boundary, watermark)
+                refined, stats, dropped = ns["apply_refinement"](fetched, config, is_new)
+                lines = ns["refinement_report"](config, stats, dropped)
+                new_emails, held_out = ns["split_new"](refined, is_new)
+                held_lines = ns["held_out_report"](held_out)
+                hits = ns["archived_hits"](refined, archived, strategy, boundary, watermark)
+                hit_lines = ns["archived_hits_report"](hits)
+                self.assertEqual([e["message_id"] for e in new_emails], ["<new@x.test>"])
+                self.assertEqual(sorted(e["id"] for e in held_out), ["3", "4"])
+                self.assertEqual(ns["earliest_held_out_day"](held_out), "2026-07-01")
+                self.assertTrue(lines and held_lines)
+                if strategy == "last_archived":
+                    self.assertEqual((scan["error"], skip["error"], [e["id"] for e in hits]), (None, None, ["1"]))
+                    self.assertTrue(hit_lines)
+                    ns["remove_skip_dir"](skip["dir"], index_dir)
+                    self.assertEqual(os.listdir(index_dir), [])
 
 
 class ArchiveReverseInventoryTests(unittest.TestCase):
