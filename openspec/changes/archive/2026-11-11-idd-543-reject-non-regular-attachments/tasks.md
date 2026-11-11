@@ -10,4 +10,4 @@
 ## 3. 文件與交叉紀錄
 
 - [x] 3.1 `CHANGELOG.md` 的 `## [Unreleased]` 加一則條目，寫明行為改變（目錄與 package 目錄被拒）。驗證：內容審閱；`swift test` 全綠。
-- [ ] 3.2 在 #479 留言說明 in-process reader 要在開啟後的 descriptor 上再檢查種類，在 #608 留言說明 reply 路徑要呼叫這個 helper。驗證：兩則留言的網址記在 Implementation Complete。
+- [x] 3.2 在 #479 留言說明 in-process reader 要在開啟後的 descriptor 上再檢查種類，在 #608 留言說明 reply 路徑要呼叫這個 helper。驗證：兩則留言的網址記在 Implementation Complete。
