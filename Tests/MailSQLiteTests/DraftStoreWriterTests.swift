@@ -211,6 +211,17 @@ final class DraftStoreWriterTests: XCTestCase {
         let emlxPath = try XCTUnwrap(EmlxParser.newEmlxPath(rowId: Int(seqBefore + 1), mailboxURL: f.url))
         let messagesDir = (emlxPath as NSString).deletingLastPathComponent
         XCTAssertFalse(FileManager.default.fileExists(atPath: messagesDir), "the fixture must not pre-create the Messages directory")
+        // The shallowest level the insert creates: the first hash directory under Data,
+        // or Messages itself when the row id needs no hash directory (#503 verify).
+        let hash = EmlxParser.hashDirectoryPath(rowId: Int(seqBefore + 1))
+        let shallowestCreated: String
+        if let first = hash.split(separator: "/").first {
+            let dataDir = String(messagesDir.dropLast("/\(hash)/Messages".count))
+            shallowestCreated = "\(dataDir)/\(first)"
+        } else {
+            shallowestCreated = messagesDir
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: shallowestCreated), "the fixture must not pre-create the hash directories")
 
         let writer = try DraftStoreWriter(databasePath: db)
         var placedFileSeen = false
@@ -227,6 +238,8 @@ final class DraftStoreWriterTests: XCTestCase {
             XCTAssertTrue(placedFileSeen, "the .emlx must have been placed before the failure")
             XCTAssertFalse(FileManager.default.fileExists(atPath: messagesDir),
                            "the Messages directory the insert created must be removed with the file (#503)")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: shallowestCreated),
+                           "every directory level the insert created must be removed, the shallowest too (#503)")
             XCTAssertTrue(try canTakeWriteLock(db), "the writer must have ended its transaction (ROLLBACK), not left it open")
         }
         XCTAssertEqual(tables.map { scalar(db, "SELECT count(*) FROM \($0)") }, rowsBefore)

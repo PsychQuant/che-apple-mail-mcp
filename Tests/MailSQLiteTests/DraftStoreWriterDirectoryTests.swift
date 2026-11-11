@@ -1,3 +1,4 @@
+import Darwin
 import XCTest
 import SQLite3
 @testable import MailSQLite
@@ -200,6 +201,57 @@ final class DraftStoreWriterDirectoryTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: emlxPath)), Data("someone else's".utf8))
         XCTAssertTrue(exists(messagesDir))
         XCTAssertEqual(messageRows(), 1)
+    }
+
+    // spec-example: message-composition / a vanished Messages directory does not stop the cleanup
+    func testAVanishedMessagesDirectoryDoesNotStopTheCleanup() throws {
+        let writer = try DraftStoreWriter(databasePath: databasePath)
+        let ins = try writer.insert(draft(), emlx: Data("x".utf8))
+        XCTAssertEqual(ins.createdDirectories, [level0, level02, messagesDir])
+        try FileManager.default.removeItem(atPath: emlxPath)
+        try FileManager.default.removeItem(atPath: messagesDir)
+        XCTAssertNoThrow(try writer.rollback(ins))
+        XCTAssertFalse(exists(level02), "a vanished deeper level must not stop the cleanup")
+        XCTAssertFalse(exists(level0))
+        XCTAssertTrue(exists(dataDir))
+        XCTAssertEqual(messageRows(), 1)
+    }
+
+    // spec-example: message-composition / a permission failure on Messages is noted on stderr
+    func testAPermissionFailureOnMessagesIsNotedOnStderr() throws {
+        let writer = try DraftStoreWriter(databasePath: databasePath)
+        let ins = try writer.insert(draft(), emlx: Data("x".utf8))
+        // rmdir needs write permission on the parent: a read-only Data/0/2 makes Messages unremovable.
+        XCTAssertEqual(chmod(level02, 0o555), 0)
+        addTeardownBlock { [level02] in _ = chmod(level02, 0o755) }
+        let log = try capturingStderr { XCTAssertNoThrow(try writer.rollback(ins)) }
+        XCTAssertFalse(exists(emlxPath))
+        XCTAssertTrue(exists(messagesDir))
+        XCTAssertTrue(exists(level02))
+        XCTAssertTrue(exists(level0))
+        XCTAssertTrue(log.contains("could not remove created directory"), log)
+        XCTAssertTrue(log.contains(messagesDir), log)
+        XCTAssertEqual(messageRows(), 1)
+    }
+
+    /// Runs `body` with standard error pointed at a file and returns what landed there
+    /// (the same approach as the server tests' helper, synchronous).
+    private func capturingStderr(_ body: () throws -> Void) throws -> String {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("stderr-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: file) }
+        let saved = dup(STDERR_FILENO)
+        guard saved >= 0 else { throw NSError(domain: "StderrCapture", code: 1) }
+        defer { close(saved) }
+        let sink = open(file.path, O_WRONLY | O_CREAT | O_TRUNC, 0o600)
+        guard sink >= 0 else { throw NSError(domain: "StderrCapture", code: 2) }
+        let redirected = dup2(sink, STDERR_FILENO)
+        close(sink)
+        guard redirected == STDERR_FILENO else { throw NSError(domain: "StderrCapture", code: 3) }
+        var failure: Error?
+        do { try body() } catch { failure = error }
+        XCTAssertEqual(dup2(saved, STDERR_FILENO), STDERR_FILENO, "standard error was not restored")
+        if let failure { throw failure }
+        return try String(contentsOf: file, encoding: .utf8)
     }
 
     /// The full list a fresh write records: every level below `Data`, shallowest first.

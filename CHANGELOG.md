@@ -130,14 +130,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A failed direct write no longer leaves empty directories behind**
   ([#503](https://github.com/PsychQuant/che-apple-mail-mcp/issues/503)). When the
   opt-in direct write failed after placing the `.emlx` (or while placing it), or
-  was reversed after the upload request failed, it removed its rows and the file
-  but left the `Messages` directory, and any hash directories above it, that it
-  had created for a new 1,000-row block. It now removes the directories it
-  created, deepest first, and only while they are empty: a level that existed
-  before, or that another process created first, is never removed, and a
-  directory Mail wrote into meanwhile stays. The error a failed write reports and
-  the outcome of a reversal are unchanged. A removal that fails for a reason other
-  than the directory not being empty is noted on stderr.
+  was reversed after the upload request failed, it removed the file (and its
+  rows, except those #628 tracks) but left the `Messages` directory, and any hash
+  directories above it, that it had created. That happens whenever the draft is
+  the first row of the Drafts mailbox in its 1,000-row block: row ids are shared
+  by all mailboxes while each mailbox has its own hash directories, so for a
+  Drafts mailbox with few messages it is the common case. It now removes the
+  directories it created, deepest first, and only while they are empty. Only a
+  level its own `mkdir` made is recorded, so a level that existed, or that
+  another process created first, is not removed; a directory Mail wrote into
+  meanwhile stays, with everything above it. A recorded directory that is
+  already gone is skipped. A removal that fails for any other reason than the
+  directory not being empty or already gone is noted on stderr and stops the
+  cleanup. Cleanup never replaces the error a failed write reports and never
+  makes a reversal fail. One error text did change: when a directory cannot be
+  created, the `emlxWrite` reason now names the level and the system error
+  (`could not create <path>: <reason>`), so the fallback note carries that path,
+  as it already did for an existing `.emlx`. A narrow race remains: if Mail has
+  found a directory this write created and has not yet written into it, the
+  cleanup can remove it first. Two related gaps are tracked in
+  [#666](https://github.com/PsychQuant/che-apple-mail-mcp/issues/666).
 - **A draft is not reported as uploaded when its queued action could not be read**
   ([#630](https://github.com/PsychQuant/che-apple-mail-mcp/issues/630)). While
   waiting for the upload, the direct-write path treats a remote id with no queued
