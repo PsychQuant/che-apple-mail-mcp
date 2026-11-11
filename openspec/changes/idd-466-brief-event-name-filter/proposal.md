@@ -6,7 +6,7 @@
 
 - `get_mail_log_events` 新增參數 `events`：1 到 20 個字串，每個 1 到 1024 個 UTF-8 bytes，重複值合併。只保留「輸出時顯示的 `event` 值」與其中一個字串**完全相等**（區分大小寫）的事件；不做子字串或前綴比對。簡短與詳細模式都可用，和 `contains` 同時給時兩者都要符合。
 - 比對對象是輸出時顯示的事件名，不是原始 `formatString`：被收回的模板只能以 `<template withheld>` 被選到，訊息過長的事件以其原始模板被選到，上傳回條以 `imap.append_uid_received` 被選到。顯示名稱與篩選共用同一個函式，兩者不會分岔。
-- 以 `imap.` 開頭、卻不是已知事件名稱的值，在啟動讀取器之前就回 invalid-parameter 錯誤，避免打錯字被讀成「事件沒發生」。
+- 前五個 bytes 是 `imap.`（字母不分 ASCII 大小寫）、卻不是已知事件名稱的值，在啟動讀取器之前就回 invalid-parameter 錯誤，避免打錯字被讀成「事件沒發生」；錯誤訊息不引用該值。
 - 篩選套用在與 `contains` 相同的位置：在 scan frontier 更新之後、`offset` 跳過之前，所以 `next_offset` 與 `offset` 只計算符合篩選的事件，`scan_cap`／`deadline` 停止時的 cursor 仍是 scan frontier。
 - 回應新增 `event_filter_count` 欄位：有給篩選時是正規化後（依 bytes 去重）的值的個數，沒給時是 `null`；不回傳值本身（verify 第 1 輪：20 個 1024 bytes 的值經 JSON 跳脫後可達 123 KB，超過 64 KiB 回應上限，且是呼叫端文字）。查無結果時的 `notice` 說明篩選已套用。
 - 工具描述、參數 schema、`README.md` 與 `README_zh-TW.md` 的工具列改寫，移除「還沒有依事件名稱篩選」的敘述。
@@ -35,7 +35,9 @@ ASSUMPTION: 不禁止控制字元：值只在解析後與顯示名稱做相等�
 - Affected specs: `mail-log-diagnostics`（ADDED requirement）
 - Affected code:
   - `Sources/CheAppleMailMCP/MailLog/MailLogQuery.swift`（參數、驗證、`allowedParameters`）
-  - `Sources/CheAppleMailMCP/MailLog/MailLogService.swift`（共用顯示名稱函式、掃描迴圈中的篩選、回應的 `events` 與 notice）
+  - `Sources/CheAppleMailMCP/MailLog/MailLogService.swift`（共用顯示名稱函式、掃描迴圈中的篩選、回應的 `event_filter_count` 與 notice）
   - `Sources/CheAppleMailMCP/MailLog/MailLogTool.swift`（schema 與描述）
-  - `Tests/CheAppleMailMCPTests/MailLog/`（新測試檔與 `MailLogToolTests` 的描述釘選）
+  - `Sources/CheAppleMailMCP/MailLog/KnownEvents.swift`（已知事件名稱集合）
+  - `Tests/CheAppleMailMCPTests/MailLog/EventNameFilterTests.swift`（新測試檔）
+  - `mcpb/manifest.json`（工具描述的鏡像）、`CHANGELOG.md`
   - `README.md`、`README_zh-TW.md`

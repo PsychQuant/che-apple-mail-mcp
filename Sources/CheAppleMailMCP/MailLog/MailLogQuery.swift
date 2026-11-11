@@ -189,8 +189,9 @@ struct MailLogQuery: Equatable {
                 // combining mark slipped past it (verify round 1, row 5).
                 let head = text.utf8.prefix(5).map { (65...90).contains($0) ? $0 + 32 : $0 }
                 if head.elementsEqual("imap.".utf8), !KnownEvents.names.contains(where: { $0.utf8.elementsEqual(text.utf8) }) {
-                    throw invalid("unknown known-event name \(text.debugDescription) — the known events are: "
-                        + KnownEvents.names.sorted().joined(separator: ", "))
+                    // The value itself is not quoted: caller text does not come back (verify round 2, row 5).
+                    throw invalid("unknown known-event name: an events entry that begins with \"imap.\" (any letter case) "
+                        + "must be exactly one of: " + KnownEvents.names.sorted().joined(separator: ", "))
                 }
                 if !names.contains(where: { $0.utf8.elementsEqual(text.utf8) }) { names.append(text) }
             }

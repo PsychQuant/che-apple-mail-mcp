@@ -59,7 +59,8 @@ final class EventNameFilterTests: XCTestCase {
     /// Accepted: the normalized values are the ones the query keeps, and the response reports how many there are.
     private func expectAccepted(_ value: Value, normalized: [String], file: StaticString = #filePath, line: UInt = #line) async throws {
         let parsed = try MailLogQuery.parse(window.merging(["events": value]) { _, new in new }, now: now)
-        XCTAssertEqual(parsed.events, normalized, file: file, line: line)
+        // Bytes, not `[String] ==`: Swift string equality is canonical equivalence (verify round 2, row 3).
+        XCTAssertEqual(parsed.events?.map { Array($0.utf8) }, normalized.map { Array($0.utf8) }, file: file, line: line)
         let r = try await call(["events": value], source: FakeLogSource(lines: [Synthetic.line(offset: 0)]))
         XCTAssertEqual(r["event_filter_count"] as? Int, normalized.count, file: file, line: line)
     }
@@ -72,6 +73,8 @@ final class EventNameFilterTests: XCTestCase {
         await expectRejected(.array([.string("imap.append_uid_recieved")]), "unknown known-event name")
         await expectRejected(.array([.string("IMAP.append_uid_received")]), "unknown known-event name")
         await expectRejected(.array([.string("imap.\u{301}append_uid_received")]), "unknown known-event name")
+        await expectRejected(.array([.string("imap.")]), "unknown known-event name")
+        try await expectAccepted(.array([.string("imap")]), normalized: ["imap"])
         await expectRejected(.array([]), "must not be empty")
         await expectRejected(.array((0..<21).map { .string("e\($0)") }), "at most 20")
         await expectRejected(.array([.string("")]), "1 to 1024 bytes")
@@ -94,8 +97,20 @@ final class EventNameFilterTests: XCTestCase {
 
     /// Verify round 1, row 2: the response must stay within the byte cap with the largest filter allowed — the
     /// values are not echoed (an echo of 20 × 1024 control characters alone was 122,952 bytes).
-    func testTheLargestFilterKeepsEveryResponseWithinTheCap() throws {
-        let huge: [String] = (0..<20).map { String(repeating: "\u{01}", count: 1023) + "\($0 % 10)" }
+    /// Paging Example row 4, run through `handle` with 20 DISTINCT values (verify round 2, row 4).
+    func testTheLargestFilterKeepsEveryResponseWithinTheCap() async throws {
+        // spec-example: mail-log-diagnostics / event-name filter paging
+        let huge: [String] = (0..<20).map { String(repeating: "\u{01}", count: 1022) + String(format: "%02d", $0) }
+        XCTAssertEqual(Set(huge).count, 20)
+        XCTAssertTrue(huge.allSatisfy { $0.utf8.count == 1024 })
+        let text = try await MailLogTool.handle(arguments: window.merging(["events": .array(huge.map { .string($0) })]) { _, n in n },
+                                                source: FakeLogSource(lines: [noise(0), noise(1)]), now: now, timeZone: Synthetic.taipei)
+        XCTAssertLessThanOrEqual(text.utf8.count, MailLogService.responseByteCap)
+        let viaTool = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        XCTAssertEqual(viaTool["event_filter_count"] as? Int, 20)
+        XCTAssertTrue(viaTool["stopped_by"] is NSNull)
+        XCTAssertEqual(viaTool["truncated"] as? Bool, false)
+        XCTAssertFalse(text.contains("\\u0001"), "caller text is not echoed")
         // nothing matches, window read to its end: an answer, not a size_cap stop
         let empty = run(FakeLogSource(lines: [noise(0), noise(1)]), query(huge))
         XCTAssertLessThanOrEqual(Synthetic.serialized(empty).utf8.count, MailLogService.responseByteCap)
@@ -112,9 +127,10 @@ final class EventNameFilterTests: XCTestCase {
         XCTAssertLessThanOrEqual(Synthetic.serialized(down).utf8.count, 4096)
     }
 
-    func testTheUnknownKnownEventErrorNamesTheKnownEvents() {
-        XCTAssertThrowsError(try MailLogQuery.parse(window.merging(["events": .array([.string("imap.nope")])]) { _, n in n }, now: now)) { error in
+    func testTheUnknownKnownEventErrorNamesTheKnownEvents_withoutQuotingTheValue() {
+        XCTAssertThrowsError(try MailLogQuery.parse(window.merging(["events": .array([.string("imap.someone@example.invalid")])]) { _, n in n }, now: now)) { error in
             XCTAssertTrue("\(error)".contains("imap.append_uid_received"), "\(error)")
+            XCTAssertFalse("\(error)".contains("someone@"), "the error does not quote the caller's value (verify round 2, row 5)")
         }
     }
 
@@ -149,9 +165,25 @@ final class EventNameFilterTests: XCTestCase {
         XCTAssertTrue(kept(withheld, "<template withheld>"))
         let huge = Synthetic.line(offset: 0, format: "%{public}@", message: String(repeating: "x", count: 65_537))
         XCTAssertTrue(kept(huge, "%{public}@"), "an oversized message shows (and is selected by) its raw template")
+        // withheld comes BEFORE oversized: a data-shaped template whose message is too long to parse is still
+        // withheld, never shown or selectable by its own text (verify round 2, row 2)
+        let withheldHuge = Synthetic.line(offset: 0, format: withheldFormat, message: String(repeating: "x", count: 65_537))
+        XCTAssertFalse(kept(withheldHuge, withheldFormat))
+        XCTAssertTrue(kept(withheldHuge, "<template withheld>"))
+        XCTAssertEqual(Synthetic.results(run(FakeLogSource(lines: [withheldHuge]), query(nil))).first?["event"] as? String, "<template withheld>")
         let composed = Synthetic.line(offset: 0, format: "Caf\u{E9} %@", message: "Caf\u{E9} x")
         XCTAssertTrue(kept(composed, "Caf\u{E9} %@"))
         XCTAssertFalse(kept(composed, "Cafe\u{301} %@"), "equality is by bytes, not by Unicode canonical equivalence")
+    }
+
+    /// Through `parse` and `handle`, not only the service: a decomposed value does not select a composed template
+    /// (verify round 2, row 3 — a parse that normalized values to NFC survived the service-level test).
+    func testADecomposedValueDoesNotSelectAComposedTemplate_endToEnd() async throws {
+        let line = Synthetic.line(offset: 0, format: "Caf\u{E9} %@", message: "Caf\u{E9} x")
+        let miss = try await call(["events": .array([.string("Cafe\u{301} %@")])], source: FakeLogSource(lines: [line]))
+        XCTAssertEqual(miss["returned"] as? Int, 0)
+        let hit = try await call(["events": .array([.string("Caf\u{E9} %@")])], source: FakeLogSource(lines: [line]))
+        XCTAssertEqual(hit["returned"] as? Int, 1)
     }
 
     func testFilterCombinesWithContainsInDetailedMode() {

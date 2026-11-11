@@ -10,7 +10,7 @@ The system SHALL accept an optional parameter `events` in both `brief` and `deta
 
 The system SHALL keep an event only when its displayed event name is exactly equal, comparing Unicode scalars and distinguishing case, to one of the values. The displayed event name SHALL be the value the response would carry in the event's `event` field, and the system SHALL compute it with the same function for the filter and for the output: `<template withheld>` for a withheld `formatString`, the `formatString` itself for a composed message longer than 65536 bytes of UTF-8, the name of a known event for a recognized known event, and the `formatString` otherwise. A withheld `formatString` SHALL therefore be selectable only as `<template withheld>` and never by its own text, and a recognized upload receipt only as `imap.append_uid_received` and never by its `formatString`. No substring, prefix, or case-insensitive match SHALL select an event. When `contains` is also given, an event SHALL satisfy both filters.
 
-The filter SHALL be applied where `contains` is applied: after an in-window event has advanced the scan frontier and before the request's `offset` is consumed. Events that the filter rejects SHALL NOT count toward `limit`, SHALL NOT be counted by `offset` or `next_offset`, and SHALL still advance the scan frontier that a `scan_cap` or `deadline` cursor uses. The response SHALL carry a field `event_filter_count` holding the number of normalized values, or `null` when the parameter was not given, in both an answered and an `unavailable` response. The response SHALL NOT echo the values themselves: escaped as JSON, 20 values of 1024 bytes can exceed the 65536-byte response cap on their own, and they are caller text, which brief output does not carry. With any `events` value the response SHALL stay within that cap and SHALL keep the stop reason and cursor that the same read without the filter's echo would give. When no event matches, `notice` SHALL state that the event-name filter was applied, in addition to the statement that the absence of events does not establish that the action did not occur.
+The filter SHALL be applied where `contains` is applied: after an in-window event has advanced the scan frontier and before the request's `offset` is consumed. Events that the filter rejects SHALL NOT count toward `limit`, SHALL NOT be counted by `offset` or `next_offset`, and SHALL still advance the scan frontier that a `scan_cap` or `deadline` cursor uses. The response SHALL carry a field `event_filter_count` holding the number of normalized values, or `null` when the parameter was not given, in both an answered and an `unavailable` response. The response SHALL NOT echo the values themselves: escaped as JSON, 20 values of 1024 bytes can exceed the 65536-byte response cap on their own, and they are caller text, which brief output does not carry. With any `events` value the response SHALL stay within that cap, and the values SHALL NOT change the stop reason or the cursor except through which events match. An error about an `events` value SHALL NOT quote the value. When no event matches, `notice` SHALL state that the event-name filter was applied, in addition to the statement that the absence of events does not establish that the action did not occur.
 
 #### Scenario: The upload receipt is found among noise
 
@@ -38,6 +38,8 @@ The filter SHALL be applied where `contains` is applied: after an in-window even
 | `events` = `["<template withheld>"]` | accepted |
 | `events` = `["imap.append_uid_recieved"]` | error: unknown known-event name |
 | `events` = `["IMAP.append_uid_received"]` | error: unknown known-event name |
+| `events` = `["imap."]` | error: unknown known-event name |
+| `events` = `["imap"]` (four bytes, no dot) | accepted |
 | `events` = `["imap.\u0301append_uid_received"]` (a combining mark after the dot) | error: unknown known-event name |
 | `events` = `[]` | error: empty |
 | `events` with 21 entries | error: more than 20 |
@@ -62,6 +64,8 @@ The filter SHALL be applied where `contains` is applied: after an in-window even
 | withheld `formatString` that contains an email-shaped string | that `formatString` | no |
 | withheld `formatString` that contains an email-shaped string | `<template withheld>` | yes |
 | composed message of 65537 bytes, `formatString` `%{public}@` | `%{public}@` | yes |
+| withheld `formatString` with a composed message of 65537 bytes | that `formatString` | no |
+| withheld `formatString` with a composed message of 65537 bytes | `<template withheld>` | yes |
 
 ##### Example: event-name filter paging
 

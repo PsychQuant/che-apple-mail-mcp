@@ -51,7 +51,14 @@ enum KnownEvents {
               !TemplateExtractor.hasLiteralText(event.formatString),
               let response = ownReadResponse(event.message).map(String.init) else { return nil }
         let range = NSRange(response.startIndex..., in: response)
-        return taggedOKReceipt.firstMatch(in: response, range: range) != nil ? appendUIDReceived : nil
+        return taggedOKReceipt.firstMatch(in: response, range: range) != nil ? known(appendUIDReceived) : nil
+    }
+
+    /// Every name `name(for:)` returns goes through here, so a name added to the matcher but not to `names`
+    /// trips in any debug build, including the test run (verify round 2, row 7).
+    private static func known(_ name: String) -> String {
+        assert(names.contains(name), "KnownEvents.name(for:) returned \(name), which is not in KnownEvents.names")
+        return name
     }
 
     /// The text after the line's own `Read: `, or nil when the line is not a Read line.
