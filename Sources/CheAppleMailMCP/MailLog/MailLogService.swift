@@ -277,7 +277,7 @@ struct MailLogService {
             "accounts_seen": shaped.accounts,
             "contains_sensitive": query.detail == .detailed,
             "skipped_lines": skipped,
-            "events": query.events.map { $0 as Any } ?? NSNull(),
+            "event_filter_count": Self.eventFilterCount(query),
             "results": shaped.results,
         ]
         if query.detail == .detailed, query.redactIdentifiers {
@@ -341,7 +341,7 @@ struct MailLogService {
             "accounts_seen": 0,
             "contains_sensitive": query.detail == .detailed,
             "skipped_lines": skipped,
-            "events": query.events.map { $0 as Any } ?? NSNull(),
+            "event_filter_count": Self.eventFilterCount(query),
             "notice": notice,
             "results": [] as [[String: Any]],
         ]
@@ -418,6 +418,13 @@ struct MailLogService {
             case .oversized(let s), .known(let s), .template(let s): return s
             }
         }
+    }
+
+    /// How many `events` values were applied, or null when there was no filter (#466). The values themselves are
+    /// not echoed: 20 values of 1024 bytes, JSON-escaped, reached 123 KB — past the byte cap the size loop enforces
+    /// only by dropping events — and they are caller text, which brief output must not carry (verify round 1, rows 2, 7, 8).
+    static func eventFilterCount(_ query: MailLogQuery) -> Any {
+        query.events.map { $0.count as Any } ?? NSNull()
     }
 
     static func displayedEvent(_ event: MailLogEvent) -> DisplayedEvent {

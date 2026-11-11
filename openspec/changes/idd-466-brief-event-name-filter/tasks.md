@@ -15,3 +15,12 @@
 
 - [x] 3.1 `README.md` 與 `README_zh-TW.md` 的 `get_mail_log_events` 列改寫為 `events` 篩選的說明（完全相等、比對顯示名稱、簡短與詳細模式都可用）。驗證：`grep -n "No event-name filter yet\|還沒有依事件名稱篩選" README.md README_zh-TW.md` 無輸出。
 - [x] 3.2 `CHANGELOG.md` 的 `## [Unreleased]` 加一則條目說明新參數（#466）。驗證：內容審閱；`swift test` 全綠（含 `ManifestVersionTests`）。
+
+## 4. Verify 第 1 輪修正
+
+- [x] 4.1 回應改報 `event_filter_count`、不回傳篩選值：最大篩選下每種回應都在 65536 bytes 內，`size_cap` 與 cursor 不受篩選影響，呼叫端文字不出現在回應裡。驗證：`testTheLargestFilterKeepsEveryResponseWithinTheCap`、`testTheResponseCarriesNoCallerText_inEitherDetail`。
+- [x] 4.2 翻頁 Example 與測試改成起始毫秒以不符合的事件開頭，能區分「先篩選再扣 offset」與相反順序。驗證：`testPagingTable`，並以把篩選移到 offset 之後的 mutation 確認轉紅。
+- [x] 4.3 驗證表的拒絕列檢查 `MailError.invalidParameter` 與各列的錯誤理由；`imap.` 檢查改為依 bytes、不分 ASCII 大小寫。驗證：`testValidationTable`。
+- [x] 4.4 描述、schema 與兩份 README 的續頁說明加上「同樣的 `events`」。驗證：內容審閱；`MailLogToolTests` 維持綠。
+- [x] 4.5 `KnownEvents.names` 與 `name(for:)` 的對應有測試釘住。驗證：`testEveryKnownEventNameIsAcceptedByTheValidator`。
+

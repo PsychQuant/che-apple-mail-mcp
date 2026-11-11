@@ -27,8 +27,10 @@ struct MailLogQuery: Equatable {
     /// Continuation only: how many matching events at exactly `start` (to the millisecond) were
     /// already returned by the previous page. See `MailLogService` for the cursor.
     var offset: Int = 0
-    /// #466: keep only events whose DISPLAYED `event` name (`MailLogService.displayedEventName`) equals one
-    /// of these exactly. Normalized: 1 to 20 values, duplicates collapsed, first occurrence kept. `nil` = no filter.
+    /// #466: keep only events whose DISPLAYED `event` name (`MailLogService.displayedEvent`) equals one of these
+    /// exactly, byte for byte. Normalized: 1 to 20 values, byte-identical duplicates collapsed, first occurrence kept.
+    /// `nil` = no filter. The values are never echoed in the response (only their count), so they cannot push it
+    /// past the byte cap and caller text never comes back in brief output.
     var events: [String]? = nil
 
     static let defaultMinutes = 10
@@ -182,8 +184,11 @@ struct MailLogQuery: Equatable {
                 guard (1...maxEventNameBytes).contains(text.utf8.count) else {
                     throw invalid("each events entry must be 1 to \(maxEventNameBytes) bytes of UTF-8 (a longer template is always withheld)")
                 }
-                // A misspelled known-event name would otherwise read as "the event did not happen".
-                if text.hasPrefix("imap."), !KnownEvents.names.contains(text) {
+                // A misspelled known-event name would otherwise read as "the event did not happen". Compared on
+                // BYTES, ASCII letters in any case: `hasPrefix` is grapheme-aware, so `imap.` followed by a
+                // combining mark slipped past it (verify round 1, row 5).
+                let head = text.utf8.prefix(5).map { (65...90).contains($0) ? $0 + 32 : $0 }
+                if head.elementsEqual("imap.".utf8), !KnownEvents.names.contains(where: { $0.utf8.elementsEqual(text.utf8) }) {
                     throw invalid("unknown known-event name \(text.debugDescription) — the known events are: "
                         + KnownEvents.names.sorted().joined(separator: ", "))
                 }

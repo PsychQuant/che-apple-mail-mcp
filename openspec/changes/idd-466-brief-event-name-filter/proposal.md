@@ -8,7 +8,7 @@
 - 比對對象是輸出時顯示的事件名，不是原始 `formatString`：被收回的模板只能以 `<template withheld>` 被選到，訊息過長的事件以其原始模板被選到，上傳回條以 `imap.append_uid_received` 被選到。顯示名稱與篩選共用同一個函式，兩者不會分岔。
 - 以 `imap.` 開頭、卻不是已知事件名稱的值，在啟動讀取器之前就回 invalid-parameter 錯誤，避免打錯字被讀成「事件沒發生」。
 - 篩選套用在與 `contains` 相同的位置：在 scan frontier 更新之後、`offset` 跳過之前，所以 `next_offset` 與 `offset` 只計算符合篩選的事件，`scan_cap`／`deadline` 停止時的 cursor 仍是 scan frontier。
-- 回應新增 `events` 欄位：有給篩選時是正規化後（去重、保留順序）的陣列，沒給時是 `null`；查無結果時的 `notice` 說明篩選已套用。
+- 回應新增 `event_filter_count` 欄位：有給篩選時是正規化後（依 bytes 去重）的值的個數，沒給時是 `null`；不回傳值本身（verify 第 1 輪：20 個 1024 bytes 的值經 JSON 跳脫後可達 123 KB，超過 64 KiB 回應上限，且是呼叫端文字）。查無結果時的 `notice` 說明篩選已套用。
 - 工具描述、參數 schema、`README.md` 與 `README_zh-TW.md` 的工具列改寫，移除「還沒有依事件名稱篩選」的敘述。
 
 ## Non-Goals

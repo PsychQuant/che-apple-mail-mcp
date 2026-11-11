@@ -41,43 +41,75 @@ final class EventNameFilterTests: XCTestCase {
 
     // MARK: - spec-example: mail-log-diagnostics / event-name filter validation
 
-    private func expectRejected(_ value: Value, _ why: String, file: StaticString = #filePath, line: UInt = #line) async {
+    /// The error must be the invalid-parameter error, and its message must name the rule this row breaks:
+    /// every row isolates one rule, so another error thrown first would not pass for it (verify round 1, row 4).
+    private func expectRejected(_ value: Value, _ reason: String, file: StaticString = #filePath, line: UInt = #line) async {
         let source = FakeLogSource(lines: [Synthetic.line(offset: 0)])
         do {
             _ = try await call(["events": value], source: source)
-            XCTFail("expected an invalid-parameter error: \(why)", file: file, line: line)
+            XCTFail("expected an invalid-parameter error naming: \(reason)", file: file, line: line)
+        } catch MailError.invalidParameter(let message) {
+            XCTAssertTrue(message.contains(reason), "error \(message.debugDescription) must name: \(reason)", file: file, line: line)
         } catch {
-            XCTAssertTrue(source.requests.isEmpty, "the log reader must not be started: \(why)", file: file, line: line)
+            XCTFail("expected MailError.invalidParameter, got \(error)", file: file, line: line)
         }
+        XCTAssertTrue(source.requests.isEmpty, "the log reader must not be started: \(reason)", file: file, line: line)
     }
 
-    private func expectAccepted(_ value: Value, echo: [String], file: StaticString = #filePath, line: UInt = #line) async throws {
+    /// Accepted: the normalized values are the ones the query keeps, and the response reports how many there are.
+    private func expectAccepted(_ value: Value, normalized: [String], file: StaticString = #filePath, line: UInt = #line) async throws {
+        let parsed = try MailLogQuery.parse(window.merging(["events": value]) { _, new in new }, now: now)
+        XCTAssertEqual(parsed.events, normalized, file: file, line: line)
         let r = try await call(["events": value], source: FakeLogSource(lines: [Synthetic.line(offset: 0)]))
-        XCTAssertEqual(r["events"] as? [String], echo, file: file, line: line)
+        XCTAssertEqual(r["event_filter_count"] as? Int, normalized.count, file: file, line: line)
     }
 
     func testValidationTable() async throws {
         // spec-example: mail-log-diagnostics / event-name filter validation
-        try await expectAccepted(.array([.string("imap.append_uid_received")]), echo: ["imap.append_uid_received"])
-        try await expectAccepted(.array([.string(template)]), echo: [template])
-        try await expectAccepted(.array([.string("<template withheld>")]), echo: ["<template withheld>"])
+        try await expectAccepted(.array([.string("imap.append_uid_received")]), normalized: ["imap.append_uid_received"])
+        try await expectAccepted(.array([.string(template)]), normalized: [template])
+        try await expectAccepted(.array([.string("<template withheld>")]), normalized: ["<template withheld>"])
         await expectRejected(.array([.string("imap.append_uid_recieved")]), "unknown known-event name")
-        await expectRejected(.array([]), "empty")
-        await expectRejected(.array((0..<21).map { .string("e\($0)") }), "more than 20")
-        await expectRejected(.array([.string("")]), "empty entry")
-        await expectRejected(.array([.string(String(repeating: "é", count: 512) + "x")]), "1025 bytes")
+        await expectRejected(.array([.string("IMAP.append_uid_received")]), "unknown known-event name")
+        await expectRejected(.array([.string("imap.\u{301}append_uid_received")]), "unknown known-event name")
+        await expectRejected(.array([]), "must not be empty")
+        await expectRejected(.array((0..<21).map { .string("e\($0)") }), "at most 20")
+        await expectRejected(.array([.string("")]), "1 to 1024 bytes")
+        await expectRejected(.array([.string(String(repeating: "é", count: 512) + "x")]), "1 to 1024 bytes")
         try await expectAccepted(.array([.string(String(repeating: "é", count: 512))]),
-                                 echo: [String(repeating: "é", count: 512)])
-        await expectRejected(.string("imap.append_uid_received"), "a string, not an array")
-        await expectRejected(.array([.int(1)]), "non-string entry")
-        try await expectAccepted(.array([.string("a"), .string("a"), .string("b")]), echo: ["a", "b"])
+                                 normalized: [String(repeating: "é", count: 512)])
+        await expectRejected(.string("imap.append_uid_received"), "must be an array")
+        await expectRejected(.array([.int(1)]), "only strings")
+        try await expectAccepted(.array([.string("a"), .string("a"), .string("b")]), normalized: ["a", "b"])
+        try await expectAccepted(.array([.string("Caf\u{E9} %@"), .string("Cafe\u{301} %@")]),
+                                 normalized: ["Caf\u{E9} %@", "Cafe\u{301} %@"])
     }
 
     func testTwentyEntriesAreAccepted_andDetailedModeAcceptsTheFilterToo() async throws {
         let twenty: [Value] = (0..<20).map { .string("e\($0)") }
         let r = try await call(["events": .array(twenty), "detail": .string("detailed")],
                                source: FakeLogSource(lines: [Synthetic.line(offset: 0)]))
-        XCTAssertEqual((r["events"] as? [String])?.count, 20)
+        XCTAssertEqual(r["event_filter_count"] as? Int, 20)
+    }
+
+    /// Verify round 1, row 2: the response must stay within the byte cap with the largest filter allowed — the
+    /// values are not echoed (an echo of 20 × 1024 control characters alone was 122,952 bytes).
+    func testTheLargestFilterKeepsEveryResponseWithinTheCap() throws {
+        let huge: [String] = (0..<20).map { String(repeating: "\u{01}", count: 1023) + "\($0 % 10)" }
+        // nothing matches, window read to its end: an answer, not a size_cap stop
+        let empty = run(FakeLogSource(lines: [noise(0), noise(1)]), query(huge))
+        XCTAssertLessThanOrEqual(Synthetic.serialized(empty).utf8.count, MailLogService.responseByteCap)
+        XCTAssertEqual(empty["status"] as? String, "no_events_in_window")
+        XCTAssertTrue(empty["stopped_by"] is NSNull)
+        XCTAssertEqual(empty["truncated"] as? Bool, false)
+        XCTAssertFalse(Synthetic.serialized(empty).contains("\\u0001"), "caller text is not echoed")
+        // a scan_cap stop keeps its scan-frontier cursor
+        let scan = run(FakeLogSource(lines: (0..<6).map { noise(Double($0), activity: $0) }, end: .scanCap), query(huge))
+        XCTAssertEqual(scan["stopped_by"] as? String, "scan_cap")
+        XCTAssertEqual(scan["next_start"] as? String, Synthetic.iso(5))
+        // an unavailable answer stays small too
+        let down = run(FakeLogSource(lines: [], end: .spawnFailed("boom")), query(huge))
+        XCTAssertLessThanOrEqual(Synthetic.serialized(down).utf8.count, 4096)
     }
 
     func testTheUnknownKnownEventErrorNamesTheKnownEvents() {
@@ -136,11 +168,13 @@ final class EventNameFilterTests: XCTestCase {
 
     func testPagingTable() {
         // spec-example: mail-log-diagnostics / event-name filter paging
-        // three matching (activity 0, 2, 4) and two non-matching (1, 3) at the start millisecond, one more match later
-        var lines = (0..<5).map { $0 % 2 == 0 ? receipt(0, activity: $0) : noise(0, activity: $0) }
+        // At the start millisecond, in reader order: non-matching 1, matching 0, non-matching 3, matching 2, matching 4;
+        // one more match later. The group STARTS with a non-matching event, so an offset consumed before the filter
+        // would skip event 1 and return 0, which the previous page already delivered (verify round 1, row 3).
+        var lines = [noise(0, activity: 1), receipt(0, activity: 0), noise(0, activity: 3), receipt(0, activity: 2), receipt(0, activity: 4)]
         lines.append(receipt(1, activity: 9))
         let r = run(FakeLogSource(lines: lines), query(["imap.append_uid_received"], limit: 1, offset: 1))
-        XCTAssertEqual(Synthetic.results(r).compactMap { $0["activity"] as? Int }, [2], "the non-matching 1 does not count toward the offset")
+        XCTAssertEqual(Synthetic.results(r).compactMap { $0["activity"] as? Int }, [2], "the non-matching events do not count toward the offset")
         XCTAssertEqual(r["stopped_by"] as? String, "limit")
         XCTAssertEqual(r["next_offset"] as? Int, 2)
 
@@ -152,19 +186,37 @@ final class EventNameFilterTests: XCTestCase {
 
         let empty = run(FakeLogSource(lines: [noise(0), noise(1)]), query(["imap.append_uid_received"]))
         XCTAssertEqual(empty["status"] as? String, "no_events_in_window")
-        XCTAssertEqual(empty["events"] as? [String], ["imap.append_uid_received"])
+        XCTAssertEqual(empty["event_filter_count"] as? Int, 1)
         XCTAssertTrue((empty["notice"] as? String ?? "").contains("event-name filter"), "\(empty["notice"] ?? "")")
         XCTAssertTrue((empty["notice"] as? String ?? "").contains("does not establish"))
 
         let unfiltered = run(FakeLogSource(lines: [noise(0)]), query(nil))
-        XCTAssertTrue(unfiltered["events"] is NSNull, "events is null when not given")
+        XCTAssertTrue(unfiltered["event_filter_count"] is NSNull, "event_filter_count is null when not given")
         XCTAssertFalse((unfiltered["notice"] as? String ?? "").contains("event-name filter"))
     }
 
-    func testTheEchoIsCarriedByAnUnavailableResponseToo() {
+    func testTheCountIsCarriedByAnUnavailableResponseToo() {
         let r = run(FakeLogSource(lines: [], end: .spawnFailed("boom")), query(["imap.append_uid_received"]))
         XCTAssertEqual(r["status"] as? String, "unavailable")
-        XCTAssertEqual(r["events"] as? [String], ["imap.append_uid_received"])
+        XCTAssertEqual(r["event_filter_count"] as? Int, 1)
+    }
+
+    /// Verify round 1, row 10: every name the matcher can return is one the validator accepts.
+    func testEveryKnownEventNameIsAcceptedByTheValidator() throws {
+        let recognized = KnownEvents.name(for: MailLogEvent(time: Synthetic.base, subsystem: "com.apple.mail", category: "IMAPConnection",
+                                                            formatString: "%{public}@", message: receiptMessage, process: "Mail", thread: 1, activity: 0))
+        XCTAssertEqual(recognized, KnownEvents.appendUIDReceived)
+        XCTAssertEqual(KnownEvents.names, [KnownEvents.appendUIDReceived], "the list is closed: exactly one entry")
+        for name in KnownEvents.names {
+            XCTAssertEqual(try MailLogQuery.parse(window.merging(["events": .array([.string(name)])]) { _, n in n }, now: now).events, [name])
+        }
+    }
+
+    func testTheResponseCarriesNoCallerText_inEitherDetail() {
+        for detail in [MailLogDetail.brief, .detailed] {
+            let r = run(FakeLogSource(lines: [noise(0)]), query(["someone@example.invalid"], detail: detail))
+            XCTAssertFalse(Synthetic.serialized(r).contains("someone@"), "\(detail): the filter values are not echoed")
+        }
     }
 
     // MARK: - scenarios
@@ -186,7 +238,7 @@ final class EventNameFilterTests: XCTestCase {
     }
 
     func testScenario_aMisspelledKnownEventNameIsRejectedBeforeReading() async {
-        await expectRejected(.array([.string("imap.append_uid_recieved")]), "misspelled known-event name")
+        await expectRejected(.array([.string("imap.append_uid_recieved")]), "unknown known-event name")
     }
 
     func testTheFilterValuesNeverReachTheReader() {
