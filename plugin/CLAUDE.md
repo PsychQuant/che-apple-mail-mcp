@@ -314,7 +314,8 @@ Search 結果的 email 可能來自 IMAP 帳號(display name)或 Exchange/EWS �
 │           └── {slug}/                          ← per-archive-target,slug = output_dir.replace("/", "-")
 │               ├── email_index.json            ← Message-ID 去重
 │               ├── threads.json                ← thread 關係索引
-│               └── threads.json.bak.*          ← rebuild-threads 的備份
+│               ├── threads.json.bak.*          ← rebuild-threads 的備份
+│               └── skip-ids-*/                 ← last_archived 每個 run 的 skip file 與已歸檔集合；Step 5 之後刪除(#652)
 ├── {output_dir}/                              ← archive markdown 目的地(依設定解析)
 │   ├── 2026-01-13_xxx.md                       ← archive 結果(user-visible)
 │   └── ...
