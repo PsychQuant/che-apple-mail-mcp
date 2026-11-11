@@ -717,7 +717,7 @@ final class MailControllerComposeTests: XCTestCase {
         await assertAttachmentRejected([subdir], containing: "'\(subdir)' rejected: not a regular file (directory)")
         await assertAttachmentRejected([dirLink], containing: "'\(dirLink)' rejected: not a regular file (directory)")
         await assertAttachmentRejected([package], containing: "'\(package)' rejected: not a regular file (directory)")
-        await assertAttachmentRejected([fifo], containing: "'\(fifo)' rejected: not a regular file (FIFO)")
+        await assertFifoRejectedWithoutOpening(fifo, path: fifo, containing: "'\(fifo)' rejected: not a regular file (FIFO)")
         await assertAttachmentRejected(["/dev/null"], containing: "'/dev/null' rejected: not a regular file (character device)")
     }
 
@@ -729,10 +729,17 @@ final class MailControllerComposeTests: XCTestCase {
         let dir = try makeScratchDir()
         let fifo = "\(dir)/pipe"
         XCTAssertEqual(mkfifo(fifo, 0o600), 0)
+        await assertFifoRejectedWithoutOpening(fifo, path: fifo, containing: "'\(fifo)' rejected: not a regular file (FIFO)")
+    }
+
+    /// Every validation of a FIFO runs under a `FifoReaderProbe`, so a regression that opens it fails instead of
+    /// hanging the run (a test without the probe blocked the whole suite in the mutation check).
+    private func assertFifoRejectedWithoutOpening(_ fifo: String, path: String, containing fragment: String,
+                                                  file: StaticString = #file, line: UInt = #line) async {
         let probe = FifoReaderProbe(path: fifo)
         probe.start()
-        await assertAttachmentRejected([fifo], containing: "'\(fifo)' rejected: not a regular file (FIFO)")
-        XCTAssertFalse(probe.stop(), "validation opened the FIFO for reading")
+        await assertAttachmentRejected([path], containing: fragment, file: file, line: line)
+        XCTAssertFalse(probe.stop(), "validation opened the FIFO for reading", file: file, line: line)
     }
 
     // MARK: - #543 fix round 1: `..` after a symlink, update_draft, remaining kinds
@@ -751,14 +758,14 @@ final class MailControllerComposeTests: XCTestCase {
         XCTAssertTrue(fm.createFile(atPath: "\(dir)/a/pipe", contents: Data("decoy".utf8)))
 
         await assertAttachmentAccepted(["\(dir)/a/L/../target.txt"])
-        await assertAttachmentRejected(["\(dir)/a/L/../pipe"], containing: "rejected: not a regular file (FIFO)")
+        await assertFifoRejectedWithoutOpening("\(dir)/real/pipe", path: "\(dir)/a/L/../pipe", containing: "rejected: not a regular file (FIFO)")
 
         // relative input, resolved against the working directory
         let saved = fm.currentDirectoryPath
         XCTAssertTrue(fm.changeCurrentDirectoryPath(dir))
         defer { fm.changeCurrentDirectoryPath(saved) }
         await assertAttachmentAccepted(["a/L/../target.txt"])
-        await assertAttachmentRejected(["a/L/../pipe"], containing: "rejected: not a regular file (FIFO)")
+        await assertFifoRejectedWithoutOpening("\(dir)/real/pipe", path: "a/L/../pipe", containing: "rejected: not a regular file (FIFO)")
     }
 
     func testValidateAttachmentPaths_allowListJudgesTheKernelTarget() async throws {
