@@ -44,7 +44,28 @@ public final class DraftStoreWriter {
         public let actionRowId: Int64
         public let messageIdHash: Int64
         public let emlxPath: String
+        /// The directory levels this insert created for `emlxPath`, shallowest first; `rollback`
+        /// removes them again while they are empty (#503).
+        public let createdDirectories: [String]
+
+        init(messageRowId: Int64, conversationId: Int64, globalDataRowId: Int64, actionRowId: Int64,
+             messageIdHash: Int64, emlxPath: String, createdDirectories: [String] = []) {
+            self.messageRowId = messageRowId; self.conversationId = conversationId
+            self.globalDataRowId = globalDataRowId; self.actionRowId = actionRowId
+            self.messageIdHash = messageIdHash; self.emlxPath = emlxPath
+            self.createdDirectories = createdDirectories
+        }
     }
+
+    /// Test-only (#503): where placing the .emlx has got to. Production never sets
+    /// `placementHook`; a test uses it to see that placement ran, or to make it fail
+    /// once the directories exist. A throw is handled like any failure of the write.
+    enum PlacementStep: Equatable {
+        case directoriesReady(String)
+        case filePlaced(String)
+    }
+
+    var placementHook: ((PlacementStep) throws -> Void)?
 
     public enum WriteError: Error, Equatable {
         case open(String), sql(String), noEmlxPath, emlxExists(String), emlxWrite(String),
@@ -185,6 +206,7 @@ public final class DraftStoreWriter {
         let now = Int64(d.date.timeIntervalSince1970)
         try exec("BEGIN IMMEDIATE")
         var placed: String?
+        var created: [String] = []
         do {
             guard let url = try scalarText("SELECT url FROM mailboxes WHERE ROWID = \(d.mailboxRowId)"),
                   url == d.mailboxURL, url.hasPrefix("imap://") else { throw WriteError.unexpectedMailbox }
@@ -218,7 +240,8 @@ public final class DraftStoreWriter {
                 """, [.int(mid), .int(d.messageIdHash), .int(gid), .blob(uuidBytes(d.documentUUID)), .int(d.senderAddressRowId),
                       .int(sid), .int(now), .int(now), .int(d.mailboxRowId), .int(d.mailboxRowId), .int(d.flags),
                       .int(Int64(d.size)), .int(cid), .int(now), .int(mid), .int(now)])
-            placed = try placeEmlx(emlx, rowId: mid, mailboxURL: d.mailboxURL)
+            placed = try placeEmlx(emlx, rowId: mid, mailboxURL: d.mailboxURL, created: &created)
+            try placementHook?(.filePlaced(placed!))
             try run("INSERT INTO conversation_id_message_id(conversation_id, message_id, date_sent) VALUES (?, ?, ?)",
                     [.int(cid), .int(d.messageIdHash), .int(now)])
             for (position, id) in toIds.enumerated() {
@@ -238,10 +261,11 @@ public final class DraftStoreWriter {
             try run("UPDATE properties SET value = ? WHERE key = 'WriteTransactionGeneration'", [.int(wtg + 1)])
             try exec("COMMIT")
             return Inserted(messageRowId: mid, conversationId: cid, globalDataRowId: gid, actionRowId: aid,
-                            messageIdHash: d.messageIdHash, emlxPath: placed!)
+                            messageIdHash: d.messageIdHash, emlxPath: placed!, createdDirectories: created)
         } catch {
             _ = try? exec("ROLLBACK")
             if let p = placed { try? FileManager.default.removeItem(atPath: p) }
+            removeCreatedDirectories(created)
             throw error
         }
     }
@@ -269,18 +293,21 @@ public final class DraftStoreWriter {
             throw error
         }
         try? FileManager.default.removeItem(atPath: ins.emlxPath)
+        removeCreatedDirectories(ins.createdDirectories)
     }
 
     // MARK: - File
 
-    private func placeEmlx(_ data: Data, rowId: Int64, mailboxURL: String) throws -> String {
+    /// `created` gets the directory levels this call made, shallowest first, even when it throws,
+    /// so the caller can remove them (#503).
+    private func placeEmlx(_ data: Data, rowId: Int64, mailboxURL: String, created: inout [String]) throws -> String {
         guard let path = EmlxParser.newEmlxPath(rowId: Int(rowId), mailboxURL: mailboxURL) else {
             throw WriteError.noEmlxPath
         }
         let fm = FileManager.default
         let dir = (path as NSString).deletingLastPathComponent
-        do { try fm.createDirectory(atPath: dir, withIntermediateDirectories: true) }
-        catch { throw WriteError.emlxWrite(error.localizedDescription) }
+        try makeDirectories(dir, created: &created)
+        try placementHook?(.directoriesReady(dir))
         guard !fm.fileExists(atPath: path) else { throw WriteError.emlxExists(path) }
         let tmp = "\(dir)/.direct-draft-\(rowId)-\(UUID().uuidString).tmp"
         do {
@@ -291,6 +318,55 @@ public final class DraftStoreWriter {
             throw WriteError.emlxWrite(error.localizedDescription)
         }
         return path
+    }
+
+    /// Creates `dir` and its missing ancestors one level at a time with mkdir(2), appending to
+    /// `created` only the levels this call's own mkdir made. A level that exists, or that another
+    /// process creates first (EEXIST), is not this call's and is never removed (#503).
+    private func makeDirectories(_ dir: String, created: inout [String]) throws {
+        var missing: [String] = []
+        var level = dir
+        while !isDirectory(level) {
+            missing.append(level)
+            let parent = (level as NSString).deletingLastPathComponent
+            guard !parent.isEmpty, parent != level else { break }
+            level = parent
+        }
+        for level in missing.reversed() {
+            if mkdir(level, 0o777) == 0 {
+                created.append(level)
+                continue
+            }
+            let code = errno
+            if code == EEXIST, isDirectory(level) { continue }
+            throw WriteError.emlxWrite("could not create \(level): \(String(cString: strerror(code)))")
+        }
+    }
+
+    private func isDirectory(_ path: String) -> Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    /// Removes the levels `makeDirectories` created, deepest first, with rmdir(2): a directory
+    /// that is not empty (Mail wrote into it meanwhile) stays, and so does everything above it.
+    /// Never throws; the write's own outcome is what the caller reports (#503).
+    private func removeCreatedDirectories(_ dirs: [String]) {
+        for dir in dirs.reversed() {
+            if rmdir(dir) == 0 { continue }
+            let code = errno
+            if code == ENOENT { continue }
+            if code != ENOTEMPTY && code != EEXIST {
+                logCleanupFailure(dir, code)
+            }
+            return
+        }
+    }
+
+    private func logCleanupFailure(_ dir: String, _ code: Int32) {
+        // The throwing overload: a closed stderr must not abort the server (#346).
+        try? FileHandle.standardError.write(contentsOf: Data(
+            "DraftStoreWriter: could not remove created directory \(dir) (\(String(cString: strerror(code))))\n".utf8))
     }
 
     private func uuidBytes(_ u: UUID) -> Data {

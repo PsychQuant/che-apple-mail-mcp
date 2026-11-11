@@ -94,10 +94,11 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 
 第 1–6 項沒有像第 7、8 項那樣的守門測試。各項目前的覆蓋（#498）：
 
-- **第 1 項**：`DraftStoreWriterTests` 有兩條測交易內失敗的行為測試，只涵蓋 writer 本身，不涵蓋 `attemptSteps` 怎麼呼叫它：
+- **第 1 項**：`DraftStoreWriterTests` 與 `DraftStoreWriterDirectoryTests` 有測交易內失敗的行為測試，只涵蓋 writer 本身，不涵蓋 `attemptSteps` 怎麼呼叫它：
   - 檔案寫不進去（`testInsertLeavesNothingBehindWhenTheFileCannotBeWritten`）；
-  - `.emlx` 放好之後才失敗（`testInsertRemovesThePlacedFileWhenALaterStepFails`）：檢查放檔已執行、writer 的交易確實結束（另一條連線拿得到寫入鎖）、沒有留下任何資料列或檔案。拿掉 ROLLBACK、拿掉刪檔、或把失敗移到放檔之前，這條都會轉紅。
-  - 缺口：交易一開始就拿寫入鎖（`BEGIN IMMEDIATE`）沒有測試，改成一般的 `BEGIN` 這兩條都不會轉紅；失敗後會留下空的 `Messages` 目錄（#503），上面那條測試目前正是靠這個目錄證明放檔已執行。
+  - `.emlx` 放好之後才失敗（`testInsertRemovesThePlacedFileWhenALaterStepFails`）：檢查放檔已執行（writer 只給測試用的放檔掛點在檔案放好時看到它）、writer 的交易確實結束（另一條連線拿得到寫入鎖）、沒有留下任何資料列、檔案或這次建立的目錄。拿掉 ROLLBACK、拿掉刪檔、把失敗移到放檔之前、或拿掉目錄清理，這條都會轉紅。
+  - 放檔時建立的目錄（#503）：只記下這次 `mkdir` 自己建立的層，寫入失敗（放檔之後、或放檔途中）與 commit 之後的 `rollback()` 都以 `rmdir` 由深到淺移除，遇到不是空的就停，清理不改變拋出的錯誤、也不讓 `rollback()` 失敗。`DraftStoreWriterDirectoryTests` 用合成的 store 測（不需 Full Disk Access）：放檔之後失敗、放檔途中失敗、還原三種情況都移除新建的層，原本就存在的層保留，新建目錄裡多了別的檔案時（失敗與還原各一條）連同上層都保留，目標路徑已有 `.emlx` 時不動它。殘留競態：移除前的瞬間 Mail 若剛建立同一目錄、還沒寫檔，移除可能早於 Mail 寫檔；只發生在新的千位區塊第一列。
+  - 缺口：交易一開始就拿寫入鎖（`BEGIN IMMEDIATE`）沒有測試，改成一般的 `BEGIN` 這些測試都不會轉紅。
 - **第 2、3、6、7 項**：`DirectDraftPathOutcomeTests`（#484）走真的 `attemptSteps` 與真的 `DraftStoreWriter`，只有 Mail 是替身，store 是測試自己建的 SQLite 檔（有 writer 驗證的表與欄位，沒有 Mail 的 trigger）。替身照 Mail 改真 store 的方式改那個檔。這批測試斷言結果代碼與 `direct` 步驟序列：
   - 上傳確認 → `created`，步驟走到 `uploaded`、`read_ensured`；
   - 上傳期限內沒有確認 → `created:upload_pending`，不走 GUI 路徑，不回報已上傳；
