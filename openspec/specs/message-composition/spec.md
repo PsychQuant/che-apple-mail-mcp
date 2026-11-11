@@ -360,7 +360,7 @@ Before writing anything, the system SHALL check eligibility. The call is ineligi
 
 After eligibility passes and before writing, the system SHALL also require all of the following, checked in this order, and SHALL take the GUI path at the first that fails: (1) Mail's version is 16.x and the macOS major version is 27; (2) `from_address` maps to exactly one Mail account; (3) when `signature` is `mail_default`, Mail's `AccountsMap.plist` lists no signature for that account (an unreadable list fails this gate), because a signature Mail would insert is not written directly; (4) the Envelope Index is readable; (5) the account's Drafts mailbox is identified and matched to a mailbox path in the index; (6) the store opens for writing; (7) the store's `messages` columns equal the verified set and every other table it writes has its required columns; (8) that Drafts path corresponds to exactly one mailbox row and its URL is an IMAP URL; (9) a sender address row already exists for `from_address` in that account. A draft created by the direct write SHALL carry a disclosure that no signature was inserted.
 
-The write SHALL happen inside a single `BEGIN IMMEDIATE` transaction, with the `.emlx` file renamed into place inside that transaction. A failure during the write SHALL roll the transaction back and remove the file, and the call SHALL take the GUI path.
+The write SHALL happen inside a single `BEGIN IMMEDIATE` transaction, with the `.emlx` file renamed into place inside that transaction. A failure during the write SHALL roll the transaction back and remove the file, and the call SHALL take the GUI path. The write SHALL record, as the directories it created, only the directory levels its own creation call made; a level that already existed, or that another process created first, SHALL NOT be recorded. When the write fails, and when a committed write is reversed, the system SHALL remove the recorded directories after the `.emlx` file, deepest first, removing a directory only while it is empty and without removing anything inside it, and SHALL stop at the first directory that cannot be removed. Removing those directories SHALL NOT change the error a failed write reports, and a directory that cannot be removed SHALL NOT make reversing the write fail.
 
 After the write commits, the system SHALL ask Mail to upload the draft by toggling the draft's read status to unread and back to read. The upload request succeeds when that toggle completes without error. If it fails, the system SHALL reverse the write exactly and take the GUI path. If the write cannot be reversed because Mail has already uploaded the draft, the system SHALL report the draft as created and SHALL NOT take the GUI path. If it cannot be reversed for any other reason, the system SHALL report the draft as created with its upload pending, SHALL NOT claim that it was uploaded or when it will be, and SHALL NOT take the GUI path. Once the upload request has succeeded, the system SHALL NOT take the GUI path for that call, because doing so would create a second draft. A reversed direct write that continues on the GUI path is not a retry through a body-assigning path; Requirement: Runtime composing failures propagate without falling back continues to govern failures of the GUI path itself.
 
@@ -387,6 +387,7 @@ Whenever the call takes the GUI path after the direct write was attempted or fou
 
 - **WHEN** the direct write commits and the request asking Mail to upload the draft fails before Mail has uploaded it
 - **THEN** the system SHALL delete every row and the `.emlx` file the write created
+- **AND** the system SHALL remove every directory the write created for the `.emlx` file that is still empty
 - **AND** the draft SHALL be created through the GUI path
 
 #### Scenario: No fallback after the upload request succeeds
@@ -405,3 +406,59 @@ Whenever the call takes the GUI path after the direct write was attempted or fou
 
 - **WHEN** the upload is confirmed, a look shows the draft unread, and every look after the re-assert fails to read the flag
 - **THEN** the tool result SHALL end with ` [note: the draft is uploaded but its local read status could not be read]`
+
+#### Scenario: A failed write removes the directories it created and keeps the rest
+
+- **WHEN** the write fails after the `.emlx` file was placed, or while placing it after its directories were created
+- **THEN** the system SHALL remove every directory level the write created for the file
+- **AND** the system SHALL NOT remove a directory level that existed before the write
+- **AND** the error the call reports SHALL be the error of the failed step
+
+##### Example: a new hash block is removed after a later step fails
+- **GIVEN** a Drafts store whose `Data` directory exists, and the next message row id 20000, so the file goes to `Data/0/2/Messages/20000.emlx`
+- **WHEN** the write places the file and then fails at a later step with the error `no WriteTransactionGeneration`
+- **THEN** `Data/0`, `Data/0/2` and `Data/0/2/Messages` no longer exist, `Data` still exists, and the write reports `no WriteTransactionGeneration`
+
+##### Example: a failure while placing the file removes the new directories
+- **GIVEN** the same store and row id
+- **WHEN** placing the file fails after `Data/0/2/Messages` was created and before the file was written
+- **THEN** `Data/0` no longer exists and `Data` still exists
+
+#### Scenario: A directory that is not empty is kept
+
+- **WHEN** the write fails, or a committed write is reversed, and a directory the write created now holds a file the write did not place
+- **THEN** the system SHALL remove the `.emlx` file it placed
+- **AND** the system SHALL keep that directory and every directory above it, together with the other file
+- **AND** reversing a committed write SHALL NOT report a failure because of that directory
+
+##### Example: another file in the new Messages directory survives a failed write
+- **GIVEN** the write created `Data/0/2/Messages` and placed `20000.emlx` in it, and another file `20001.emlx` appeared in that directory
+- **WHEN** the write fails at a later step
+- **THEN** `20000.emlx` is removed, and `20001.emlx`, `Data/0/2/Messages`, `Data/0/2` and `Data/0` remain
+
+##### Example: another file in the new Messages directory survives a reversal
+- **GIVEN** a committed write that created `Data/0/2/Messages`, and another file `20001.emlx` that appeared in that directory
+- **WHEN** the write is reversed
+- **THEN** the reversal succeeds, `20000.emlx` is removed, and `20001.emlx` and its directories remain
+
+#### Scenario: Reversing a committed write removes the directories it created
+
+- **WHEN** a committed write that created directories for its `.emlx` file is reversed
+- **THEN** the system SHALL remove those directories once the file is removed
+- **AND** the system SHALL NOT remove a directory level that existed before the write
+
+##### Example: reversal removes only the levels the write created
+- **GIVEN** a store where `Data/0` already exists, and a committed write that created `Data/0/2` and `Data/0/2/Messages` for `20000.emlx`
+- **WHEN** the write is reversed
+- **THEN** `Data/0/2` no longer exists and `Data/0` still exists
+
+#### Scenario: A file already at the target path is not touched
+
+- **WHEN** the write finds a file already at the path where its `.emlx` file would go
+- **THEN** the write SHALL fail without writing any row
+- **AND** the system SHALL NOT remove or change that file or its directory
+
+##### Example: an existing 20000.emlx is left as it was
+- **GIVEN** `Data/0/2/Messages/20000.emlx` already exists with other content
+- **WHEN** the write for row id 20000 runs
+- **THEN** the write fails, and the file keeps its content and its directory remains
