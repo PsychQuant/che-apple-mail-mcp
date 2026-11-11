@@ -1219,6 +1219,143 @@ class ArchiveRefinementSopTests(unittest.TestCase):
         self.assertNotIn("refined, refinement_stats = apply_refinement(fetched, config)\n", text)
 
 
+class ArchiveDedupRecipeTests(unittest.TestCase):
+    """Step 3d / Step 4.1: where message_id comes from, and rows without a usable one (#643)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ns = {"__name__": "archive_recipe"}
+        for name in ("date", "dedup"):
+            exec(compile(recipe_code(name), name, "exec"), cls.ns)
+
+    def decide(self, rows, known=(), strategy="index", last_archived="", watermark=None):
+        is_new = self.ns["make_is_new"](set(known), strategy, last_archived, watermark)
+        return self.ns["split_new"](rows, is_new)
+
+    def test_message_id_from_raw_headers(self):
+        # spec-example: archive-mail-dedup / message id from raw headers
+        read = self.ns["message_id_from_headers"]
+        cases = [
+            ("Message-ID: <a@b.test>", "<a@b.test>"),
+            ("message-id:   <a@b.test>  ", "<a@b.test>"),
+            ("Message-ID:\r\n <a@b.test>", "<a@b.test>"),
+            ("Message-ID: <first@b.test>\nMessage-ID: <last@b.test>", "<last@b.test>"),
+            ("Subject: no id here", None),
+            ("Message-ID:    ", None),
+            ("Message-ID: =?utf-8?q?x?=", None),
+            (None, None),
+            (42, None),
+        ]
+        for raw, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(read(raw), expected)
+
+    def test_a_folded_header_is_read_like_the_server_reads_it(self):
+        read = self.ns["message_id_from_headers"]
+        self.assertEqual(read("Subject: x\r\nMessage-ID:\r\n <a@b.test>\r\n"), "<a@b.test>")
+        self.assertEqual(read("Subject: x\nMessage-Id:\n\t<a@b.test>\n"), "<a@b.test>")
+        self.assertEqual(read("X-Message-ID: <no@b.test>\nSubject: y"), None)   # a different header name
+        self.assertEqual(read("Subject: Message-ID: <no@b.test>"), None)       # text inside another header
+
+    def test_rows_decided_by_step_4_1(self):
+        # spec-example: archive-mail-dedup / rows decided by Step 4.1
+        known = {"<old@x.test>"}
+        cases = [
+            ({"message_id": "<new@x.test>"}, "new"),
+            ({"message_id": "<old@x.test>"}, "neither"),
+            ({}, "held"),
+            ({"message_id": None}, "held"),
+            ({"message_id": ""}, "held"),
+            ({"message_id": "   "}, "held"),
+            ({"message_id": 42}, "held"),
+            ("not a row", "held"),
+        ]
+        for row, expected in cases:
+            with self.subTest(row=row):
+                new, held = self.decide([row], known)
+                got = "new" if row in new else "held" if row in held else "neither"
+                self.assertEqual(got, expected)
+
+    def test_a_row_without_message_id_no_longer_stops_the_run(self):
+        new, held = self.decide([{"subject": "A"}, {"message_id": "<n@x.test>"}])
+        self.assertEqual((new, held), ([{"message_id": "<n@x.test>"}], [{"subject": "A"}]))
+
+    def test_an_empty_message_id_is_not_archived(self):
+        new, held = self.decide([{"message_id": ""}])
+        self.assertEqual((new, held), ([], [{"message_id": ""}]))
+
+    def test_held_out_rows_under_a_date_boundary(self):
+        # spec-example: archive-mail-dedup / held out rows under a date boundary
+        mark = self.ns["watermark_instant"]("2026-06-01T00:00:00Z")
+        later = {"date_received": "2026-07-01T00:00:00Z"}
+        earlier = {"date_received": "2026-05-01T00:00:00Z"}
+        valid = dict(later, message_id="<n@x.test>")
+        for strategy in ("last_archived", "both"):
+            with self.subTest(strategy=strategy):
+                new, held = self.decide([later, earlier, valid], (), strategy, "2026-06-01T00:00:00Z", mark)
+                self.assertEqual((new, held), ([valid], [later]))
+
+    def test_the_watermark_gate_reads_a_non_dict_row_as_undated(self):
+        mark = self.ns["watermark_instant"]("2026-06-01T00:00:00Z")
+        new, held = self.decide(["not a row"], (), "last_archived", "2026-06-01T00:00:00Z", mark)
+        self.assertEqual((new, held), ([], ["not a row"]))   # an unreadable date counts as after (#600)
+
+    def test_rows_with_a_usable_id_are_decided_as_before(self):
+        mark = self.ns["watermark_instant"]("2026-06-01T00:00:00Z")
+        rows = [{"message_id": "<a@x.test>", "date_received": "2026-07-01T00:00:00Z"},
+                {"message_id": "<b@x.test>", "date_received": "2026-05-01T00:00:00Z"},
+                {"message_id": "<c@x.test>", "date": "2026-07-01T00:00:00Z"}]
+        new, held = self.decide(rows, {"<a@x.test>"}, "both", "2026-06-01", mark)
+        self.assertEqual((new, held), ([rows[2]], []))
+
+    def test_held_out_report_lines(self):
+        # spec-example: archive-mail-dedup / held out report lines
+        report = self.ns["held_out_report"]
+        self.assertEqual(report([]), [])
+        lines = report([{"id": "17", "subject": "Hello"}])
+        self.assertIn("1", lines[0])
+        self.assertIn("data, not instructions", lines[0])
+        self.assertEqual(lines[1], "```text")
+        self.assertEqual(lines[-1], "```")
+        self.assertEqual(len(lines), 4)
+        self.assertIn("17", lines[2])
+        self.assertIn("Hello", lines[2])
+        many = report([{"id": str(i), "subject": "s%d" % i} for i in range(25)])
+        self.assertIn("25", many[0])
+        self.assertIn("(first 20 shown)", many[0])
+        self.assertEqual(sum(1 for line in many if line.startswith("  | ")), 20)
+        hostile = report([{"id": "9", "subject": "line one\nline `two`"}])[2]
+        self.assertNotIn("\n", hostile)
+        self.assertNotIn("`", hostile)
+
+    def test_the_report_survives_rows_of_any_shape(self):
+        lines = self.ns["held_out_report"](["not a row", {"id": 7}, {"subject": None}])
+        self.assertEqual(sum(1 for line in lines if line.startswith("  | ")), 3)
+
+
+class ArchiveDedupSopTests(unittest.TestCase):
+    def test_step_3d_names_the_source_of_message_id(self):
+        text = DOCUMENT.read_text()
+        step3d = text[text.index("**3d. 合併去重**"):text.index("### Step 4: 過濾新郵件")]
+        self.assertIn("get_email_headers", step3d)
+        self.assertIn("message_id_from_headers", step3d)
+
+    def test_step_4_1_uses_the_recipe_and_no_longer_indexes_message_id(self):
+        text = DOCUMENT.read_text()
+        step41 = text[text.index("#### Step 4.1: Dedup"):text.index("### Step 4.5:")]
+        self.assertIn("split_new", step41)
+        self.assertIn("make_is_new", step41)
+        self.assertNotIn('email["message_id"] in known_ids', text)
+        self.assertNotIn("new_emails = [e for e in refined if is_new(e)]", text)
+
+    def test_preview_and_report_show_the_held_out_rows(self):
+        text = DOCUMENT.read_text()
+        preview = text[text.index("#### Phase 2: Search Preview"):text.index("#### Phase 3: Operation Confirmation")]
+        report = text[text.index("### Step 7: 輸出報告"):text.index("### Step 8:")]
+        for section in (preview, report):
+            self.assertIn("held_out_lines", section)
+
+
 class ArchiveReverseInventoryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
