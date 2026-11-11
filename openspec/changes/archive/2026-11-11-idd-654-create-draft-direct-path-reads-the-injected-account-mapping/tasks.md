@@ -7,4 +7,4 @@
 
 - [x] 2.1 `Server.swift` 加 `directDraftPath()`，`create_draft` 改用它；沒有對照時與現在相同。驗證：1.1、1.2 綠；`DirectDraftPathTests`（閉包預設值）與 `DirectWriteSafetyGuardTests` 仍綠。
 - [x] 2.2 `CHANGELOG.md`：#633 條目裡「直接寫入路徑仍讀 plist」那句改成已由 #654 處理，並加 #654 條目。驗證：內容審閱。
-- [ ] 2.3 全部測試：兩個 bundle 都 0 failures。驗證：分別讀兩個 bundle 的 `Executed N tests` 行。
+- [x] 2.3 全部測試：兩個 bundle 都 0 failures。驗證：分別讀兩個 bundle 的 `Executed N tests` 行。
