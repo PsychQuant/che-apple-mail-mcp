@@ -6,4 +6,4 @@
 ## 2. 文件
 
 - [x] 2.1 `CHANGELOG.md` 的 #654 條目與 `Server.swift` 工廠註解改寫閘門 (3) 的說法。驗證：內容審閱。
-- [ ] 2.2 全部測試：兩個 bundle 都 0 failures。驗證：分別讀兩個 bundle 的 `Executed N tests` 行。
+- [x] 2.2 全部測試：兩個 bundle 都 0 failures。驗證：分別讀兩個 bundle 的 `Executed N tests` 行。

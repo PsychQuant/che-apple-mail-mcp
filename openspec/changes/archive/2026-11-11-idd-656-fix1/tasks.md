@@ -6,4 +6,4 @@
 ## 2. 文件
 
 - [x] 2.1 `CHANGELOG.md` 的 #656 條目：預設跟著 override、開成的 reader 不讀使用者清單、reader 沒開成時的 AppleScript 退回不變。驗證：內容審閱。
-- [ ] 2.2 全部測試：兩個 bundle 都 0 failures。驗證：分別讀兩個 bundle 的 `Executed N tests` 行。
+- [x] 2.2 全部測試：兩個 bundle 都 0 failures。驗證：分別讀兩個 bundle 的 `Executed N tests` 行。
