@@ -364,7 +364,7 @@ The write SHALL happen inside a single `BEGIN IMMEDIATE` transaction, with the `
 
 After the write commits, the system SHALL ask Mail to upload the draft by toggling the draft's read status to unread and back to read. The upload request succeeds when that toggle completes without error. If it fails, the system SHALL reverse the write exactly and take the GUI path. If the write cannot be reversed because Mail has already uploaded the draft, the system SHALL report the draft as created and SHALL NOT take the GUI path. If it cannot be reversed for any other reason, the system SHALL report the draft as created with its upload pending, SHALL NOT claim that it was uploaded or when it will be, and SHALL NOT take the GUI path. Once the upload request has succeeded, the system SHALL NOT take the GUI path for that call, because doing so would create a second draft. A reversed direct write that continues on the GUI path is not a retry through a body-assigning path; Requirement: Runtime composing failures propagate without falling back continues to govern failures of the GUI path itself.
 
-After the upload is confirmed, the system SHALL look at the draft's local read flag up to four times until it can be read. If a look shows the draft unread, the system SHALL re-assert its read status once and look again up to eight times. The tool result SHALL end with ` [note: the draft is uploaded but still shows as unread locally]` when no look after the re-assert shows it read but at least one shows it unread, and with ` [note: the draft is uploaded but its local read status could not be read]` when all four looks before any re-assert, or all eight looks after the re-assert, fail to read the flag.
+After the upload is confirmed, the system SHALL look at the draft's local read flag up to four times until it can be read. If a look shows the draft unread, the system SHALL re-assert its read status once and look again up to eight times. The tool result SHALL end with ` [note: the draft is uploaded but still shows as unread locally]` when no look after the re-assert shows it read but at least one shows it unread, and with ` [note: the draft is uploaded but its local read status could not be read]` when all four looks before any re-assert, or all eight looks after the re-assert, fail to read the flag. A look that fails to read the flag SHALL write a line naming `messages.read` and the cause to stderr; a look whose read works and finds no row for the draft SHALL NOT write to stderr. Either look counts as not able to read the flag.
 
 The direct-write path SHALL NOT require Accessibility. It requires Full Disk Access, because it writes Mail's store, and Automation, because it toggles the draft's read status.
 
@@ -485,3 +485,25 @@ Whenever the call takes the GUI path after the direct write was attempted or fou
 - **GIVEN** a committed write that created `Data/0`, `Data/0/2` and `Data/0/2/Messages` for `20000.emlx`, and `Data/0/2` made read-only so `Data/0/2/Messages` cannot be removed
 - **WHEN** the write is reversed
 - **THEN** the reversal succeeds, `20000.emlx` is removed, `Data/0/2/Messages`, `Data/0/2` and `Data/0` remain, and stderr has a line containing `could not remove created directory` and the path of `Data/0/2/Messages`
+
+#### Scenario: A failed look at the read flag names its cause
+
+- **WHEN** the system looks at the draft's local read flag and the read fails
+- **THEN** the look SHALL count as not able to read the flag
+- **AND** the system SHALL write a line naming `messages.read` and the cause to stderr
+
+##### Example: a missing messages table is reported on stderr
+- **GIVEN** a store in which the `messages` table cannot be read (renamed away)
+- **WHEN** the system reads the read flag of draft row 1
+- **THEN** the answer is "cannot tell", and stderr has a line containing `messages.read read failed`
+
+#### Scenario: A draft row that is gone is not reported as a failed read
+
+- **WHEN** the system looks at the draft's local read flag, the read works, and no row exists for the draft
+- **THEN** the look SHALL count as not able to read the flag
+- **AND** the system SHALL NOT write to stderr
+
+##### Example: a deleted draft row reads as cannot tell without a log line
+- **GIVEN** a store whose `messages` table has no row 999
+- **WHEN** the system reads the read flag of draft row 999
+- **THEN** the answer is "cannot tell", and nothing is written to stderr

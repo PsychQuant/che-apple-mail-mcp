@@ -7,4 +7,4 @@
 
 - [x] 2.1 `DraftStoreWriter.readFlag` 改成 do/catch，失敗經 `logReadFailure("messages.read", error)` 寫 stderr 並回 nil；簽名不變，`ensureRead`／`attemptSteps` 不動。驗證：1.1、1.2 綠，`DirectWriteSafetyGuardTests` 與 `DirectDraftPathOutcomeTests` 其他測試仍綠。
 - [x] 2.2 `.claude/rules/direct-write-transaction-safety.md` 的 `readFlag` 覆蓋句補上讀取失敗的測試；`CHANGELOG.md` 加條目。驗證：內容審閱。
-- [ ] 2.3 全部測試：兩個 bundle 都 0 failures。驗證：分別讀兩個 bundle 的 `Executed N tests` 行。
+- [x] 2.3 全部測試：兩個 bundle 都 0 failures。驗證：分別讀兩個 bundle 的 `Executed N tests` 行。
