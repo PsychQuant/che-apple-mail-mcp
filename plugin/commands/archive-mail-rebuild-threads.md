@@ -30,9 +30,9 @@ allowed-tools: Read, Write, Glob, Bash(mkdir:*)
 ### Step 1: 解析參數
 
 - `archive_dir`: 預設 `communication/emails`
-- 先從參數取出可選的 `--index-dir <absolute-directory>`，存為 `INDEX_DIR_OVERRIDE`；值缺少或不是絕對路徑即報錯，不把旗標當 archive_dir。未提供時設為空字串，沿用原本 slug 路徑。已登錄樹狀流程使用 registry 的 index_file 所在目錄；直接呼叫則以使用者明確指定的目錄為準。
+- 先從參數取出可選的 `--index-dir <absolute-directory>`，存為 `INDEX_DIR_OVERRIDE`；值缺少或不是絕對路徑即報錯（`status: bad-arguments`），不把旗標當 archive_dir。未提供時設為空字串，沿用原本 slug 路徑。已登錄樹狀流程使用 registry 的 index_file 所在目錄；直接呼叫則以使用者明確指定的目錄為準。
 
-若目錄不存在，報錯退出。
+若目錄不存在，報錯退出（`status: bad-arguments`）。
 
 ### Step 2: 解析 namespace 路徑 + 備份既有 `threads.json`（v2.8.0+）
 
@@ -79,7 +79,7 @@ fi
 
 ### Step 4: 聚合成 threads 結構
 
-**排序怎麼執行（#556）**：`thread_order`／`thread_bounds` 是 `archive-mail.md` 日期 recipe（標記 `archive-mail-date-recipe`）裡的純函式，這個指令不另寫一份。把該 recipe 存成固定腳本，腳本與輸入輸出檔都放在這次叫用用 `mktemp -d` 建的私有目錄（不用共用的固定路徑），輸入（每封信的 `date` 與 `file`）用 `Write` 寫成 JSON 檔，由腳本讀入後當函式引數，輸出寫成 JSON 檔再用 `Read` 讀回；信件衍生的字串只經 JSON 檔傳遞，不放進指令字串。本指令的 `allowed-tools` 沒有 python，執行 Python 時由宿主提示權限，不擴大 `allowed-tools`。**無人值守時不等待授權**：宿主沒有放行 Python（沒有人可以按允許）就視同拿不到執行能力，立刻停止，不卡住。**拿不到執行能力（宿主不放行、`python3` 不存在、recipe 執行失敗）就停止**，報 `status: order-unavailable` 與原因，不寫任何輸出、不改 `.threads.json`；**不得**退回手動比較字串或心算排序（那正是 #556 要消除的不確定性）。
+**排序怎麼執行（#556）**：`thread_order`／`thread_bounds` 是 `archive-mail.md` 日期 recipe（標記 `archive-mail-date-recipe`）裡的純函式，這個指令不另寫一份。把該 recipe 存成腳本，腳本與輸入輸出檔都放在這次叫用用 `mktemp -d` 建的私有目錄（規則見 `archive-mail.md` 的〈腳本與資料檔放在私有目錄〉），輸入（每封信的 `date` 與 `file`）用 `Write` 寫成 JSON 檔，由腳本讀入後當函式引數，輸出寫成 JSON 檔再用 `Read` 讀回；信件衍生的字串只經 JSON 檔傳遞，不放進指令字串。本指令的 `allowed-tools` 沒有 python，執行 Python 時由宿主提示權限，不擴大 `allowed-tools`。**無人值守時不等待授權**：宿主沒有放行 Python（沒有人可以按允許）就視同拿不到執行能力，立刻停止，不卡住。**拿不到執行能力（宿主不放行、`python3` 不存在、recipe 執行失敗）就停止**，報 `status: order-unavailable` 與原因，不寫任何輸出、不改 `.threads.json`；**不得**退回手動比較字串或心算排序（那正是 #556 要消除的不確定性）。
 
 建立新的 threads 物件：
 
@@ -141,6 +141,7 @@ for key, entry in new_threads:
 Rebuild Threads Index
 ═══════════════════════════════════════════
 
+status: rebuilt
 Archive: communications/
 Scanned: 67 md files
 Parsed: 65 with valid frontmatter
@@ -180,6 +181,16 @@ Diff from previous .threads.json:
 ```
 
 若有 `-` removed threads，提示使用者檢查是不是誤刪 md。
+
+## 狀態詞（#635）
+
+這個指令結束時只有下面三個 `status`，只有這些，不得依性質相似類推。工具本身失敗（`mkdir`、`cp`、寫檔失敗）不是這裡的狀態：照實回報工具的錯誤，不寫 `status:` 行，也不另造詞。
+
+| status | 出口 | 意思 | 留下什麼 |
+|--------|------|------|----------|
+| `rebuilt` | Step 6 | 重建完成 | 新的 `threads.json` 與 Step 2 的備份 |
+| `bad-arguments` | Step 1 | `--index-dir` 缺值或不是絕對路徑，或 archive 目錄不存在 | 什麼都沒寫 |
+| `order-unavailable` | Step 4 | 拿不到排序的執行能力 | `threads.json` 未重建；Step 2 可能已搬移 legacy 檔並留下備份 |
 
 ## Legacy md 的 backfill 策略
 

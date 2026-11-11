@@ -99,6 +99,47 @@ final class ByteDecodingTests: XCTestCase {
         XCTAssertEqual(RFC822Parser.decodeQuotedPrintableBytes(Data([0x3D, 0xE9])), Data([0x3D, 0xE9]))
     }
 
+    // #626: the end-of-input guard ran before the soft-break test, so a break
+    // that was the last thing in the input was written out with its `=`.
+
+    func testASoftBreakAtTheEndOfTheInputIsDropped() {
+        for input in ["abc=\r\n", "abc=\n", "abc=\r"] {
+            let label = input.debugDescription
+            XCTAssertEqual(RFC822Parser.decodeQuotedPrintableBytes(Data(input.utf8)), Data("abc".utf8), label)
+            XCTAssertEqual(RFC822Parser.decodeQuotedPrintableBytes(input), Data("abc".utf8), label)
+        }
+    }
+
+    func testATruncatedEscapeAtTheEndOfTheInputStaysLiteral() {
+        for input in ["abc=X", "abc=", "abc=4"] {
+            XCTAssertEqual(RFC822Parser.decodeQuotedPrintableBytes(Data(input.utf8)), Data(input.utf8), input)
+            XCTAssertEqual(RFC822Parser.decodeQuotedPrintableBytes(input), Data(input.utf8), input)
+        }
+    }
+
+    func testASoftBreakBeforeMoreTextStillJoinsTheLines() {
+        for input in ["abc=\r\ndef", "abc=\ndef", "abc=\rdef"] {
+            let label = input.debugDescription
+            XCTAssertEqual(RFC822Parser.decodeQuotedPrintableBytes(Data(input.utf8)), Data("abcdef".utf8), label)
+            XCTAssertEqual(RFC822Parser.decodeQuotedPrintableBytes(input), Data("abcdef".utf8), label)
+        }
+    }
+
+    func testAMultipartQuotedPrintablePartEndingInASoftBreakHasNoStrayEquals() {
+        // Multipart text keeps the line break before the boundary (#546), so a
+        // part that ends in a soft break hands the decoder exactly this tail.
+        let body = "--b626\r\n"
+            + "Content-Type: text/plain; charset=utf-8\r\n"
+            + "Content-Transfer-Encoding: quoted-printable\r\n"
+            + "\r\n"
+            + "line one=\r\n"
+            + "--b626--\r\n"
+        let result = MIMEParser.parseBody(Data(body.utf8), headers: [
+            "content-type": "multipart/mixed; boundary=b626"
+        ])
+        XCTAssertEqual(result.textBody, "line one")
+    }
+
     func testQuotedPrintableStringOverloadStillEncodesLiteralsAsUTF8() {
         XCTAssertEqual(RFC822Parser.decodeQuotedPrintableBytes("日=20本"), Data("日 本".utf8))
     }

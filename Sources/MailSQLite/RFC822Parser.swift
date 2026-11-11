@@ -360,7 +360,12 @@ public enum RFC822Parser {
                 }
                 let next2 = text.index(after: next1)
                 guard next2 < text.endIndex else {
-                    appendLiteral(&data, String(text[i...next1]))
+                    // #626: a soft break can be the last thing in the input;
+                    // only a character that is not a line break is a
+                    // truncated escape.
+                    if !isLineBreak(text[next1]) {
+                        appendLiteral(&data, String(text[i...next1]))
+                    }
                     break
                 }
                 let hex = String(text[next1]) + String(text[next2])
@@ -380,8 +385,7 @@ public enum RFC822Parser {
                 // LF happened to work, which is why the defect survived. Same
                 // trap `decodeRFC2047` documents for its LWS scan (#125);
                 // decompose to scalars rather than compare whole clusters.
-                let scalars = String(text[next1]).unicodeScalars
-                if scalars.allSatisfy({ $0 == "\r" || $0 == "\n" }) {
+                if isLineBreak(text[next1]) {
                     i = text.index(after: next1)
                     continue
                 }
@@ -393,6 +397,12 @@ public enum RFC822Parser {
             i = text.index(after: i)
         }
         return data
+    }
+
+    /// Whether a character is a line break. Works on scalars because `\r\n`
+    /// is one grapheme that equals neither `\r` nor `\n` (#339).
+    private static func isLineBreak(_ character: Character) -> Bool {
+        character.unicodeScalars.allSatisfy { $0 == "\r" || $0 == "\n" }
     }
 
     /// Map charset name to Swift String.Encoding.

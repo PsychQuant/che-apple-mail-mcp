@@ -215,6 +215,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A quoted-printable soft break at the very end of a part no longer leaves a
+  stray `=`** ([#626](https://github.com/PsychQuant/che-apple-mail-mcp/issues/626)).
+  The decoder's end-of-input guard ran before its soft-break test, so `=` plus a
+  line break that was the last thing in the input was written out verbatim.
+  Multipart text keeps the line break before the boundary (#546), which made this
+  visible at the end of a body. A lone `=` or a truncated escape such as `=4`
+  still stays literal.
+
 - **A header value no longer ends at a Unicode line character**
   ([#555](https://github.com/PsychQuant/che-apple-mail-mcp/issues/555)).
   The header parser split lines with `CharacterSet.newlines`, which besides CR
@@ -397,6 +405,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that cannot be rolled back, and the read repair, each with its outcome code and
   `direct` step sequence. Two new tests take the timing CSV's `flock` from a
   separate process. These show the branches, not what the real Mail does.
+- **The stdio probe is pinned to `initialize`**
+  ([#623](https://github.com/PsychQuant/che-apple-mail-mcp/issues/623)). The
+  probe keeps `HOME` on its environment allow list, so a tool call through it
+  could reach the real Mail data. A new test scans its own source and fails if
+  any JSON-RPC method other than `initialize` is written there, and its message
+  lists what to inject first. The scan is textual, so a frame assembled from a
+  variable gets past it. The injection points stay deferred until a test needs
+  them; this is test code only.
 - **The stdio shutdown probe starts with an allow-listed environment and checks its own assumptions**
   ([#578](https://github.com/PsychQuant/che-apple-mail-mcp/issues/578)). The
   probe now starts with a small allow-listed environment (`PATH`, `HOME`,
