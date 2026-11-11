@@ -192,7 +192,7 @@ compose/create_draft/update_draft 支援 signature 物件（mail_default／none�
 | `exclude_mailboxes` | 字串清單；空清單 | 搜尋時排除指定 mailbox。條目若是 `Inbox`／`Drafts`／`Sent`／`Trash`／`Junk`（不分大小寫），先展開成該帳號 `get_special_mailboxes` 的實名再比對，字面條目保留；完整路徑或末段相等就排除，只靠末段相等排除的匣（可能是使用者自建資料夾）列在 Step 7 報告，不中止；展開不到實名或字面條目在所有帳號都不存在時印警告（不以搜尋零命中判定）。不寫 `Junk` 時垃圾郵件匣照舊進 corpus。 |
 | `subject_keywords` | 字串清單；空清單 | Step 2／3 增加 subject-keyword 搜尋，補抓原搜尋漏掉的 thread。 |
 | `participant_aliases` | email → 顯示名稱對應表；空對應表 | Step 1.4 以全域 identity 為基底，workspace 條目原樣補充新地址；衝突以全域為準且具名揭露。沒有 identity 檔時搜尋與 alias 解析不變（例外見 SOP Step 1.4 第 4 項）。Phase 1 候選與 audit 共用結果，不直接改 filter。 |
-| `dedup_strategy` | `index`（預設）、`last_archived`、`both` | Step 1.6／4：Message-ID 去重、日期去重，或兩者同時成立。`last_archived` 不讀也不寫 `email_index.json`；未登錄 target 的 Step 8.5 只做唯讀稽核（掃頂層 md 與日期稽核，不寫 index、不重建 threads，#545）；已登錄 target 經 `archive-mail-tree` reconcile 時，不論本地策略都跑完整 gate。 |
+| `dedup_strategy` | `index`（預設）、`last_archived`、`both` | Step 1.6／4：Message-ID 去重、日期去重，或兩者同時成立。`last_archived` 不讀也不寫 `email_index.json`，改在 Step 4.1 掃 `output_dir` 頂層檔案的 frontmatter，已有其 Message-ID 的信不再寫（Step 5.0 也以 skip file 交給伺服器；移出頂層的檔案看不到，#652）；未登錄 target 的 Step 8.5 只做唯讀稽核（掃頂層 md 與日期稽核，不寫 index、不重建 threads，#545）；已登錄 target 經 `archive-mail-tree` reconcile 時，不論本地策略都跑完整 gate。 |
 | `distributed_archives` | 歸檔目錄字串清單；空清單 | Step 2.1 讀取已分派歸檔的 Message-ID，併入 capture 層去重集合。 |
 | `sender_includes` | 字串清單；空清單不限制 | Step 4.0：每個 thread 至少一封信的寄件人符合此軸條件。 |
 | `sender_excludes` | 字串清單；空清單不排除 | Step 4.0：任一寄件人符合即排除整個 thread。 |

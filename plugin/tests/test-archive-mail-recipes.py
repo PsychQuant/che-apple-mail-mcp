@@ -4,6 +4,7 @@ import copy
 from datetime import date, timedelta, timezone
 import itertools
 import json
+import os
 from pathlib import Path
 import re
 import string
@@ -1356,6 +1357,105 @@ class ArchiveDedupSopTests(unittest.TestCase):
             self.assertIn("held_out_lines", section)
 
 
+class ArchiveArchivedSetTests(unittest.TestCase):
+    """Under last_archived, mail already in a top-level file is not rewritten (#652)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ns = {"__name__": "archive_recipe"}
+        for name in ("date", "scan", "dedup"):
+            exec(compile(recipe_code(name), name, "exec"), cls.ns)
+
+    def tempdir(self):
+        directory = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(directory, ignore_errors=True))
+        return directory
+
+    def test_archived_ids_from_a_scan_report(self):
+        # spec-example: archive-mail-dedup / archived ids from a scan report
+        ids = self.ns["archived_message_ids"]
+        self.assertEqual(ids({"usable": [{"message_id": "<a@x.test>"}, {"message_id": "<b@x.test>"}]}),
+                         frozenset({"<a@x.test>", "<b@x.test>"}))
+        self.assertEqual(ids({"usable": [], "unparseable": ["e.md"], "synthetic_placeholder": ["c.md"]}), frozenset())
+        self.assertEqual(ids({"usable": [{"message_id": None}, {"message_id": "  "}, "x", {"file": "f.md"}]}),
+                         frozenset())
+        for report in (None, "x", [], {"usable": "x"}):
+            with self.subTest(report=report):
+                self.assertEqual(ids(report), frozenset())
+
+    def test_archived_set_runs_the_real_scan_once(self):
+        directory = self.tempdir()
+        md = '---\nmessage_id: "%s"\ndate: "2026-06-30T10:00:00Z"\n---\nbody\n'
+        (Path(directory) / "a.md").write_text(md % "<a@x.test>", encoding="utf-8")
+        (Path(directory) / "s.md").write_text(md % "synthetic:x", encoding="utf-8")
+        (Path(directory) / "u.md").write_text("no frontmatter\n", encoding="utf-8")
+        archived, stats = self.ns["archived_set"](directory)
+        self.assertEqual(archived, frozenset({"<a@x.test>"}))
+        self.assertEqual(stats["scanned"], 3)
+        self.assertIsInstance(stats["seconds"], float)
+        self.assertGreaterEqual(stats["seconds"], 0)
+
+    def test_skip_file_contents(self):
+        # spec-example: archive-mail-dedup / skip file contents
+        state = os.path.join(self.tempdir(), "state", "archives", "slug")   # need not exist yet
+        write = self.ns["write_skip_file"]
+        path, written, left_out = write(frozenset({"<b@x.test>", "<a@x.test>"}), state)
+        self.assertEqual(Path(path).read_text(encoding="utf-8"), "<a@x.test>\n<b@x.test>\n")
+        self.assertEqual((written, left_out), (2, 0))
+        self.assertTrue(os.path.isabs(path))
+        self.assertEqual(os.path.dirname(os.path.dirname(path)), os.path.abspath(state))
+        self.assertEqual(os.stat(os.path.dirname(path)).st_mode & 0o777, 0o700)
+        path2, written, left_out = write({"<a@x.test>", " <b@x.test>", "<c\nd@x.test>", "#e@x.test", "  "}, state)
+        self.assertNotEqual(os.path.dirname(path2), os.path.dirname(path))
+        self.assertEqual(Path(path2).read_text(encoding="utf-8"), "<a@x.test>\n")
+        self.assertEqual((written, left_out), (1, 4))
+        path3, written, left_out = write(frozenset(), state)
+        self.assertEqual((Path(path3).read_text(encoding="utf-8"), written, left_out), ("", 0, 0))
+
+    def test_rows_decided_with_the_archived_set(self):
+        # spec-example: archive-mail-dedup / rows decided with the archived set
+        mark = self.ns["watermark_instant"]("2026-06-01T00:00:00Z")
+        archived = frozenset({"<a@x.test>"})
+        rows = [{"message_id": "<a@x.test>", "date_received": "2026-07-01T00:00:00Z"},
+                {"message_id": "<a@x.test>", "date_received": "2026-05-01T00:00:00Z"},
+                {"message_id": "<a@x.test>", "date_received": "not a date"},
+                {"message_id": "<b@x.test>", "date_received": "2026-07-01T00:00:00Z"}]
+        is_new = self.ns["make_is_new"](set() | archived, "last_archived", "2026-06-01T00:00:00Z", mark)
+        new, held = self.ns["split_new"](rows, is_new)
+        self.assertEqual((new, held), ([rows[3]], []))
+        hits = self.ns["count_archived_hits"](rows, archived, "last_archived", "2026-06-01T00:00:00Z", mark)
+        self.assertEqual(hits, 2)
+
+    def test_a_mail_already_archived_is_not_new_under_last_archived(self):
+        mark = self.ns["watermark_instant"]("2026-06-01T00:00:00Z")
+        row = {"message_id": "<a@x.test>", "date_received": "2026-07-01T00:00:00Z"}
+        is_new = self.ns["make_is_new"](frozenset({"<a@x.test>"}), "last_archived", "2026-06-01T00:00:00Z", mark)
+        self.assertEqual(self.ns["split_new"]([row], is_new), ([], []))
+
+
+class ArchiveArchivedSetSopTests(unittest.TestCase):
+    def test_steps_4_1_5_and_7_use_the_archived_set(self):
+        text = DOCUMENT.read_text()
+        step41 = text[text.index("#### Step 4.1: Dedup"):text.index("### Step 4.5:")]
+        self.assertIn("archived_set(output_dir)", step41)
+        self.assertIn("ARCHIVED_IDS", step41)
+        step50 = text[text.index("#### Step 5.0:"):text.index("#### Step 5.1:")]
+        self.assertIn("write_skip_file", step50)
+        self.assertIn("skip_message_ids_path", step50)
+        step51 = text[text.index("#### Step 5.1:"):text.index("### Step 5.5:")]
+        self.assertIn("ARCHIVED_IDS", step51)
+        step7 = text[text.index("### Step 7: 輸出報告"):text.index("### Step 8:")]
+        self.assertIn("頂層已有而未重寫", step7)
+        self.assertIn("掃描", step7)
+
+    def test_the_minus_n_promise_is_gone(self):
+        text = DOCUMENT.read_text()
+        self.assertNotIn("Step 5's collision guard then writes a `-N` duplicate", text)
+        self.assertNotIn("Step 5 的 collision guard 寫出 `-N` 重複檔），這是已知代價", text)
+        claude = (DOCUMENT.parents[1] / "CLAUDE.md").read_text()
+        self.assertIn("#652", claude)
+
+
 class ArchiveReverseInventoryTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -1564,7 +1664,8 @@ class ArchiveWatermarkTests(unittest.TestCase):
         self.assertNotIn('if email["date"] <= LAST_ARCHIVED', text)
         self.assertIn("停止並點名 `last_archived`", text)
         self.assertIn("帶時間但沒有時區的值（`2026-06-30T10:00:00`）不接受", text)
-        self.assertIn("`last_archived` 沒有 index，這種信每次執行都會重抓", text)
+        # #652 replaced the "-N on every run" promise: the target's top-level files now stop an archived mail
+        self.assertIn("`last_archived` 沒有 index，改由頂層檔案的 Message-ID 擋**", text)
         self.assertIn("日期早於參考值當天本機 00:00 的信，下一輪會被略過", text)
         self.assertNotIn("在參考值當天或之前的信", text)
         self.assertIn("`日期讀不出而保留: N 封` 一行（#600）", text)

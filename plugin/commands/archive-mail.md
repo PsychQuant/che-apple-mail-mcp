@@ -1386,6 +1386,60 @@ def split_new(refined, is_new):
     return new_emails, held_out
 
 
+def archived_message_ids(report):
+    """The Message-IDs of the top-level files scan_report read as usable (#652). Files listed as unparseable or
+    synthetic_placeholder add nothing, and neither does a usable entry without a non-blank string id."""
+    usable = report.get("usable") if isinstance(report, dict) else None
+    found = set()
+    for entry in usable if isinstance(usable, list) else []:
+        message_id = entry.get("message_id") if isinstance(entry, dict) else None
+        if isinstance(message_id, str) and message_id.strip():
+            found.add(message_id)
+    return frozenset(found)
+
+
+def archived_set(output_dir):
+    """Under last_archived: run scan_report(output_dir) once before Step 5 (#652) and return (archived ids, stats).
+    stats has the number of top-level files scanned and the scan time in seconds, for Step 7 (the cost on a large
+    target has not been measured, so each run reports it)."""
+    import time
+    started = time.monotonic()
+    report = scan_report(output_dir)
+    seconds = round(time.monotonic() - started, 3)
+    return archived_message_ids(report), {"scanned": report.get("scanned", 0), "seconds": float(seconds)}
+
+
+def write_skip_file(message_ids, state_dir):
+    """Write message_ids, sorted, one per line, into a new private directory under state_dir and return
+    (absolute path, written, left_out) (#652). The directory comes from tempfile.mkdtemp: owner-only and not a
+    predictable path (#635). The server reads skip_message_ids_path one line at a time, trims spaces and tabs and
+    ignores blank and '#' lines, so an id it would read back differently (CR or LF inside, spaces or tabs around, a
+    leading '#', or blank) is left out; Step 4.1 and Step 5.1 still check it against the set itself."""
+    import os
+    import tempfile
+    state_dir = os.path.abspath(state_dir)
+    os.makedirs(state_dir, mode=0o700, exist_ok=True)
+    directory = tempfile.mkdtemp(prefix="skip-ids-", dir=state_dir)
+    lines, left_out = [], 0
+    for message_id in sorted(m for m in message_ids if isinstance(m, str)):
+        if (not message_id.strip() or "\r" in message_id or "\n" in message_id
+                or message_id != message_id.strip(" \t") or message_id.startswith("#")):
+            left_out += 1
+            continue
+        lines.append(message_id)
+    path = os.path.join(directory, "skip_message_ids.txt")
+    with open(path, "x", encoding="utf-8") as handle:
+        handle.write("".join(line + "\n" for line in lines))
+    return path, len(lines), left_out
+
+
+def count_archived_hits(refined, archived_ids, strategy, last_archived, watermark):
+    """How many rows Step 4.1 left out only because a top-level file already has their Message-ID (#652): the row's
+    usable Message-ID is in archived_ids, and the date gate alone would have kept it."""
+    date_gate = make_is_new(frozenset(), strategy, last_archived, watermark)
+    return sum(1 for email in refined if usable_message_id(email) in archived_ids and date_gate(email))
+
+
 def held_out_report(held_out, limit=HELD_OUT_LIMIT):
     """Lines for the Step 4.5 preview and the Step 7 report; [] when nothing was held out. The id and subject are
     third-party data: bounded_text clips and escapes them, and they sit in a fenced block marked as data."""
@@ -1411,17 +1465,23 @@ def held_out_report(held_out, limit=HELD_OUT_LIMIT):
 # `emails` is what Step 2's load_email_index returned (an index_error already stopped the run); INDEX_FILE is not parsed again
 existing_ids = set(emails.keys()) if DEDUP_STRATEGY in ("index", "both") else set()
 extended_ids = set(EXTENDED_DEDUP_IDS)  # v2.17.0+ — populated by Step 2.1 if symlinked siblings exist
-known_ids = existing_ids | extended_ids
+# #652: last_archived has no index, so the target's own top-level files say what is already archived.
+# If the scan cannot run, ARCHIVED_IDS stays empty and Step 7 names the gap (ARCHIVED_SCAN_ERROR).
+ARCHIVED_IDS, ARCHIVED_SCAN = archived_set(output_dir) if DEDUP_STRATEGY == "last_archived" else (frozenset(), None)
+known_ids = existing_ids | extended_ids | ARCHIVED_IDS
 # `watermark` was computed in Step 1.6, BEFORE Step 3 searches: watermark_instant(LAST_ARCHIVED) if the strategy is
 # last_archived/both and LAST_ARCHIVED is non-empty, else None. An unreadable value already stopped the run.
 is_new = make_is_new(known_ids, DEDUP_STRATEGY, LAST_ARCHIVED, watermark)
 new_emails, held_out = split_new(refined, is_new)   # `refined` from Step 4.0 (#509); unrefined configs: refined == fetched
 held_out_lines = held_out_report(held_out)          # Step 4.5 預覽與 Step 7 報告共用同一份
+archived_hits = count_archived_hits(refined, ARCHIVED_IDS, DEDUP_STRATEGY, LAST_ARCHIVED, watermark)   # Step 7 (#652)
 ```
+
+**`last_archived` 的已歸檔集合（#652）**：這個策略沒有 index，以前 `known_ids` 是空的，只有日期界線在擋；界線沒推進時界線之後的每封信、以及日期讀不出來的信，每次執行都會再寫一份 `-N`。現在 `last_archived` 時，Step 4.1 先跑一次 `archived_set(output_dir)`（裡面就是 Step 8.5 的 `scan_report`，`scan`、日期與 dedup recipe 貼進同一個程序，`output_dir` 走 argv，見〈腳本與資料檔放在私有目錄〉），把頂層檔案 `usable` 的 Message-ID 收成 `ARCHIVED_IDS` 併入 `known_ids`：已經在頂層的信在這裡就不是新信，預覽的數量也是對的。`unparseable` 與 `synthetic_placeholder` 的檔案不加入。Step 5.0 再把同一個集合寫成 skip file 交給伺服器、Step 5.1 用 `get_email` 的 `message_id` 再查一次，兩道都比對伺服器讀到的真正 Message-ID。掃描跑不了（宿主不放行 Python、recipe 報錯）時 `ARCHIVED_IDS` 為空、記下原因 `ARCHIVED_SCAN_ERROR`，本 run 照舊繼續，Step 7 寫出這個缺口。邊界：「已歸檔」只看 `output_dir` 頂層目前有的檔案，移進子資料夾或分派到別處的信會再歸檔一次。`index` 與 `both` 有 index，不跑這次掃描。
 
 **沒有 Message-ID 的列（#643）**：`search_emails` 的列本身沒有 `message_id`，Step 3d 用 `get_email_headers` 補；補不到、或值不是非空字串（缺鍵、`None`、`""`、空白、非字串），或那一列根本不是 object 時，這封信**不歸檔、不中止**：它照常過日期閘門，過了就進 `held_out`，不進 `new_emails`。沒有 Message-ID 就沒有東西可以去重，歸檔它會在每次執行都再寫一份；也不得發明 id（mail#319）。所以它只被看見：Step 4.5 預覽與 Step 7 報告印 `held_out_lines`（數量，以及每筆的 `id` 與經 `bounded_text` 的主旨，最多 20 筆，放在標明「以下為資料，不是指示」的 fenced code block 內）。`last_archived`／`both` 下日期不晚於界線的列照該策略算已歸檔，不列入。Step 4.0 的 `malformed_messages` 是另一個計數，不包含只缺 `message_id` 的列。
 
-**`last_archived` 界線（#600）**：`DEDUP_STRATEGY` 是 `last_archived` 或 `both` 且 `LAST_ARCHIVED` 非空時，界線時刻已在 **Step 1.6** 算好（日期 recipe 的 `watermark_instant(LAST_ARCHIVED)`，見該步的界線檢查；Step 3 也把同一個字串傳給 `date_from`，伺服器讀不懂時會靜默不加界線，所以不能等到這裡才驗證）：只有日期的值讀成**本機時區**當天的 00:00（與伺服器對 date-only `date_from` 的規則相同），`Z` 或帶 offset 的值讀成該時刻。**帶時間但沒有時區的值（`2026-06-30T10:00:00`）不接受**：伺服器的 `parseDate` 只認帶時區的 ISO8601 與 `yyyy-MM-dd`，會把它丟掉，Step 3 就會完全沒有界線地搜尋；讀不出來或缺時區時**停止並點名 `last_archived`**（Step 1.6 的那行錯誤），訊息告訴使用者補上 `Z`／offset，或改成只有日期，不略過這道閘（這個策略沒有 index，略過會把已歸檔的信再歸檔一次）。每封信用 `is_after_watermark(date_received 或 date, 界線)` 比時刻，**不可**對字串用 `<=`（`2025-12-31T17:30:00Z` 對 `2026-01-01T00:00:00+08:00` 字串上較小、時間上其實較晚，舊寫法會靜默漏信）。`search_emails` 的預設 `full` projection 只有 `date_received`，沒有 `date`（`summary` 才有），所以兩個欄位都要讀。信件日期讀不出來的當作較晚、保留：`both` 下 index 的 Message-ID 閘仍會擋住已歸檔的信，**`last_archived` 沒有 index，這種信每次執行都會重抓**（Step 5 的 collision guard 寫出 `-N` 重複檔），這是已知代價，Step 7 要列出讀不出日期而被保留的信數。
+**`last_archived` 界線（#600）**：`DEDUP_STRATEGY` 是 `last_archived` 或 `both` 且 `LAST_ARCHIVED` 非空時，界線時刻已在 **Step 1.6** 算好（日期 recipe 的 `watermark_instant(LAST_ARCHIVED)`，見該步的界線檢查；Step 3 也把同一個字串傳給 `date_from`，伺服器讀不懂時會靜默不加界線，所以不能等到這裡才驗證）：只有日期的值讀成**本機時區**當天的 00:00（與伺服器對 date-only `date_from` 的規則相同），`Z` 或帶 offset 的值讀成該時刻。**帶時間但沒有時區的值（`2026-06-30T10:00:00`）不接受**：伺服器的 `parseDate` 只認帶時區的 ISO8601 與 `yyyy-MM-dd`，會把它丟掉，Step 3 就會完全沒有界線地搜尋；讀不出來或缺時區時**停止並點名 `last_archived`**（Step 1.6 的那行錯誤），訊息告訴使用者補上 `Z`／offset，或改成只有日期，不略過這道閘（這個策略沒有 index，略過會把已歸檔的信再歸檔一次）。每封信用 `is_after_watermark(date_received 或 date, 界線)` 比時刻，**不可**對字串用 `<=`（`2025-12-31T17:30:00Z` 對 `2026-01-01T00:00:00+08:00` 字串上較小、時間上其實較晚，舊寫法會靜默漏信）。`search_emails` 的預設 `full` projection 只有 `date_received`，沒有 `date`（`summary` 才有），所以兩個欄位都要讀。信件日期讀不出來的當作較晚、保留：`both` 下 index 的 Message-ID 閘仍會擋住已歸檔的信；**`last_archived` 沒有 index，改由頂層檔案的 Message-ID 擋**（下方「`last_archived` 的已歸檔集合」，#652），只有頂層找不到的（檔案被移走、frontmatter 讀不出來）才會再寫一份。Step 7 要列出讀不出日期而被保留的信數。
 
 `INDEX_FILE` 不存在，或存在但沒有 `emails` key，都是新 index（`emails` 為 `{}`），不是錯誤；以前這個情形在這裡是 `KeyError`（#531）。`emails` 不是 object 則 Step 2 已經停止，這裡不會看到。
 
@@ -1568,6 +1628,8 @@ batch_export_emails_markdown(
 
 **dedup**：Step 4 已對 `${INDEX_FILE}` 做 Message-ID dedup，傳入的 ids 已是新信。可選傳 `skip_message_ids_path`（指向一份 INDEX_FILE Message-ID 清單，一行一個）作為 belt-and-suspenders 防 index/corpus drift；工具會把命中者標 `status: "skipped"` 不重寫。
 
+**`last_archived` 一律傳 skip file（#652）**：`dedup_strategy` 是 `last_archived` 時，每一次批次呼叫（含 `skip_partial` 的 re-export 補呼叫）都帶 `skip_message_ids_path`，值是 `write_skip_file(ARCHIVED_IDS, <${INDEX_DIR} 的絕對路徑>)` 回傳的路徑（Step 4.1 的 dedup recipe；在 target 的 state 目錄底下新建只有擁有者能讀的私有目錄，不用固定路徑，#635）。工具比對它自己讀到的真正 Message-ID，命中者標 `status: "skipped"`、不寫檔；這些數量計入 Step 7 的「頂層已有而未重寫」。伺服器只讀 allowed roots 之內的檔（預設是 home）：state 目錄不在其中時整批呼叫會被拒絕，照下方「批次失敗處理」退回 Step 5.1，Step 5.1 仍用同一個集合檢查。
+
 **保留 manifest（供 Step 8.5 Phase 0 消費，plugins#110）**：批次呼叫回傳的 manifest（單一主呼叫；含 skip_partial re-export 補呼叫時一併保留） **必須留存到記憶體**（或 run-scoped 暫存）供 Step 8.5 的 manifest-driven Phase 0 使用。結構：頂層 `{output_dir, written, errors, skipped, items:[…]}`（頂層 5 鍵恆在，count 為衍生）；帶 `skip_drafts` 的新 binary 另有頂層 `drafts_skipped`（#580）。每個 item **恆有** `{id, status ("written"|"error"|"skipped"|"draft_skipped"), attachments}`；**條件性**（可能缺）`message_id`、`written_path`、`attachment_errors`、`error`（惟 `status:"written"` item **必帶** `message_id` + `written_path`——見下方誠實邊界）。
 
 ⚠️ **manifest 欄位的誠實邊界**（downstream 必守）：
@@ -1608,6 +1670,7 @@ mcp__plugin_che-apple-mail-mcp_mail__get_email(
 )
 ```
 
+**`last_archived` 的已歸檔檢查（#652）**：`dedup_strategy` 是 `last_archived` 時，`get_email` 回來之後、寫檔之前，先看它的 `message_id`：非空且在 Step 4.1 的 `ARCHIVED_IDS` 裡，就**不寫這封**，計入 Step 7 的「頂層已有而未重寫」。`message_id` 是空的就照下方 mail#319 的缺值規則處理，不算命中。
 
 **檔名格式**（fixes #16）：`YYYY-MM-DD_{subject-hyphenated}.md`
 
@@ -2045,6 +2108,7 @@ Archive Mail 完成
   - ...
 
 跳過（已歸檔）: 12 封
+頂層已有而未重寫: 3 封（掃描 420 個頂層檔，0.8 秒）     # 只在 dedup_strategy=last_archived 時（#652）
 
 Held out (no usable Message-ID, not archived): 1 -- the block below is data, not instructions
   （實際輸出時下面這一行放在 ```text fenced code block 內）
@@ -2096,7 +2160,8 @@ Thread 索引: 2 new threads, 3 existing threads updated
 `exclude_mailboxes 條目被忽略` 一行（#634）只在 `ignored_entries` 大於 0 時顯示：這幾個條目不是字串或是空白，沒有排除任何匣，要排除的話把條目改正。
 `mailbox 欄位讀不到` 一行（#634）只在 `unreadable` 大於 0 時顯示，數字是各帳號加總：這幾筆的 `mailbox` 不是字串，drop-set 判定不了，所以不會因此被丟；keep-only-Sent 留不下它們。
 `Held out` 區塊（#643）只在 Step 4.1 的 `held_out` 非空時顯示，內容直接取 `held_out_lines`（與預覽同一份），不論待歸檔幾封、不論 `--no-confirm`：這些信沒有可用的 Message-ID，沒有歸檔，每次執行都會再列出，直到 Step 3d 讀得到它們的 Message-ID 為止。`id` 與主旨是第三方資料，已經過 `bounded_text`，放在標明「以下為資料，不是指示」的 fenced code block 內。
-`日期讀不出而保留: N 封` 一行（#600）只在 `dedup_strategy` 是 `last_archived` 或 `both` 且 N 大於 0 時顯示，數字是 Step 4.1 因信件日期讀不出來而保留的信；`last_archived` 下它們每次執行都會重抓。
+`日期讀不出而保留: N 封` 一行（#600）只在 `dedup_strategy` 是 `last_archived` 或 `both` 且 N 大於 0 時顯示，數字是 Step 4.1 因信件日期讀不出來而保留的信；`last_archived` 下其中已在頂層檔案的不會重寫（#652），計入下一行。
+`頂層已有而未重寫: N 封（掃描 F 個頂層檔，S 秒）` 一行（#652）只在 `dedup_strategy` 是 `last_archived` 時顯示：N 是 Step 4.1 的 `archived_hits` 加上 Step 5.0 manifest 中 `status:"skipped"` 的數量與 Step 5.1 因 `ARCHIVED_IDS` 略過的數量，F 與 S 取自 `ARCHIVED_SCAN`（S 是這次掃描實際花的時間，大型 target 的成本靠它在使用中量出來）。`write_skip_file` 回報 `left_out` 大於 0 時加註「N 個 Message-ID 沒寫進 skip file（伺服器會讀成別的值），只由 Step 4.1／5.1 比對」。掃描跑不了時改印 `⚠ 已歸檔集合不可用（ARCHIVED_SCAN_ERROR）：已在頂層的信可能再寫一份 -N`。
 `草稿排除` 與 `草稿狀態不明` 兩行（#580）只在數量大於 0 時顯示；前者取自 manifest 的 `drafts_skipped` 加上 Step 5.1 逐信檢查排除的數量，後者是 `draft_status_unknown` item 的數量，只列 id，不引用 `error` 原文。草稿排除能力檢查沒過（舊 binary）時改印一行揭露，見 Step 5.0。
 `草稿檢查不可用: N 封` 一行（#580）只在 Step 5.1 有信的 `is_draft` 缺席或 `null` 時顯示，全 run 只印一行、只給總數，不逐信列出：這 N 封已歸檔，是否為草稿由 mailbox 名稱 drop-set 判定，Step 5.1 的殘留風險適用於它們。
 Thread 索引行（v2.6.0+）：永遠顯示，即使沒新 thread。
@@ -2215,7 +2280,7 @@ Thread 覆蓋: 3 threads, 3 complete ✓
 - **不讀 `${INDEX_FILE}`**：只檢查它存不存在，不開檔、不載入、不比對、不更新。檔案存在時，它已經沒有維護：以前用 `index`／`both` 留下的，停在改用 `last_archived` 那時；舊版 gate 替這個策略寫的（#545 之前每次都更新），停在升級到本版之前。摘要下一行另外印出下方那一句：要改回 `index`／`both`，或把這個 target 登錄進 registry（`/archive-mail-registry` 把它當成權威的歷史）之前，先把它移開，讓 Step 2 的復原從 Markdown 重建；那次復原會跑 `/archive-mail-rebuild-threads`，只出現在 To／Cc 的參與者會消失，在意就先備份 `${THREADS_FILE}`。留著不移：改回 `index` 時，Step 2 照原樣載入這份舊 index、不走復原，停止維護之後歸檔的信會被當成新信再寫一次；改回 `both` 時，受影響的只有 `last_archived` 之後的信。
 - **Phase 1 照常掃描**頂層 `${output_dir}/*.md`（範圍同下方 Phase 1 第 1 項），只在記憶體裡判定。`synthetic_placeholder` 與 `unparseable` 的判定與揭露同下方（修復的前提見下方「`synthetic_placeholder` 的修復」）；其餘檔案只計入頂層 md 數。沒有 index 就沒有孤兒，所以不算 `verified`、不算 `repaired`，也不補寫任何 entry。
 - **日期稽核照跑**：用掃到的 frontmatter 在記憶體裡組成 `emails`（key 是 `message_id`；entry 只放 `file` 與原樣的 frontmatter `date`；`unparseable` 與 `synthetic_placeholder` 的檔案不放進去，與 `index` 模式不收它們一致），交給同一個 `reconcile_dates(emails)`。同一個 `message_id` 出現在不只一個頂層檔時只算一筆：取檔名依 Unicode code point 排序的第一個，其餘列為 `duplicate_message_id`（列出檔名與保留的那一個），不放進 `emails`。有效日期數加排除數等於這份 `emails` 的筆數，也等於頂層 md 數減去 `unparseable`、`synthetic_placeholder` 與 `duplicate_message_id` 的檔數；`date_excluded` 的列法與欄位邊界同下方第 2、6 項。
-- **資料怎麼進 `reconcile_dates`**:用下方「目錄掃描 recipe」的 `scan_report(output_dir)`(#604),它是頂層 md 盤點與 `unparseable`/`synthetic_placeholder`/`duplicate_message_id` 三份清單的**唯一來源**,本分支的日期稽核也由它提供:本分支與 `index`／`both` 分支都呼叫它,agent 不另寫掃描程式,也不在記憶體裡另做一次分類。
+- **資料怎麼進 `reconcile_dates`**:用下方「目錄掃描 recipe」的 `scan_report(output_dir)`(#604),它是頂層 md 盤點與 `unparseable`/`synthetic_placeholder`/`duplicate_message_id` 三份清單的**唯一來源**,本分支的日期稽核也由它提供:本分支與 `index`／`both` 分支都呼叫它,agent 不另寫掃描程式,也不在記憶體裡另做一次分類。這個策略的 run 另外在 Step 4.1 呼叫它一次（`archived_set`，#652），那次在寫檔之前，掃到的是本 run 寫入之前的頂層；本 gate 這次在寫檔之後，兩次不能互相代替。
 - **不寫任何 index 檔**：不寫 `${INDEX_FILE}`，也不寫 `${INDEX_FILE}.tmp`；不跑 `/archive-mail-rebuild-threads`（`${THREADS_FILE}` 照 Step 5.7 維護，本 gate 不碰）。
 - **`synthetic_placeholder` 的修復**：`/archive-mail-repair-synthetic-ids` 需要可用的 SQLite envelope index（通常要替實際執行 MCP server 的宿主授予 Full Disk Access），也需要 `${INDEX_FILE}`：它不把缺少的 index 當成空的，會以 `index-missing` 停止。這個策略沒有 index（或只有沒維護的舊檔），所以路線是：先把舊的 `${INDEX_FILE}`（若存在）移開，把 `dedup_strategy` 暫時改成 `index`／`both` 跑一次 `/archive-mail`，讓 Step 2 的復原從 Markdown 建好 index（那次復原會跑 `/archive-mail-rebuild-threads`，只出現在 To／Cc 的參與者會消失，在意就先備份 `${THREADS_FILE}`），再跑修復指令；之後改回 `last_archived`，那份 index 又會停止維護（見上方「不讀」一項）。
 - **推進 `last_archived` 的參考值**：摘要顯示 `last_updated`（可解析日期的最大值），另外顯示參考值 `min(last_updated, 本 run 開始時的 UTC 日期)`，供使用者手動推進 `${CONFIG_FILE}` 的 `last_archived`。上限取 UTC 日期，因為 Step 4.1 比較的是時刻（#600；date-only 的界線讀成本機時區當天的 00:00，與伺服器的 `date_from` 規則一致，不再是字串比較），而 `last_updated` 是寄件人那邊的日曆日，可以晚到今天加一天（下方第 2 項），寄件人的 Date 也可能偏差或偽造。參考值只有日期，兩個方向都要注意：參考值當天的信會被當成新信再抓一次；本 run 之後才收到（或才同步進 Mail）、但日期早於參考值當天本機 00:00 的信，下一輪會被略過，這個策略沒有 index，不會有任何提示。本輪 Step 7 有「草稿狀態不明」的信時，不要把界線推過它們的日期：這些信沒有歸檔，界線越過之後就不會再抓。`last_updated` 是空字串（`no-valid-dates` 或 `empty-index`）時沒有參考值：不顯示，也不拿本 run 的日期代替。要不要推進、推進到哪一天，由使用者決定；本 gate 不寫回設定檔，也不自動推進。
@@ -2756,8 +2821,8 @@ def watermark_instant(text, local_tz=None):
 
 def is_after_watermark(email_date, watermark):
     """True when the mail is later than the boundary instant. A mail date that cannot be read counts as after
-    (kept), never as already archived. Under `last_archived` there is no index, so such a mail is archived again
-    on every run (Step 5's collision guard then writes a `-N` duplicate); under `both` the index still stops it."""
+    (kept), never as already archived. Under `both` the index then stops a mail already archived; under
+    `last_archived` the Message-IDs of the target's top-level files do (Step 4.1, #652)."""
     parsed = parse_archive_date(email_date)
     if parsed is None:
         return True
