@@ -73,4 +73,16 @@ final class HandlerAccountMappingTests: XCTestCase {
         XCTAssertFalse(scripts.all.contains { $0.contains("account id") }, "\(scripts.all)")
         XCTAssertTrue(scripts.all.contains { $0.contains(#"account "nobody@example.invalid""#) }, "\(scripts.all)")
     }
+
+    // spec-example: message-composition / the injected mapping answers and the signature list is unreadable
+    /// #654: `create_draft`'s direct-write path answers its account gate from the injected mapping
+    /// too. The test calls the path's two lookups; it does not run the path (that needs the opt-in
+    /// variable and Mail 16 on macOS 27), so it reaches no gate and no Mail.
+    func testTheDirectDraftPathAnswersFromTheInjectedMapping() async throws {
+        let (server, _) = try await makeServer(mapping: ["UUID-A": "a@example.invalid"])
+        let path = server.directDraftPath()
+        XCTAssertEqual(path.accountUUIDs("A@EXAMPLE.INVALID"), ["UUID-A"])
+        XCTAssertEqual(path.accountUUIDs("nobody@example.invalid"), [])
+        XCTAssertNil(path.accountSignatureIDs("UUID-A"), "the mapping holds no signature list: it reads as unreadable")
+    }
 }

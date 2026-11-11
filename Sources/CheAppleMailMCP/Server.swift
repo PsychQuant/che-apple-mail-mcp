@@ -30,7 +30,8 @@ class CheAppleMailMCPServer {
          initialSync: Bool = true,
          classificationDirectory: URL = ClassificationPolicyStore.defaultDirectory,
          classificationLoader: (@Sendable (String) async throws -> ClassificationMessage)? = nil,
-         accountMapping: [String: String]? = nil) async throws {
+         accountMapping: [String: String]? = nil,
+         vipMailboxesPath: String? = nil) async throws {
         self.accountMapping = accountMapping
         self.classificationStore = ClassificationPolicyStore(directory: classificationDirectory)
         self.classificationEngine = ClassificationPlanEngine(store: self.classificationStore)
@@ -60,7 +61,8 @@ class CheAppleMailMCPServer {
         // The FDA probe reads the same path as the open, so a probe started
         // against a test-owned path never touches the user's index (#329 verify).
         self.indexProvider = IndexReaderProvider(
-            open: { try EnvelopeIndexReader(databasePath: databasePath, accountMapping: accountMapping) },
+            open: { try EnvelopeIndexReader(databasePath: databasePath, accountMapping: accountMapping,
+                                            vipMailboxesPath: vipMailboxesPath) },
             probe: { FDAStatus.probeDetail(path: databasePath) },
             log: { Diagnostics.emit($0) })
         _ = indexProvider.current()
@@ -1488,7 +1490,7 @@ class CheAppleMailMCPServer {
             // write the draft straight into Mail's store; anything outside the
             // verified range falls back to the GUI path, with a note. #475: the
             // whole call is one timing run when CHE_MAIL_COMPOSE_TIMING_CSV is set.
-            let directPath = DirectDraftPath(controller: mailController, reader: indexReader)
+            let directPath = directDraftPath()
             return try await DirectDraftPath.createDraft(
                 csvPath: ComposeTiming.csvPathFromEnvironment, directEnabled: DirectDraft.isEnabled,
                 direct: {
@@ -2698,6 +2700,19 @@ class CheAppleMailMCPServer {
         }
         return try resolveAccountIdForTool(accountId: accountId, accountName: accountName, tool: tool,
                                            uuidsForEmail: { AccountMapper.uuids(forEmail: $0, in: accountMapping) })
+    }
+
+    /// The direct-write path `create_draft` uses (#654). Without `accountMapping` this is the
+    /// plain path: on each call the account gate reads AccountsMap.plist, and the signature gate
+    /// reads it too unless iCloud-synced signatures exist (then the list is unknown). With one, the account gate
+    /// answers from the mapping alone, and the signature gate reads the list as unreadable (the
+    /// mapping holds none), so `mail_default` takes the GUI path. Internal for the tests.
+    func directDraftPath() -> DirectDraftPath {
+        var path = DirectDraftPath(controller: mailController, reader: indexReader)
+        guard let accountMapping else { return path }
+        path.accountUUIDs = { AccountMapper.uuids(forEmail: $0, in: accountMapping) }
+        path.accountSignatureIDs = { _ in nil }
+        return path
     }
 
     /// The one answer a caller gets for an export path the policy refuses (#625,

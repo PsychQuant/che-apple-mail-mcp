@@ -68,4 +68,31 @@ final class IndexReaderWiringGuardTests: XCTestCase {
         XCTAssertFalse(source.contains("self.indexReader ="),
                        "init must not assign a reader directly any more (#537)")
     }
+
+    /// #654: `create_draft` builds its direct-write path through the server's factory, so a test's
+    /// mapping reaches the account gate. The factory holds the only construction, and the injected
+    /// lookup uses the mapping alone. Structural only: the nil path reads the machine's plist.
+    func testCreateDraftBuildsItsDirectPathThroughTheServersMapping() throws {
+        let source = try serverSource()
+        let code = source.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+        XCTAssertEqual(code.filter { $0.contains("DirectDraftPath(") },
+                       ["var path = DirectDraftPath(controller: mailController, reader: indexReader)"])
+        XCTAssertEqual(code.filter { $0.contains("directDraftPath()") },
+                       ["let directPath = directDraftPath()", "func directDraftPath() -> DirectDraftPath {"])
+        // The whole factory body, in order (#654 verify): a line placed above the guard would run in
+        // production, so nothing may be added, removed or moved without changing this list.
+        let start = try XCTUnwrap(code.firstIndex(of: "func directDraftPath() -> DirectDraftPath {"))
+        let end = try XCTUnwrap(code[start...].firstIndex(of: "}"))
+        XCTAssertEqual(Array(code[start...end]), [
+            "func directDraftPath() -> DirectDraftPath {",
+            "var path = DirectDraftPath(controller: mailController, reader: indexReader)",
+            "guard let accountMapping else { return path }",
+            "path.accountUUIDs = { AccountMapper.uuids(forEmail: $0, in: accountMapping) }",
+            "path.accountSignatureIDs = { _ in nil }",
+            "return path",
+            "}",
+        ])
+    }
 }

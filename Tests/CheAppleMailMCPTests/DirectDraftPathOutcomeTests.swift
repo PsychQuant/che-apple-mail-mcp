@@ -297,6 +297,29 @@ final class DirectDraftPathOutcomeTests: XCTestCase {
         XCTAssertTrue(log.contains("messages.remote_id read failed"), log)
     }
 
+    // spec-example: message-composition / a missing messages table is reported on stderr
+    /// #653: a failed read of the read flag still means "cannot tell", and now says why.
+    func testAFailedReadFlagReadNamesItsCause() async throws {
+        let (writer, inserted) = try writerFacingUpload(actionRowId: 999)
+        try store.exec("ALTER TABLE messages RENAME TO messages_hidden")
+        var flag: Bool?? = .none
+        let log = try await capturingStderr { flag = .some(writer.readFlag(inserted)) }
+        XCTAssertEqual(flag, .some(nil), "a failed read answers cannot tell")
+        XCTAssertTrue(log.contains("messages.read read failed"), log)
+    }
+
+    // spec-example: message-composition / a deleted draft row reads as cannot tell without a log line
+    /// #653, the other side: a read that works and finds no row is not a failed read.
+    func testAReadFlagRowThatIsGoneLogsNothing() async throws {
+        let writer = try DraftStoreWriter(databasePath: store.databasePath)
+        let gone = DraftStoreWriter.Inserted(messageRowId: 999, conversationId: 0, globalDataRowId: 0,
+                                             actionRowId: 999, messageIdHash: 0, emlxPath: "")
+        var flag: Bool?? = .none
+        let log = try await capturingStderr { flag = .some(writer.readFlag(gone)) }
+        XCTAssertEqual(flag, .some(nil), "no row answers cannot tell")
+        XCTAssertEqual(log, "", "a row that is gone is not a failed read")
+    }
+
 }
 
 /// The background work of a Mail stand-in, kept so a test can await it and see it fail.

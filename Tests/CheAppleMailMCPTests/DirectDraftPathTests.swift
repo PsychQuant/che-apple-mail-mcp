@@ -334,6 +334,7 @@ final class DirectDraftPathTests: XCTestCase {
         }
     }
 
+    // spec-example: message-composition / an empty local list becomes unreadable once iCloud signatures appear
     /// With iCloud-synced signatures present, the local list may be stale, so
     /// the account's signatures are unknown (#322 verify).
     func testICloudSignaturesMakeTheLocalListUnknown() throws {

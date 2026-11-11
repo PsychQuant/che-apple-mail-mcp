@@ -175,14 +175,14 @@ final class DraftStoreWriterTests: XCTestCase {
     /// the file; the row is put back afterwards because the snapshot is shared
     /// by the whole class. Three things are checked, each because a weaker
     /// check passed a broken writer (#498 verify):
-    /// - placement was reached before the failure: `placeEmlx` creates the
-    ///   row's `Messages` directory, which did not exist before. This relies on
-    ///   the failed insert leaving that directory behind, empty (#503); if #503
-    ///   removes it, prove placement another way;
+    /// - placement was reached before the failure: the writer's test-only
+    ///   placement hook sees the .emlx on disk once it is placed (#503; before
+    ///   #503 this relied on the failed insert leaving the `Messages` directory
+    ///   behind, which it no longer does);
     /// - the transaction really ended: a second connection must be able to take
     ///   the write lock while the writer is still alive (row counts read on
     ///   another connection cannot see an uncommitted transaction);
-    /// - no row and no file is left.
+    /// - no row, no file and none of the directories the insert created is left (#503).
     /// Not covered: taking the write lock at the start (`BEGIN IMMEDIATE`);
     /// a plain `BEGIN` passes this test.
     func testInsertRemovesThePlacedFileWhenALaterStepFails() throws {
@@ -211,15 +211,35 @@ final class DraftStoreWriterTests: XCTestCase {
         let emlxPath = try XCTUnwrap(EmlxParser.newEmlxPath(rowId: Int(seqBefore + 1), mailboxURL: f.url))
         let messagesDir = (emlxPath as NSString).deletingLastPathComponent
         XCTAssertFalse(FileManager.default.fileExists(atPath: messagesDir), "the fixture must not pre-create the Messages directory")
+        // The shallowest level the insert creates: the first hash directory under Data,
+        // or Messages itself when the row id needs no hash directory (#503 verify).
+        let hash = EmlxParser.hashDirectoryPath(rowId: Int(seqBefore + 1))
+        let shallowestCreated: String
+        if let first = hash.split(separator: "/").first {
+            let dataDir = String(messagesDir.dropLast("/\(hash)/Messages".count))
+            shallowestCreated = "\(dataDir)/\(first)"
+        } else {
+            shallowestCreated = messagesDir
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: shallowestCreated), "the fixture must not pre-create the hash directories")
 
         let writer = try DraftStoreWriter(databasePath: db)
+        var placedFileSeen = false
+        writer.placementHook = { step in
+            if case .filePlaced(let path) = step {
+                XCTAssertEqual(path, emlxPath)
+                placedFileSeen = FileManager.default.fileExists(atPath: path)
+            }
+        }
         try withExtendedLifetime(writer) {
             XCTAssertThrowsError(try writer.insert(draft(f), emlx: Data("1234      \nfake message bytes".utf8))) {
                 XCTAssertEqual($0 as? DraftStoreWriter.WriteError, .sql("no WriteTransactionGeneration"))
             }
-            XCTAssertTrue(FileManager.default.fileExists(atPath: messagesDir),
-                          "placeEmlx must have been reached before the failure: it creates the row's Messages directory, "
-                          + "which a failed insert currently leaves behind, empty (#503). If #503 removes it, prove placement another way.")
+            XCTAssertTrue(placedFileSeen, "the .emlx must have been placed before the failure")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: messagesDir),
+                           "the Messages directory the insert created must be removed with the file (#503)")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: shallowestCreated),
+                           "every directory level the insert created must be removed, the shallowest too (#503)")
             XCTAssertTrue(try canTakeWriteLock(db), "the writer must have ended its transaction (ROLLBACK), not left it open")
         }
         XCTAssertEqual(tables.map { scalar(db, "SELECT count(*) FROM \($0)") }, rowsBefore)
