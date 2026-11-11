@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`forward_email` can save the forward as a draft**
+  ([#599](https://github.com/PsychQuant/che-apple-mail-mcp/issues/599)). The new
+  `save_as_draft` (boolean, default false) saves a forward that carries a body
+  with ⌘S through the same paste path instead of sending it, like
+  `reply_email`'s draft mode. A forward without a body and
+  `save_as_draft: true` is refused by name before any Mail call, because the
+  bodyless forward is Mail's native `forward` verb followed by `send`; a
+  bodyless draft mode is tracked in
+  [#673](https://github.com/PsychQuant/che-apple-mail-mcp/issues/673). Without
+  `save_as_draft` the call sends, as before, and the tool description now says
+  so in its first sentence. A timeout on the draft path is not reported as an
+  unknown send state; the send path's handling is unchanged. The draft mode has
+  not been run against Mail yet.
+
 - **`get_mail_log_events` can filter by event name**
   ([#466](https://github.com/PsychQuant/che-apple-mail-mcp/issues/466)). The new
   `events` parameter (1 to 20 values) keeps only events whose `event` field is

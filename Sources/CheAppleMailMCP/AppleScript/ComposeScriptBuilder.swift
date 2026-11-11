@@ -1163,12 +1163,14 @@ func buildReplyEmailPasteScript(
 
 /// #218 — wrapper-free forward: native `forward` verb (Mail quotes the original)
 /// + clipboard paste of the plain new note at the cursor. `to` recipients are set
-/// natively on the forward message. Forward always sends (no draft mode in the
-/// `forward_email` tool). The new note is NEVER `set content`/`set html content`.
+/// natively on the forward message. #599: `saveAsDraft` saves the forward with ⌘S
+/// instead of sending it with ⇧⌘D (default: send, as before). The new note is
+/// NEVER `set content`/`set html content`.
 func buildForwardEmailPasteScript(
     messageRef: String,
     to: [String],
-    newBody: String
+    newBody: String,
+    saveAsDraft: Bool = false
 ) -> String {
     let nativeLines = to.isEmpty ? "" : "\n" + recipientFragment(to, kind: "to")
 
@@ -1178,8 +1180,8 @@ func buildForwardEmailPasteScript(
         msgVar: "fwdMsg",
         newBody: newBody,
         nativeLines: nativeLines,
-        send: true,
-        successLabel: "Email forwarded successfully (paste path)",
+        send: !saveAsDraft,
+        successLabel: saveAsDraft ? "Forward saved as draft (paste path)" : "Email forwarded successfully (paste path)",
         notOpenedError: "forward did not open a compose window"
     )
 }

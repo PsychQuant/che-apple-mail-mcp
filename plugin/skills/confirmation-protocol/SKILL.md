@@ -45,7 +45,7 @@ TaskCreate(subject="confirm_phase4_execute_or_iterate",
 | **Bulk operation** | search 結果 ≥ 5 封 | 🟡 建議 confirm |
 | **Destructive** | delete_email、empty Trash、bulk move | 🔴 必 confirm |
 | **Compose 寄出** | compose_email、reply_email | 🔴 必 confirm |
-| **Outbound side effect** | mark_as_junk、forward_email | 🟡 建議 confirm |
+| **Outbound side effect** | mark_as_junk、forward_email（`save_as_draft: true` 只存草稿，不寄出，#599）| 🟡 建議 confirm |
 
 **Skip confirm**(可以直接執行):
 - 明確 Message-ID 的 read-only 操作(get_email、list_attachments)

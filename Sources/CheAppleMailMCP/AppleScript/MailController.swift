@@ -2089,9 +2089,17 @@ actor MailController {
     }
 
     /// Forward an email
-    func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil, format: BodyFormat = .plain, accountId: String? = nil) throws -> String {
+    func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil, format: BodyFormat = .plain, accountId: String? = nil, saveAsDraft: Bool = false) throws -> String {
         // Issue #41: validate forward recipients at the boundary.
         try validateEmailAddresses(to, field: "to")
+        // #599: the bodyless forward is Mail's native `forward` verb followed by `send`, with no keystroke step that
+        // could save it instead; refuse by name before any Mail call until #673 adds a bodyless draft mode.
+        if saveAsDraft && body == nil {
+            throw MailError.invalidParameter(
+                "forward_email cannot save a forward without a body as a draft yet (#673): the bodyless forward "
+                + "has no step that could save instead of send. Pass a body (a short note is enough) with "
+                + "save_as_draft: true, or forward the message in Mail by hand. This call created and sent nothing.")
+        }
         let ref = resolveMsgRef(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName)
 
         // #218/#304: with a NEW body, the native-verb + paste path is the only
@@ -2104,18 +2112,22 @@ actor MailController {
         guard let newBody = body else {
             return try runScript(buildForwardNoBodyScript(messageRef: ref, to: to))
         }
-        // #301: the with-body forward paste path always dispatches a send.
+        // #301: the with-body forward paste path dispatches a send, unless #599's save_as_draft saves it with ⌘S.
         return try dispatchComposePath(
             refusal: replyForwardRefusalForCall(format: format),
             cleanPath: {
                 let pasteScript = buildForwardEmailPasteScript(
-                    messageRef: ref, to: to, newBody: newBody)
+                    messageRef: ref, to: to, newBody: newBody, saveAsDraft: saveAsDraft)
                 return try withClipboardPreserved { try runGuiScript(pasteScript, timeout: Self.guiScriptTimeout) }
             },
             // #254/#304: a post-dispatch (or timeout) failure leaves the send
             // state UNKNOWN — report that rather than a bare GUI error. Every
             // other runtime failure propagates verbatim.
+            // #599: a saved draft sends nothing, so the draft flow consults neither gate and its errors propagate
+            // verbatim, as `createDraft`'s do (#301: a duplicated draft is visible and harmless); a timeout keeps its
+            // own draft-save hint. The send flow's gate below is unchanged (timeout-outcome-boundary.md rule 2).
             mapRuntimeError: { error in
+                if saveAsDraft { return error }
                 guard isPostDispatchError(error) || isTimeoutError(error) else { return error }
                 return unknownReplyForwardSendStateError(noun: "forward", error: error)
             })
