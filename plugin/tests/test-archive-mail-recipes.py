@@ -982,6 +982,32 @@ class ArchiveThreadOrderTests(unittest.TestCase):
                 self.assertEqual(self.dates["thread_bounds"]([{"date": value, "file": "a.md"}]),
                                  {"first_message": None, "last_message": None})
 
+    def test_refused_zones_are_placed_by_their_day(self):
+        # spec-example: archive-mail-thread-order / thread order with refused zones
+        jan, cst = "2026-01-01T00:00:00Z", "Tue, 30 Jun 2026 10:00:00 CST"
+        kst, dec = "Wed, 1 Jul 2026 09:00:00 KST", "2026-12-01T00:00:00Z"
+        msgs = [{"date": d, "file": f} for d, f in ((jan, "a.md"), (cst, "b.md"), (kst, "c.md"), (dec, "d.md"))]
+        for perm in itertools.permutations(msgs):
+            ordered, unreadable = self.dates["thread_order"](list(perm))
+            self.assertEqual([m["date"] for m in ordered], [jan, cst, kst, dec])
+            self.assertEqual(unreadable, ["b.md", "c.md"])
+        got, unreadable = self.order("garbage", "2026-07-01T00:00:00Z")
+        self.assertEqual((got, unreadable), (["2026-07-01T00:00:00Z", "garbage"], ["f0.md"]))
+        key = self.dates["thread_sort_key"]
+        self.assertEqual(key("Tue, 30 Jun 2026 10:00:00 -0000", "x")[:3], key("2026-06-30T10:00:00Z", "x")[:3])
+        self.assertEqual(self.order("Tue, 30 Jun 2026 10:00:00 -0000", "2026-06-30T10:00:00Z")[1], [])
+        self.assertEqual(key(cst, "x"), key("2026-06-30", "x"))   # placed like a date-only value of that day
+        self.assertEqual(key("2026-06-30", "x"), (0, "2026-06-30", "00:00:00", "x"))           # unchanged
+        self.assertEqual(key("2026-06-30T10:00:00", "x"), (0, "2026-06-30", "10:00:00", "x"))  # naive: unchanged
+
+    def test_bounds_ignore_day_placed_values(self):
+        # spec-example: archive-mail-thread-order / bounds ignore day-placed values
+        cst = {"date": "Tue, 30 Jun 2026 10:00:00 CST", "file": "a.md"}
+        later = {"date": "2026-07-01T00:00:00Z", "file": "b.md"}
+        self.assertEqual(self.dates["thread_bounds"]([cst, later]),
+                         {"first_message": "2026-07-01T00:00:00Z", "last_message": "2026-07-01T00:00:00Z"})
+        self.assertEqual(self.dates["thread_bounds"]([cst]), {"first_message": None, "last_message": None})
+
     def test_bounds_are_null_without_a_readable_date(self):
         self.assertEqual(self.dates["thread_bounds"]([{"date": "x", "file": "a.md"}]),
                          {"first_message": None, "last_message": None})
@@ -1022,7 +1048,16 @@ class ArchiveThreadOrderSopTests(unittest.TestCase):
         self.assertNotIn("entry.unreadable_dates", rebuild)
         self.assertIn("report.unreadable_dates.extend(unreadable)", rebuild)
         self.assertIn("`unreadable_dates` 只進 Step 6 的報告，不寫進 `.threads.json`", rebuild)
-        self.assertIn("date unreadable (sorted last in its thread, kept)", rebuild)
+        self.assertIn("date unreadable (placed by its day if one can be read, otherwise last in its thread; kept)", rebuild)
+        self.assertNotIn("sorted last in its thread", rebuild)
+
+    def test_rebuild_and_view_state_the_day_limit(self):
+        # #644: what the stored text can and cannot order
+        for name in ("archive-mail-rebuild-threads.md", "archive-mail-view.md"):
+            text = (self.ROOT / name).read_text()
+            with self.subTest(name=name):
+                self.assertIn("一天之內的先後無法從歸檔還原", text)
+                self.assertIn("依它寫明的那一天排", text)
 
     def test_rebuild_and_view_name_the_recipe_and_the_stop_outcome(self):
         for name in ("archive-mail-rebuild-threads.md", "archive-mail-view.md"):

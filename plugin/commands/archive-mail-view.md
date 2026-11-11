@@ -72,7 +72,7 @@ fi
 對選定的 thread entry：
 
 1. 從 `messages` 陣列讀取所有 `file` 路徑
-2. 依時序排序（asc，最早的在前）：用 `archive-mail.md` 日期 recipe 的 `thread_order`（#556），**不可**對 `date` 字串排序。日期讀不出來的信排在最後並在輸出末尾列出檔名，不丟掉
+2. 依時序排序（asc，最早的在前）：用 `archive-mail.md` 日期 recipe 的 `thread_order`（#556），**不可**對 `date` 字串排序。日期讀不出來的信在輸出末尾列出檔名，不丟掉：讀得出日期的依那一天排，連日期都讀不出的排在最後。只有日期、沒有時區或時區不明的值，一天之內的先後無法從歸檔還原（歸檔只存寄件人寫的日期）；時區名稱讀不懂的值（例如裸 `CST`）依它寫明的那一天排，排在那一天的開頭；RFC 的 `-0000` 依 UTC 時刻排（#644）。
 3. 對每個 md 檔：
    - `Read` 該檔
    - 解析 YAML frontmatter 取得 `message_id` / `sender` / `direction` / `date` / `in_reply_to`
