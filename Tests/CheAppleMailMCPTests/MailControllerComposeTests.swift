@@ -685,6 +685,67 @@ final class MailControllerComposeTests: XCTestCase {
         }
     }
 
+    // MARK: - validateAttachmentPaths: regular files only (#543)
+
+    /// A fresh temporary directory for one test, removed afterwards.
+    private func makeScratchDir() throws -> String {
+        let dir = "/tmp/che-apple-mail-543-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: false)
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: dir) }
+        return dir
+    }
+
+    func testValidateAttachmentPaths_acceptsOnlyRegularFiles_exampleTable() async throws {
+        // spec-example: message-composition / attachment path kinds
+        let dir = try makeScratchDir()
+        let file = "\(dir)/report.txt"
+        XCTAssertTrue(FileManager.default.createFile(atPath: file, contents: Data("ok".utf8)))
+        let fileLink = "\(dir)/link-to-file"
+        try FileManager.default.createSymbolicLink(atPath: fileLink, withDestinationPath: file)
+        let subdir = "\(dir)/folder"
+        try FileManager.default.createDirectory(atPath: subdir, withIntermediateDirectories: false)
+        let dirLink = "\(dir)/link-to-folder"
+        try FileManager.default.createSymbolicLink(atPath: dirLink, withDestinationPath: subdir)
+        let package = "\(dir)/Note.rtfd"
+        try FileManager.default.createDirectory(atPath: package, withIntermediateDirectories: false)
+        XCTAssertTrue(FileManager.default.createFile(atPath: "\(package)/TXT.rtf", contents: Data("{\\rtf1}".utf8)))
+        let fifo = "\(dir)/pipe"
+        XCTAssertEqual(mkfifo(fifo, 0o600), 0, "mkfifo failed: errno \(errno)")
+
+        await assertAttachmentAccepted([file])
+        await assertAttachmentAccepted([fileLink])
+        await assertAttachmentRejected([subdir], containing: "'\(subdir)' rejected: not a regular file (directory)")
+        await assertAttachmentRejected([dirLink], containing: "'\(dirLink)' rejected: not a regular file (directory)")
+        await assertAttachmentRejected([package], containing: "'\(package)' rejected: not a regular file (directory)")
+        await assertAttachmentRejected([fifo], containing: "'\(fifo)' rejected: not a regular file (FIFO)")
+        await assertAttachmentRejected(["/dev/null"], containing: "'/dev/null' rejected: not a regular file (character device)")
+    }
+
+    /// Scenario: a FIFO with no writer is rejected without being opened (opening it for reading would block).
+    func testValidateAttachmentPaths_rejectsAFifoWithoutBlocking() async throws {
+        let dir = try makeScratchDir()
+        let fifo = "\(dir)/pipe"
+        XCTAssertEqual(mkfifo(fifo, 0o600), 0)
+        let started = Date()
+        await assertAttachmentRejected([fifo], containing: "not a regular file")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5, "validation must not open the FIFO")
+    }
+
+    /// Scenario: the new failure joins the existing aggregated error.
+    func testValidateAttachmentPaths_directoryAndMissingPathAreReportedTogether() async throws {
+        let dir = try makeScratchDir()
+        let missing = "\(dir)/missing.pdf"
+        do {
+            try await MailController.shared.validateAttachmentPaths([dir, missing])
+            XCTFail("expected validation to throw")
+        } catch MailError.invalidParameter(let msg) {
+            XCTAssertTrue(msg.contains("'\(dir)' rejected: not a regular file (directory)"), msg)
+            XCTAssertTrue(msg.contains("'\(missing)' not found"), msg)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
     // MARK: - validateEmailAddresses (#41) — continued
 
     func testValidateEmailAddresses_rejectsMultipleAt() async {

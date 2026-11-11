@@ -52,7 +52,7 @@ list is refused before a file is read, so no reply attaches a file and the
 checks below do not run on that path. When #608 restores reply attachments, it
 must run the reply's paths through the same checks (`validateAttachmentPaths`).
 
-The server defends against this with three layers, applied in order:
+The server defends against this with five layers, applied in order:
 
 ### 1. Existence
 
@@ -93,6 +93,16 @@ MAIL_MCP_ATTACHMENT_ROOTS=~/Documents/letters:~/Downloads/safe-attach
 ```
 
 When unset (default), only the deny-list applies.
+
+### 5. Regular files only
+
+The resolved path must be a regular file ([#543](https://github.com/PsychQuant/che-apple-mail-mcp/issues/543)).
+Directories (including package directories such as `.rtfd` or `.app`), FIFOs,
+sockets, character and block devices, and a path that is still a symbolic link
+after resolution are rejected as `not a regular file (<kind>)`. The type is read
+without opening the path, so a FIFO with no writer cannot block validation. A
+reader that later opens the file must still check the opened descriptor: the
+check at validation time does not cover a path swapped afterwards.
 
 ### Known limitations
 
@@ -140,4 +150,5 @@ runtime validation is strictly stronger than the schema.
 |------|-------|-----|
 | 2026-05-03 | [#48](https://github.com/PsychQuant/che-apple-mail-mcp/issues/48) | SECURITY.md created — RFC 3676 nested quote forgery limitation documented |
 | 2026-05-03 | [#38](https://github.com/PsychQuant/che-apple-mail-mcp/issues/38) | Attachment path validation: deny-list + symlink resolution + opt-in allow-list |
+| 2026-11-11 | [#543](https://github.com/PsychQuant/che-apple-mail-mcp/issues/543) | Attachment path validation: reject anything that is not a regular file after symlink resolution |
 | 2026-05-03 | [#50](https://github.com/PsychQuant/che-apple-mail-mcp/issues/50) | `id` injection at msgRef AppleScript interpolation — Int validation at handler boundary |

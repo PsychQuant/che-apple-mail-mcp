@@ -1617,6 +1617,27 @@ actor MailController {
     ///
     /// `internal` (not `private`) so `@testable import` can exercise the helper
     /// in unit tests without going through Mail.app.
+    /// #543: nil for a regular file; otherwise the name of what the path is. Reads the type without following a
+    /// final symlink and without opening the path.
+    static func nonRegularFileKind(atResolvedPath path: String) -> String? {
+        guard let type = (try? FileManager.default.attributesOfItem(atPath: path))?[.type] as? FileAttributeType else {
+            return "unreadable type"
+        }
+        switch type {
+        case .typeRegular: return nil
+        case .typeDirectory: return "directory"
+        case .typeSymbolicLink: return "symbolic link"
+        case .typeCharacterSpecial: return "character device"
+        case .typeBlockSpecial: return "block device"
+        case .typeSocket: return "socket"
+        default:
+            // Foundation reports a FIFO as `.typeUnknown`; tell it apart with lstat's mode bits.
+            var info = stat()
+            if lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFIFO { return "FIFO" }
+            return "unknown type"
+        }
+    }
+
     func validateAttachmentPaths(_ paths: [String]) throws {
         guard !paths.isEmpty else { return }
 
@@ -1688,6 +1709,16 @@ actor MailController {
                     failures.append("'\(path)' rejected: outside MAIL_MCP_ATTACHMENT_ROOTS allow-list")
                     continue
                 }
+            }
+
+            // #543: only regular files. `fileExists` is true for directories, FIFOs and device files, and `/dev`
+            // is not deny-listed, so a FIFO (a read blocks) or `/dev/zero` (a read never ends) passed every layer.
+            // The type is read with `attributesOfItem`, which does not follow a final symlink and does not open the
+            // path; a link that resolution could not remove is therefore rejected too. An in-process reader must
+            // still re-check the opened descriptor (time-of-check/time-of-use, #479).
+            if let kind = Self.nonRegularFileKind(atResolvedPath: resolved) {
+                failures.append("'\(path)' rejected: not a regular file (\(kind))")
+                continue
             }
         }
 
