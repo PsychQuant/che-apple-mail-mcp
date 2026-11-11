@@ -239,4 +239,91 @@ final class ExportHandlerTests: XCTestCase {
             XCTAssertEqual(try items(manifest)["1"]?["is_draft"] as? Bool, true, label)
         }
     }
+
+    // MARK: - Refused paths (#625)
+
+    private static let refusedParameters = ["output_dir", "skip_message_ids_path"]
+
+    /// A folder outside the allowed root, removed afterwards.
+    private func makeOutsideFolder(beside root: URL) throws -> URL {
+        let folder = root.deletingLastPathComponent().appendingPathComponent("export625-secret-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
+        return folder
+    }
+
+    /// The text a caller reads when `parameter` is refused. A good `output_dir` is
+    /// supplied, so a refused `skip_message_ids_path` is the only thing that can fail.
+    private func refusal(_ server: CheAppleMailMCPServer, _ parameter: String, _ path: String, root: URL) async -> String {
+        var arguments: [String: Value] = ["ids": .array([.string("7")]),
+                                          "output_dir": .string(root.appendingPathComponent("out").path)]
+        arguments[parameter] = .string(path)
+        do {
+            _ = try await server.executeToolCall(name: "batch_export_emails_markdown", arguments: arguments)
+            XCTFail("\(parameter): accepted \(path)")
+            return ""
+        } catch {
+            return error.localizedDescription
+        }
+    }
+
+    /// Resolution runs before the check, so an interpolated error told a caller
+    /// with only MCP tools where a link inside the allowed root points.
+    func testARefusalDoesNotSayWhereALinkPoints() async throws {
+        let (server, root) = try await makeServer()
+        let secret = try makeOutsideFolder(beside: root)
+        try FileManager.default.createSymbolicLink(atPath: root.path + "/link", withDestinationPath: secret.path)
+        for parameter in Self.refusedParameters {
+            let message = await refusal(server, parameter, root.path + "/link/target", root: root)
+            XCTAssertEqual(message, "Invalid parameter: \(parameter) rejected by write-safety check: outside the permitted "
+                + "export policy. Use a path within CHE_MAIL_EXPORT_ALLOWED_ROOTS (default: home excluding sensitive paths).")
+            XCTAssertFalse(message.contains(secret.lastPathComponent), message)
+            XCTAssertFalse(message.contains("escapesAllowedRoots"), message)
+            XCTAssertFalse(message.contains("path:"), message)
+        }
+    }
+
+    /// Different wording would tell a caller which kind of location a path is, so
+    /// whether a protected directory lies behind a link. The premise is checked
+    /// first: if a fixture stopped being the kind it claims, the comparison would
+    /// prove nothing about that kind.
+    func testEveryKindOfRefusalReadsTheSame() async throws {
+        let (server, root) = try await makeServer()
+        let outside = try makeOutsideFolder(beside: root)
+        let home = NSHomeDirectory()
+        try FileManager.default.createSymbolicLink(atPath: root.path + "/to-system", withDestinationPath: "/private/etc")
+        try FileManager.default.createSymbolicLink(atPath: root.path + "/to-home", withDestinationPath: home + "/Library")
+        let cases: [(path: String, kind: String)] = [
+            (outside.path + "/target", "escapesAllowedRoots"),
+            ("/usr/export625-target", "systemPath"),
+            (root.path + "/to-system/export625-target", "systemPath"),
+            (home + "/.ssh/export625-target", "deniedHomePath"),
+            (root.path + "/to-home/export625-target", "deniedHomePath"),
+        ]
+        for (path, kind) in cases {
+            XCTAssertThrowsError(try AllowedRootsValidator().validate(path, allowedRoots: [root.path])) { error in
+                XCTAssertTrue("\(error)".hasPrefix(kind + "("), "\(path): \(error)")
+            }
+        }
+        for parameter in Self.refusedParameters {
+            var messages: Set<String> = []
+            for (path, _) in cases { messages.insert(await refusal(server, parameter, path, root: root)) }
+            XCTAssertEqual(messages.count, 1, "\(parameter): \(messages)")
+        }
+    }
+
+    /// The operator still needs to know why: the reason moved, it did not go away.
+    func testARefusalKeepsItsReasonOnStderr() async throws {
+        let (server, root) = try await makeServer()
+        let secret = try makeOutsideFolder(beside: root)
+        try FileManager.default.createSymbolicLink(atPath: root.path + "/link", withDestinationPath: secret.path)
+        for parameter in Self.refusedParameters {
+            let log = try await capturingStderr {
+                _ = await refusal(server, parameter, root.path + "/link/target", root: root)
+            }
+            XCTAssertTrue(log.contains(parameter), log)
+            XCTAssertTrue(log.contains("escapesAllowedRoots"), log)
+            XCTAssertTrue(log.contains(secret.lastPathComponent + "/target"), log)
+        }
+    }
 }

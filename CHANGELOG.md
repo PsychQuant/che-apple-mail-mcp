@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A handler test with an address as `account_name` no longer reads the machine's
+  accounts** ([#633](https://github.com/PsychQuant/che-apple-mail-mcp/issues/633)).
+  A server built with `accountMapping` now resolves an address from that mapping.
+  Without one, nothing changes: the server still reads AccountsMap.plist on each call.
+  This covers `account_name`; the direct-write path still reads the plist for
+  `from_address` ([#654](https://github.com/PsychQuant/che-apple-mail-mcp/issues/654)).
 - **BREAKING: `reply_email` refuses `attachments` for now**
   ([#534](https://github.com/PsychQuant/che-apple-mail-mcp/issues/534)).
   With a non-empty `attachments`, the reply script pasted the new body through
@@ -121,6 +127,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A draft is not reported as uploaded when its queued action could not be read**
+  ([#630](https://github.com/PsychQuant/che-apple-mail-mcp/issues/630)). While
+  waiting for the upload, the direct-write path treats a remote id with no queued
+  action as uploaded, and a failed read of the queued action counted as "none".
+  A failed read now counts as still queued, so the wait keeps looking and ends as
+  pending unless a later read confirms the upload. Both reads now say why they
+  failed on stderr, up to two lines per poll, about 200 lines per draft if they
+  keep failing. A read that keeps failing costs more than it did: the draft takes
+  the full wait instead of ending at once, longer if a held lock makes each read
+  wait out the 5-second busy timeout. A draft Mail did upload is then reported as
+  pending, and the read repair, which runs only after a confirmed upload, does not
+  run, so its local copy can stay unread. The 10-second limit itself is unchanged.
+- **A refused export path no longer says where it resolved**
+  ([#625](https://github.com/PsychQuant/che-apple-mail-mcp/issues/625)). When
+  `batch_export_emails_markdown` refused `output_dir` or
+  `skip_message_ids_path`, the error printed the validator's reason, which held
+  the symlink-resolved path and named the kind of refusal. Resolution runs before
+  the check, so a caller with only MCP tools could learn where a link points or
+  whether a protected folder exists. Both parameters now get one fixed message
+  whatever the kind, and the reason goes to stderr, as `save_attachment` has done
+  since #576. The `<parameter> rejected by write-safety check:` lead is unchanged;
+  only the text after it differs.
 - **Accounts added or renamed while the server runs resolve without a restart**
   ([#554](https://github.com/PsychQuant/che-apple-mail-mcp/issues/554)). The
   SQLite reader built its account mapping from AccountsMap.plist once, when it

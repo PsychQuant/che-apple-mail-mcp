@@ -156,6 +156,19 @@ final class AccountMapperTests: XCTestCase {
         return plistPath
     }
 
+    // MARK: - uuids(forEmail:in:) (#633)
+
+    func testUuidsForEmailInMapping_matchesWithoutAFile() {
+        let mapping = ["UUID-B": "dup@example.invalid", "UUID-A": "Dup@Example.Invalid", "UUID-C": "other@example.invalid"]
+        XCTAssertEqual(AccountMapper.uuids(forEmail: "DUP@example.invalid", in: mapping), ["UUID-A", "UUID-B"])
+        XCTAssertEqual(AccountMapper.uuids(forEmail: "nobody@example.invalid", in: mapping), [])
+    }
+
+    /// The EWS fallback stores the UUID as the value (#9); it must not match even a query equal to it.
+    func testUuidsForEmailInMapping_ewsFallbackValuesNeverMatch() {
+        XCTAssertEqual(AccountMapper.uuids(forEmail: "UUID-EWS", in: ["UUID-EWS": "UUID-EWS"]), [])
+    }
+
     func testUuidsForEmail_uniqueMatch() throws {
         let path = try writeFixture([
             "UUID-A": ["AccountURL": "imap://alice%40example.com/"],
