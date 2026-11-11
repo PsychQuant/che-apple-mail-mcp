@@ -174,9 +174,15 @@ public final class DraftStoreWriter {
         return result
     }
 
-    /// `messages.read` of the inserted draft (nil if the row is gone).
+    /// `messages.read` of the inserted draft; nil when it cannot be told. A read that
+    /// fails says why on stderr; a read that works and finds no row does not (#653).
     public func readFlag(_ ins: Inserted) -> Bool? {
-        (try? scalarInt("SELECT read FROM messages WHERE ROWID = \(ins.messageRowId)"))?.map { $0 != 0 } ?? nil
+        do {
+            return try scalarInt("SELECT read FROM messages WHERE ROWID = \(ins.messageRowId)").map { $0 != 0 }
+        } catch {
+            logReadFailure("messages.read", error)
+            return nil
+        }
     }
 
     /// What the upload wait loop acts on. A failed read is not an answer: `remoteId`

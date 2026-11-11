@@ -68,7 +68,7 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 `readOutcome`、`outcomeAfterFailedTrigger`、`buildDirectDraftMarkReadScript`、`buildDirectDraftTriggerScript`
 （`DirectDraftPathTests`）、`triggerDirectDraftUpload`（`DirectDraftTriggerTimingTests`，#489：斷言它送出的
 就是 `buildDirectDraftTriggerScript` 在同一個 `timing` 下的輸出）與 `uploadState`（`DraftStoreWriterTests`；讀取失敗見 `DirectDraftPathOutcomeTests`，#630），
-`readFlag` 與 `createdText` 由 `DirectDraftPathOutcomeTests` 走過（#484），`markDirectDraftRead` 在那裡是替身，真的那個沒有測試。
+`readFlag` 與 `createdText` 由 `DirectDraftPathOutcomeTests` 走過（#484；`readFlag` 讀取失敗寫 stderr、找不到列不寫，也在那裡，#653），`markDirectDraftRead` 在那裡是替身，真的那個沒有測試。
 
 結構檢查擋不住所有削弱方式。#490 第 4 輪驗證找到下列六種寫法，這兩條守門測試都不會轉紅。#492 之後，每一種都有別的測試會轉紅，列在各項後面，都實際改過原始碼確認：
 

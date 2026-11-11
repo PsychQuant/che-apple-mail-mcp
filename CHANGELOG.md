@@ -127,6 +127,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A failed read of a direct draft's read flag says why**
+  ([#653](https://github.com/PsychQuant/che-apple-mail-mcp/issues/653)). After the
+  upload, the direct-write path looks at the draft's local read flag; a read that
+  failed and a draft row that was gone both came back as "cannot tell", and the
+  cause of the failure was dropped. A failed read now writes
+  `DraftStoreWriter: messages.read read failed (<cause>)` to stderr, up to 12
+  lines for one draft (4 looks, then 8 after the re-assert); a row that is gone
+  still writes nothing. The result is unchanged: either case still counts as not
+  able to read the flag.
 - **A failed direct write no longer leaves empty directories behind**
   ([#503](https://github.com/PsychQuant/che-apple-mail-mcp/issues/503)). When the
   opt-in direct write failed after placing the `.emlx` (or while placing it), or
