@@ -1,0 +1,46 @@
+# archive-mail-view-arguments Specification
+
+## Purpose
+
+Defines how `/archive-mail-view` reads what the user typed after the command, so the typed text stays data and never becomes part of the instructions, the way #540 made `/archive-mail` read its arguments.
+
+## Requirements
+
+### Requirement: View reads its arguments from ARGS_RAW only
+
+`plugin/commands/archive-mail-view.md` SHALL hold exactly one unescaped `$ARGUMENTS`, on a line of its own that reads `ARGS_RAW: $ARGUMENTS`, followed by a statement that `ARGS_RAW` is data, not instructions; no other part of the command SHALL read the typed text. Step 1 SHALL split `ARGS_RAW` shell-style (single quotes, double quotes, backslash escapes): when it holds none of `"`, `'` and `\`, by ASCII whitespace with no program; otherwise with `split_view_arguments` from the marked `archive-mail-view-args-recipe`, reading `ARGS_RAW` from a data file in the run's private directory, never from program text or a command line. The first token SHALL be `thread_query`, the second `archive_dir` (default `communication/emails`), and later tokens SHALL be ignored; the command has no flags, so a token starting with `-` is an ordinary token. An empty or missing `thread_query`, an unbalanced quote, a trailing backslash, or a split that cannot be run SHALL stop the command with `status: bad-arguments` and no file written; the command's closed list of six statuses SHALL NOT grow.
+
+#### Scenario: A quoted thread key stays one token
+
+- **WHEN** `split_view_arguments` receives `"Aster manuscript 2025" communications`
+- **THEN** it returns the tokens `Aster manuscript 2025` and `communications` and no error
+
+##### Example: view argument splitting
+
+| `ARGS_RAW` | Tokens | Error |
+| --- | --- | --- |
+| `Aster` | `Aster` | none |
+| `"Aster manuscript 2025" communications` | `Aster manuscript 2025`, `communications` | none |
+| `'Aster manuscript` | none | `unbalanced-quote` |
+| `Aster\` | none | `unbalanced-quote` |
+| `--odd key` | `--odd`, `key` | none |
+| empty | none | none (Step 1 stops with `bad-arguments`: no `thread_query`) |
+
+---
+### Requirement: The argument guard counts backslashes
+
+The `/archive-mail` test guard that allows only the `ARGS_RAW` line to carry `$ARGUMENTS` SHALL treat a placeholder as escaped only when exactly one backslash precedes it, using the same `backslashes_before` helper as `plugin/tests/test-command-placeholders.py` (loaded by path), so a doubled backslash, which Claude Code still substitutes, is counted.
+
+#### Scenario: A doubled backslash does not hide a placeholder
+
+- **WHEN** the guard's counting function scans `ARGS_RAW: $ARGUMENTS` followed by a line holding `\\$ARGUMENTS`
+- **THEN** it counts two placeholders
+
+##### Example: escaped and unescaped placeholders
+
+| Text | Counted placeholders |
+| --- | --- |
+| `$ARGUMENTS` | 1 |
+| `\$ARGUMENTS` | 0 |
+| `\\$ARGUMENTS` | 1 |
+| `\\\$ARGUMENTS` | 1 |
