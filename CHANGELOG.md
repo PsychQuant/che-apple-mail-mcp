@@ -39,15 +39,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A server built with `accountMapping` now gives the opt-in direct-write path that
   mapping for `from_address`, and treats the account's signature list as
   unreadable (the mapping holds none), so `signature: mail_default` takes the GUI
-  path there. Without a mapping, nothing changes: both lookups read
-  AccountsMap.plist on each call.
+  path there. Without a mapping, nothing changes: on each call the account lookup
+  reads AccountsMap.plist, and the signature lookup reads it too unless
+  iCloud-synced signatures exist (then the list counts as unreadable, as before).
 - **`list_vip_senders` can read an injected VIP list**
   ([#656](https://github.com/PsychQuant/che-apple-mail-mcp/issues/656)).
   `EnvelopeIndexReader` and the server's `init` take an optional VIP list path,
-  so a handler test reads only the file it wrote instead of the developer's VIP
-  list. Without one, the reader reads the same `VIPMailboxes.plist` as before; the
-  path is now built from the mail storage path, which is the same directory
-  unless a test overrides it.
+  so a handler test reads only the file it wrote, as long as the reader opens.
+  Without one, the reader reads the same `VIPMailboxes.plist` as before; the path
+  is now built from the mail storage path, so it follows a test's override of
+  that path (production never sets one). When the reader is not open, the
+  handler still falls back to AppleScript, as before.
 - **BREAKING: `reply_email` refuses `attachments` for now**
   ([#534](https://github.com/PsychQuant/che-apple-mail-mcp/issues/534)).
   With a non-empty `attachments`, the reply script pasted the new body through

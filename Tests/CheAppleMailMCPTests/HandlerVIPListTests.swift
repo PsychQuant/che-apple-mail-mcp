@@ -6,8 +6,28 @@ import XCTest
 /// #656: `list_vip_senders` over a server built with a VIP list path reads only that file, so a
 /// handler test does not depend on the developer's VIP list. The index is a throwaway SQLite file
 /// (the reader only needs one it can read), and the account mapping is injected so the reader does
-/// not read AccountsMap.plist either. Nothing reaches Mail.
+/// not read AccountsMap.plist either. Throwing script seams make sure nothing reaches Mail: if the
+/// reader did not open, the handler's AppleScript fallback would hit them (#656 verify).
 final class HandlerVIPListTests: XCTestCase {
+    private final class Scripts: @unchecked Sendable {
+        private let lock = NSLock()
+        private var seen: [String] = []
+        func add(_ script: String) { lock.lock(); seen.append(script); lock.unlock() }
+        var all: [String] { lock.lock(); defer { lock.unlock() }; return seen }
+    }
+
+    private func installSeams() async -> Scripts {
+        let scripts = Scripts()
+        await MailController.shared.setTestSeams(scriptRunner: { script in
+            scripts.add(script)
+            throw MailError.operationFailed("HandlerVIPListTests: no Mail in this test")
+        }, refusal: nil, scriptListRunner: { script in
+            scripts.add(script)
+            throw MailError.operationFailed("HandlerVIPListTests: no Mail in this test")
+        }, automationGranted: false)
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
+        return scripts
+    }
 
     private func makeRoot() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("handler656-\(UUID().uuidString)")
@@ -27,6 +47,7 @@ final class HandlerVIPListTests: XCTestCase {
 
     // spec-example: sqlite-query-engine / list_vip_senders answers from the server's VIP list path
     func testListVipSendersAnswersFromTheServersVIPListPath() async throws {
+        let scripts = await installSeams()
         let root = try makeRoot()
         let index = root.appendingPathComponent("Envelope Index").path
         try writeIndex(at: index)
@@ -40,5 +61,6 @@ final class HandlerVIPListTests: XCTestCase {
         let text = try await server.executeToolCall(name: "list_vip_senders", arguments: [:])
         let decoded = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [[String: String]]
         XCTAssertEqual(decoded, [["address": "vip@example.invalid"]], text)
+        XCTAssertTrue(scripts.all.isEmpty, "no AppleScript may run: \(scripts.all)")
     }
 }

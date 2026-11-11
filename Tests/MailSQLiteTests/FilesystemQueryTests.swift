@@ -106,7 +106,7 @@ final class FilesystemQueryTests: XCTestCase {
 
     /// #656: a reader over a throwaway index (it only needs a file SQLite can read), with the
     /// account mapping injected so it reads no AccountsMap.plist either.
-    private func readerWithVIPList(at vipPath: String) throws -> EnvelopeIndexReader {
+    private func readerWithVIPList(at vipPath: String?) throws -> EnvelopeIndexReader {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("vip656-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: root) }
@@ -142,5 +142,24 @@ final class FilesystemQueryTests: XCTestCase {
         defer { EnvelopeIndexReader.mailStoragePathOverride = original }
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         XCTAssertEqual(EnvelopeIndexReader.defaultVIPMailboxesPath, "\(home)/Library/Mail/V10/MailData/VIPMailboxes.plist")
+    }
+
+    // spec-example: sqlite-query-engine / the default follows the test override of the mail storage path
+    /// #656 verify: the branch production uses (no VIP list path) reads under the mail storage
+    /// path. The override keeps the test off the user's own VIP list.
+    func testTheDefaultFollowsTheMailStorageOverride() throws {
+        let storage = FileManager.default.temporaryDirectory.appendingPathComponent("vip656-storage-\(UUID().uuidString)")
+        let mailData = storage.appendingPathComponent("MailData")
+        try FileManager.default.createDirectory(at: mailData, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: storage) }
+        try PropertyListSerialization.data(fromPropertyList: [["address": "override@example.invalid"]], format: .xml, options: 0)
+            .write(to: mailData.appendingPathComponent("VIPMailboxes.plist"))
+        let original = EnvelopeIndexReader.mailStoragePathOverride
+        EnvelopeIndexReader.mailStoragePathOverride = storage.path
+        defer { EnvelopeIndexReader.mailStoragePathOverride = original }
+
+        let listed = try readerWithVIPList(at: nil).listVIPSenders()
+        XCTAssertEqual(listed.count, 1)
+        XCTAssertEqual(listed.first?["address"] as? String, "override@example.invalid")
     }
 }
