@@ -360,7 +360,7 @@ Before writing anything, the system SHALL check eligibility. The call is ineligi
 
 After eligibility passes and before writing, the system SHALL also require all of the following, checked in this order, and SHALL take the GUI path at the first that fails: (1) Mail's version is 16.x and the macOS major version is 27; (2) `from_address` maps to exactly one Mail account; (3) when `signature` is `mail_default`, Mail's `AccountsMap.plist` lists no signature for that account (an unreadable list fails this gate), because a signature Mail would insert is not written directly; (4) the Envelope Index is readable; (5) the account's Drafts mailbox is identified and matched to a mailbox path in the index; (6) the store opens for writing; (7) the store's `messages` columns equal the verified set and every other table it writes has its required columns; (8) that Drafts path corresponds to exactly one mailbox row and its URL is an IMAP URL; (9) a sender address row already exists for `from_address` in that account. A draft created by the direct write SHALL carry a disclosure that no signature was inserted.
 
-The write SHALL happen inside a single `BEGIN IMMEDIATE` transaction, with the `.emlx` file renamed into place inside that transaction. A failure during the write SHALL roll the transaction back and remove the file, and the call SHALL take the GUI path. The write SHALL record, as the directories it created, only the directory levels its own creation call made; a level that already existed, or that another process created first, SHALL NOT be recorded. When the write fails, and when a committed write is reversed, the system SHALL remove the recorded directories after the `.emlx` file, deepest first, removing a directory only while it is empty and without removing anything inside it, and SHALL stop at the first directory that cannot be removed. Removing those directories SHALL NOT change the error a failed write reports, and a directory that cannot be removed SHALL NOT make reversing the write fail.
+The write SHALL happen inside a single `BEGIN IMMEDIATE` transaction, with the `.emlx` file renamed into place inside that transaction. A failure during the write SHALL roll the transaction back and remove the file, and the call SHALL take the GUI path. The write SHALL record, as the directories it created, only the directory levels its own creation call made; a level that already existed, or that another process created first, SHALL NOT be recorded. When the write fails, and when a committed write is reversed, the system SHALL remove the recorded directories after the `.emlx` file, deepest first, removing a directory only while it is empty and without removing anything inside it. A recorded directory that no longer exists SHALL be skipped and the removal SHALL go on to the next level up; the removal SHALL stop at the first recorded directory that still exists and cannot be removed. When a removal fails for a reason other than the directory not being empty or no longer existing, the system SHALL write a line naming the directory and the reason to stderr. Removing those directories SHALL NOT change the error a failed write reports, and a directory that cannot be removed SHALL NOT make reversing the write fail.
 
 After the write commits, the system SHALL ask Mail to upload the draft by toggling the draft's read status to unread and back to read. The upload request succeeds when that toggle completes without error. If it fails, the system SHALL reverse the write exactly and take the GUI path. If the write cannot be reversed because Mail has already uploaded the draft, the system SHALL report the draft as created and SHALL NOT take the GUI path. If it cannot be reversed for any other reason, the system SHALL report the draft as created with its upload pending, SHALL NOT claim that it was uploaded or when it will be, and SHALL NOT take the GUI path. Once the upload request has succeeded, the system SHALL NOT take the GUI path for that call, because doing so would create a second draft. A reversed direct write that continues on the GUI path is not a retry through a body-assigning path; Requirement: Runtime composing failures propagate without falling back continues to govern failures of the GUI path itself.
 
@@ -462,3 +462,26 @@ Whenever the call takes the GUI path after the direct write was attempted or fou
 - **GIVEN** `Data/0/2/Messages/20000.emlx` already exists with other content
 - **WHEN** the write for row id 20000 runs
 - **THEN** the write fails, and the file keeps its content and its directory remains
+
+#### Scenario: A recorded directory that no longer exists is skipped
+
+- **WHEN** a committed write that created directories for its `.emlx` file is reversed, and another process has already removed the deepest of those directories
+- **THEN** the system SHALL skip that directory and remove the remaining directories the write created
+- **AND** reversing the write SHALL succeed
+
+##### Example: a vanished Messages directory does not stop the cleanup
+- **GIVEN** a committed write that created `Data/0`, `Data/0/2` and `Data/0/2/Messages` for `20000.emlx`, and another process removed `20000.emlx` and then `Data/0/2/Messages`
+- **WHEN** the write is reversed
+- **THEN** the reversal succeeds, `Data/0/2` and `Data/0` no longer exist, and `Data` still exists
+
+#### Scenario: A removal that fails for another reason is noted and stops the cleanup
+
+- **WHEN** a committed write is reversed and removing a directory it created fails for a reason other than the directory not being empty or no longer existing
+- **THEN** the system SHALL write a line naming that directory and the reason to stderr
+- **AND** the system SHALL keep that directory and every directory above it
+- **AND** reversing the write SHALL succeed
+
+##### Example: a permission failure on Messages is noted on stderr
+- **GIVEN** a committed write that created `Data/0`, `Data/0/2` and `Data/0/2/Messages` for `20000.emlx`, and `Data/0/2` made read-only so `Data/0/2/Messages` cannot be removed
+- **WHEN** the write is reversed
+- **THEN** the reversal succeeds, `20000.emlx` is removed, `Data/0/2/Messages`, `Data/0/2` and `Data/0` remain, and stderr has a line containing `could not remove created directory` and the path of `Data/0/2/Messages`
