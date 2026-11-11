@@ -25,72 +25,91 @@ final class ForwardSaveAsDraftTests: XCTestCase {
             initialSync: false, classificationDirectory: root)
     }
 
-    /// Runs `forwardEmail` with every script captured and answered with `reply`.
-    private func runForward(body: String?, saveAsDraft: Bool, reply: String = "ok") async throws -> (result: String, scripts: [String]) {
+    /// Runs the `forward_email` tool through the MCP handler (`executeToolCall`), every script captured and
+    /// answered "ok". `save_as_draft` is left out of the arguments when `flag` is nil, so "omitted" really is omitted.
+    private func runForwardTool(body: String?, flag: Value?) async throws -> [String] {
         var scripts: [String] = []
-        await MailController.shared.setTestSeams(scriptRunner: { script in scripts.append(script); return reply },
+        await MailController.shared.setTestSeams(scriptRunner: { script in scripts.append(script); return "ok" },
                                                  refusal: { nil })
-        let result = try await MailController.shared.forwardEmail(
-            id: "123", mailbox: "INBOX", accountName: "me@example.invalid",
-            to: ["me@example.invalid"], body: body, saveAsDraft: saveAsDraft)
-        return (result, scripts)
+        var arguments: [String: Value] = [
+            "id": .string("123"), "mailbox": .string("INBOX"), "account_name": .string("Work"),
+            "to": .array([.string("me@example.invalid")]),
+        ]
+        if let body { arguments["body"] = .string(body) }
+        if let flag { arguments["save_as_draft"] = flag }
+        _ = try await makeToolServer().executeToolCall(name: "forward_email", arguments: arguments)
+        return scripts
+    }
+
+    /// No send keystroke and no AppleScript `send` command anywhere in the script.
+    private func assertSendsNothing(_ script: String, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertFalse(script.contains(send), "draft script must not press ⇧⌘D", file: file, line: line)
+        XCTAssertNil(script.range(of: #"(?m)^\s*send\b"#, options: .regularExpression),
+                     "draft script must not run an AppleScript send command", file: file, line: line)
     }
 
     // MARK: - spec-example: message-composition / forward_email save_as_draft
 
+    /// Every row runs through the tool handler, so the wiring from `save_as_draft` to the controller is under test
+    /// (#599 verify round 1, row 1: a handler that dropped the flag survived every controller-level test).
     func testExampleTable() async throws {
         // spec-example: message-composition / forward_email save_as_draft
-        // body + save_as_draft: true → paste path, save keystroke, no send keystroke, draft label
-        let draft = buildForwardEmailPasteScript(messageRef: "msgRef", to: ["me@example.invalid"], newBody: "FYI", saveAsDraft: true)
-        XCTAssertTrue(draft.contains(save))
-        XCTAssertFalse(draft.contains(send))
-        XCTAssertTrue(draft.contains("Forward saved as draft (paste path)"))
-        XCTAssertTrue(draft.contains("forward"), "still Mail's native forward verb")
+        // "FYI" | true → paste path, save keystroke, no send keystroke, draft label
+        let draft = try await runForwardTool(body: "FYI", flag: .bool(true))
+        XCTAssertEqual(draft.count, 1)
+        XCTAssertTrue(draft[0].contains(save))
+        assertSendsNothing(draft[0])
+        XCTAssertTrue(draft[0].contains("Forward saved as draft (paste path)"))
+        XCTAssertTrue(draft[0].contains("forward"), "still Mail's native forward verb")
 
-        // body, save_as_draft omitted or false → unchanged send script
-        let sent = buildForwardEmailPasteScript(messageRef: "msgRef", to: ["me@example.invalid"], newBody: "FYI")
-        XCTAssertTrue(sent.contains(send))
-        XCTAssertFalse(sent.contains(save))
-        XCTAssertTrue(sent.contains("Email forwarded successfully (paste path)"))
-        XCTAssertEqual(sent, buildForwardEmailPasteScript(messageRef: "msgRef", to: ["me@example.invalid"], newBody: "FYI", saveAsDraft: false))
-
-        // through the controller: the draft flow runs exactly the draft script
-        let viaController = try await runForward(body: "FYI", saveAsDraft: true)
-        XCTAssertEqual(viaController.scripts.count, 1)
-        XCTAssertTrue(viaController.scripts[0].contains(save))
-        XCTAssertFalse(viaController.scripts[0].contains(send))
-
-        // no body + save_as_draft: true → refused before any Mail script
-        await MailController.shared.setTestSeams(scriptRunner: { script in
-            XCTFail("no Mail script may run for a refused bare-forward draft; got \(script.prefix(60))")
-            return ""
-        }, refusal: { nil })
-        do {
-            _ = try await MailController.shared.forwardEmail(
-                id: "123", mailbox: "INBOX", accountName: "me@example.invalid",
-                to: ["me@example.invalid"], body: nil, saveAsDraft: true)
-            XCTFail("a bare forward with save_as_draft must be refused")
-        } catch MailError.invalidParameter(let message) {
-            XCTAssertTrue(message.contains("#673"), message)
-            XCTAssertTrue(message.contains("save_as_draft"), message)
+        // "FYI" | omitted, false, null → paste path, send keystroke (unchanged)
+        for flag: Value? in [nil, .bool(false), .null] {
+            let sent = try await runForwardTool(body: "FYI", flag: flag)
+            XCTAssertEqual(sent.count, 1, "save_as_draft \(String(describing: flag))")
+            XCTAssertTrue(sent[0].contains(send), "save_as_draft \(String(describing: flag)) must send")
+            XCTAssertFalse(sent[0].contains(save))
+            XCTAssertTrue(sent[0].contains("Email forwarded successfully (paste path)"))
         }
 
-        // no body, save_as_draft omitted → the native forward script, unchanged (ends in send)
-        let bare = try await runForward(body: nil, saveAsDraft: false)
-        XCTAssertEqual(bare.scripts.count, 1)
-        XCTAssertTrue(bare.scripts[0].contains("send fwdMsg"))
-
-        // a non-boolean save_as_draft is refused by the handler
-        let server = try await makeToolServer()
+        // none | true → refused before any Mail operation, naming the reason, #673 and both alternatives
+        var refusedScripts = 0
+        await MailController.shared.setTestSeams(scriptRunner: { _ in refusedScripts += 1; return "" }, refusal: { nil })
         do {
-            _ = try await server.executeToolCall(name: "forward_email", arguments: [
+            _ = try await makeToolServer().executeToolCall(name: "forward_email", arguments: [
                 "id": .string("123"), "mailbox": .string("INBOX"), "account_name": .string("Work"),
-                "to": .array([.string("me@example.invalid")]), "body": .string("FYI"), "save_as_draft": .string("yes"),
+                "to": .array([.string("me@example.invalid")]), "save_as_draft": .bool(true),
             ])
+            XCTFail("a bare forward with save_as_draft must be refused")
+        } catch MailError.invalidParameter(let message) {
+            for needle in ["#673", "save_as_draft", "no step that could save", "Pass a body",
+                           "forward the message in Mail by hand", "created and sent nothing"] {
+                XCTAssertTrue(message.contains(needle), "refusal must contain '\(needle)': \(message)")
+            }
+        }
+        XCTAssertEqual(refusedScripts, 0, "no Mail script may run for a refused bare-forward draft")
+
+        // none | omitted → the native forward script, unchanged (ends in send)
+        let bare = try await runForwardTool(body: nil, flag: nil)
+        XCTAssertEqual(bare.count, 1)
+        XCTAssertTrue(bare[0].contains("send fwdMsg"))
+
+        // "FYI" | "yes" → refused: save_as_draft must be a boolean
+        do {
+            _ = try await runForwardTool(body: "FYI", flag: .string("yes"))
             XCTFail("a string save_as_draft must be refused")
         } catch MailError.invalidParameter(let message) {
             XCTAssertTrue(message.contains("save_as_draft"), message)
         }
+    }
+
+    /// The builder alone: the draft variant differs from the send variant only in the dispatch step and label.
+    func testBuilderDraftVariant() {
+        let draft = buildForwardEmailPasteScript(messageRef: "msgRef", to: ["me@example.invalid"], newBody: "FYI", saveAsDraft: true)
+        XCTAssertTrue(draft.contains(save))
+        assertSendsNothing(draft)
+        let sent = buildForwardEmailPasteScript(messageRef: "msgRef", to: ["me@example.invalid"], newBody: "FYI")
+        XCTAssertTrue(sent.contains(send))
+        XCTAssertEqual(sent, buildForwardEmailPasteScript(messageRef: "msgRef", to: ["me@example.invalid"], newBody: "FYI", saveAsDraft: false))
     }
 
     // MARK: - scenarios
@@ -131,7 +150,7 @@ final class ForwardSaveAsDraftTests: XCTestCase {
         let d = tool.description ?? ""
         let first = d.components(separatedBy: ". ").first ?? ""
         XCTAssertTrue(first.contains("SENDS"), "the first sentence must say the call sends: \(first)")
-        for needle in ["save_as_draft", "#461", "#673", "not been run against Mail"] {
+        for needle in ["save_as_draft", "#461", "#673", "not been run against Mail", "To recipients and body"] {
             XCTAssertTrue(d.contains(needle), "forward_email description must mention \(needle)")
         }
         XCTAssertLessThanOrEqual(d.count, 2048, "Claude Code truncates tool descriptions at 2,048 characters")

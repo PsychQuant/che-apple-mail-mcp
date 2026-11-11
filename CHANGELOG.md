@@ -19,9 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bodyless draft mode is tracked in
   [#673](https://github.com/PsychQuant/che-apple-mail-mcp/issues/673). Without
   `save_as_draft` the call sends, as before, and the tool description now says
-  so in its first sentence. A timeout on the draft path is not reported as an
-  unknown send state; the send path's handling is unchanged. The draft mode has
-  not been run against Mail yet.
+  so in its first sentence; it also advises reading a saved draft's To
+  recipients and body back before sending it. `null` means the same as an
+  omitted `save_as_draft`, as for `reply_email`; any other non-boolean value is
+  refused. A timeout on the draft path is not reported as an unknown send
+  state; the send path's handling is unchanged. The draft mode has not been run
+  against Mail yet.
 
 - **`get_mail_log_events` can filter by event name**
   ([#466](https://github.com/PsychQuant/che-apple-mail-mcp/issues/466)). The new

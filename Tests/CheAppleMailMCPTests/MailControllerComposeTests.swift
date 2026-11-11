@@ -410,7 +410,7 @@ final class MailControllerComposeTests: XCTestCase {
     }
 
     func testBuildForwardPasteScript_send_noExplicitWindowClose() {
-        // forward always sends → no explicit close (matches reply send path).
+        // a sending forward → no explicit close (matches reply send path); the #599 draft mode closes with saving yes.
         let s = buildForwardEmailPasteScript(
             messageRef: "msgRef", to: ["x@y.z"], newBody: "B")
         XCTAssertFalse(s.contains("saving yes"))

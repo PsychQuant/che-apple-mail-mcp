@@ -48,7 +48,7 @@
 
 ### Compose / Send
 - `compose_email`(寄出新信)
-- `reply_email`、`forward_email`、`redirect_email`（`reply_email` 與 `forward_email` 帶 `save_as_draft: true` 時存成草稿、不寄出；`forward_email` 存草稿要有 `body`，#599）
+- `reply_email`、`forward_email`、`redirect_email`（`reply_email` 與 `forward_email` 帶 `save_as_draft: true` 時存成草稿、不寄出，仍屬必須確認：存好的草稿只差一個動作就會寄出，收件人與內文要確認；`forward_email` 存草稿要有 `body`，且要含 #599 的 binary，較舊的 binary 會忽略這個參數而直接寄出）
 - 任何 outbound side effect
 
 ### Bulk(影響 ≥ 5 emails 的任何操作)
