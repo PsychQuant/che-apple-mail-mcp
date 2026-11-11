@@ -65,6 +65,7 @@ struct MailLogService {
         var frontier: Date?         // latest in-window time looked at, before `contains`
         var inversions = 0          // in-window events that arrived earlier in time than one already seen
         var resumed = 0             // matching events at the start millisecond passed over for `offset`
+        let eventNames = query.events.map { Set($0.map { Array($0.utf8) }) }   // exact: by bytes, not by Unicode equivalence
 
         let end = source.read(request, cancellation: cancellation) { line in
             switch NdjsonParser.parse(line) {
@@ -82,6 +83,11 @@ struct MailLogService {
                 frontier = max(frontier ?? event.time, event.time)
                 if let needle = query.contains,
                    Self.visibleText(event.message, masked: query.redactIdentifiers).range(of: needle, options: .caseInsensitive) == nil {
+                    return true
+                }
+                // #466: at the same point as `contains` — after the frontier, before the offset — so `offset`,
+                // `next_offset` and `limit` count matching events only, and rejected events still move the frontier.
+                if let names = eventNames, !names.contains(Array(Self.displayedEvent(event).name.utf8)) {
                     return true
                 }
                 if resumed < query.offset, MailLogTime.millisecondKey(event.time) == startKey {
@@ -271,6 +277,7 @@ struct MailLogService {
             "accounts_seen": shaped.accounts,
             "contains_sensitive": query.detail == .detailed,
             "skipped_lines": skipped,
+            "event_filter_count": Self.eventFilterCount(query),
             "results": shaped.results,
         ]
         if query.detail == .detailed, query.redactIdentifiers {
@@ -284,7 +291,9 @@ struct MailLogService {
         }
         var notice: [String] = []
         if events.isEmpty {
-            notice.append("No events matched in this window. The absence of log lines does not establish that the "
+            notice.append("No events matched in this window"
+                + (query.events == nil ? "" : " (the event-name filter `events` was applied)")
+                + ". The absence of log lines does not establish that the "
                 + "action did not occur: Mail may not have been running, or the event may not be logged at this level.")
             if stoppedBy != nil {
                 notice.append("Scanning stopped early (\(stoppedBy ?? "read limit")), so this window was not fully searched"
@@ -332,6 +341,7 @@ struct MailLogService {
             "accounts_seen": 0,
             "contains_sensitive": query.detail == .detailed,
             "skipped_lines": skipped,
+            "event_filter_count": Self.eventFilterCount(query),
             "notice": notice,
             "results": [] as [[String: Any]],
         ]
@@ -348,7 +358,8 @@ struct MailLogService {
         results.reserveCapacity(events.count)
 
         for event in events {
-            let withheld = TemplateExtractor.looksLikeData(event.formatString)
+            let displayed = Self.displayedEvent(event)
+            let withheld = displayed == .withheld
             // Only a template that puts the `[account - mailbox]` bracket at the start names an
             // account; elsewhere a bracket is runtime text and a letter would be an oracle.
             let account = !withheld && TemplateExtractor.carriesAccountPrefix(event.formatString)
@@ -359,23 +370,19 @@ struct MailLogService {
                 "category": Self.capped(event.category, "category"),
                 "activity": event.activity,
                 "account": account.map { $0 as Any } ?? NSNull(),
+                "event": displayed.name,
             ]
-            if withheld {
-                // The "template" is itself data-shaped: say nothing about this event rather than echo it.
-                item["event"] = Self.withheldTemplate
+            switch displayed {
+            case .withheld, .oversized:
+                // Withheld: the "template" is itself data-shaped, so say nothing about this event rather than echo it.
+                // Oversized: the message is too long to parse.
                 item["kind"] = EventKind.unstructured.rawValue
                 item["args"] = [Any]()
-            } else if event.message.utf8.count > Self.parseBytesLimit {
-                item["event"] = event.formatString
-                item["kind"] = EventKind.unstructured.rawValue
-                item["args"] = [Any]()
-            } else if let known = KnownEvents.name(for: event) {
-                item["event"] = known
+            case .known:
                 item["kind"] = EventKind.known.rawValue
                 item["args"] = [Any]()
-            } else {
+            case .template:
                 let extraction = TemplateExtractor.extract(formatString: event.formatString, message: event.message)
-                item["event"] = event.formatString
                 item["kind"] = extraction.kind.rawValue
                 item["args"] = extraction.args.map { $0.map { $0 as Any } ?? NSNull() }
             }
@@ -389,6 +396,42 @@ struct MailLogService {
             results.append(item)
         }
         return (results, aliaser.count)
+    }
+
+    /// What an event's `event` field shows, decided in ONE place (#466): the output and the `events` filter
+    /// both use it, so the filter can only select among names the output would show anyway. Matching the raw
+    /// `formatString` instead would let a caller address a withheld template by its own text — the oracle
+    /// that keeps `contains` out of brief mode.
+    enum DisplayedEvent: Equatable {
+        /// The template is data-shaped (`TemplateExtractor.looksLikeData`): shown as `<template withheld>`.
+        case withheld
+        /// The composed message is longer than `parseBytesLimit`: shown as its template, not parsed.
+        case oversized(String)
+        /// A recognized known event (`KnownEvents`): shown by its name.
+        case known(String)
+        /// Everything else: shown as its template.
+        case template(String)
+
+        var name: String {
+            switch self {
+            case .withheld: return MailLogService.withheldTemplate
+            case .oversized(let s), .known(let s), .template(let s): return s
+            }
+        }
+    }
+
+    /// How many `events` values were applied, or null when there was no filter (#466). The values themselves are
+    /// not echoed: 20 values of 1024 bytes, JSON-escaped, reached 123 KB — past the byte cap the size loop enforces
+    /// only by dropping events — and they are caller text, which brief output must not carry (verify round 1, rows 2, 7, 8).
+    static func eventFilterCount(_ query: MailLogQuery) -> Any {
+        query.events.map { $0.count as Any } ?? NSNull()
+    }
+
+    static func displayedEvent(_ event: MailLogEvent) -> DisplayedEvent {
+        if TemplateExtractor.looksLikeData(event.formatString) { return .withheld }
+        if event.message.utf8.count > parseBytesLimit { return .oversized(event.formatString) }
+        if let known = KnownEvents.name(for: event) { return .known(known) }
+        return .template(event.formatString)
     }
 
     // MARK: - Size cap

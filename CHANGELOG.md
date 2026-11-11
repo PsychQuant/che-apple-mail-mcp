@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`forward_email` can save the forward as a draft**
+  ([#599](https://github.com/PsychQuant/che-apple-mail-mcp/issues/599)). The new
+  `save_as_draft` (boolean, default false) saves a forward that carries a body
+  with ⌘S through the same paste path instead of sending it, like
+  `reply_email`'s draft mode. A forward without a body and
+  `save_as_draft: true` is refused by name before any Mail call, because the
+  bodyless forward is Mail's native `forward` verb followed by `send`; a
+  bodyless draft mode is tracked in
+  [#673](https://github.com/PsychQuant/che-apple-mail-mcp/issues/673). Without
+  `save_as_draft` the call sends, as before, and the tool description now says
+  so in its first sentence; it also advises reading a saved draft's To
+  recipients and body back before sending it. `null` means the same as an
+  omitted `save_as_draft`, as for `reply_email`; any other non-boolean value is
+  refused. A timeout on the draft path is not reported as an unknown send
+  state; the send path's handling is unchanged. The draft mode has not been run
+  against Mail yet.
+
+- **`get_mail_log_events` can filter by event name**
+  ([#466](https://github.com/PsychQuant/che-apple-mail-mcp/issues/466)). The new
+  `events` parameter (1 to 20 values) keeps only events whose `event` field is
+  exactly one of the values: a template, `imap.append_uid_received`, or
+  `<template withheld>`. It works in brief and detailed output, so the upload
+  receipt no longer has to be paged out of hundreds of `IMAPConnection` lines.
+  The comparison is against the name the output shows, by the same function, so
+  a withheld template cannot be selected by its own text, and nothing but exact
+  equality selects an event. An `imap.` value that is not a known event is an
+  error, so a typo does not read as "the event did not happen". Paging counts
+  only matching events. The values are not echoed: the response reports how
+  many were applied as `event_filter_count`, so a large filter cannot push it
+  past the 64 KiB cap and caller text never comes back in brief output.
+
 - **The `.mcpb` install can set the destination policy**
   ([#574](https://github.com/PsychQuant/che-apple-mail-mcp/issues/574)). The
   bundle's manifest had no way to set `CHE_MAIL_EXPORT_ALLOWED_ROOTS`, so a
@@ -27,6 +58,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with no absolute path in it now denies every destination.
 
 ### Changed
+
+- **Attachment paths must be regular files**
+  ([#543](https://github.com/PsychQuant/che-apple-mail-mcp/issues/543)).
+  `compose_email` and `create_draft` validated attachments only by existence,
+  symlink resolution, the deny-list and the optional allow-list, so a
+  directory, a FIFO or a device such as `/dev/zero` passed. A path that is not a
+  regular file after symlink resolution is now rejected as
+  `not a regular file (<kind>)`, in the same aggregated error and before Mail is
+  touched; the type is read without opening the path. `update_draft` gets the
+  same checks, now before its draft scans. A path with a `.` or `..` component
+  is refused as `contains a '.' or '..' path component`: Mail receives the
+  caller's text through the open panel's Go-to-folder field, and without such
+  components every reading of the path names the same file. Resolution no
+  longer applies `.standardized` first (it removed `..` from the text before
+  following links, so the deny-list, the allow-list and the type check could
+  judge a different file from the one named). A relative path still counts from
+  the server's working directory. **Behaviour change:** directories are rejected
+  too, including package documents such as `.rtfd` or `.app` bundles that Mail
+  might have attached before, and so are paths with `.` or `..` components.
 
 - **A handler test with an address as `account_name` no longer reads the machine's
   accounts** ([#633](https://github.com/PsychQuant/che-apple-mail-mcp/issues/633)).

@@ -3,7 +3,7 @@
      (issue #s below refer to PsychQuant/che-apple-mail-mcp). This plugin copy
      exists so plugin users get the discipline without cloning the repo; re-sync
      it when the upstream rule changes materially. Imported by plugin-upgrade,
-     shell v2.43.0; re-synced for #304, #404 and #534. -->
+     shell v2.43.0; re-synced for #304, #404, #534 and #599. -->
 
 # 建立信件：已移除觸發上游引文問題的注入路徑（#304 / #310）
 
@@ -41,12 +41,12 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 `sanitize_links`（只服務 markdown 渲染）、`format` 的 `markdown` / `html`、
 以及兩個 env hatch（`CHE_MAIL_DISABLE_MAILTO_COMPOSE` / `CHE_MAIL_DISABLE_PASTE_REPLY`）。
 
-## 呼叫失敗時怎麼辦（封閉九類，不得依性質相似類推第十類）
+## 呼叫失敗時怎麼辦（封閉十類，不得依性質相似類推第十一類）
 
-以下九類屬 GUI 路徑。第 9 類是**暫時**的，只適用 `reply_email`，#608（回信路徑改由 Mail 編輯器附加檔案）落地時從表中移除，**不得**當成拒絕其他工具或參數的前例。`create_draft` 的 opt-in 直接寫入（#472／#475）建立草稿時，第 3 類（Accessibility）與第 8 類（長度）不適用；直接寫入沒有建立草稿時，第 1–8 類照常全部適用（第 9 類只適用 `reply_email`）。
+第 1–9 類屬 GUI 路徑。第 9 類是**暫時**的，只適用 `reply_email`，#608（回信路徑改由 Mail 編輯器附加檔案）落地時從表中移除，**不得**當成拒絕其他工具或參數的前例。第 10 類也是**暫時**的，只適用 `forward_email`，#673（不帶內文的轉寄存成草稿）落地時從表中移除；它是 #599 明確加進本表的一列，不是由第 9 類類推而來，同樣**不得**當成前例。第 10 類不是 GUI 路徑的不合格理由：spec 把它寫成 `forward_email` 的參數拒絕（Requirement: forward_email can save the forward as a draft），不延伸〈Ineligible composing calls fail without side effects〉的清單；列在這裡只是為了讓呼叫端查得到處置。`create_draft` 的 opt-in 直接寫入（#472／#475）建立草稿時，第 3 類（Accessibility）與第 8 類（長度）不適用；直接寫入沒有建立草稿時，第 1–8 類照常全部適用（第 9 類只適用 `reply_email`，第 10 類只適用 `forward_email`）。
 
 前提不滿足時工具**直接失敗、零副作用**（不建草稿、不寄出、不刪既有草稿），
-訊息會具名原因與替代做法。九類與各自的處置：
+訊息會具名原因與替代做法。十類與各自的處置：
 
 | # | 原因 | 處置 |
 |---|---|---|
@@ -59,6 +59,7 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 | 7 | `signature` 為 `named`，但名稱在 Mail 裡不存在或不只一個（`SIGNATURE: name is missing or ambiguous in Mail`，#322） | 用 `list_signatures` 找出確切名稱；或改用 `mode: none`，自己在正文寫署名 |
 | 8 | `MAILTO_URL_TOO_LONG`：percent-encoded URL 超過 8000 字元（CJK 常見字約佔 9 個） | 先用 `check_compose_length` 精確計量 total/body/overhead。或帶 `from_address` 用 create_draft 的 opt-in 直接寫入（沒有長度上限；只在伺服器開了直接寫入、且呼叫符合其條件時）；或把完整正文保留在使用者選的地方，建立短／空正文草稿後在 Mail 手動貼上；或經使用者確認拆成多封。不要截斷、不要復活 legacy。此檢查在 GUI 路徑的任何 GUI 操作前拒絕（compose_email 與 update_draft 在任何 Mail 查詢前）；create_draft 的直接寫入建立草稿時不受此限（#388 verify），update_draft 不掃描／替換／刪除舊草稿。 |
 | 9 | **暫時，只適用 `reply_email`**（#534）：`attachments` 非空，草稿與寄出皆然。在任何 Mail 動作、附件檔案檢查與 AppleScript 之前拒絕；工具入口的引數解析（包括第 1 類的 format 拒絕）先執行 | 以 `save_as_draft: true` 且**不帶 `attachments`** 回信，再到 Mail 的草稿匣開啟該回信、把檔案拖進撰寫視窗。原因：附件那一步在貼上內文之後寫入回信的 `content`，把貼上的內文與引用原信一起洗掉，卻回報成功。#608 落地後移除本列 |
+| 10 | **暫時，只適用 `forward_email`**（#599）：`save_as_draft: true` 而沒有 `body`。不帶內文的轉寄是 Mail 原生 `forward` 加 `send`，沒有可以改成存檔的按鍵步驟。在任何 Mail 動作之前拒絕 | 帶一段內文（簡短的附註即可）並 `save_as_draft: true`，草稿走 paste 路徑以 ⌘S 存檔；或在 Mail 手動轉寄。`save_as_draft` 要含 #599 的 binary 才認得：較舊的 binary 會忽略它而**直接寄出**。#673 落地後移除本列 |
 
 > 第 5、6 類的配方與 #304 之前的規則一致——差別是現在**工具自己會說**，不必靠人記得。
 

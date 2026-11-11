@@ -27,6 +27,11 @@ struct MailLogQuery: Equatable {
     /// Continuation only: how many matching events at exactly `start` (to the millisecond) were
     /// already returned by the previous page. See `MailLogService` for the cursor.
     var offset: Int = 0
+    /// #466: keep only events whose DISPLAYED `event` name (`MailLogService.displayedEvent`) equals one of these
+    /// exactly, byte for byte. Normalized: 1 to 20 values, byte-identical duplicates collapsed, first occurrence kept.
+    /// `nil` = no filter. The values are never echoed in the response (only their count), so they cannot push it
+    /// past the byte cap and caller text never comes back in brief output.
+    var events: [String]? = nil
 
     static let defaultMinutes = 10
     static let maxWindowSeconds: TimeInterval = 3600
@@ -36,8 +41,13 @@ struct MailLogQuery: Equatable {
     /// these (pinned by `MailLogToolTests`), so the two cannot drift apart.
     static let allowedParameters: Set<String> = [
         "detail", "last_minutes", "since", "until", "around", "radius_seconds",
-        "categories", "limit", "contains", "redact_identifiers", "offset",
+        "categories", "limit", "contains", "redact_identifiers", "offset", "events",
     ]
+
+    /// #466: an `events` value may be no longer than the longest template that can be DISPLAYED — a longer
+    /// `formatString` is always withheld (`TemplateExtractor.looksLikeData`), so it could never match.
+    static let maxEventNameBytes = 1024
+    static let maxEventNames = 20
 
     static func parse(_ arguments: [String: Value], now: Date) throws -> MailLogQuery {
         func invalid(_ message: String) -> MailError { MailError.invalidParameter(message) }
@@ -161,7 +171,34 @@ struct MailLogQuery: Equatable {
             redact = flag
         }
 
+        // #466: event-name filter, in both details. Exact equality on the DISPLAYED name, so it can only
+        // select among events the output would show anyway: no oracle, unlike `contains` on brief output.
+        var events: [String]?
+        if let v = present("events") {
+            guard case .array(let items) = v else { throw invalid("events must be an array of event names") }
+            guard !items.isEmpty else { throw invalid("events must not be empty when provided") }
+            guard items.count <= maxEventNames else { throw invalid("events accepts at most \(maxEventNames) entries") }
+            var names: [String] = []
+            for item in items {
+                guard case .string(let text) = item else { throw invalid("events must contain only strings") }
+                guard (1...maxEventNameBytes).contains(text.utf8.count) else {
+                    throw invalid("each events entry must be 1 to \(maxEventNameBytes) bytes of UTF-8 (a longer template is always withheld)")
+                }
+                // A misspelled known-event name would otherwise read as "the event did not happen". Compared on
+                // BYTES, ASCII letters in any case: `hasPrefix` is grapheme-aware, so `imap.` followed by a
+                // combining mark slipped past it (verify round 1, row 5).
+                let head = text.utf8.prefix(5).map { (65...90).contains($0) ? $0 + 32 : $0 }
+                if head.elementsEqual("imap.".utf8), !KnownEvents.names.contains(where: { $0.utf8.elementsEqual(text.utf8) }) {
+                    // The value itself is not quoted: caller text does not come back (verify round 2, row 5).
+                    throw invalid("unknown known-event name: an events entry that begins with \"imap.\" (any letter case) "
+                        + "must be exactly one of: " + KnownEvents.names.sorted().joined(separator: ", "))
+                }
+                if !names.contains(where: { $0.utf8.elementsEqual(text.utf8) }) { names.append(text) }
+            }
+            events = names
+        }
+
         return MailLogQuery(detail: detail, start: start, end: end, categories: categories,
-                            contains: contains, redactIdentifiers: redact, limit: limit, offset: offset)
+                            contains: contains, redactIdentifiers: redact, limit: limit, offset: offset, events: events)
     }
 }

@@ -295,7 +295,7 @@ final class ReplyForwardSendStageTests: XCTestCase {
         XCTAssertLessThan(endTry.lowerBound, close.lowerBound)
     }
 
-    func testForwardPaste_alwaysSend_carriesSentinel() {
+    func testForwardPaste_send_carriesSentinel() {
         let script = buildForwardEmailPasteScript(
             messageRef: "message id 1 of mailbox \"INBOX\"", to: ["x@y.z"], newBody: "note")
         XCTAssertTrue(script.contains("POSTDISPATCH: "))

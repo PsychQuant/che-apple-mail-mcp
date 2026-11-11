@@ -410,7 +410,7 @@ final class MailControllerComposeTests: XCTestCase {
     }
 
     func testBuildForwardPasteScript_send_noExplicitWindowClose() {
-        // forward always sends → no explicit close (matches reply send path).
+        // a sending forward → no explicit close (matches reply send path); the #599 draft mode closes with saving yes.
         let s = buildForwardEmailPasteScript(
             messageRef: "msgRef", to: ["x@y.z"], newBody: "B")
         XCTAssertFalse(s.contains("saving yes"))
@@ -685,6 +685,188 @@ final class MailControllerComposeTests: XCTestCase {
         }
     }
 
+    // MARK: - validateAttachmentPaths: regular files only (#543)
+
+    /// A fresh temporary directory for one test, removed afterwards.
+    private func makeScratchDir() throws -> String {
+        let dir = "/tmp/che-apple-mail-543-\(UUID().uuidString)"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: false)
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: dir) }
+        return dir
+    }
+
+    func testValidateAttachmentPaths_acceptsOnlyRegularFiles_exampleTable() async throws {
+        // spec-example: message-composition / attachment path kinds
+        let dir = try makeScratchDir()
+        let file = "\(dir)/report.txt"
+        XCTAssertTrue(FileManager.default.createFile(atPath: file, contents: Data("ok".utf8)))
+        let fileLink = "\(dir)/link-to-file"
+        try FileManager.default.createSymbolicLink(atPath: fileLink, withDestinationPath: file)
+        let subdir = "\(dir)/folder"
+        try FileManager.default.createDirectory(atPath: subdir, withIntermediateDirectories: false)
+        let dirLink = "\(dir)/link-to-folder"
+        try FileManager.default.createSymbolicLink(atPath: dirLink, withDestinationPath: subdir)
+        let package = "\(dir)/Note.rtfd"
+        try FileManager.default.createDirectory(atPath: package, withIntermediateDirectories: false)
+        XCTAssertTrue(FileManager.default.createFile(atPath: "\(package)/TXT.rtf", contents: Data("{\\rtf1}".utf8)))
+        let fifo = "\(dir)/pipe"
+        XCTAssertEqual(mkfifo(fifo, 0o600), 0, "mkfifo failed: errno \(errno)")
+
+        await assertAttachmentAccepted([file])
+        await assertAttachmentAccepted([fileLink])
+        await assertAttachmentRejected([subdir], containing: "'\(subdir)' rejected: not a regular file (directory)")
+        await assertAttachmentRejected([dirLink], containing: "'\(dirLink)' rejected: not a regular file (directory)")
+        await assertAttachmentRejected([package], containing: "'\(package)' rejected: not a regular file (directory)")
+        await assertFifoRejectedWithoutOpening(fifo, path: fifo, containing: "'\(fifo)' rejected: not a regular file (FIFO)")
+        await assertAttachmentRejected(["/dev/null"], containing: "'/dev/null' rejected: not a regular file (character device)")
+    }
+
+    /// Scenario: a FIFO with no writer is rejected without being opened (opening it for reading would block).
+    /// Bounded (verify round 1, row 3): a writer thread keeps trying a non-blocking open for writing, which succeeds
+    /// only while some reader has the FIFO open. If validation ever opened the FIFO, the writer's open would succeed —
+    /// that also unblocks the reader, so a regression FAILS here instead of hanging the suite.
+    func testValidateAttachmentPaths_rejectsAFifoWithoutOpeningIt() async throws {
+        let dir = try makeScratchDir()
+        let fifo = "\(dir)/pipe"
+        XCTAssertEqual(mkfifo(fifo, 0o600), 0)
+        await assertFifoRejectedWithoutOpening(fifo, path: fifo, containing: "'\(fifo)' rejected: not a regular file (FIFO)")
+    }
+
+    /// Every validation of a FIFO runs under a `FifoReaderProbe`, so a regression that opens it fails instead of
+    /// hanging the run (a test without the probe blocked the whole suite in the mutation check).
+    private func assertFifoRejectedWithoutOpening(_ fifo: String, path: String, containing fragment: String,
+                                                  file: StaticString = #file, line: UInt = #line) async {
+        let probe = FifoReaderProbe(path: fifo)
+        probe.start()
+        await assertAttachmentRejected([path], containing: fragment, file: file, line: line)
+        XCTAssertFalse(probe.stop(), "validation opened the FIFO for reading", file: file, line: line)
+    }
+
+    // MARK: - #543 fix round 1: `..` after a symlink, update_draft, remaining kinds
+
+    func testValidateAttachmentPaths_dotDotAfterALinkCountsFromTheLinkTarget() async throws {
+        // spec-example: message-composition / attachment path kinds
+        let dir = try makeScratchDir()
+        let fm = FileManager.default
+        try fm.createDirectory(atPath: "\(dir)/real/sub", withIntermediateDirectories: true)
+        try fm.createDirectory(atPath: "\(dir)/a", withIntermediateDirectories: false)
+        try fm.createSymbolicLink(atPath: "\(dir)/a/L", withDestinationPath: "\(dir)/real/sub")
+        // kernel: a/L/../X is real/X
+        XCTAssertTrue(fm.createFile(atPath: "\(dir)/real/target.txt", contents: Data("ok".utf8)))
+        XCTAssertEqual(mkfifo("\(dir)/real/pipe", 0o600), 0)
+        // a regular decoy where the old string-only `..` collapse looked (a/pipe)
+        XCTAssertTrue(fm.createFile(atPath: "\(dir)/a/pipe", contents: Data("decoy".utf8)))
+
+        // Fix round 2: a `.` or `..` component is refused before anything else, so the textual and the physical
+        // reading of an accepted path always name the same file, whatever the open panel's Go-to field does with `..`.
+        let component = "rejected: contains a '.' or '..' path component"
+        await assertAttachmentRejected(["\(dir)/a/L/../target.txt"], containing: "'\(dir)/a/L/../target.txt' \(component)")
+        await assertFifoRejectedWithoutOpening("\(dir)/real/pipe", path: "\(dir)/a/L/../pipe", containing: component)
+        // the same file named without `..` is accepted
+        await assertAttachmentAccepted(["\(dir)/real/target.txt"])
+
+        // relative input, resolved against the working directory
+        let saved = fm.currentDirectoryPath
+        XCTAssertTrue(fm.changeCurrentDirectoryPath(dir))
+        defer { fm.changeCurrentDirectoryPath(saved) }
+        await assertAttachmentRejected(["a/L/../target.txt"], containing: component)
+        await assertAttachmentRejected(["./real/target.txt"], containing: component)
+        await assertAttachmentAccepted(["real/target.txt"])
+    }
+
+    func testValidateAttachmentPaths_allowListJudgesTheKernelTarget() async throws {
+        // spec-example: message-composition / attachment path kinds
+        let dir = try makeScratchDir()
+        let fm = FileManager.default
+        try fm.createDirectory(atPath: "\(dir)/allowed", withIntermediateDirectories: false)
+        try fm.createDirectory(atPath: "\(dir)/outside/inner", withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: "\(dir)/allowed/L", withDestinationPath: "\(dir)/outside/inner")
+        XCTAssertTrue(fm.createFile(atPath: "\(dir)/outside/secret.txt", contents: Data("s".utf8)))
+        XCTAssertTrue(fm.createFile(atPath: "\(dir)/allowed/secret.txt", contents: Data("decoy".utf8)))
+        await assertAttachmentRejected(["\(dir)/allowed/L/../secret.txt"], containing: "rejected: contains a '.' or '..' path component",
+                                       envAllowList: "\(dir)/allowed")
+        // through the link without `..`: the allow-list judges the link's target, outside the allowed root
+        XCTAssertTrue(fm.createFile(atPath: "\(dir)/outside/inner/secret.txt", contents: Data("s".utf8)))
+        await assertAttachmentRejected(["\(dir)/allowed/L/secret.txt"], containing: "outside MAIL_MCP_ATTACHMENT_ROOTS",
+                                       envAllowList: "\(dir)/allowed")
+        await assertAttachmentAccepted(["\(dir)/allowed/secret.txt"], envAllowList: "\(dir)/allowed")
+    }
+
+    /// Fix round 2: only a component that IS `.` or `..` is refused; names that merely contain dots are fine. The
+    /// existence check runs on the caller's path, so a trailing slash after a file is "not found" (ENOTDIR).
+    func testValidateAttachmentPaths_dotNamesAndTrailingSlash() async throws {
+        // spec-example: message-composition / attachment path kinds
+        let dir = try makeScratchDir()
+        let fm = FileManager.default
+        for name in [".hidden.txt", "a..b.txt", "...txt"] {
+            XCTAssertTrue(fm.createFile(atPath: "\(dir)/\(name)", contents: Data("x".utf8)))
+            await assertAttachmentAccepted(["\(dir)/\(name)"])
+        }
+        XCTAssertTrue(fm.createFile(atPath: "\(dir)/report.txt", contents: Data("x".utf8)))
+        await assertAttachmentRejected(["\(dir)/report.txt/"], containing: "'\(dir)/report.txt/' not found")
+        await assertAttachmentRejected(["\(dir)/./report.txt"], containing: "path component")
+    }
+
+    func testNonRegularFileKind_namesEveryKind() throws {
+        // spec-example: message-composition / attachment type names
+        let dir = try makeScratchDir()
+        let fm = FileManager.default
+        // socket
+        let sockPath = "\(dir)/s"
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        XCTAssertGreaterThanOrEqual(fd, 0)
+        defer { close(fd) }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        _ = withUnsafeMutableBytes(of: &addr.sun_path) { raw in sockPath.utf8CString.withUnsafeBytes { raw.copyMemory(from: $0) } }
+        let bound = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
+        XCTAssertEqual(bound, 0, "bind failed: errno \(errno)")
+        XCTAssertEqual(MailController.nonRegularFileKind(atResolvedPath: sockPath), "socket")
+        // a final symbolic link is reported, not followed
+        let file = "\(dir)/f.txt"
+        XCTAssertTrue(fm.createFile(atPath: file, contents: Data("x".utf8)))
+        try fm.createSymbolicLink(atPath: "\(dir)/link", withDestinationPath: file)
+        XCTAssertEqual(MailController.nonRegularFileKind(atResolvedPath: "\(dir)/link"), "symbolic link")
+        XCTAssertNil(MailController.nonRegularFileKind(atResolvedPath: file))
+        XCTAssertEqual(MailController.nonRegularFileKind(atResolvedPath: "/dev/null"), "character device")
+        XCTAssertEqual(MailController.nonRegularFileKind(atResolvedPath: "/dev/disk0"), "block device")
+        // a type that cannot be read is refused, never accepted
+        XCTAssertEqual(MailController.nonRegularFileKind(atResolvedPath: "\(dir)/missing"), "type could not be read")
+    }
+
+    /// Verify round 1, row 2: `update_draft` validates its attachments before its draft scans.
+    func testUpdateDraft_rejectsANonRegularAttachmentBeforeAnyMailScript() async throws {
+        let dir = try makeScratchDir()
+        await MailController.shared.setTestSeams(scriptRunner: { script in
+            XCTFail("no Mail script may run before attachment validation; got: \(script.prefix(80))")
+            return ""
+        }, refusal: nil)
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
+        do {
+            _ = try await MailController.shared.updateDraft(
+                draftId: "123", subjectMatch: nil, accountName: nil, accountId: nil,
+                to: ["someone@example.invalid"], subject: "s", body: "b", attachments: [dir])
+            XCTFail("expected validation to throw")
+        } catch MailError.invalidParameter(let msg) {
+            XCTAssertTrue(msg.contains("not a regular file (directory)"), msg)
+        }
+    }
+
+    /// Scenario: the new failure joins the existing aggregated error.
+    func testValidateAttachmentPaths_directoryAndMissingPathAreReportedTogether() async throws {
+        let dir = try makeScratchDir()
+        let missing = "\(dir)/missing.pdf"
+        do {
+            try await MailController.shared.validateAttachmentPaths([dir, missing])
+            XCTFail("expected validation to throw")
+        } catch MailError.invalidParameter(let msg) {
+            XCTAssertTrue(msg.contains("'\(dir)' rejected: not a regular file (directory)"), msg)
+            XCTAssertTrue(msg.contains("'\(missing)' not found"), msg)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
     // MARK: - validateEmailAddresses (#41) — continued
 
     func testValidateEmailAddresses_rejectsMultipleAt() async {
@@ -842,3 +1024,43 @@ final class MailControllerComposeTests: XCTestCase {
         }
     }
 }
+
+/// #543: detects whether anything opened a FIFO for reading. A non-blocking open for writing succeeds only while a
+/// reader has the FIFO open (otherwise ENXIO); succeeding also releases a reader blocked in open. What it catches: a
+/// BLOCKING open for reading, or a reader that stays open while it polls (every 2 ms). It can miss a brief
+/// non-blocking open and close between two polls, and it does not release an open for read-write followed by a read.
+final class FifoReaderProbe: @unchecked Sendable {
+    private let path: String
+    private let lock = NSLock()
+    private var stopped = false
+    private var sawReader = false
+    private let done = DispatchSemaphore(value: 0)
+
+    init(path: String) { self.path = path }
+
+    func start() {
+        Thread.detachNewThread { [self] in
+            while true {
+                lock.lock(); let stop = stopped; lock.unlock()
+                if stop { break }
+                let fd = open(path, O_WRONLY | O_NONBLOCK)
+                if fd >= 0 {
+                    close(fd)
+                    lock.lock(); sawReader = true; lock.unlock()
+                    break
+                }
+                usleep(2_000)
+            }
+            done.signal()
+        }
+    }
+
+    /// Stops the probe and reports whether a reader was seen.
+    func stop() -> Bool {
+        lock.lock(); stopped = true; lock.unlock()
+        _ = done.wait(timeout: .now() + 2)
+        lock.lock(); defer { lock.unlock() }
+        return sawReader
+    }
+}
+

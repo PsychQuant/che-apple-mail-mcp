@@ -405,3 +405,86 @@ Whenever the call takes the GUI path after the direct write was attempted or fou
 
 - **WHEN** the upload is confirmed, a look shows the draft unread, and every look after the re-assert fails to read the flag
 - **THEN** the tool result SHALL end with ` [note: the draft is uploaded but its local read status could not be read]`
+
+---
+### Requirement: Attachment paths must be regular files
+
+When a composing tool validates its attachment paths (`compose_email`, `create_draft`, and `update_draft` for the replacement draft), the system SHALL first reject every path that has a `.` or `..` component, as `'<path>' rejected: contains a '.' or '..' path component`, because Mail receives the caller's text through the open panel's Go-to-folder field and only without such components do the textual and the physical reading of the path name the same file; a name that merely contains dots (such as `.hidden.txt`) is not such a component. The existence check SHALL use the caller's path with the kernel's lookup, so that a missing component or a trailing slash after a file is `not found`. For the remaining checks the system SHALL make a relative path absolute against the server's working directory and follow symbolic links, and the deny-list, the `MAIL_MCP_ATTACHMENT_ROOTS` allow-list and the type check SHALL all judge that one resolved path. The system SHALL reject every path that, after symlink resolution, is not a regular file: a directory (including a package directory such as `.rtfd` or `.app`), a FIFO, a socket, a character or block device, or a path whose final component is still a symbolic link after resolution. The type SHALL be read without following a final symbolic link, so a link that resolution could not remove is rejected rather than followed; a type that cannot be read SHALL be rejected as `type could not be read`. The rejection SHALL be added to the same aggregated invalid-parameter error as the existing checks (a missing path, the deny-list, the allow-list), as `'<path>' rejected: not a regular file (<kind>)`, and SHALL happen before any Mail operation, including the draft scans of `update_draft`. The system SHALL NOT open a path to decide its type. A regular file, and a symbolic link that resolves to a regular file, named by a path without `.` or `..` components, SHALL still be accepted. This is input validation, not an ineligibility reason of Requirement: Ineligible composing calls fail without side effects, and it does not extend that list.
+
+#### Scenario: A FIFO is rejected without being opened
+
+- **GIVEN** a named pipe created in a temporary directory, with no writer
+- **WHEN** `validateAttachmentPaths` is called with its path
+- **THEN** it throws an invalid-parameter error naming the path and `not a regular file (FIFO)`, returns without blocking, and no blocking reader opens the pipe
+
+#### Scenario: A directory is rejected with the other failures
+
+- **WHEN** `validateAttachmentPaths` is called with a directory and a missing path
+- **THEN** one invalid-parameter error names both: the directory as `not a regular file (directory)` and the missing path as `not found`
+
+#### Scenario: update_draft validates before scanning drafts
+
+- **WHEN** `update_draft` is called with a directory among its attachments
+- **THEN** it fails with `not a regular file (directory)` before any Mail script runs
+
+##### Example: attachment path kinds
+
+| Path | Result |
+| --- | --- |
+| a regular file in a temporary directory | accepted |
+| a symbolic link to that regular file | accepted |
+| a directory | rejected: not a regular file (directory) |
+| a symbolic link to a directory | rejected: not a regular file (directory) |
+| a package directory named `Note.rtfd` | rejected: not a regular file (directory) |
+| a FIFO created with `mkfifo` | rejected: not a regular file (FIFO) |
+| `/dev/null` | rejected: not a regular file (character device) |
+| `a/L/../target.txt` (absolute or relative), L a link to `real/sub` | rejected: contains a '.' or '..' path component |
+| `a/L/../pipe`, a FIFO at `real/pipe`, a regular decoy at `a/pipe` | rejected: contains a '.' or '..' path component |
+| `./real/target.txt` | rejected: contains a '.' or '..' path component |
+| `real/target.txt` (relative, no `.` or `..`) | accepted |
+| `allowed/L/secret.txt` with `MAIL_MCP_ATTACHMENT_ROOTS` = `allowed`, L a link to `outside/inner` | rejected: outside MAIL_MCP_ATTACHMENT_ROOTS allow-list |
+| `.hidden.txt`, `a..b.txt`, `...txt` (regular files) | accepted |
+| `report.txt/` (a trailing slash after a regular file) | rejected: not found |
+
+##### Example: attachment type names
+
+| Resolved path | Kind |
+| --- | --- |
+| a regular file | none (accepted) |
+| a bound Unix-domain socket | socket |
+| a symbolic link (the final component) | symbolic link |
+| `/dev/null` | character device |
+| `/dev/disk0` | block device |
+| a path that does not exist | type could not be read |
+
+---
+### Requirement: forward_email can save the forward as a draft
+
+`forward_email` SHALL accept an optional boolean `save_as_draft`, default `false`; `false`, an omitted key and `null` SHALL all mean `false`, as for `reply_email`'s `save_as_draft`, and any other value that is not a boolean SHALL be rejected as an invalid parameter rather than read as `false`. When `save_as_draft` is `true` and a body is given, the system SHALL open the forward with Mail's native forward verb, paste the body at the cursor, set the recipients, and save the forward as a draft with the save keystroke instead of the send keystroke, so that nothing is sent; it SHALL report `Forward saved as draft (paste path)`. When `save_as_draft` is `true` and no body is given, the system SHALL refuse the call with an invalid-parameter error before any Mail operation, because the bodyless forward is Mail's native forward verb followed by a send, with no keystroke step that could save it; the error SHALL name that reason, #673, and both alternatives (pass a body with `save_as_draft: true`, or forward the message in Mail by hand), and SHALL say that the call created and sent nothing. This refusal is temporary and SHALL be removed when a bodyless draft mode exists (#673). When `save_as_draft` means `false`, the behaviour SHALL be unchanged: the forward is sent. A timeout or a post-dispatch failure on the send path SHALL keep the existing unknown-send-state handling exactly; on the draft path a timeout SHALL NOT be reported as an unknown send state. The tool description SHALL state that the call sends the forward unless `save_as_draft` is `true`, and SHALL advise reading a saved draft back, its To recipients and its body, before sending it. This refusal is a parameter refusal, not an ineligibility reason of Requirement: Ineligible composing calls fail without side effects, and it does not extend that list.
+
+#### Scenario: A forward with a note is saved as a draft
+
+- **WHEN** `forward_email` is called with a body and `save_as_draft: true`
+- **THEN** the GUI script it runs dispatches with the save keystroke, contains neither the send keystroke nor an AppleScript `send` command, and reports `Forward saved as draft (paste path)`
+
+#### Scenario: A bare forward cannot be saved as a draft yet
+
+- **WHEN** `forward_email` is called without a body and with `save_as_draft: true`
+- **THEN** it fails with an invalid-parameter error naming the reason, #673 and both alternatives, and no Mail script runs
+
+#### Scenario: A draft-flow timeout is not an unknown send state
+
+- **WHEN** the GUI script of a `save_as_draft: true` forward times out
+- **THEN** the error is not the unknown-send-state error, while a timeout of a sending forward still is
+
+##### Example: forward_email save_as_draft
+
+| body | save_as_draft | Result |
+| --- | --- | --- |
+| `"FYI"` | `true` | paste path, save keystroke, no send keystroke, `Forward saved as draft (paste path)` |
+| `"FYI"` | omitted | paste path, send keystroke (unchanged) |
+| `"FYI"` | `false` | paste path, send keystroke (unchanged) |
+| `"FYI"` | `null` | paste path, send keystroke (same as omitted) |
+| none | `true` | refused before any Mail operation, naming the reason, #673 and both alternatives |
+| none | omitted | native forward script ending in `send` (unchanged) |
+| `"FYI"` | `"yes"` (a string) | refused: save_as_draft must be a boolean |

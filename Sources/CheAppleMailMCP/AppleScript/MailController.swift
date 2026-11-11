@@ -1603,13 +1603,38 @@ actor MailController {
         return result
     }
 
-    /// Issue #38: harden attachment path validation against prompt-injection
-    /// exfil vectors. Three layers of defense applied in order:
-    ///   1. Existence (preserved from validateFilePaths)
-    ///   2. Symlink resolution (defeats `~/Documents/decoy → ~/.ssh` bypass)
+    /// #543: nil for a regular file; otherwise the name of what the path is. Reads the type without following a
+    /// final symlink and without opening the path.
+    static func nonRegularFileKind(atResolvedPath path: String) -> String? {
+        guard let type = (try? FileManager.default.attributesOfItem(atPath: path))?[.type] as? FileAttributeType else {
+            return "type could not be read"
+        }
+        switch type {
+        case .typeRegular: return nil
+        case .typeDirectory: return "directory"
+        case .typeSymbolicLink: return "symbolic link"
+        case .typeCharacterSpecial: return "character device"
+        case .typeBlockSpecial: return "block device"
+        case .typeSocket: return "socket"
+        default:
+            // Foundation reports a FIFO as `.typeUnknown`; tell it apart with lstat's mode bits.
+            var info = stat()
+            if lstat(path, &info) == 0, (info.st_mode & S_IFMT) == S_IFIFO { return "FIFO" }
+            return "unknown type"
+        }
+    }
+
+    /// Issues #38 and #543: harden attachment path validation against prompt-injection
+    /// exfil vectors. Layers applied in order:
+    ///   0. No `.` or `..` component (#543 fix round 2): Mail receives the caller's text, and only without such a
+    ///      component does every reading of it name the same file.
+    ///   1. Existence, on the caller's path (preserved from validateFilePaths)
+    ///   2. Symlink resolution (defeats `~/Documents/decoy → ~/.ssh` bypass). The path is made absolute against the
+    ///      working directory and then resolved with `resolvingSymlinksInPath()` alone; layers 3–5 judge that path.
     ///   3. Deny-list of sensitive directories (default-on, hardcoded)
     ///   4. Optional allow-list via `MAIL_MCP_ATTACHMENT_ROOTS` env var
     ///      (colon-separated, `~` expanded). If unset, only deny-list applies.
+    ///   5. Regular files only (#543): directories, FIFOs, sockets and devices are rejected.
     ///
     /// Without these checks, a malicious / hallucinated MCP caller could pass
     /// `attachments=["/Users/X/.ssh/id_ed25519"]` and have it attached to a
@@ -1665,15 +1690,29 @@ actor MailController {
         var failures: [String] = []
 
         for path in paths {
+            // #543 fix round 2: refuse a `.` or `..` component before anything else. Mail never receives the
+            // resolved path: the GUI step pastes the caller's text into the open panel's Go-to-folder field, and
+            // nobody has observed whether that field reads `..` after a symbolic link textually or physically.
+            // Without such a component both readings name the same file, so the verdict here is the file Mail
+            // opens either way, and the caller's file name is kept.
+            if path.split(separator: "/", omittingEmptySubsequences: false).contains(where: { $0 == "." || $0 == ".." }) {
+                failures.append("'\(path)' rejected: contains a '.' or '..' path component")
+                continue
+            }
+            // Existence is checked on the caller's path, with the kernel's semantics: the safer side, because
+            // `resolvingSymlinksInPath()` falls back to collapsing text when a component is missing or a link chain
+            // is too long, and a trailing slash after a file is ENOTDIR here.
             guard FileManager.default.fileExists(atPath: path) else {
                 failures.append("'\(path)' not found")
                 continue
             }
 
-            let resolved = URL(fileURLWithPath: path)
-                .standardized
-                .resolvingSymlinksInPath()
-                .path
+            // Absolute first (a relative path counts from the working directory, as before), then resolve WITHOUT
+            // `.standardized`: `resolvingSymlinksInPath()` follows each link before applying the `..` after it, as the
+            // kernel does, and still strips a leading `/private` (#543 verify round 1, row 1).
+            let absolute = (path as NSString).isAbsolutePath
+                ? path : (FileManager.default.currentDirectoryPath as NSString).appendingPathComponent(path)
+            let resolved = URL(fileURLWithPath: absolute).resolvingSymlinksInPath().path
 
             if let denied = denyList.first(where: { resolved == $0 || resolved.hasPrefix("\($0)/") }) {
                 failures.append("'\(path)' rejected: resolves under sensitive directory '\(denied)'")
@@ -1688,6 +1727,16 @@ actor MailController {
                     failures.append("'\(path)' rejected: outside MAIL_MCP_ATTACHMENT_ROOTS allow-list")
                     continue
                 }
+            }
+
+            // #543: only regular files. `fileExists` is true for directories, FIFOs and device files, and `/dev`
+            // is not deny-listed, so a FIFO (a read blocks) or `/dev/zero` (a read never ends) passed every layer.
+            // The type is read with `attributesOfItem`, which does not follow a final symlink and does not open the
+            // path; a link that resolution could not remove is therefore rejected too. An in-process reader must
+            // still re-check the opened descriptor (time-of-check/time-of-use, #479).
+            if let kind = Self.nonRegularFileKind(atResolvedPath: resolved) {
+                failures.append("'\(path)' rejected: not a regular file (\(kind))")
+                continue
             }
         }
 
@@ -2040,9 +2089,17 @@ actor MailController {
     }
 
     /// Forward an email
-    func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil, format: BodyFormat = .plain, accountId: String? = nil) throws -> String {
+    func forwardEmail(id: String, mailbox: String, accountName: String, to: [String], body: String? = nil, format: BodyFormat = .plain, accountId: String? = nil, saveAsDraft: Bool = false) throws -> String {
         // Issue #41: validate forward recipients at the boundary.
         try validateEmailAddresses(to, field: "to")
+        // #599: the bodyless forward is Mail's native `forward` verb followed by `send`, with no keystroke step that
+        // could save it instead; refuse by name before any Mail call until #673 adds a bodyless draft mode.
+        if saveAsDraft && body == nil {
+            throw MailError.invalidParameter(
+                "forward_email cannot save a forward without a body as a draft yet (#673): the bodyless forward "
+                + "has no step that could save instead of send. Pass a body (a short note is enough) with "
+                + "save_as_draft: true, or forward the message in Mail by hand. This call created and sent nothing.")
+        }
         let ref = resolveMsgRef(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName)
 
         // #218/#304: with a NEW body, the native-verb + paste path is the only
@@ -2055,18 +2112,22 @@ actor MailController {
         guard let newBody = body else {
             return try runScript(buildForwardNoBodyScript(messageRef: ref, to: to))
         }
-        // #301: the with-body forward paste path always dispatches a send.
+        // #301: the with-body forward paste path dispatches a send, unless #599's save_as_draft saves it with ⌘S.
         return try dispatchComposePath(
             refusal: replyForwardRefusalForCall(format: format),
             cleanPath: {
                 let pasteScript = buildForwardEmailPasteScript(
-                    messageRef: ref, to: to, newBody: newBody)
+                    messageRef: ref, to: to, newBody: newBody, saveAsDraft: saveAsDraft)
                 return try withClipboardPreserved { try runGuiScript(pasteScript, timeout: Self.guiScriptTimeout) }
             },
             // #254/#304: a post-dispatch (or timeout) failure leaves the send
             // state UNKNOWN — report that rather than a bare GUI error. Every
             // other runtime failure propagates verbatim.
+            // #599: a saved draft sends nothing, so the draft flow consults neither gate and its errors propagate
+            // verbatim, as `createDraft`'s do (#301: a duplicated draft is visible and harmless); a timeout keeps its
+            // own draft-save hint. The send flow's gate below is unchanged (timeout-outcome-boundary.md rule 2).
             mapRuntimeError: { error in
+                if saveAsDraft { return error }
                 guard isPostDispatchError(error) || isTimeoutError(error) else { return error }
                 return unknownReplyForwardSendStateError(noun: "forward", error: error)
             })
@@ -2151,6 +2212,10 @@ actor MailController {
                 "update_draft requires exactly one of draft_id or subject_match (got "
                 + (hasId ? "both" : "neither") + ")")
         }
+
+        // #543: attachments are validated before the read-only locate and pre-receipt scans, like the #411 recipient
+        // checks below; `createDraft` validates them again (pure, idempotent).
+        if let attachments { try validateAttachmentPaths(attachments) }
 
         // 1. Locate (read-only) — account-scoped when a selector was given,
         //    unified all-accounts scan otherwise.
