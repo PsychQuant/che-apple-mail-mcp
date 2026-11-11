@@ -8,4 +8,4 @@
 
 - [x] 2.1 `EnvelopeIndexReader` 加 `vipMailboxesPath` 與 `defaultVIPMailboxesPath`；伺服器 `init` 加同名參數並傳給 reader。驗證：1.1–1.3 綠，其他 reader 與 handler 測試仍綠。
 - [x] 2.2 `CHANGELOG.md` 條目。驗證：內容審閱。
-- [ ] 2.3 全部測試：兩個 bundle 都 0 failures。驗證：分別讀兩個 bundle 的 `Executed N tests` 行。
+- [x] 2.3 全部測試：兩個 bundle 都 0 failures。驗證：分別讀兩個 bundle 的 `Executed N tests` 行。
