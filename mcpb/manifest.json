@@ -235,7 +235,7 @@
       "name" : "list_vip_senders"
     },
     {
-      "description" : "Mark an email as junk or not junk",
+      "description" : "Set the junk mail status flag of an email (true = junk, false = not junk). This changes the flag only: it does not move the message, so a message in the junk mailbox stays there. To move it, call move_email. The result states the flag as Mail reports it after the change; if Mail still reports the opposite value, the call fails.",
       "name" : "mark_as_junk"
     },
     {

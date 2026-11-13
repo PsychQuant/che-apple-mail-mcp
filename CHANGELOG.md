@@ -127,6 +127,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`mark_as_junk` says what it did instead of "Email marked as not junk"**
+  ([#689](https://github.com/PsychQuant/che-apple-mail-mcp/issues/689)). The tool
+  sets Mail's junk mail status, which is a flag: it does not move the message, so
+  a message in the junk mailbox stayed there while the tool answered that it was
+  marked as not junk. The tool now reads the flag back after setting it and
+  reports the value Mail returns, that it did not move the message, the mailbox
+  the message was addressed in, and that `move_email` moves it. If Mail still
+  reports the opposite value, the call fails. If the flag cannot be read back,
+  the result says so and does not state the value as a fact. The tool description
+  says the same. **Behaviour change:** the result text is different, and a call
+  whose flag did not change is now an error. The tool still does not move
+  anything. Not checked on a real Mail account: the tests cover the script text
+  and the result for each read-back value through a fake script runner.
+
 - **A draft is not reported as uploaded when its queued action could not be read**
   ([#630](https://github.com/PsychQuant/che-apple-mail-mcp/issues/630)). While
   waiting for the upload, the direct-write path treats a remote id with no queued

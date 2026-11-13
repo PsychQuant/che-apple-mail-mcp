@@ -2712,10 +2712,12 @@ actor MailController {
         return try runScript(script)
     }
 
-    /// Mark email as junk or not junk
+    /// Set the junk mail status flag of a message and report what that did (#689).
+    /// The flag is read back; the message is not moved.
     func markAsJunk(id: String, mailbox: String, accountId: String? = nil, accountName: String, isJunk: Bool) throws -> String {
         let script = buildMarkAsJunkScript(id: id, mailbox: mailbox, accountId: accountId, accountName: accountName, isJunk: isJunk)
-        return try runScript(script)
+        let readBack = parseJunkStatusReadBack(try runScript(script))
+        return try markAsJunkReport(requested: isJunk, readBack: readBack, mailbox: mailbox)
     }
 
     /// Get all email headers
