@@ -93,7 +93,7 @@ The mail has subject `Statement`, sender `a@example.invalid`, received time `202
 ---
 ### Requirement: Sender decisions are recorded in a dedicated per-target file
 
-The SOP SHALL store the user's answer in `junk_decisions.json` inside the archive target's state directory, separate from `email_index.json` and `threads.json`. The file SHALL hold a `version` and a `senders` object keyed by the sender's bare address in lower case, each value holding `decision` (`rescue` or `leave`) and `decided_at` (an ISO 8601 time with a UTC offset). The SOP SHALL write the file only from an answer the user gave in the conversation, SHALL keep every existing sender entry it did not change, and SHALL replace the file atomically. A mail whose sender cannot be reduced to an address SHALL NOT be recorded and SHALL only be listed. An address SHALL be accepted only when its local part uses letters, digits and `. _ % + -` and its domain uses letters, digits, `.` and `-`; any other address SHALL be treated as unreadable, because the address is shown in a question and stored as a key. A write that fails SHALL return the error name `junk-decisions-write-failed`, SHALL leave the existing file unchanged and SHALL leave no temporary file; mail SHALL NOT be moved on an answer that could not be recorded.
+The SOP SHALL store the user's answer in `junk_decisions.json` inside the archive target's state directory, separate from `email_index.json` and `threads.json`. The file SHALL hold a `version` and a `senders` object keyed by the sender's bare address in lower case, each value holding `decision` (`rescue` or `leave`) and `decided_at` (an ISO 8601 time with a UTC offset). The SOP SHALL write the file only from an answer the user gave in the conversation, SHALL keep every existing sender entry it did not change, and SHALL replace the file atomically. A mail whose sender cannot be reduced to an address SHALL NOT be recorded and SHALL only be listed. An address SHALL be accepted only when its local part uses letters, digits and `. _ % + -` and its domain uses letters, digits, `.` and `-`; any other address SHALL be treated as unreadable, because the address is shown in a question and stored as a key. A write that fails SHALL return the error name `junk-decisions-write-failed`, SHALL leave the existing file unchanged and SHALL leave no temporary file; a write whose result would be larger than four mebibytes, the size above which the record is no longer read, SHALL count as a failed write. Whether mail is still moved on an answer that could not be written is stated by the requirement 'An answer that could not be stored still applies to the run that asked'.
 
 #### Scenario: an answer is recorded per sender
 
@@ -121,6 +121,14 @@ The SOP SHALL store the user's answer in `junk_decisions.json` inside the archiv
 - **THEN** the file holds both senders, `old@example.invalid` keeps its decision and time, `new@example.invalid` has `rescue` and `2026-11-13T08:40:00+08:00`, and no temporary file is left in the directory
 
 ---
+
+##### Example: a write that would exceed the size limit
+
+- **GIVEN** a record of about 2.4 mebibytes that loads without error, whose one entry carries an extra field of 800000 non-ASCII characters
+- **WHEN** the decisions `{"a@example.invalid": "rescue"}` are recorded
+- **THEN** the call returns `junk-decisions-write-failed`, the file is unchanged and still loads, and no temporary file is left
+
+---
 ### Requirement: A recorded sender is not asked again
 
 When a sender has a valid recorded decision the SOP SHALL NOT ask about that sender. With a person present, mail from a sender recorded as `rescue` SHALL be moved without a question and listed in the report with the sender and the recorded time; mail from a sender recorded as `leave` SHALL only be listed. An entry whose decision is neither `rescue` nor `leave`, or that is not an object, SHALL be treated as absent, SHALL be reported as an invalid entry, and SHALL make the sender eligible for the question again.
@@ -143,7 +151,7 @@ When a sender has a valid recorded decision the SOP SHALL NOT ask about that sen
 ---
 ### Requirement: A corrupt decision record leaves the mailbox untouched
 
-When `junk_decisions.json` exists and cannot be read (for example the path is a directory or the file is not readable), or is not valid JSON, or its top level is not an object, or its `senders` value is not an object, the SOP SHALL NOT ask, SHALL NOT move any mail and SHALL NOT write the file in that run. The report SHALL carry one line `junk_decisions_error` with the error name and SHALL list the mails in the junk mailbox. A missing file SHALL be treated as an empty record and SHALL NOT be an error.
+When `junk_decisions.json` exists and cannot be read (for example the path is a directory or the file is not readable), or is not valid JSON, or its top level is not an object, or it has no `senders` object (the key is missing or its value is not an object), the SOP SHALL NOT ask, SHALL NOT move any mail and SHALL NOT write the file in that run. The report SHALL carry one line `junk_decisions_error` with the error name and SHALL list the mails in the junk mailbox. A missing file SHALL be treated as an empty record and SHALL NOT be an error.
 
 #### Scenario: a corrupt record stops the rescue step
 
@@ -156,7 +164,7 @@ When `junk_decisions.json` exists and cannot be read (for example the path is a 
 | ------------ | ------- | ----- |
 | (file missing) | `{}` | none |
 | `{"version": "1.0", "senders": {}}` | `{}` | none |
-| `{"version": "1.0"}` | `{}` | none |
+| `{"version": "1.0"}` | none | `junk-decisions-senders-not-object` |
 | `not json` | none | `junk-decisions-not-json` |
 | (empty file) | none | `junk-decisions-not-json` |
 | `[]` | none | `junk-decisions-not-object` |
@@ -317,7 +325,7 @@ The recipe SHALL treat the record as unusable, and the run SHALL only list, when
 ---
 ### Requirement: Nothing is changed for a mail whose rescue cannot be completed and checked
 
-Before any call that changes the mailbox, the plan SHALL only list a mail that has no `id` or `account_name`, whose account has no known inbox, or for which no read-back search can be built (no subject, or a received time that is not an ISO 8601 time with an offset), each with its own reason. The recipe SHALL produce the arguments of the three calls for a mail, and SHALL produce none for a mail that is only listed.
+Before any call that changes the mailbox, the plan SHALL only list a mail that has no `id` or `account_name`, whose account has no known inbox, whose account names no junk mailbox or no trash mailbox (the read-back could then never confirm the move), or for which no read-back search can be built (no subject, or a received time that is not an ISO 8601 time with an offset or lies at the edge of the representable range), each with its own reason. The recipe SHALL produce the arguments of the three calls for a mail, and SHALL produce none for a mail that is only listed.
 
 #### Scenario: a mail without a known inbox is not unjunked
 
@@ -332,6 +340,7 @@ Before any call that changes the mailbox, the plan SHALL only list a mail that h
 | the account's inbox | `inbox-unknown` |
 | a received time with an offset (`date_received` is `Friday, 16 October 2026`) | `readback-unavailable` |
 | a subject | `readback-unavailable` |
+| the account's trash mailbox name | `readback-unavailable` |
 
 ##### Example: rescue calls for one mail
 
@@ -539,3 +548,19 @@ Mails in the junk mailbox from `a@example.invalid`, `b@example.invalid` and `c@e
 - **GIVEN** the Step 9 section of the archive-mail command
 - **WHEN** its text is read
 - **THEN** it states that when the write fails the user's consent in this conversation still holds, that the plan is computed again with the answers, and that the report says the answer was not recorded and will be asked again
+
+---
+### Requirement: A failed recipe call stops the rescue step
+
+When a call of the recipe inside the rescue step cannot run, prints nothing or prints something that cannot be read, the step SHALL make no further call that changes the mailbox, SHALL report the mails already moved by the read-back results it has, and SHALL list the rest with the reason that the recipe failed. A recording that fails without an error name SHALL be treated as a recording error other than a failed write. When the plan computed after recording has any sender to ask, whether or not that sender was in the question, the step SHALL NOT ask again and SHALL only list that sender's mail. The answers passed to the plan after a failed write SHALL use the addresses of the plan's ask list unchanged. The report SHALL tell which moved mail was moved by an earlier record and which by this run's answer by the group its sender had in the plan the step started with, and SHALL NOT tell the user to delete an invalid entry in order to be asked again.
+
+#### Scenario: a recipe that stops answering stops the moves
+
+- **WHEN** the calls for a mail cannot be produced because the recipe fails to run
+- **THEN** no further mail is marked or moved in that run
+
+##### Example: rescue step text on a failed recipe call
+
+- **GIVEN** the Step 9 section of the archive-mail command
+- **WHEN** its text is read
+- **THEN** it names the four recipe calls, states that after a failed one no tool that changes the mailbox is called and the remaining mails are listed with the reason that the recipe failed, treats a recording that fails without an error name as an error other than a failed write, states that any sender left to ask after recording is not asked again, and states that the answers use the addresses of the ask list unchanged
