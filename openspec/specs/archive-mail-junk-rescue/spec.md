@@ -487,22 +487,6 @@ Recording an answer SHALL return `junk-decisions-write-failed`, and SHALL NOT ra
 - **THEN** the output has the mail in the move group, `decided_at` equal to `{"a@example.invalid": "2026-11-13T08:40:00+08:00"}`, and no `senders` key
 
 ---
-### Requirement: A failed recording moves nothing
-
-When recording the answer returns an error, the rescue step SHALL move no mail in that run, including mail from senders already recorded as `rescue`, SHALL list every mail of the plan it started with as listed only with the error name, and SHALL NOT compute the plan again. When the plan computed after recording names a sender that was not in the question, the step SHALL NOT ask a second time and SHALL only list that sender's mail. The step SHALL tell the user to delete an entry or move the file away, not to edit entries. When the junk mailbox check of the report did not run, the step SHALL NOT run and its task SHALL be closed with that reason.
-
-#### Scenario: an answer that could not be stored changes no mailbox
-
-- **WHEN** the user answers the question and the record cannot be written
-- **THEN** no call that changes the mailbox is made in that run
-
-##### Example: rescue step text on a failed recording
-
-- **GIVEN** the Step 9 section of the archive-mail command
-- **WHEN** its text is read
-- **THEN** it states that on a recording error nothing is moved in that run including the move group, that the plan is not computed again, that a sender appearing only in the plan computed after recording is not asked about a second time, that the user deletes an entry or moves the file away, and how the task is closed when the report's check did not run
-
----
 ### Requirement: The bulk move rule does not apply to the rescue step
 
 The confirmation rules SHALL state that the bulk rule for `move_email` (five or more messages need a confirmation) does not apply to the rescue step, whose confirmation is its own question and the stored decision, and that the list shown before a move by record is a disclosure made in the same turn as the move, not a chance to stop it.
@@ -517,3 +501,41 @@ The confirmation rules SHALL state that the bulk rule for `move_email` (five or 
 - **GIVEN** the confirmation-triggers rule and the Step 9 section of the archive-mail command
 - **WHEN** their text is read
 - **THEN** the bulk line for `move_email` names Step 9 as an exception, the Provenance section states that the bulk rule does not apply to Step 9 and that the list is only a disclosure, and Step 9 says the same without calling the list a chance to stop the move
+
+---
+### Requirement: An answer that could not be stored still applies to the run that asked
+
+When recording the answer fails only at the write (`junk-decisions-write-failed`: the record could be read and could not be written), the rescue step SHALL still act on the answer the user gave in this conversation: it SHALL compute the plan again with that answer supplied as this run's answers, SHALL move the mail of the plan's move group, and SHALL report that the answer was not recorded and that the question will be asked again. This run's answers SHALL decide only the senders they name, SHALL be ignored unless every one of them is a bare lower-case address with `rescue` or `leave`, and SHALL be ignored when nobody is present or the record has a read error. When recording returns any other error, the rescue step SHALL move no mail in that run, including mail from senders already recorded as `rescue`, SHALL list every mail of the plan it started with as listed only with the error name, and SHALL NOT compute the plan again. When the plan computed after recording names a sender that was not in the question, the step SHALL NOT ask a second time and SHALL only list that sender's mail. The step SHALL tell the user to delete an entry or move the file away, not to edit entries. When the junk mailbox check of the report did not run, the step SHALL NOT run and its task SHALL be closed with that reason.
+
+#### Scenario: a yes still moves the mail when the record cannot be written
+
+- **WHEN** the user answers the question with "move" and writing the record fails
+- **THEN** the mail of the senders in the question is moved in that run and the report says the answer was not recorded
+
+#### Scenario: an answer that could not be stored changes no mailbox when the record is unreadable
+
+- **WHEN** recording returns a read error of the record
+- **THEN** no call that changes the mailbox is made in that run
+
+##### Example: plan with answers that could not be stored
+
+Mails in the junk mailbox from `a@example.invalid`, `b@example.invalid` and `c@example.invalid`; the record has `c@example.invalid` decided as `leave`.
+
+| This run's answers | Attended | Record error | move | leave | ask |
+| ------------------ | -------- | ------------ | ---- | ----- | --- |
+| `a` rescue, `b` leave | yes | none | a | b, c | (none) |
+| `a` with the decision `maybe` | yes | none | (none) | c | a, b |
+| `a` rescue | no | none | (none) | c | (none; a and b are listed only, nobody present) |
+| `a` rescue | yes | `junk-decisions-not-json` | (none) | (none) | (none; all listed only) |
+
+##### Example: rescue step text on a failed recording
+
+- **GIVEN** the Step 9 section of the archive-mail command
+- **WHEN** its text is read
+- **THEN** it states that on a recording error other than a failed write nothing is moved in that run including the move group, that the plan is not computed again, that a sender appearing only in the plan computed after recording is not asked about a second time, that the user deletes an entry or moves the file away, and how the task is closed when the report's check did not run
+
+##### Example: rescue step text on an unrecorded answer
+
+- **GIVEN** the Step 9 section of the archive-mail command
+- **WHEN** its text is read
+- **THEN** it states that when the write fails the user's consent in this conversation still holds, that the plan is computed again with the answers, and that the report says the answer was not recorded and will be asked again
