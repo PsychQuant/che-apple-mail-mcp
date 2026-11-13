@@ -3019,5 +3019,334 @@ class ArchiveLastArchivedGateTests(unittest.TestCase):
         self.assertIn("unregistered", entry)
 
 
+
+class ArchiveJunkRescueRecipeTests(unittest.TestCase):
+    """#688: which newly archived mails sit in the junk mailbox, who is asked, what is recorded, when nothing moves."""
+
+    GMAIL = {"junk": "垃圾郵件", "junk_path": "[Gmail]/垃圾郵件", "inbox": "INBOX", "inbox_path": "INBOX"}
+    LEAF_ONLY = {"junk": "Junk", "inbox": "INBOX"}
+
+    @classmethod
+    def setUpClass(cls):
+        cls.r = recipe("junk")
+
+    @staticmethod
+    def mail(sender="a@example.invalid", mailbox="[Gmail]/垃圾郵件", account="g", file="f.md",
+             subject="Statement", date="2026-10-16T06:32:19Z"):
+        return {"file": file, "sender": sender, "mailbox": mailbox, "account_id": account,
+                "subject": subject, "date": date}
+
+    def group_of(self, mailbox, special):
+        mail = self.mail(mailbox=mailbox)
+        found = self.r["junk_candidates"]([mail], {} if special is None else {"g": special})
+        self.assertEqual(sorted(found), ["in_junk", "last_segment"])
+        if mail in found["in_junk"]:
+            self.assertNotIn(mail, found["last_segment"])
+            return "in_junk"
+        return "last_segment" if mail in found["last_segment"] else "neither"
+
+    def test_junk_classification_by_mailbox_path(self):
+        # spec-example: archive-mail-junk-rescue / junk classification by mailbox path
+        rows = [("[Gmail]/垃圾郵件", self.GMAIL, "in_junk"),
+                ("Junk", self.LEAF_ONLY, "in_junk"),
+                ("Clients/Junk", self.LEAF_ONLY, "last_segment"),
+                ("Clients/垃圾郵件", self.GMAIL, "last_segment"),
+                ("INBOX", self.GMAIL, "neither"),
+                ("[Gmail]/垃圾郵件", None, "neither")]
+        for mailbox, special, expected in rows:
+            with self.subTest(mailbox=mailbox, special=special):
+                self.assertEqual(self.group_of(mailbox, special), expected)
+
+    def test_a_mail_with_an_unreadable_mailbox_or_account_is_in_neither_group(self):
+        candidates = self.r["junk_candidates"]
+        for mail in [dict(self.mail(), mailbox=None), dict(self.mail(), account_id=None), "not a mail", None]:
+            with self.subTest(mail=mail):
+                self.assertEqual(candidates([mail], {"g": self.GMAIL}), {"in_junk": [], "last_segment": []})
+        self.assertEqual(candidates(None, None), {"in_junk": [], "last_segment": []})
+        self.assertEqual(candidates([self.mail()], {"g": "not a dict"}), {"in_junk": [], "last_segment": []})
+
+    def plan(self, mails, senders, error=None, attended=True):
+        return self.r["plan_junk_rescue"](mails, senders, error, attended)
+
+    @staticmethod
+    def entry(decision, at="2026-11-13T08:40:00+08:00"):
+        return {"decision": decision, "decided_at": at}
+
+    def test_senders_to_ask_are_deduplicated_and_sorted(self):
+        # spec-example: archive-mail-junk-rescue / senders to ask are deduplicated and sorted
+        mails = [self.mail(sender=s, file=f"{i}.md") for i, s in enumerate(
+            ["b@example.invalid", "a@example.invalid", "b@example.invalid", "c@example.invalid"])]
+        plan = self.plan(mails, {"c@example.invalid": self.entry("leave")})
+        self.assertEqual(plan["ask"], ["a@example.invalid", "b@example.invalid"])
+        self.assertEqual(plan["ask_mails"], mails[:3])
+        self.assertEqual(plan["leave"], [mails[3]])
+        self.assertEqual(plan["move"], [])
+        self.assertEqual(plan["listed_only"], [])
+
+    def test_no_question_when_every_sender_is_recorded(self):
+        # spec-example: archive-mail-junk-rescue / no question when every sender is recorded
+        mails = [self.mail(file="1.md"), self.mail(file="2.md")]
+        plan = self.plan(mails, {"a@example.invalid": self.entry("rescue")})
+        self.assertEqual(plan["ask"], [])
+        self.assertEqual(plan["ask_mails"], [])
+        self.assertEqual(plan["move"], mails)
+
+    def test_plan_by_recorded_decision(self):
+        # spec-example: archive-mail-junk-rescue / plan by recorded decision
+        mail = self.mail()
+        rows = [(self.entry("rescue"), "move", []),
+                (self.entry("leave"), "leave", []),
+                ({"decision": "maybe"}, "ask_mails", ["a@example.invalid"]),
+                ("rescue", "ask_mails", ["a@example.invalid"]),
+                (None, "ask_mails", [])]
+        for entry, group, invalid in rows:
+            with self.subTest(entry=entry):
+                senders = {} if entry is None else {"a@example.invalid": entry}
+                plan = self.plan([mail], senders)
+                for name in ("move", "leave", "ask_mails"):
+                    self.assertEqual(plan[name], [mail] if name == group else [], name)
+                self.assertEqual(plan["invalid"], invalid)
+                self.assertEqual(plan["ask"], ["a@example.invalid"] if group == "ask_mails" else [])
+
+    def test_the_plan_uses_the_normalized_sender_and_lists_an_unreadable_one(self):
+        named = self.mail(sender='"Bank Notice" <A@Example.invalid>', file="1.md")
+        unreadable = self.mail(sender="Bank Notice", file="2.md")
+        plan = self.plan([named, unreadable], {"a@example.invalid": self.entry("rescue")})
+        self.assertEqual(plan["move"], [named])
+        self.assertEqual(plan["listed_only"], [{"mail": unreadable, "reason": "sender-unreadable"}])
+        self.assertEqual(plan["ask"], [])
+
+    def test_unattended_plan(self):
+        # spec-example: archive-mail-junk-rescue / unattended plan
+        a, b, c = (self.mail(sender=f"{name}@example.invalid", file=f"{name}.md") for name in "abc")
+        senders = {"a@example.invalid": self.entry("rescue"), "b@example.invalid": self.entry("leave")}
+        plan = self.plan([a, b, c], senders, attended=False)
+        self.assertEqual(plan["ask"], [])
+        self.assertEqual(plan["ask_mails"], [])
+        self.assertEqual(plan["move"], [])
+        self.assertEqual(plan["leave"], [b])
+        self.assertEqual(plan["listed_only"], [{"mail": a, "reason": "nobody-present"},
+                                               {"mail": c, "reason": "nobody-present"}])
+
+    def test_attended_must_be_the_boolean_true_to_ask_or_move(self):
+        mail = self.mail()
+        for attended in (None, "yes", 1, 0, False):
+            with self.subTest(attended=attended):
+                plan = self.plan([mail], {"a@example.invalid": self.entry("rescue")}, attended=attended)
+                self.assertEqual(plan["move"], [])
+                self.assertEqual(plan["listed_only"], [{"mail": mail, "reason": "nobody-present"}])
+
+    def test_sender_normalization(self):
+        # spec-example: archive-mail-junk-rescue / sender normalization
+        rows = [('"Bank Notice" <NOTICE@Example.invalid>', "notice@example.invalid"),
+                ("notice@example.invalid", "notice@example.invalid"),
+                ("  <Notice@Example.Invalid>  ", "notice@example.invalid"),
+                ("Bank Notice", ""),
+                (None, ""), (7, ""), (["notice@example.invalid"], ""),
+                # outside the conservative set: left unreadable, so the mail is only listed
+                ("a`b@example.invalid", ""), ("$(x)@example.invalid", ""), ("a b@example.invalid", ""),
+                ("a@exa mple.invalid", ""), ("a@b@example.invalid", "")]
+        for value, expected in rows:
+            with self.subTest(value=value):
+                self.assertEqual(self.r["normalize_sender"](value), expected)
+
+    def test_record_loader_results(self):
+        # spec-example: archive-mail-junk-rescue / record loader results
+        load = self.r["load_junk_decisions"]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "junk_decisions.json"
+            self.assertEqual(load(str(path)), ({}, None))
+            rows = [('{"version": "1.0", "senders": {}}', {}, None),
+                    ('{"version": "1.0"}', {}, None),
+                    ("not json", None, "junk-decisions-not-json"),
+                    ("", None, "junk-decisions-not-json"),
+                    ("[]", None, "junk-decisions-not-object"),
+                    ('{"senders": []}', None, "junk-decisions-senders-not-object"),
+                    ('{"senders": null}', None, "junk-decisions-senders-not-object")]
+            for content, senders, error in rows:
+                with self.subTest(content=content):
+                    path.write_text(content, encoding="utf-8")
+                    self.assertEqual(load(str(path)), (senders, error))
+            path.write_bytes(b"\xff\xfe{}")
+            self.assertEqual(load(str(path)), (None, "junk-decisions-not-json"))
+            self.assertFalse(list(Path(folder).glob("*.tmp")))
+
+    def test_an_error_plans_no_question_and_no_move_and_refuses_to_write(self):
+        # spec-example: archive-mail-junk-rescue / an error plans no question and no move and refuses to write
+        mails = [self.mail(file="1.md"), self.mail(sender="b@example.invalid", file="2.md")]
+        plan = self.plan(mails, None, error="junk-decisions-not-json")
+        self.assertEqual(plan["ask"], [])
+        self.assertEqual(plan["move"], [])
+        self.assertEqual(plan["leave"], [])
+        self.assertEqual(plan["listed_only"], [{"mail": m, "reason": "junk-decisions-not-json"} for m in mails])
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "junk_decisions.json"
+            path.write_text("not json", encoding="utf-8")
+            result = self.r["record_junk_decisions"](str(path), {"a@example.invalid": "rescue"},
+                                                     "2026-11-13T08:40:00+08:00")
+            self.assertEqual(result, "junk-decisions-not-json")
+            self.assertEqual(path.read_text(encoding="utf-8"), "not json")
+            self.assertEqual([p.name for p in Path(folder).iterdir()], ["junk_decisions.json"])
+
+    def test_recording_keeps_earlier_entries(self):
+        # spec-example: archive-mail-junk-rescue / recording keeps earlier entries
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "junk_decisions.json"
+            path.write_text(json.dumps({"version": "1.0", "senders": {
+                "old@example.invalid": {"decision": "leave", "decided_at": "2026-11-01T09:00:00+08:00"}}}),
+                encoding="utf-8")
+            result = self.r["record_junk_decisions"](str(path), {"new@example.invalid": "rescue"},
+                                                     "2026-11-13T08:40:00+08:00")
+            self.assertIsNone(result)
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"version": "1.0", "senders": {
+                "old@example.invalid": {"decision": "leave", "decided_at": "2026-11-01T09:00:00+08:00"},
+                "new@example.invalid": {"decision": "rescue", "decided_at": "2026-11-13T08:40:00+08:00"}}})
+            self.assertEqual([p.name for p in Path(folder).iterdir()], ["junk_decisions.json"])
+
+    def test_recording_creates_the_file_and_refuses_bad_input_without_writing(self):
+        record = self.r["record_junk_decisions"]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "state" / "junk_decisions.json"
+            bad = [({"a@example.invalid": "maybe"}, "2026-11-13T08:40:00+08:00"),
+                   ({"Bank Notice": "rescue"}, "2026-11-13T08:40:00+08:00"),
+                   ({"a@example.invalid": "rescue"}, "2026-11-13T08:40:00"),      # no offset
+                   ({"a@example.invalid": "rescue"}, "yesterday"),
+                   ({}, "2026-11-13T08:40:00+08:00"),
+                   ("not a mapping", "2026-11-13T08:40:00+08:00")]
+            for decisions, now in bad:
+                with self.subTest(decisions=decisions, now=now):
+                    self.assertEqual(record(str(path), decisions, now), "junk-decisions-bad-input")
+                    self.assertFalse(path.exists())
+            self.assertIsNone(record(str(path), {'"Bank" <A@Example.invalid>': "leave"}, "2026-11-13T08:40:00+08:00"))
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), {"version": "1.0", "senders": {
+                "a@example.invalid": {"decision": "leave", "decided_at": "2026-11-13T08:40:00+08:00"}}})
+
+    def test_read_back_outcomes(self):
+        # spec-example: archive-mail-junk-rescue / read-back outcomes
+        mail = self.mail()
+        names = ["[Gmail]/垃圾郵件", "垃圾郵件"]
+
+        def row(mailbox, date="2026-10-16T06:32:19Z"):
+            return {"subject": "Statement", "sender": "Bank <A@Example.invalid>", "date": date, "mailbox": mailbox}
+
+        rows = [([row("[Gmail]/全部郵件")], "rescued"),
+                ([row("INBOX"), row("[Gmail]/全部郵件")], "rescued"),
+                ([row("[Gmail]/垃圾郵件")], "unconfirmed"),
+                ([row("[Gmail]/垃圾郵件"), row("INBOX")], "unconfirmed"),
+                ([], "unconfirmed"),
+                ([row("INBOX", date="2026-10-17T06:32:19Z")], "unconfirmed")]
+        for results, expected in rows:
+            with self.subTest(results=results):
+                self.assertEqual(self.r["confirm_rescue"](mail, results, names), expected)
+
+    def test_read_back_is_unconfirmed_on_anything_it_cannot_read(self):
+        confirm = self.r["confirm_rescue"]
+        mail = self.mail()
+        good = {"subject": "Statement", "sender": "a@example.invalid", "date": "2026-10-16T06:32:19Z",
+                "mailbox": "INBOX"}
+        self.assertEqual(confirm(mail, [good], ["[Gmail]/垃圾郵件"]), "rescued")
+        for results in (None, "rows", [dict(good, mailbox=None)], [dict(good, subject="Other")],
+                        [dict(good, sender="b@example.invalid")], [good, "junk row"]):
+            with self.subTest(results=results):
+                self.assertEqual(confirm(mail, results, ["[Gmail]/垃圾郵件"]), "unconfirmed")
+        self.assertEqual(confirm(mail, [good], []), "unconfirmed")        # no junk name known: cannot prove it left
+        self.assertEqual(confirm(mail, [dict(good, mailbox="Clients/垃圾郵件")], ["垃圾郵件"]), "unconfirmed")
+
+    def test_the_command_line_plans_records_and_reads_back_through_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            script, record = folder / "junk_recipe.py", folder / "state" / "junk_decisions.json"
+            script.write_text(recipe_code("junk"), encoding="utf-8")
+
+            def run(*args):
+                return subprocess.run([sys.executable, "-I", str(script), *map(str, args)],
+                                      capture_output=True, text=True)
+
+            mail = self.mail()
+            (folder / "in.json").write_text(json.dumps({
+                "written": [mail, self.mail(mailbox="Clients/垃圾郵件", file="2.md")],
+                "special_by_account": {"g": self.GMAIL}, "record_path": str(record), "attended": True}),
+                encoding="utf-8")
+            self.assertEqual(run("plan", folder / "in.json", folder / "plan.json").returncode, 0)
+            plan = json.loads((folder / "plan.json").read_text(encoding="utf-8"))
+            self.assertEqual((plan["error"], plan["ask"], plan["ask_mails"]), (None, ["a@example.invalid"], [mail]))
+            self.assertEqual([m["file"] for m in plan["last_segment"]], ["2.md"])
+            (folder / "answer.json").write_text(json.dumps({"a@example.invalid": "rescue"}), encoding="utf-8")
+            done = run("record", record, folder / "answer.json", "2026-11-13T08:40:00+08:00")
+            self.assertEqual((done.returncode, json.loads(done.stdout)), (0, {"error": None}))
+            self.assertEqual(run("plan", folder / "in.json", folder / "plan.json").returncode, 0)
+            self.assertEqual(json.loads((folder / "plan.json").read_text(encoding="utf-8"))["move"], [mail])
+            (folder / "back.json").write_text(json.dumps({
+                "mail": mail, "junk_names": ["[Gmail]/垃圾郵件", "垃圾郵件"],
+                "results": [{"subject": "Statement", "sender": "a@example.invalid", "date": mail["date"],
+                             "mailbox": "INBOX"}]}), encoding="utf-8")
+            self.assertEqual(run("readback", folder / "back.json", folder / "out.json").returncode, 0)
+            self.assertEqual(json.loads((folder / "out.json").read_text(encoding="utf-8")), {"outcome": "rescued"})
+            for bad in ((), ("plan",), ("confirm", "a", "b"), ("record", "a", "b")):
+                with self.subTest(bad=bad):
+                    self.assertNotEqual(run(*bad).returncode, 0)
+
+
+class ArchiveJunkRescueSopTests(unittest.TestCase):
+    """#688: where the rescue step sits, what it may call, and who can consent to it."""
+
+    RULES = DOCUMENT.parents[1] / "rules/confirmation-triggers.md"
+
+    def test_the_rescue_step_follows_the_reconcile_gate_and_has_its_task(self):
+        text = DOCUMENT.read_text()
+        self.assertLess(text.index("\n### Step 8.5:"), text.index("\n### Step 9:"))
+        self.assertLess(text.index("\n### Step 9:"), text.index("\n## 注意事項"))
+        self.assertIn('subject="junk_rescue"', sop_section("### Step 0:"))
+        step = sop_section("### Step 9:")
+        for needed in ("junk_candidates", "load_junk_decisions", "plan_junk_rescue", "record_junk_decisions",
+                       "confirm_rescue", "junk_decisions.json", "${INDEX_DIR}"):
+            self.assertIn(needed, step, needed)
+
+    def test_rescue_step_text_orders_the_three_calls(self):
+        # spec-example: archive-mail-junk-rescue / rescue step text orders the three calls
+        step = sop_section("### Step 9:")
+        order = [step.index("`mark_as_junk(is_junk: false)`"), step.index("`move_email`"), step.index("讀回")]
+        self.assertEqual(order, sorted(order))
+        self.assertIn("`mark_as_junk` 失敗只記錄，不中止這一封的搬移", step)
+        self.assertIn("Step 9 的任何失敗都不使歸檔失敗", step)
+
+    def test_rescue_step_text_excludes_the_no_confirm_flag(self):
+        # spec-example: archive-mail-junk-rescue / rescue step text excludes the no-confirm flag
+        step = sop_section("### Step 9:")
+        self.assertIn("沒有人在場只有這兩種情況", step)
+        block = step.split("沒有人在場只有這兩種情況", 1)[1].split("\n\n", 2)[1]
+        self.assertEqual(re.findall(r"(?m)^(\d)\. ", block), ["1", "2"])
+        self.assertIn("拿不準就當成沒有人在場", step)
+        self.assertIn("`--no-confirm` 不涵蓋這一步", step)
+
+    def test_the_report_lists_both_junk_groups(self):
+        report = sop_section("### Step 7:")
+        self.assertIn("位於垃圾郵件匣", report)
+        self.assertIn("只有末段相同", report)
+
+    def test_trust_boundary_text_limits_the_two_tools(self):
+        # spec-example: archive-mail-junk-rescue / trust boundary text limits the two tools
+        boundary = sop_section("## Trust boundary")
+        self.assertNotIn("歸檔流程持有 delete/compose/move/junk 權限", boundary)
+        self.assertNotIn("9 個 read/export 工具", boundary)
+        self.assertIn("11 個", boundary)
+        self.assertIn("`mark_as_junk` 與 `move_email` 只在 Step 9 呼叫", boundary)
+        self.assertIn("目的地只能是該帳號的收件匣", boundary)
+
+    def test_the_frontmatter_names_the_two_tools(self):
+        allowed = DOCUMENT.read_text().split("\n---\n", 1)[0]
+        for tool in ("mail__mark_as_junk", "mail__move_email"):
+            self.assertEqual(allowed.count(tool), 1, tool)
+
+    def test_provenance_lists_the_stored_sender_decision(self):
+        # spec-example: archive-mail-junk-rescue / provenance lists the stored sender decision
+        text = self.RULES.read_text()
+        section = text.split("## Provenance", 1)[1].split("**不是授權**", 1)[0]
+        self.assertEqual(re.findall(r"(?m)^(\d)\. \*\*", section), ["1", "2", "3", "4"])
+        fourth = section.split("\n4. **", 1)[1]
+        for needed in ("junk_decisions.json", "垃圾郵件匣", "收件匣", "第三方 clone", "否認"):
+            self.assertIn(needed, fourth, needed)
+        self.assertIn("不能略過其他確認", fourth)
+
 if __name__ == "__main__":
     unittest.main()

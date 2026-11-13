@@ -219,6 +219,9 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
                 "search_emails", "get_email", "get_email_headers", "list_accounts",
                 "get_special_mailboxes", "list_attachments", "list_attachments_batch",
                 "save_attachment", "batch_export_emails_markdown",
+                // #688: the two mailbox-changing tools Step 9 needs, and no other.
+                // spec-example: archive-mail-junk-rescue / archive-mail allowed mail tools
+                "mark_as_junk", "move_email",
             ], ["Bash(mkdir:*)", "Read", "Write", "Glob"]),
             ("archive-mail-repair-synthetic-ids", [
                 "search_emails", "get_email_headers",
