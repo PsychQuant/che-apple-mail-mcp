@@ -3556,6 +3556,59 @@ class ArchiveJunkRescueRecipeTests(unittest.TestCase):
         self.assertEqual(self.group_of("Clients/垃圾郵件", path_only), "last_segment")
         self.assertEqual(self.group_of("[Gmail]/垃圾郵件", path_only), "in_junk")
 
+    def test_plan_with_answers_that_could_not_be_stored(self):
+        # spec-example: archive-mail-junk-rescue / plan with answers that could not be stored
+        a, b, c = (self.mail(sender=f"{name}@example.invalid", file=f"{name}.md") for name in "abc")
+        plan = self.r["plan_junk_rescue"]
+        table = {"g": self.GMAIL}
+        record = {"c@example.invalid": self.entry("leave")}
+        got = plan([a, b, c], record, None, True, table, {"a@example.invalid": "rescue", "b@example.invalid": "leave"})
+        self.assertEqual((got["move"], got["leave"], got["ask"]), ([a], [b, c], []))
+        self.assertEqual(got["decided_at"], {"c@example.invalid": self.NOW})     # an unstored answer has no time
+        rescue_a = {"a@example.invalid": "rescue"}
+        rows = [({"a@example.invalid": "rescue", "b@example.invalid": "leave"}, True, None, [a], [b, c], [], []),
+                ({"a@example.invalid": "maybe"}, True, None, [], [c], ["a@example.invalid", "b@example.invalid"], []),
+                (rescue_a, False, None, [], [c], [], [(a, "nobody-present"), (b, "nobody-present")]),
+                (rescue_a, True, "junk-decisions-not-json", [], [], [],
+                 [(m, "junk-decisions-not-json") for m in (a, b, c)])]
+        for answers, attended, error, move, leave, ask, listed in rows:
+            with self.subTest(answers=answers, attended=attended, error=error):
+                got = plan([a, b, c], None if error else record, error, attended, table, answers)
+                self.assertEqual((got["move"], got["leave"], got["ask"]), (move, leave, ask))
+                self.assertEqual(got["listed_only"], [{"mail": m, "reason": why} for m, why in listed])
+        # an answer decides only the senders it names; for those it wins over an older record
+        got = plan([a, c], record, None, True, table, {"c@example.invalid": "rescue"})
+        self.assertEqual((got["move"], got["leave"], got["ask"]), ([c], [], ["a@example.invalid"]))
+        # answers that are not in the form of an answer are ignored as a whole
+        for answers in ({"a@example.invalid": "maybe"}, {"Bank Notice": "rescue"}, {"A@Example.invalid": "rescue"},
+                        ["a@example.invalid"], "rescue", {"a@example.invalid": "rescue", "x": "rescue"}):
+            with self.subTest(answers=answers):
+                got = plan([a], {}, None, True, table, answers)
+                self.assertEqual((got["move"], got["ask"]), ([], ["a@example.invalid"]))
+        # they change nothing when nobody is present or the record cannot be read
+        got = plan([a], {}, None, False, table, {"a@example.invalid": "rescue"})
+        self.assertEqual((got["move"], got["listed_only"]), ([], [{"mail": a, "reason": "nobody-present"}]))
+        got = plan([a], None, "junk-decisions-not-json", True, table, {"a@example.invalid": "rescue"})
+        self.assertEqual((got["move"], got["listed_only"]), ([], [{"mail": a, "reason": "junk-decisions-not-json"}]))
+        # and the earlier five-argument call still works
+        self.assertEqual(plan([a], {}, None, True, table)["ask"], ["a@example.invalid"])
+
+    def test_the_command_line_plan_takes_answers(self):
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            script = folder / "junk_recipe.py"
+            script.write_text(recipe_code("junk"), encoding="utf-8")
+            mail = self.mail()
+            given = {"written": [mail], "special_by_account": {"g": self.GMAIL},
+                     "record_path": str(folder / "junk_decisions.json"), "attended": True}
+            for answers, group in (({"a@example.invalid": "rescue"}, "move"), (None, "ask_mails")):
+                with self.subTest(answers=answers):
+                    (folder / "in.json").write_text(json.dumps(dict(given, answers=answers) if answers else given),
+                                                    encoding="utf-8")
+                    self.assertEqual(self.run_cli(script, "plan", folder / "in.json", folder / "out.json").returncode, 0)
+                    self.assertEqual(json.loads((folder / "out.json").read_text(encoding="utf-8"))[group], [mail])
+            self.assertFalse((folder / "junk_decisions.json").exists())      # planning with answers writes nothing
+
     def run_cli(self, script, *args):
         return subprocess.run([sys.executable, "-I", str(script), *map(str, args)], capture_output=True, text=True)
 
@@ -3807,6 +3860,19 @@ class ArchiveJunkRescueSopTests(unittest.TestCase):
         self.assertNotIn("修正紀錄檔", step)
         self.assertNotIn("把該檔修好", step)
         self.assertIn("Step 7 的檢查沒有執行，未執行", step)
+
+    def test_rescue_step_text_on_an_unrecorded_answer(self):
+        # spec-example: archive-mail-junk-rescue / rescue step text on an unrecorded answer
+        step = sop_section("### Step 9:")
+        self.assertIn("回報 `junk-decisions-write-failed` 時", step)
+        self.assertIn("使用者在這次對話裡的同意仍然有效", step)
+        self.assertIn("當 `answers` 重跑 `plan`", step)
+        self.assertIn("答案沒有記下來，下次會再問", step)
+        other = step[step.index("回報其他錯誤"):].split("\n\n", 1)[0]
+        for needed in ("這一輪整批不搬", "包含 `move` 組在內", "不再重跑 `plan`"):
+            self.assertIn(needed, other, needed)
+        template = step[step.index("**報告末尾的摘要**"):step.index("<!-- archive-mail-junk-recipe:start -->")]
+        self.assertIn("答案沒有記下來", template)
 
     def test_bulk_rule_text_names_the_rescue_step(self):
         # spec-example: archive-mail-junk-rescue / bulk rule text names the rescue step
