@@ -3038,6 +3038,8 @@ class ArchiveJunkRescueRecipeTests(unittest.TestCase):
              subject="Statement", date="2026-10-16T06:32:19Z"):
         """One archived mail as Step 3 keeps it: the fields of a `full` search row (which names the received
         time `date_received` and has no `date`) plus the written file name."""
+        if "<" not in sender and "@" in sender:
+            sender = "Sender <%s>" % sender          # the server writes `name <address>` when there is an address
         return {"id": "101", "account_name": "Example", "account_id": account, "mailbox": mailbox,
                 "sender": sender, "subject": subject, "date_received": date, "file": file}
 
@@ -3435,7 +3437,7 @@ class ArchiveJunkRescueRecipeTests(unittest.TestCase):
             with self.subTest(hidden=hidden):
                 self.assertEqual(confirm(mail, [row("INBOX"), hidden], self.GMAIL), "unconfirmed")
         # rows that are another mail do not block it
-        for other in (row("[Gmail]/垃圾郵件", subject="Other"), row("[Gmail]/垃圾郵件", sender="b@example.invalid"),
+        for other in (row("[Gmail]/垃圾郵件", subject="Other"), row("[Gmail]/垃圾郵件", sender="X <b@example.invalid>"),
                       row("[Gmail]/垃圾郵件", date_received="2026-09-16T06:32:19Z"),
                       row("[Gmail]/垃圾郵件", account_id="h")):
             with self.subTest(other=other):
@@ -3447,6 +3449,112 @@ class ArchiveJunkRescueRecipeTests(unittest.TestCase):
         self.assertEqual(confirm(mail, [row("INBOX")], None), "unconfirmed")
         for unreadable in (dict(mail, date_received=None), dict(mail, account_id=None), dict(mail, sender="x")):
             self.assertEqual(confirm(unreadable, [row("INBOX")], self.GMAIL), "unconfirmed")
+
+    def test_rescue_calls_refused(self):
+        # spec-example: archive-mail-junk-rescue / rescue calls refused
+        calls = self.r["rescue_calls"]
+        self.assertIsNotNone(calls(self.mail(), self.GMAIL))
+        rows = [(self.mail(mailbox="INBOX"), self.GMAIL),
+                (self.mail(mailbox="[Gmail]/全部郵件"), self.GMAIL),
+                (self.mail(mailbox="Clients/Junk"), self.LEAF_ONLY),
+                (self.mail(mailbox="Junk"), self.LEAF_ONLY),               # no junk_path: never a source
+                (self.mail(mailbox="Clients/垃圾郵件"), self.GMAIL),
+                (self.mail(sender="Bank Notice"), self.GMAIL),
+                (self.mail(sender="x <a@example.invalid> <b@example.invalid>"), self.GMAIL),
+                (dict(self.mail(), sender="a@example.invalid"), self.GMAIL),   # no bracket group: a display name
+                (self.mail(), None), (self.mail(), "special")]
+        for mail, special in rows:
+            with self.subTest(mailbox=mail["mailbox"], sender=mail["sender"], special=special):
+                self.assertIsNone(calls(mail, special))
+
+    def test_mail_sender_fields_without_a_bracket_group(self):
+        # spec-example: archive-mail-junk-rescue / mail sender fields without a bracket group
+        rows = [("Bank <a@example.invalid>", "a@example.invalid"), (" <a@example.invalid>", "a@example.invalid"),
+                ("a@example.invalid", ""), ("Bank Notice", ""), ("", ""), (None, "")]
+        for value, expected in rows:
+            with self.subTest(value=value):
+                self.assertEqual(self.r["mail_sender"](value), expected)
+        bare = dict(self.mail(), sender="a@example.invalid")
+        plan = self.plan([bare], {"a@example.invalid": self.entry("rescue")})
+        self.assertEqual((plan["move"], plan["listed_only"]), ([], [{"mail": bare, "reason": "sender-unreadable"}]))
+        # record keys and answers are bare addresses, and must have a dotted domain that does not end in a dot
+        for value, expected in (("a@example.invalid", "a@example.invalid"), ("a@b", ""), ("a@b.invalid.", ""),
+                                (".@.", ""), ("a@.invalid", "")):
+            with self.subTest(key=value):
+                self.assertEqual(self.r["normalize_sender"](value), expected)
+
+    def test_strict_record_errors(self):
+        # spec-example: archive-mail-junk-rescue / strict record errors
+        load = self.r["load_junk_decisions"]
+        entry = '{"decision": "rescue", "decided_at": "%s", "extra": EXTRA}' % self.NOW
+        record = '{"version": "1.0", "senders": {"a@example.invalid": %s}}' % entry
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            path = folder / "junk_decisions.json"
+            for constant in ("NaN", "Infinity", "-Infinity"):
+                with self.subTest(constant=constant):
+                    path.write_text(record.replace("EXTRA", constant), encoding="utf-8")
+                    self.assertEqual(load(str(path)), (None, "junk-decisions-not-json"))
+            path.write_text(record.replace("EXTRA", "1"), encoding="utf-8")
+            self.assertIsNone(load(str(path))[1])
+            real = folder / "other-target"
+            real.mkdir()
+            good = '{"version": "1.0", "senders": {}}'
+            (real / "junk_decisions.json").write_text(good, encoding="utf-8")
+            link = folder / "state"
+            link.symlink_to(real, target_is_directory=True)
+            self.assertEqual(load(str(link / "junk_decisions.json")), (None, "junk-decisions-unreadable"))
+            self.assertEqual(self.r["record_junk_decisions"](str(link / "junk_decisions.json"),
+                                                             {"a@example.invalid": "rescue"}, self.NOW),
+                             "junk-decisions-unreadable")
+            self.assertEqual((real / "junk_decisions.json").read_text(encoding="utf-8"), good)
+            self.assertEqual(load(str(link / "missing.json")), (None, "junk-decisions-unreadable"))
+            big = folder / "big.json"
+            big.write_text('{"version": "1.0", "senders": {}, "pad": "%s"}' % ("x" * (4 * 1024 * 1024)),
+                           encoding="utf-8")
+            self.assertEqual(load(str(big)), (None, "junk-decisions-unreadable"))
+
+    def test_recording_beside_a_deeply_nested_entry(self):
+        # spec-example: archive-mail-junk-rescue / recording beside a deeply nested entry
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            path = folder / "junk_decisions.json"
+            old = '{"version": "1.0", "senders": {"x@example.invalid": %s}}' % ("[" * 3000 + "]" * 3000)
+            path.write_text(old, encoding="utf-8")
+            result = self.r["record_junk_decisions"](str(path), {"a@example.invalid": "rescue"}, self.NOW)
+            self.assertIn(result, ("junk-decisions-write-failed", "junk-decisions-not-json"))
+            self.assertEqual(path.read_text(encoding="utf-8"), old)
+            self.assertEqual([p.name for p in folder.iterdir()], ["junk_decisions.json"])
+            script = folder / "junk_recipe.py"
+            script.write_text(recipe_code("junk"), encoding="utf-8")
+            (folder / "in.json").write_text(json.dumps({
+                "written": [self.mail()], "special_by_account": {"g": self.GMAIL}, "record_path": str(path),
+                "attended": True}), encoding="utf-8")
+            done = self.run_cli(script, "plan", folder / "in.json", folder / "out.json")
+            self.assertEqual(done.returncode, 0, done.stderr[-300:])
+            json.loads((folder / "out.json").read_text(encoding="utf-8"))
+
+    def test_entries_and_times_outside_the_written_form_are_not_decisions(self):
+        mail = self.mail()
+        for at in ("2026-11-13X08:40:00+08:00", "2026-11-13 08:40:00+08:00", "2026-11-13T08:40:00+0800",
+                   "20261113T084000+08:00", " 2026-11-13T08:40:00+08:00"):
+            with self.subTest(at=at):
+                plan = self.plan([mail], {"a@example.invalid": {"decision": "rescue", "decided_at": at}})
+                self.assertEqual((plan["move"], plan["invalid"]), ([], ["a@example.invalid"]))
+        for key in ("A@example.invalid", "Bank <a@example.invalid>", " a@example.invalid"):
+            with self.subTest(key=key):
+                plan = self.plan([mail], {key: self.entry("rescue")})
+                self.assertEqual((plan["move"], plan["invalid"], plan["ask"]),
+                                 ([], ["a@example.invalid"], ["a@example.invalid"]))
+        ok = self.plan([mail], {"a@example.invalid": self.entry("rescue", "2026-11-13T00:40:00.250Z")})
+        self.assertEqual(ok["move"], [mail])
+
+    def test_read_back_needs_a_known_trash_and_junk_path_alone_names_its_last_segment(self):
+        no_trash = {key: value for key, value in self.GMAIL.items() if not key.startswith("trash")}
+        self.assertEqual(self.r["confirm_rescue"](self.mail(), [self.row("INBOX")], no_trash), "unconfirmed")
+        path_only = {"junk_path": "[Gmail]/垃圾郵件", "inbox": "INBOX"}
+        self.assertEqual(self.group_of("Clients/垃圾郵件", path_only), "last_segment")
+        self.assertEqual(self.group_of("[Gmail]/垃圾郵件", path_only), "in_junk")
 
     def run_cli(self, script, *args):
         return subprocess.run([sys.executable, "-I", str(script), *map(str, args)], capture_output=True, text=True)
@@ -3487,11 +3595,15 @@ class ArchiveJunkRescueRecipeTests(unittest.TestCase):
             self.assertEqual((plan["error"], plan["ask"], plan["ask_mails"]), (None, ["a@example.invalid"], [mail]))
             self.assertEqual([m["file"] for m in plan["last_segment"]], ["2.md"])
             self.assertEqual((plan["in_junk"], plan["unreadable"], plan["ignored_keys"]), ([mail], 0, 0))
+            self.assertNotIn("senders", plan)
             (folder / "answer.json").write_text(json.dumps({"a@example.invalid": "rescue"}), encoding="utf-8")
             done = run("record", record, folder / "answer.json", self.NOW)
             self.assertEqual((done.returncode, json.loads(done.stdout)), (0, {"error": None}))
             self.assertEqual(run("plan", folder / "in.json", folder / "plan.json").returncode, 0)
-            self.assertEqual(json.loads((folder / "plan.json").read_text(encoding="utf-8"))["move"], [mail])
+            again = json.loads((folder / "plan.json").read_text(encoding="utf-8"))
+            # spec-example: archive-mail-junk-rescue / plan output carries recorded times, not the record
+            self.assertEqual((again["move"], again["decided_at"]), ([mail], {"a@example.invalid": self.NOW}))
+            self.assertNotIn("senders", again)
             (folder / "mail.json").write_text(json.dumps({"mail": mail, "special_by_account": table}),
                                               encoding="utf-8")
             self.assertEqual(run("calls", folder / "mail.json", folder / "calls.json").returncode, 0)
@@ -3587,8 +3699,12 @@ class ArchiveJunkRescueSopTests(unittest.TestCase):
         # spec-example: archive-mail-junk-rescue / rescue step text orders the three calls
         step = sop_section("### Step 9:")
         calls = step[step.index("**搬一封信是三個呼叫"):]
-        order = [calls.index("`mark_as_junk(is_junk: false)`"), calls.index("`move_email`"), calls.index("讀回")]
+        order = [calls.index("\n1. `mark_as_junk(is_junk: false)`"), calls.index("\n2. `move_email`"),
+                 calls.index("\n3. 讀回")]
         self.assertEqual(order, sorted(order))
+        third = calls[order[2]:].split("\n\n", 1)[0]
+        self.assertIn("`search_emails`", third)
+        self.assertIn("`readback`", third)
         self.assertIn("`mark_as_junk` 失敗只記錄，不中止這一封的搬移", step)
         self.assertIn("`move_email` 回報錯誤時照樣讀回", step)
         self.assertIn("Step 9 的任何失敗都不使歸檔失敗", step)
@@ -3654,8 +3770,10 @@ class ArchiveJunkRescueSopTests(unittest.TestCase):
     def test_the_trust_boundary_names_the_record_as_its_one_exception(self):
         boundary = sop_section("## Trust boundary")
         self.assertIn("四個殘留", boundary)
-        sentence = boundary[boundary.index("`junk_decisions.json` 是從磁碟讀回的值裡唯一的例外"):].split("\n\n", 1)[0]
-        for needed in ("只對 Step 9", "不當指示", "不貼進指令字串"):
+        self.assertNotIn("從磁碟讀回的值裡唯一的例外", boundary)      # config.yaml is read from disk and authorizes too
+        sentence = boundary[boundary.index("`junk_decisions.json` 是上面這份清單裡唯一的例外"):].split("\n\n", 1)[0]
+        self.assertNotIn("只顯示、不據以行動", sentence)
+        for needed in ("只對 Step 9", "不當指示", "不貼進指令字串", "只用來檢查條目的形式與顯示"):
             self.assertIn(needed, sentence, needed)
 
     def test_the_frontmatter_names_the_two_tools(self):
@@ -3678,6 +3796,37 @@ class ArchiveJunkRescueSopTests(unittest.TestCase):
         text = self.RULES.read_text()
         section = text.split("## Provenance", 1)[1].split("**不是授權**", 1)[0]
         self.assertIn("第 2、3 類都不授權把信從垃圾郵件匣搬回收件匣", section)
+
+    def test_rescue_step_text_on_a_failed_recording(self):
+        # spec-example: archive-mail-junk-rescue / rescue step text on a failed recording
+        step = sop_section("### Step 9:")
+        self.assertIn("這一輪整批不搬", step)
+        self.assertIn("包含 `move` 組在內", step)
+        self.assertIn("不再重跑 `plan`", step)
+        self.assertIn("不再問第二次", step)
+        self.assertNotIn("修正紀錄檔", step)
+        self.assertNotIn("把該檔修好", step)
+        self.assertIn("Step 7 的檢查沒有執行，未執行", step)
+
+    def test_bulk_rule_text_names_the_rescue_step(self):
+        # spec-example: archive-mail-junk-rescue / bulk rule text names the rescue step
+        rules = self.RULES.read_text()
+        line = next(l for l in rules.split("\n") if l.startswith("- `move_email` 批次移動 ≥ 5 封"))
+        self.assertIn("Step 9", line)
+        section = rules.split("## Provenance", 1)[1].split("**不是授權**", 1)[0]
+        self.assertIn("bulk 規則不適用 Step 9", section)
+        self.assertNotIn("刪掉它即可", section)
+        self.assertIn("只是揭露", section)
+        step = sop_section("### Step 9:")
+        self.assertIn("這份清單只是揭露", step)
+        self.assertNotIn("唯一機會", step)
+        self.assertIn("bulk 規則", step)
+
+    def test_the_step_states_its_known_limits(self):
+        step = sop_section("### Step 9:")
+        for needed in ("#690", "#692", "#693", "`junk_path`"):
+            self.assertIn(needed, step, needed)
+        self.assertIn("沒有回報任何垃圾郵件匣名稱", step)
 
     def test_no_stale_count_of_consent_sources_is_left(self):
         text = self.RULES.read_text()
