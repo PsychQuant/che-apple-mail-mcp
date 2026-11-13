@@ -331,7 +331,7 @@ Search 結果的 email 可能來自 IMAP 帳號(display name)或 Exchange/EWS �
 | `.claude/.mail/config.yaml` | Plugin config(v2.16.0+;legacy `.md` 仍 fallback) | User 改的 YAML config,跟工作流綁定 |
 | `~/.claude/.mail/identity.yaml` | 全域身份資料(使用者維護,工作流只讀) | 同一個人在每個 workspace 叫同一個名字;不是 config 的第二層 |
 | `.claude/.mail/state/archives/{slug}/` | Plugin state | 自動產生的索引,user 不手動編輯 |
-| `.claude/.mail/state/archives/{slug}/junk_decisions.json` | 垃圾郵件匣的寄件人決定(#688) | `/archive-mail` Step 9 依使用者的回答寫入:某個寄件人的信位於垃圾郵件匣時,要搬回收件匣(`rescue`)還是留著(`leave`)。純文字 JSON,`{"version": "1.0", "senders": {"<寄件人位址小寫>": {"decision": "rescue"\|"leave", "decided_at": "<帶 offset 的 ISO 時間>"}}}`。這一個檔 user 可以手動改:刪掉某個寄件人的條目,下次就會再問;檔案壞掉時 Step 9 只列不動 |
+| `.claude/.mail/state/archives/{slug}/junk_decisions.json` | 垃圾郵件匣的寄件人決定(#688) | `/archive-mail` Step 9 依使用者的回答寫入:某個寄件人的信位於垃圾郵件匣時,要搬回收件匣(`rescue`)還是留著(`leave`)。純文字 JSON,`{"version": "1.0", "senders": {"<寄件人位址小寫>": {"decision": "rescue"\|"leave", "decided_at": "<帶 offset 的 ISO 時間>"}}}`。手動可以做的只有刪掉某個寄件人的條目(下次就會再問);條目由 Step 9 寫,不要手動新增。檔案讀不了、形式不對或是 symlink 時 Step 9 只列不動。command 無法驗證這個檔是誰寫的,所以不要把別人的 workspace 帶來的這個檔留著用 |
 | `{output_dir}/` | User-visible 歸檔結果 | User 主動 ls 找的 archive markdown |
 | `{attachment_routing.documents_dir}/`、`{attachment_routing.data_dir}/` | User-visible 附件 | 依分類寫入；document 另以信件檔名分目錄 |
 
