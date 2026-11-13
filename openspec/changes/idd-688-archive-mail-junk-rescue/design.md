@@ -70,8 +70,8 @@ frontmatter 的 allowed-tools 加入 mark_as_junk 與 move_email，CommandAllowe
 
 - archive-mail.md 新增一個 recipe，以 archive-mail-junk-recipe 的 start 與 end 標記包住，函式如下：
   - normalize_sender(value)：回傳 bare address 小寫；讀不出位址、或位址含保守字元集（英數與 . _ % + -）以外的字元時回空字串，那封信只列不動。
-  - junk_candidates(written, special_by_account)：written 是本次新歸檔信件的清單（file、sender、mailbox、account_id、subject、date；date 是搜尋結果的 date 欄位），回傳 in_junk 與 last_segment 兩個清單。
-  - load_junk_decisions(path)：回傳 (senders, error)；error 是 None、junk-decisions-not-json、junk-decisions-not-object、junk-decisions-senders-not-object 之一；檔案不存在回傳空的 senders 與 None。
+  - junk_candidates(written, special_by_account)：written 是本次新歸檔信件的清單（id、account_name、account_id、mailbox、sender、subject、date_received、file；前七個是 full 搜尋結果的欄位，id 與 account_name 是 mark_as_junk 與 move_email 的必填參數。full 結果的收信時間叫 date_received，summary 結果叫 date，兩者是同一個 ISO 8601 值，recipe 兩個名字都讀）。回傳另有 unreadable：mailbox 或 account_id 讀不到的封數，判定不了的信不安靜地丟掉，回傳 in_junk 與 last_segment 兩個清單。
+  - load_junk_decisions(path)：回傳 (senders, error)；error 是 None、junk-decisions-not-json、junk-decisions-not-object、junk-decisions-senders-not-object、junk-decisions-unreadable 之一（封閉列舉，只有這四個錯誤；最後一個是檔案存在但讀不了，例如路徑是目錄或沒有讀取權限）；檔案不存在回傳空的 senders 與 None。record_junk_decisions 另有兩個錯誤：junk-decisions-bad-input（輸入不合規）與 junk-decisions-write-failed（寫入失敗，舊檔不變、不留暫存檔）。plan_junk_rescue 的 listed_only 原因：nobody-present、sender-unreadable、mail-unaddressable（信沒有 id 或 account_name），或紀錄檔的錯誤名稱。
   - plan_junk_rescue(in_junk, senders, error, attended)：回傳 move（照紀錄直接搬的信）、ask（要問的寄件人，去重、排序）、ask_mails（要問的信）、leave（照紀錄留著的信）、listed_only（只列不動的信與原因）、invalid（紀錄無效的寄件人）。
   - record_junk_decisions(path, decisions, now)：decisions 是寄件人到 rescue 或 leave 的對應；先重新載入，有錯誤就不寫並回傳錯誤名稱；寫入走暫存檔加 os.replace。
   - confirm_rescue(mail, results, junk_names)：results 是讀回搜尋的結果，回傳 rescued 或 unconfirmed。
@@ -92,7 +92,7 @@ frontmatter 的 allowed-tools 加入 mark_as_junk 與 move_email，CommandAllowe
 
 **範圍**
 
-- 在範圍內：archive-mail.md、confirmation-triggers.md、上述兩個測試檔、plugin/CLAUDE.md 的 state 檔說明、plugin 的 CHANGELOG 與版號。
+- 在範圍內：archive-mail.md、confirmation-triggers.md、上述兩個測試檔、plugin/CLAUDE.md 的 state 檔說明、plugin 的 CHANGELOG（Unreleased）。版號不在這次升：這個 repo 的條目累積在 Unreleased，發版時才升 plugin.json。
 - 不在範圍內：Swift server 程式碼、其他 archive-mail-* 指令、archive-mail-tree 的流程。
 
 ## Risks / Trade-offs

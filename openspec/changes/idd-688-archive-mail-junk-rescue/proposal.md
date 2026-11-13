@@ -33,5 +33,4 @@ archive-mail 會把位於帳號垃圾郵件匣的信照常歸檔，之後沒有�
     - Tests/CheAppleMailMCPTests/CommandAllowedToolsGuardTests.swift
     - plugin/CLAUDE.md
     - plugin/CHANGELOG.md
-    - plugin/.claude-plugin/plugin.json
   - Removed: (none)

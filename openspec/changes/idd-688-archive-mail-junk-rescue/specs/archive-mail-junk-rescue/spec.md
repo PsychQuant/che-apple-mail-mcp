@@ -6,7 +6,7 @@ Defines how `/archive-mail` reports archived mail that sits in an account's junk
 
 ### Requirement: Report lists archived mail located in the junk mailbox
 
-The archive-mail SOP SHALL classify every mail newly archived in the current run by comparing its `mailbox` with the junk mailbox of its own account, using the `get_special_mailboxes` result already fetched in Step 3. A mail SHALL count as located in the junk mailbox only when its mailbox equals that account's `junk_path` by full path, or equals the `junk` leaf name by full path when no `junk_path` is known. A mail whose mailbox matches the junk name only by its last path segment SHALL be listed separately as unconfirmed and SHALL NOT be offered for a move. The Step 7 report SHALL list both groups by file name, and SHALL omit the section when both groups are empty.
+The archive-mail SOP SHALL classify every mail newly archived in the current run by comparing its `mailbox` with the junk mailbox of its own account, using the `get_special_mailboxes` result already fetched in Step 3. A mail SHALL count as located in the junk mailbox only when its mailbox equals that account's `junk_path` by full path, or equals the `junk` leaf name by full path when no `junk_path` is known. A mail whose mailbox matches the junk name only by its last path segment SHALL be listed separately as unconfirmed and SHALL NOT be offered for a move. The Step 7 report SHALL list both groups by file name, and SHALL omit the section when both groups are empty. The classification SHALL be computed before the report is printed, and the rescue step SHALL reuse that result. For every newly archived mail the SOP SHALL keep the `id`, `account_name`, `account_id`, `mailbox`, `sender`, `subject` and `date_received` of its search row together with the written file name. A mail whose mailbox or account cannot be read SHALL NOT be dropped silently: it SHALL be counted, and the report SHALL show that count when it is above zero.
 
 #### Scenario: mail in the account junk mailbox is listed
 
@@ -24,9 +24,11 @@ The archive-mail SOP SHALL classify every mail newly archived in the current run
 | `INBOX` | `[Gmail]/垃圾郵件` | `垃圾郵件` | neither |
 | `[Gmail]/垃圾郵件` | (account unknown) | (account unknown) | neither |
 
+A mail with no readable `mailbox` or no `account_id` is in neither group and adds one to the unreadable count.
+
 ### Requirement: Rescue question covers every undecided sender once
 
-After Step 8.5 the SOP SHALL run a rescue step. When a person is present and at least one mail in the junk mailbox comes from a sender without a recorded decision, the SOP SHALL ask exactly one question that names every such sender and offers two answers: move all of them to the inbox, or leave all of them. The SOP SHALL NOT ask one question per mail or per sender. When every sender already has a recorded decision, the SOP SHALL NOT ask.
+After Step 8.5 the SOP SHALL run a rescue step. When a person is present and at least one mail in the junk mailbox comes from a sender without a recorded decision, the SOP SHALL ask exactly one question that names every such sender and offers two answers: move all of them to the inbox, or leave all of them. The SOP SHALL NOT ask one question per mail or per sender. When every sender already has a recorded decision, the SOP SHALL NOT ask. When the question is asked, the SOP SHALL NOT call `mark_as_junk` or `move_email` for any mail — including mail from senders recorded as `rescue` — before the answer arrives; when no answer arrives it SHALL compute the plan again as a run with nobody present.
 
 #### Scenario: one question for all undecided senders
 
@@ -47,7 +49,7 @@ After Step 8.5 the SOP SHALL run a rescue step. When a person is present and at 
 
 ### Requirement: Rescue moves the mail to the account inbox and reads it back
 
-For each mail to rescue the SOP SHALL call `mark_as_junk` with `is_junk` false, then `move_email` from the account's junk mailbox to the account's inbox (`inbox_path`, or `inbox` when no path is known), then read the result back with a fresh subject search. A failure of `mark_as_junk` SHALL be recorded in the report and SHALL NOT stop the move. A failure of `move_email` SHALL mark that mail as failed and SHALL NOT stop the remaining mails. The SOP SHALL report a mail as rescued only when the read-back finds no copy of it (same subject, sender and received time) in the junk mailbox and finds a copy in another mailbox; every other read-back result SHALL be reported as unconfirmed. A failure in the rescue step SHALL NOT make the archive run fail.
+For each mail to rescue the SOP SHALL call `mark_as_junk` with `is_junk` false, then `move_email` from the account's junk mailbox to the account's inbox (`inbox_path`, or `inbox` when no path is known), then read the result back with a fresh subject search. Both calls SHALL pass the `id` and `account_name` kept from the mail's search row (and `account_id` when present), and SHALL name the junk mailbox by the mail's own `mailbox` value. A mail without a string `id` or `account_name` SHALL only be listed, with the reason `mail-unaddressable`. A failure of `mark_as_junk` SHALL be recorded in the report and SHALL NOT stop the move. A failure of `move_email` SHALL mark that mail as failed and SHALL NOT stop the remaining mails. The SOP SHALL report a mail as rescued only when the read-back finds no copy of it (same subject, sender and received time) in the junk mailbox and finds a copy in another mailbox; every other read-back result SHALL be reported as unconfirmed, including a failed or truncated search. The received time is the `date_received` of a `full` search row and the `date` of a `summary` row; the comparison SHALL accept either name on both sides. A failure in the rescue step SHALL NOT make the archive run fail.
 
 #### Scenario: read-back decides the reported outcome
 
@@ -78,7 +80,7 @@ For each mail to rescue the SOP SHALL call `mark_as_junk` with `is_junk` false, 
 
 ### Requirement: Sender decisions are recorded in a dedicated per-target file
 
-The SOP SHALL store the user's answer in `junk_decisions.json` inside the archive target's state directory, separate from `email_index.json` and `threads.json`. The file SHALL hold a `version` and a `senders` object keyed by the sender's bare address in lower case, each value holding `decision` (`rescue` or `leave`) and `decided_at` (an ISO 8601 time with a UTC offset). The SOP SHALL write the file only from an answer the user gave in the conversation, SHALL keep every existing sender entry it did not change, and SHALL replace the file atomically. A mail whose sender cannot be reduced to an address SHALL NOT be recorded and SHALL only be listed.
+The SOP SHALL store the user's answer in `junk_decisions.json` inside the archive target's state directory, separate from `email_index.json` and `threads.json`. The file SHALL hold a `version` and a `senders` object keyed by the sender's bare address in lower case, each value holding `decision` (`rescue` or `leave`) and `decided_at` (an ISO 8601 time with a UTC offset). The SOP SHALL write the file only from an answer the user gave in the conversation, SHALL keep every existing sender entry it did not change, and SHALL replace the file atomically. A mail whose sender cannot be reduced to an address SHALL NOT be recorded and SHALL only be listed. An address SHALL be accepted only when its local part uses letters, digits and `. _ % + -` and its domain uses letters, digits, `.` and `-`; any other address SHALL be treated as unreadable, because the address is shown in a question and stored as a key. A write that fails SHALL return the error name `junk-decisions-write-failed`, SHALL leave the existing file unchanged and SHALL leave no temporary file; mail SHALL NOT be moved on an answer that could not be recorded.
 
 #### Scenario: an answer is recorded per sender
 
@@ -94,6 +96,10 @@ The SOP SHALL store the user's answer in `junk_decisions.json` inside the archiv
 | `  <Notice@Example.Invalid>  ` | `notice@example.invalid` |
 | `Bank Notice` | (empty: not recorded) |
 | (not a string) | (empty: not recorded) |
+| ``a`b@example.invalid`` | (empty: not recorded) |
+| `$(x)@example.invalid` | (empty: not recorded) |
+| `a b@example.invalid` | (empty: not recorded) |
+| `a@b@example.invalid` | (empty: not recorded) |
 
 ##### Example: recording keeps earlier entries
 
@@ -122,7 +128,7 @@ When a sender has a valid recorded decision the SOP SHALL NOT ask about that sen
 
 ### Requirement: A corrupt decision record leaves the mailbox untouched
 
-When `junk_decisions.json` exists and is not valid JSON, or its top level is not an object, or its `senders` value is not an object, the SOP SHALL NOT ask, SHALL NOT move any mail and SHALL NOT write the file in that run. The report SHALL carry one line `junk_decisions_error` with the error name and SHALL list the mails in the junk mailbox. A missing file SHALL be treated as an empty record and SHALL NOT be an error.
+When `junk_decisions.json` exists and cannot be read (for example the path is a directory or the file is not readable), or is not valid JSON, or its top level is not an object, or its `senders` value is not an object, the SOP SHALL NOT ask, SHALL NOT move any mail and SHALL NOT write the file in that run. The report SHALL carry one line `junk_decisions_error` with the error name and SHALL list the mails in the junk mailbox. A missing file SHALL be treated as an empty record and SHALL NOT be an error.
 
 #### Scenario: a corrupt record stops the rescue step
 
@@ -141,6 +147,7 @@ When `junk_decisions.json` exists and is not valid JSON, or its top level is not
 | `[]` | none | `junk-decisions-not-object` |
 | `{"senders": []}` | none | `junk-decisions-senders-not-object` |
 | `{"senders": null}` | none | `junk-decisions-senders-not-object` |
+| (the path is a directory) | none | `junk-decisions-unreadable` |
 
 ##### Example: an error plans no question and no move and refuses to write
 
