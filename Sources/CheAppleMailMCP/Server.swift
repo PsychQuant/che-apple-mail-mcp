@@ -607,7 +607,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "mark_as_junk",
-                description: "Set the junk mail status flag of an email (true = junk, false = not junk). This changes the flag only: it does not move the message, so a message in the junk mailbox stays there. To move it, call move_email. The result states the flag as Mail reports it after the change; if Mail still reports the opposite value, the call fails.",
+                description: "Set the junk mail status flag of an email (true = junk, false = not junk). This changes the flag only: the tool issues no move, so a success does not mean the message left the junk mailbox. To move a message, call move_email. The result states the flag as Mail reports it after the change and whether Mail still found the message in the mailbox it was addressed in; if Mail still reports the opposite value, the call fails.",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -615,7 +615,7 @@ class CheAppleMailMCPServer {
                         "mailbox": .object(["type": .string("string"), "description": .string("Mailbox name")]),
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account (display_name)")]),
                         "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
-                        "is_junk": .object(["type": .string("boolean"), "description": .string("true=junk, false=not junk. Sets the flag only; the message is not moved.")])
+                        "is_junk": .object(["type": .string("boolean"), "description": .string("true=junk, false=not junk. Sets the flag only; the tool issues no move.")])
                     ]),
                     "required": .array([.string("id"), .string("mailbox"), .string("account_name"), .string("is_junk")])
                 ])

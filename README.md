@@ -234,7 +234,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 | `flag_email` | Flag/unflag email |
 | `set_flag_color` | Set flag color (7 colors) |
 | `set_background_color` | Set email background color |
-| `mark_as_junk` | Set the junk flag (it does not move the message; use `move_email` for that) |
+| `mark_as_junk` | Set the junk flag only (the tool issues no move; use `move_email` to move a message) |
 | `move_email` | Move to another mailbox |
 | `copy_email` | Copy to another mailbox |
 | `delete_email` | Delete email (to trash) |

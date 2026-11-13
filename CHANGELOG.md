@@ -129,17 +129,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`mark_as_junk` says what it did instead of "Email marked as not junk"**
   ([#689](https://github.com/PsychQuant/che-apple-mail-mcp/issues/689)). The tool
-  sets Mail's junk mail status, which is a flag: it does not move the message, so
-  a message in the junk mailbox stayed there while the tool answered that it was
-  marked as not junk. The tool now reads the flag back after setting it and
-  reports the value Mail returns, that it did not move the message, the mailbox
-  the message was addressed in, and that `move_email` moves it. If Mail still
-  reports the opposite value, the call fails. If the flag cannot be read back,
-  the result says so and does not state the value as a fact. The tool description
-  says the same. **Behaviour change:** the result text is different, and a call
-  whose flag did not change is now an error. The tool still does not move
-  anything. Not checked on a real Mail account: the tests cover the script text
-  and the result for each read-back value through a fake script runner.
+  sets Mail's junk mail status, which is a flag: setting it issues no move, so a
+  message in the junk mailbox stayed there while the tool answered that it was
+  marked as not junk. The tool now reads the flag back from the same message and
+  reports the value Mail returns, that the tool issued no move, that Mail still
+  found the message in the mailbox it was addressed in when the flag was read
+  back, and that `move_email` moves it. If the flag cannot be read back, the
+  result says so, states neither the value nor a mailbox as fact, and tells the
+  caller to search for the message again before moving it. The tool description
+  says the tool issues no move; it makes no claim about what Mail does with the
+  message. **Behaviour change:** the result text is different, and a call whose
+  flag reads back as the opposite of the requested value is now an error (asking
+  for the value a message already has still succeeds). The tool still moves
+  nothing. A script that runs past the time limit still fails as a timeout, even
+  if the flag was already changed. Not checked on a real Mail account: the tests
+  cover the whole script text and the result for each read-back value through a
+  fake script runner. The value read back is the one Mail holds locally, not
+  proof that the mail server accepted the change.
 
 - **A draft is not reported as uploaded when its queued action could not be read**
   ([#630](https://github.com/PsychQuant/che-apple-mail-mcp/issues/630)). While

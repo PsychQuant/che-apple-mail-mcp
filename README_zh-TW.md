@@ -164,7 +164,7 @@ compose_email、create_draft、update_draft 支援 signature 物件：`{"mode":"
 | `flag_email` | 加上/移除旗標 |
 | `set_flag_color` | 設定旗標顏色（7 種顏色） |
 | `set_background_color` | 設定郵件背景顏色 |
-| `mark_as_junk` | 設定垃圾郵件旗標（不搬動信件，要搬請用 `move_email`） |
+| `mark_as_junk` | 只設定垃圾郵件旗標（工具本身不搬信，要搬請用 `move_email`） |
 | `move_email` | 移動到其他信箱 |
 | `copy_email` | 複製到其他信箱 |
 | `delete_email` | 刪除郵件（移至垃圾桶） |

@@ -158,55 +158,80 @@ final class MutationToolScriptBuilderTests: XCTestCase {
     //
     // The tool set the `junk mail status` property and answered "Email marked as
     // not junk" while the message stayed in the junk mailbox. The property is a
-    // flag; it does not move the message. These tests pin the report the caller
-    // now gets, and the read-back the script performs.
-
-    private let junkTail = "mark_as_junk changes the flag only: it did not move the message, which was addressed in mailbox"
+    // flag; setting it issues no move. These tests pin the report the caller now
+    // gets, and the whole script the tool runs.
 
     func testMarkAsJunkReport_textByReadBack() throws {
         // spec-example: junk-status-tool / report text by read-back
         XCTAssertEqual(
             try markAsJunkReport(requested: false, readBack: .value(false), mailbox: "[Gmail]/垃圾郵件"),
-            "Junk mail status is now false. \(junkTail) \"[Gmail]/垃圾郵件\". To move it, call move_email.")
+            "Mail reports junk mail status false after the change. mark_as_junk changes the flag only: "
+            + "it issued no move, and Mail still found the message in mailbox \"[Gmail]/垃圾郵件\" "
+            + "when the flag was read back. To move it, call move_email.")
         XCTAssertEqual(
             try markAsJunkReport(requested: true, readBack: .value(true), mailbox: "INBOX"),
-            "Junk mail status is now true. \(junkTail) \"INBOX\". To move it, call move_email.")
+            "Mail reports junk mail status true after the change. mark_as_junk changes the flag only: "
+            + "it issued no move, and Mail still found the message in mailbox \"INBOX\" "
+            + "when the flag was read back. To move it, call move_email.")
         XCTAssertEqual(
             try markAsJunkReport(requested: false, readBack: .unknown, mailbox: "INBOX"),
-            "Junk mail status was set to false, but it could not be read back. \(junkTail) \"INBOX\". To move it, call move_email.")
+            "Junk mail status was set to false, but it could not be read back from mailbox \"INBOX\". "
+            + "mark_as_junk changes the flag only and issued no move. If Mail moved the message on its own, "
+            + "the message has a new id: search for it again before calling move_email.")
     }
 
-    func testMarkAsJunkReport_oppositeReadBackIsAnError() {
+    func testMarkAsJunkReport_oppositeReadBackIsAnError() throws {
         // spec-example: junk-status-tool / opposite read-back
         XCTAssertThrowsError(try markAsJunkReport(requested: false, readBack: .value(true), mailbox: "INBOX")) { error in
             XCTAssertEqual(
                 (error as? LocalizedError)?.errorDescription,
-                "Mail still reports junk mail status true after it was set to false. The message was addressed in mailbox \"INBOX\" and was not moved.")
+                "Mail still reports junk mail status true after it was set to false. mark_as_junk issued no move, "
+                + "and Mail still found the message in mailbox \"INBOX\" when the flag was read back.")
         }
         XCTAssertThrowsError(try markAsJunkReport(requested: true, readBack: .value(false), mailbox: "Junk")) { error in
             XCTAssertEqual(
                 (error as? LocalizedError)?.errorDescription,
-                "Mail still reports junk mail status false after it was set to true. The message was addressed in mailbox \"Junk\" and was not moved.")
+                "Mail still reports junk mail status false after it was set to true. mark_as_junk issued no move, "
+                + "and Mail still found the message in mailbox \"Junk\" when the flag was read back.")
         }
+        // A request for the value the message already has is a success: the
+        // error is about an opposite read-back, not about a flag that did not change.
+        XCTAssertNoThrow(try markAsJunkReport(requested: false, readBack: .value(false), mailbox: "INBOX"))
+        XCTAssertNoThrow(try markAsJunkReport(requested: true, readBack: .value(true), mailbox: "INBOX"))
+    }
+
+    /// The whole script `mark_as_junk` runs for message 3 in INBOX of the test account.
+    private func expectedJunkScript(ref: String, isJunk: Bool) -> String {
+        """
+        tell application "Mail"
+            set msg to \(ref)
+            set junk mail status of msg to \(isJunk)
+            set flagNow to "unknown"
+            try
+                if junk mail status of msg then
+                    set flagNow to "true"
+                else
+                    set flagNow to "false"
+                end if
+            end try
+            return flagNow
+        end tell
+        """
     }
 
     func testBuildMarkAsJunkScript_setsThenReadsBackInsideTry() throws {
         // spec-example: junk-status-tool / script shape and output parsing
-        let s = buildMarkAsJunkScript(id: "3", mailbox: "INBOX",
-                                      accountId: uuid, accountName: "x@y", isJunk: false)
-        let set = try XCTUnwrap(s.range(of: "set junk mail status of"))
-        let tryStart = try XCTUnwrap(s.range(of: #"\n[ \t]*try\n"#, options: .regularExpression),
-                                     "a line that is only `try`, whatever its indentation:\n\(s)")
-        let tryEnd = try XCTUnwrap(s.range(of: "end try"))
-        let ret = try XCTUnwrap(s.range(of: "return flagNow"))
-        XCTAssertTrue(s.contains("to false"))
-        XCTAssertLessThan(set.lowerBound, tryStart.lowerBound, "the status is set before it is read back")
-        let insideTry = String(s[tryStart.upperBound..<tryEnd.lowerBound])
-        XCTAssertTrue(insideTry.contains("junk mail status of"), "the read-back sits inside the try block:\n\(s)")
-        XCTAssertTrue(insideTry.contains("(account id \"\(uuid)\")"), "the read-back addresses the same message")
-        XCTAssertLessThan(tryEnd.lowerBound, ret.lowerBound, "the script returns after the try block")
-        XCTAssertTrue(s.contains("set flagNow to \"unknown\""), "a failed read-back leaves the answer unknown")
-        XCTAssertFalse(s.contains("Email marked as"), "the fixed success string is gone")
+        let ref = resolveMsgRef(id: "3", mailbox: "INBOX", accountId: uuid, accountName: "x@y")
+        XCTAssertTrue(ref.contains("whose id is 3") && ref.contains("INBOX") && ref.contains(uuid),
+                      "the reference addresses message 3 in INBOX of the account: \(ref)")
+        for isJunk in [false, true] {
+            let s = buildMarkAsJunkScript(id: "3", mailbox: "INBOX",
+                                          accountId: uuid, accountName: "x@y", isJunk: isJunk)
+            XCTAssertEqual(s, expectedJunkScript(ref: ref, isJunk: isJunk))
+            XCTAssertEqual(s.components(separatedBy: ref).count - 1, 1,
+                           "the message is resolved once; the read-back does not search for it again")
+            XCTAssertFalse(s.contains("Email marked as"), "the fixed success string is gone")
+        }
 
         XCTAssertEqual(parseJunkStatusReadBack("true"), .value(true))
         XCTAssertEqual(parseJunkStatusReadBack(" false \n"), .value(false))
@@ -218,15 +243,18 @@ final class MutationToolScriptBuilderTests: XCTestCase {
     func testMarkAsJunk_throughFakeScriptRunner() async throws {
         // spec-example: junk-status-tool / tool result through a fake script runner
         let controller = MailController.shared
+        // Awaited by XCTest whether the test passes, fails or throws, so the
+        // shared controller never keeps the fake runner for a later test.
+        addTeardownBlock { await MailController.shared.setTestSeams(scriptRunner: nil, refusal: nil) }
         func run(_ output: String) async throws -> String {
             await controller.setTestSeams(scriptRunner: { _ in output }, refusal: nil, scriptTimeout: 5.0)
             return try await controller.markAsJunk(id: "3", mailbox: "INBOX", accountId: nil,
                                                    accountName: "x@y", isJunk: false)
         }
         let same = try await run("false")
-        XCTAssertTrue(same.hasPrefix("Junk mail status is now false."), same)
+        XCTAssertTrue(same.hasPrefix("Mail reports junk mail status false after the change."), same)
         let unknown = try await run("unknown")
-        XCTAssertTrue(unknown.hasPrefix("Junk mail status was set to false, but it could not be read back."), unknown)
+        XCTAssertTrue(unknown.hasPrefix("Junk mail status was set to false, but it could not be read back"), unknown)
         do {
             let wrong = try await run("true")
             XCTFail("an opposite read-back must not be reported as success: \(wrong)")
@@ -234,15 +262,16 @@ final class MutationToolScriptBuilderTests: XCTestCase {
             let text = (error as? LocalizedError)?.errorDescription ?? ""
             XCTAssertTrue(text.hasPrefix("Mail still reports junk mail status true"), text)
         }
-        await controller.setTestSeams(scriptRunner: nil, refusal: nil)
     }
 
     func testMarkAsJunkDescription_saysItChangesTheFlagOnly() throws {
         // spec-example: junk-status-tool / description text
         let tool = try XCTUnwrap(CheAppleMailMCPServer.defineTools().first { $0.name == "mark_as_junk" })
         let description = try XCTUnwrap(tool.description)
-        for needed in ["flag only", "does not move", "move_email"] {
+        for needed in ["flag only", "issues no move", "move_email"] {
             XCTAssertTrue(description.contains(needed), "missing '\(needed)' in: \(description)")
         }
+        XCTAssertFalse(description.contains("stays there"),
+                       "the tool does not establish where Mail leaves the message: \(description)")
     }
 }
