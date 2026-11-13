@@ -6,7 +6,9 @@ import XCTest
 /// `/archive-mail` used to pre-authorize the ENTIRE mail tool set via a
 /// `mcp__plugin_che-apple-mail-mcp_mail__*` wildcard — including
 /// delete/compose/move/junk, none of which an archival command has any use
-/// for. #395 replaced that with an explicit enumeration, but an enumeration
+/// for. (#688 later gave the command one: its Step 9 moves mail out of the
+/// junk mailbox, so `mark_as_junk` and `move_email` are in the exact set below.)
+/// #395 replaced the wildcard with an explicit enumeration, but an enumeration
 /// only stays correct while something checks it: this repo's own history
 /// (#233, #248) shows doc↔`defineTools()` drift is recurrent, and the
 /// enumeration is exactly the kind of list a future step silently outgrows.
@@ -219,6 +221,9 @@ final class CommandAllowedToolsGuardTests: XCTestCase {
                 "search_emails", "get_email", "get_email_headers", "list_accounts",
                 "get_special_mailboxes", "list_attachments", "list_attachments_batch",
                 "save_attachment", "batch_export_emails_markdown",
+                // #688: the two mailbox-changing tools Step 9 needs, and no other.
+                // spec-example: archive-mail-junk-rescue / archive-mail allowed mail tools
+                "mark_as_junk", "move_email",
             ], ["Bash(mkdir:*)", "Read", "Write", "Glob"]),
             ("archive-mail-repair-synthetic-ids", [
                 "search_emails", "get_email_headers",

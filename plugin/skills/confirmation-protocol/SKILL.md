@@ -5,6 +5,8 @@ description: Foresay-derived confirmation workflow for email operations. Use thi
 
 # Confirmation Protocol — Email Operations
 
+> `/archive-mail` Step 9（把已歸檔、位於垃圾郵件匣的信搬回收件匣）不在本 skill 的 bulk 觸發範圍：那一步的確認是它自己的那一題與 `junk_decisions.json` 的紀錄，封數不另外設限。依據見 `rules/confirmation-triggers.md` 的 Provenance。
+
 ## 核心原則
 
 先讀取 `rules/confirmation-triggers.md` 的「Provenance（全域前提）」；其來源與範圍要求適用於
@@ -43,7 +45,7 @@ TaskCreate(subject="confirm_phase4_execute_or_iterate",
 |---------|------|--------|
 | **Filter ambiguity** | 「陳老師」、「最近的信」、「VIP 寄來的」 | 🔴 必 confirm |
 | **Bulk operation** | search 結果 ≥ 5 封 | 🟡 建議 confirm |
-| **Destructive** | delete_email、empty Trash、bulk move | 🔴 必 confirm |
+| **Destructive** | delete_email、empty Trash、bulk move（`/archive-mail` Step 9 把信從垃圾郵件匣搬回收件匣除外） | 🔴 必 confirm |
 | **Compose 寄出** | compose_email、reply_email | 🔴 必 confirm |
 | **Outbound side effect** | mark_as_junk、forward_email | 🟡 建議 confirm |
 
