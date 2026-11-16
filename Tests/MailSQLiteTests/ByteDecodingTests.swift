@@ -204,4 +204,63 @@ final class ByteDecodingTests: XCTestCase {
         XCTAssertEqual(MIMEParser.decodeBodyText(Data([0x63, 0x61, 0x66, 0xE9]), declaredCharset: "us-ascii"), "café")
         XCTAssertEqual(MIMEParser.decodeBodyText(Data("日".utf8), declaredCharset: "us-ascii"), "日")
     }
+
+    // MARK: - #641: a hex escape is two ASCII hex digits
+
+    // spec-example: hex-escape-decoding / hex escape decoding
+
+    func testHexEscapeReadsTwoASCIIHexDigits() {
+        XCTAssertEqual(HexEscape.byte("C", "3"), 0xC3)
+        XCTAssertEqual(HexEscape.byte("c", "3"), 0xC3)
+        XCTAssertEqual(HexEscape.byte("0", "0"), 0x00)
+        XCTAssertEqual(HexEscape.byte("F", "f"), 0xFF)
+        XCTAssertEqual(HexEscape.byte("9", "A"), 0x9A)
+    }
+
+    func testHexEscapeRefusesEveryOtherCharacterInEitherPlace() {
+        let hexDigits = Set("0123456789ABCDEFabcdef")
+        for value in 0...0x7F {
+            let ch = Character(Unicode.Scalar(UInt8(value)))
+            guard !hexDigits.contains(ch) else { continue }
+            XCTAssertNil(HexEscape.byte(ch, "0"), "high place, U+\(String(value, radix: 16))")
+            XCTAssertNil(HexEscape.byte("0", ch), "low place, U+\(String(value, radix: 16))")
+        }
+        // `UInt8("+5", radix: 16)` is 5 and `Character.hexDigitValue` reads fullwidth forms: neither may leak in.
+        for ch: Character in ["\u{FF10}", "\u{FF21}", "\u{0663}", "5\u{0301}", "\r\n"] {
+            XCTAssertNil(HexEscape.byte(ch, "0"), "\(ch.unicodeScalars.map(\.value))")
+            XCTAssertNil(HexEscape.byte("0", ch), "\(ch.unicodeScalars.map(\.value))")
+        }
+    }
+
+    /// Inputs that must stay literal text in both quoted-printable overloads.
+    private static let notAnEscape = ["a=+5b", "a=-0b", "a=+ab", "a=ZZb", "a=\u{FF10}\u{FF15}b", "a=5 b", "a= 5b", "a=%5b"]
+
+    func testASignedOrNonASCIIPairStaysLiteralInBothQuotedPrintableOverloads() {
+        for input in Self.notAnEscape + ["=+5", "=ZZ", "=-0"] {
+            XCTAssertEqual(RFC822Parser.decodeQuotedPrintableBytes(Data(input.utf8)), Data(input.utf8), input)
+            XCTAssertEqual(RFC822Parser.decodeQuotedPrintableBytes(input), Data(input.utf8), input)
+        }
+    }
+
+    func testLowercaseAndUppercaseEscapesStillDecodeInBothOverloads() {
+        for input in ["caf=C3=A9", "caf=c3=a9", "caf=C3=a9"] {
+            XCTAssertEqual(RFC822Parser.decodeQuotedPrintableBytes(Data(input.utf8)), Data("café".utf8), input)
+            XCTAssertEqual(RFC822Parser.decodeQuotedPrintableBytes(input), Data("café".utf8), input)
+        }
+    }
+
+    func testAnEncodedWordKeepsASignedPairAsText() {
+        XCTAssertEqual(RFC822Parser.decodeRFC2047("=?utf-8?Q?a=+5b?="), "a=+5b")
+        XCTAssertEqual(RFC822Parser.decodeRFC2047("=?utf-8?Q?a=-0b?="), "a=-0b")
+        XCTAssertEqual(RFC822Parser.decodeRFC2047("=?utf-8?Q?caf=c3=a9?="), "café")
+    }
+
+    func testAPercentEscapeNeedsTwoASCIIHexDigits() {
+        for encoded in ["%+5.txt", "%-0.txt", "%+a.txt", "%ZZ.txt", "%\u{FF10}\u{FF15}.txt", "%5 .txt", "% 5.txt"] {
+            XCTAssertNil(MIMEParser.decodePercentEncoded(encoded, charset: "utf-8"), encoded)
+        }
+        XCTAssertEqual(MIMEParser.decodePercentEncoded("%e6%97%a5.txt", charset: "utf-8"), "日.txt")
+        XCTAssertEqual(MIMEParser.decodePercentEncoded("%E6%97%A5.txt", charset: "utf-8"), "日.txt")
+        XCTAssertNil(MIMEParser.decodeRFC5987("UTF-8''a%+5b.txt"))
+    }
 }
