@@ -298,10 +298,22 @@ class ViewArgumentsTests(unittest.TestCase):
             ("Aster\\", {"tokens": [], "error": "unbalanced-quote"}),
             ("--odd key", {"tokens": ["--odd", "key"], "error": None}),
             ("", {"tokens": [], "error": None}),
+            ('"" key', {"tokens": [], "error": "empty-thread-query"}),
+            ('""', {"tokens": [], "error": "empty-thread-query"}),
+            ('" " key', {"tokens": [], "error": "empty-thread-query"}),
+            ("'\u3000' key", {"tokens": [], "error": "empty-thread-query"}),
+            ('key ""', {"tokens": ["key", ""], "error": None}),
         ]
         for raw, want in rows:
             with self.subTest(raw=raw):
                 self.assertEqual(self.split(raw), want)
+
+    def test_an_empty_first_token_stops_like_a_missing_thread_query(self) -> None:
+        # Fix round 1 for #651: spec requirement 1 says an empty thread_query stops with bad-arguments.
+        # A quoted empty or blank first token is a token, so rule 4 has to name it, and the recipe reports it.
+        self.assertIn("`empty-thread-query`", self.step_1)
+        row = next(line for line in self.document.split("\n") if line.startswith("| `bad-arguments` |"))
+        self.assertIn("空的", row)
 
     def test_the_split_refuses_anything_but_text(self) -> None:
         with self.assertRaises(TypeError):

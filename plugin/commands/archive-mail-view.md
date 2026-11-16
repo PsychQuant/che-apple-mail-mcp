@@ -35,8 +35,8 @@ ARGS_RAW: $ARGUMENTS
 1. 用 shell 風格切詞（`shlex.split(raw, posix=True)`：單引號、雙引號、反斜線跳脫空白）。
 2. 第一個 token 是 `thread_query`（必填），第二個是 `archive_dir`（沒給就是 `communication/emails`），第三個以後被忽略。
 3. 這個指令沒有旗標：以 `-` 開頭的 token 也是一般的 token（`/archive-mail-view --odd key` 找的 thread key 是 `--odd`）。
-4. 引號不成對或結尾是反斜線（recipe 回 `unbalanced-quote`）、或沒有 `thread_query`（沒打引數，或切詞後沒有 token），
-   都停止並報 `status: bad-arguments`，不讀索引、不寫任何檔案。
+4. 引號不成對或結尾是反斜線（recipe 回 `unbalanced-quote`）、第一個 token 是空字串或只有空白（`"" key`、`" "`，recipe 回
+   `empty-thread-query`）、或沒有 `thread_query`（沒打引數，或切詞後沒有 token），都停止並報 `status: bad-arguments`，不讀索引、不寫任何檔案。
 
 **怎麼套用**：
 
@@ -52,9 +52,12 @@ def split_view_arguments(raw):
     if not isinstance(raw, str):
         raise TypeError("raw must be the invocation text")
     try:
-        return {"tokens": shlex.split(raw, posix=True), "error": None}
+        tokens = shlex.split(raw, posix=True)
     except ValueError:
         return {"tokens": [], "error": "unbalanced-quote"}
+    if tokens and not tokens[0].strip():
+        return {"tokens": [], "error": "empty-thread-query"}
+    return {"tokens": tokens, "error": None}
 
 if __name__ == "__main__":
     import json
@@ -222,7 +225,7 @@ Output: communications/.threads/Aster-manuscript-2025.md
 | status | 出口 | 意思 | 留下什麼 |
 |--------|------|------|----------|
 | `generated` | Step 6 | 聚合視圖已寫出 | 視圖檔 |
-| `bad-arguments` | Step 1 | 沒有 `thread_query`、引號不成對或結尾是反斜線，或切詞的 recipe 無法執行 | 什麼都沒寫 |
+| `bad-arguments` | Step 1 | 沒有 `thread_query`、空的或只有空白的 `thread_query`、引號不成對或結尾是反斜線，或切詞的 recipe 無法執行 | 什麼都沒寫 |
 | `no-index` | Step 2 | `threads.json` 與 legacy `.threads.json` 都不存在 | 什麼都沒寫 |
 | `no-match` | Step 3 | 沒有符合的 thread key | 什麼都沒寫；Step 2 可能已搬移 legacy 檔 |
 | `ambiguous-match` | Step 3 | 符合的 thread key 超過一個 | 什麼都沒寫；Step 2 可能已搬移 legacy 檔 |
