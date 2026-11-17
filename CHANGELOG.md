@@ -32,8 +32,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accounts** ([#633](https://github.com/PsychQuant/che-apple-mail-mcp/issues/633)).
   A server built with `accountMapping` now resolves an address from that mapping.
   Without one, nothing changes: the server still reads AccountsMap.plist on each call.
-  This covers `account_name`; the direct-write path still reads the plist for
-  `from_address` ([#654](https://github.com/PsychQuant/che-apple-mail-mcp/issues/654)).
+  This covers `account_name`; the direct-write path's `from_address` lookup is
+  covered by #654 below.
+- **`create_draft`'s direct-write path answers its account gate from an injected
+  mapping** ([#654](https://github.com/PsychQuant/che-apple-mail-mcp/issues/654)).
+  A server built with `accountMapping` now gives the opt-in direct-write path that
+  mapping for `from_address`, and treats the account's signature list as
+  unreadable (the mapping holds none), so `signature: mail_default` takes the GUI
+  path there. Without a mapping, nothing changes: on each call the account lookup
+  reads AccountsMap.plist, and the signature lookup reads it too unless
+  iCloud-synced signatures exist (then the list counts as unreadable, as before).
+- **`list_vip_senders` can read an injected VIP list**
+  ([#656](https://github.com/PsychQuant/che-apple-mail-mcp/issues/656)).
+  `EnvelopeIndexReader` and the server's `init` take an optional VIP list path,
+  so a handler test reads only the file it wrote, as long as the reader opens.
+  Without one, the reader reads the same `VIPMailboxes.plist` as before; the path
+  is now built from the mail storage path, so it follows a test's override of
+  that path (production never sets one). When the reader is not open, the
+  handler still falls back to AppleScript, as before.
 - **BREAKING: `reply_email` refuses `attachments` for now**
   ([#534](https://github.com/PsychQuant/che-apple-mail-mcp/issues/534)).
   With a non-empty `attachments`, the reply script pasted the new body through
@@ -127,6 +143,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A failed read of a direct draft's read flag says why**
+  ([#653](https://github.com/PsychQuant/che-apple-mail-mcp/issues/653)). After the
+  upload, the direct-write path looks at the draft's local read flag; a read that
+  failed and a draft row that was gone both came back as "cannot tell", and the
+  cause of the failure was dropped. A failed read now writes
+  `DraftStoreWriter: messages.read read failed (<cause>)` to stderr, up to 12
+  lines for one draft (4 looks, then 8 after the re-assert); a row that is gone
+  still writes nothing. The result is unchanged: either case still counts as not
+  able to read the flag.
+- **A failed direct write no longer leaves empty directories behind**
+  ([#503](https://github.com/PsychQuant/che-apple-mail-mcp/issues/503)). When the
+  opt-in direct write failed after placing the `.emlx` (or while placing it), or
+  was reversed after the upload request failed, it removed the file (and its
+  rows, except those #628 tracks) but left the `Messages` directory, and any hash
+  directories above it, that it had created. That happens whenever the draft is
+  the first row of the Drafts mailbox in its 1,000-row block: row ids are shared
+  by all mailboxes while each mailbox has its own hash directories, so for a
+  Drafts mailbox with few messages it is the common case. It now removes the
+  directories it created, deepest first, and only while they are empty. Only a
+  level its own `mkdir` made is recorded, so a level that existed, or that
+  another process created first, is not removed; a directory Mail wrote into
+  meanwhile stays, with everything above it. A recorded directory that is
+  already gone is skipped. A removal that fails for any other reason than the
+  directory not being empty or already gone is noted on stderr and stops the
+  cleanup. Cleanup never replaces the error a failed write reports and never
+  makes a reversal fail. One error text did change: when a directory cannot be
+  created, the `emlxWrite` reason now names the level and the system error
+  (`could not create <path>: <reason>`), so the fallback note carries that path,
+  as it already did for an existing `.emlx`. A narrow race remains: if Mail has
+  found a directory this write created and has not yet written into it, the
+  cleanup can remove it first. Two related gaps are tracked in
+  [#666](https://github.com/PsychQuant/che-apple-mail-mcp/issues/666).
 - **A draft is not reported as uploaded when its queued action could not be read**
   ([#630](https://github.com/PsychQuant/che-apple-mail-mcp/issues/630)). While
   waiting for the upload, the direct-write path treats a remote id with no queued

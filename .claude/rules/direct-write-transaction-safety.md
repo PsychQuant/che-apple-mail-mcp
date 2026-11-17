@@ -68,7 +68,7 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 `readOutcome`、`outcomeAfterFailedTrigger`、`buildDirectDraftMarkReadScript`、`buildDirectDraftTriggerScript`
 （`DirectDraftPathTests`）、`triggerDirectDraftUpload`（`DirectDraftTriggerTimingTests`，#489：斷言它送出的
 就是 `buildDirectDraftTriggerScript` 在同一個 `timing` 下的輸出）與 `uploadState`（`DraftStoreWriterTests`；讀取失敗見 `DirectDraftPathOutcomeTests`，#630），
-`readFlag` 與 `createdText` 由 `DirectDraftPathOutcomeTests` 走過（#484），`markDirectDraftRead` 在那裡是替身，真的那個沒有測試。
+`readFlag` 與 `createdText` 由 `DirectDraftPathOutcomeTests` 走過（#484；`readFlag` 讀取失敗寫 stderr、找不到列不寫，也在那裡，#653），`markDirectDraftRead` 在那裡是替身，真的那個沒有測試。
 
 結構檢查擋不住所有削弱方式。#490 第 4 輪驗證找到下列六種寫法，這兩條守門測試都不會轉紅。#492 之後，每一種都有別的測試會轉紅，列在各項後面，都實際改過原始碼確認：
 
@@ -94,10 +94,12 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 
 第 1–6 項沒有像第 7、8 項那樣的守門測試。各項目前的覆蓋（#498）：
 
-- **第 1 項**：`DraftStoreWriterTests` 有兩條測交易內失敗的行為測試，只涵蓋 writer 本身，不涵蓋 `attemptSteps` 怎麼呼叫它：
+- **第 1 項**：`DraftStoreWriterTests` 與 `DraftStoreWriterDirectoryTests` 有測交易內失敗的行為測試，只涵蓋 writer 本身，不涵蓋 `attemptSteps` 怎麼呼叫它：
   - 檔案寫不進去（`testInsertLeavesNothingBehindWhenTheFileCannotBeWritten`）；
-  - `.emlx` 放好之後才失敗（`testInsertRemovesThePlacedFileWhenALaterStepFails`）：檢查放檔已執行、writer 的交易確實結束（另一條連線拿得到寫入鎖）、沒有留下任何資料列或檔案。拿掉 ROLLBACK、拿掉刪檔、或把失敗移到放檔之前，這條都會轉紅。
-  - 缺口：交易一開始就拿寫入鎖（`BEGIN IMMEDIATE`）沒有測試，改成一般的 `BEGIN` 這兩條都不會轉紅；失敗後會留下空的 `Messages` 目錄（#503），上面那條測試目前正是靠這個目錄證明放檔已執行。
+  - `.emlx` 放好之後才失敗（`testInsertRemovesThePlacedFileWhenALaterStepFails`）：檢查放檔已執行（writer 只給測試用的放檔掛點在檔案放好時看到它）、writer 的交易確實結束（另一條連線拿得到寫入鎖）、沒有留下任何資料列、檔案或這次建立的目錄。拿掉 ROLLBACK、拿掉刪檔、把失敗移到放檔之前、或拿掉目錄清理，這條都會轉紅。
+  - 放檔時建立的目錄（#503）：只記下這次 `mkdir` 自己建立的層，寫入失敗（放檔之後、或放檔途中）與 commit 之後的 `rollback()` 都以 `rmdir` 由深到淺移除：已不存在的層略過、繼續往上；停在第一個仍然存在卻移除不了的層（不是空的，或其他原因；「不是空的」與「已不存在」以外的原因寫到 stderr）。清理不改變拋出的錯誤、也不讓 `rollback()` 失敗。`DraftStoreWriterDirectoryTests` 用合成的 store 測（不需 Full Disk Access）：放檔之後失敗、放檔途中失敗、還原三種情況都移除新建的層，原本就存在的層保留，新建目錄裡多了別的檔案時（失敗與還原各一條）連同上層都保留，目標路徑已有 `.emlx` 時不動它，已不存在的 `Messages` 不擋住上層的清理，權限造成的移除失敗寫到 stderr 並停下（#503 fix round 1）。
+  - 殘留競態（#503）：清理移除這次建立的空目錄時，Mail 若剛好找到這個目錄、還沒寫檔，移除可能早於 Mail 寫檔。前提是這次失敗的寫入是該 Drafts mailbox 在這個千位區塊的第一列：row id 全域共用、雜湊目錄卻是每個 mailbox 各自一份，所以 Drafts 訊息少時這很常見，不是罕見情況。另有兩項在 #666：`insert` 的清理在 `ROLLBACK` 之後才做（重用 row id 的同一路徑），以及目錄只以路徑記錄、不比對身分。
+  - 缺口：交易一開始就拿寫入鎖（`BEGIN IMMEDIATE`）沒有測試，改成一般的 `BEGIN` 這些測試都不會轉紅；「別的程序先建立的層不記錄」（`EEXIST`）沒有測試（#666）。
 - **第 2、3、6、7 項**：`DirectDraftPathOutcomeTests`（#484）走真的 `attemptSteps` 與真的 `DraftStoreWriter`，只有 Mail 是替身，store 是測試自己建的 SQLite 檔（有 writer 驗證的表與欄位，沒有 Mail 的 trigger）。替身照 Mail 改真 store 的方式改那個檔。這批測試斷言結果代碼與 `direct` 步驟序列：
   - 上傳確認 → `created`，步驟走到 `uploaded`、`read_ensured`；
   - 上傳期限內沒有確認 → `created:upload_pending`，不走 GUI 路徑，不回報已上傳；
