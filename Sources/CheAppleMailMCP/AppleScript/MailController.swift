@@ -1695,7 +1695,12 @@ actor MailController {
             // nobody has observed whether that field reads `..` after a symbolic link textually or physically.
             // Without such a component both readings name the same file, so the verdict here is the file Mail
             // opens either way, and the caller's file name is kept.
-            if path.split(separator: "/", omittingEmptySubsequences: false).contains(where: { $0 == "." || $0 == ".." }) {
+            // Segments are compared as the filesystem sees them: bytes between slashes. `String.split` works on
+            // Characters, where a slash followed by a combining mark is a single Character and never splits.
+            let dot = UInt8(ascii: "."), slash = UInt8(ascii: "/")
+            if path.utf8.split(separator: slash, omittingEmptySubsequences: false).contains(where: { seg in
+                seg.elementsEqual([dot]) || seg.elementsEqual([dot, dot])
+            }) {
                 failures.append("'\(path)' rejected: contains a '.' or '..' path component")
                 continue
             }

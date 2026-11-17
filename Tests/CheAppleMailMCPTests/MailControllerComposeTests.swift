@@ -807,6 +807,22 @@ final class MailControllerComposeTests: XCTestCase {
         await assertAttachmentRejected(["\(dir)/./report.txt"], containing: "path component")
     }
 
+    /// Path segments are compared as the filesystem sees them: bytes between slashes, not Characters. A slash
+    /// followed by a combining mark is one Character, but still a separator for the kernel.
+    func testValidateAttachmentPaths_segmentsAreComparedAsTheFilesystemSeesThem() async throws {
+        let dir = try makeScratchDir()
+        let mark = "\u{301}"
+        await assertAttachmentRejected(["\(dir)/a/../\(mark)b"], containing: "path component")
+        await assertAttachmentRejected(["\(dir)/a/./\(mark)b"], containing: "path component")
+        await assertAttachmentRejected(["\(dir)/a/..\(mark)/../b"], containing: "path component")
+        // a name that merely starts with a combining mark, or has one after dots, is still an ordinary name
+        let fm = FileManager.default
+        for name in ["\(mark)b.txt", "..\(mark)x.txt"] {
+            XCTAssertTrue(fm.createFile(atPath: "\(dir)/\(name)", contents: Data("x".utf8)))
+            await assertAttachmentAccepted(["\(dir)/\(name)"])
+        }
+    }
+
     func testNonRegularFileKind_namesEveryKind() throws {
         // spec-example: message-composition / attachment type names
         let dir = try makeScratchDir()
