@@ -1695,6 +1695,12 @@ actor MailController {
             // nobody has observed whether that field reads `..` after a symbolic link textually or physically.
             // Without such a component both readings name the same file, so the verdict here is the file Mail
             // opens either way, and the caller's file name is kept.
+            // The filesystem reads a path up to its first NUL byte; a path that holds one is refused by name, so the
+            // checks below judge the same path the system would open.
+            if path.utf8.contains(0) {
+                failures.append("'\(path.replacingOccurrences(of: "\u{0}", with: "\\0"))' rejected: contains a NUL character")
+                continue
+            }
             // Segments are compared as the filesystem sees them: bytes between slashes. `String.split` works on
             // Characters, where a slash followed by a combining mark is a single Character and never splits.
             let dot = UInt8(ascii: "."), slash = UInt8(ascii: "/")

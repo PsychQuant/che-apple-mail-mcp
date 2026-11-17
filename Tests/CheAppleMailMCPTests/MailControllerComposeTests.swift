@@ -823,6 +823,15 @@ final class MailControllerComposeTests: XCTestCase {
         }
     }
 
+    /// The filesystem reads a path up to its first NUL byte, so a segment check on the whole text would judge a
+    /// different path from the one the system opens. A path with a NUL is refused by name.
+    func testValidateAttachmentPaths_aNulByteIsRefused() async throws {
+        let dir = try makeScratchDir()
+        await assertAttachmentRejected(["\(dir)/..\u{0}suffix"], containing: "NUL")
+        await assertAttachmentRejected(["\(dir)/a/..\u{0}"], containing: "NUL")
+        await assertAttachmentRejected(["\(dir)/x\u{0}.txt"], containing: "NUL")
+    }
+
     func testNonRegularFileKind_namesEveryKind() throws {
         // spec-example: message-composition / attachment type names
         let dir = try makeScratchDir()

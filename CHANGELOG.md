@@ -70,7 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same checks, now before its draft scans. A path with a `.` or `..` component
   is refused as `contains a '.' or '..' path component`: Mail receives the
   caller's text through the open panel's Go-to-folder field, and without such
-  components every reading of the path names the same file. Resolution no
+  components every reading of the path names the same file. Components are compared as the filesystem sees them (the bytes between slashes), and a path that holds a NUL byte is refused by name. Resolution no
   longer applies `.standardized` first (it removed `..` from the text before
   following links, so the deny-list, the allow-list and the type check could
   judge a different file from the one named). A relative path still counts from
