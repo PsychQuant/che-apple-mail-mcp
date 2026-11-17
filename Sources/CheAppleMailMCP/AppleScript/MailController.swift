@@ -1626,6 +1626,68 @@ actor MailController {
         }
     }
 
+    /// #671: a directory's identity on disk, independent of the name it is reached by.
+    struct FileIdentity: Hashable {
+        let device: Int64
+        let inode: UInt64
+    }
+
+    enum DenyRootVerdict: Equatable {
+        case clear
+        case under(String)
+        case unverifiable(prefix: String, reason: String)
+    }
+
+    /// The identity of each deny root that exists (`stat` follows a link such as `/var`, so the identity is the
+    /// directory's). A root that does not exist has nothing to protect and is skipped. A root that exists but
+    /// cannot be examined is returned with a nil identity, so that the verdict fails closed.
+    /// `failure` is the system's description of why the directory could not be examined.
+    typealias DenyRootIdentity = (root: String, identity: FileIdentity?, failure: String?)
+
+    static func denyRootIdentities(_ roots: [String]) -> [DenyRootIdentity] {
+        roots.compactMap { root in
+            var info = stat()
+            if stat(root, &info) == 0 {
+                return (root, FileIdentity(device: Int64(info.st_dev), inode: UInt64(info.st_ino)), nil)
+            }
+            let code = errno
+            return (code == ENOENT || code == ENOTDIR) ? nil : (root, nil, String(cString: strerror(code)))
+        }
+    }
+
+    /// #671: does any prefix of `resolved` (the resolved string, not the physical path: `/tmp` is a link into
+    /// `/private`, and a physical walk would put every `/tmp` file under the `/private` root) name a deny root?
+    /// An error never means allowed: a prefix that cannot be examined, or a deny root that cannot be examined,
+    /// rejects the path. The one exception is `EINVAL` on a prefix that is followed by a longer one, which is how
+    /// the kernel answers a bare `/.resolve/<n>` (it names no directory until a path follows).
+    static func denyRootVerdict(forResolvedPath resolved: String,
+                                identities: [DenyRootIdentity]) -> DenyRootVerdict {
+        if let blind = identities.first(where: { $0.identity == nil }) {
+            return .unverifiable(prefix: blind.root, reason: blind.failure ?? "the directory cannot be examined")
+        }
+        guard !identities.isEmpty else { return .clear }
+        let wanted = Dictionary(identities.compactMap { entry in entry.identity.map { ($0, entry.root) } },
+                                uniquingKeysWith: { first, _ in first })
+        // Components are the bytes between slashes, as the filesystem reads them: `String.split` works on
+        // Characters, where a slash followed by a combining mark is one Character and never splits, which would
+        // merge a deny-listed directory with the name after it and skip its identity.
+        let components = resolved.utf8.split(separator: UInt8(ascii: "/"), omittingEmptySubsequences: true)
+        var prefix = ""
+        for (index, component) in components.enumerated() {
+            prefix += "/" + String(decoding: component, as: UTF8.self)
+            var info = stat()
+            guard stat(prefix, &info) == 0 else {
+                let code = errno
+                if code == EINVAL, index < components.count - 1 { continue }
+                return .unverifiable(prefix: prefix, reason: String(cString: strerror(code)))
+            }
+            if let root = wanted[FileIdentity(device: Int64(info.st_dev), inode: UInt64(info.st_ino))] {
+                return .under(root)
+            }
+        }
+        return .clear
+    }
+
     /// Issues #38 and #543: harden attachment path validation against prompt-injection
     /// exfil vectors. Layers applied in order:
     ///   0. No `.` or `..` component (#543 fix round 2): Mail receives the caller's text, and only without such a
@@ -1633,7 +1695,9 @@ actor MailController {
     ///   1. Existence, on the caller's path (preserved from validateFilePaths)
     ///   2. Symlink resolution (defeats `~/Documents/decoy → ~/.ssh` bypass). The path is made absolute against the
     ///      working directory and then resolved with `resolvingSymlinksInPath()` alone; layers 3–5 judge that path.
-    ///   3. Deny-list of sensitive directories (default-on, hardcoded)
+    ///   3. Deny-list of sensitive directories (default-on, hardcoded). Two tests: the resolved string against each
+    ///      root, and (#671) the device and inode of each prefix of the resolved string against each root's, so a
+    ///      spelling the string test does not know is still refused.
     ///   4. Optional allow-list via `MAIL_MCP_ATTACHMENT_ROOTS` env var
     ///      (colon-separated, `~` expanded). If unset, only deny-list applies.
     ///   5. Regular files only (#543): directories, FIFOs, sockets and devices are rejected.
@@ -1644,7 +1708,10 @@ actor MailController {
     ///
     /// `internal` (not `private`) so `@testable import` can exercise the helper
     /// in unit tests without going through Mail.app.
-    func validateAttachmentPaths(_ paths: [String]) throws {
+    ///
+    /// `denyRoots` replaces the hardcoded deny-list; it exists so tests can use a temporary directory as the
+    /// sensitive root (#671) and is `nil` in production.
+    func validateAttachmentPaths(_ paths: [String], denyRoots: [String]? = nil) throws {
         guard !paths.isEmpty else { return }
 
         // Issue #63: cap attachment count to mitigate DoS amplification.
@@ -1666,7 +1733,7 @@ actor MailController {
         }
 
         let home = NSHomeDirectory()
-        let denyList: [String] = [
+        let denyList: [String] = denyRoots ?? [
             "\(home)/.ssh",
             "\(home)/Library/Keychains",
             "\(home)/Library/Application Support/com.apple.TCC",
@@ -1688,6 +1755,9 @@ actor MailController {
                     .map { String($0) }
                     .map { p in p.hasPrefix("~") ? "\(home)\(p.dropFirst())" : p }
             }
+
+        // #671: the identity (device and inode) of every deny-list root that exists, read once per call.
+        let denyIdentities = Self.denyRootIdentities(denyList)
 
         var failures: [String] = []
 
@@ -1729,6 +1799,20 @@ actor MailController {
 
             if let denied = denyList.first(where: { resolved == $0 || resolved.hasPrefix("\($0)/") }) {
                 failures.append("'\(path)' rejected: resolves under sensitive directory '\(denied)'")
+                continue
+            }
+            // #671: the string test above misses a spelling that resolution keeps and the kernel still accepts
+            // (a root-level prefix such as `/.nofollow` or `/.resolve/<n>`, or a directory name that differs
+            // from the deny root only in letter case on a case-insensitive volume). Compare by which directory
+            // each prefix of the resolved path is, not by how it is spelled.
+            switch Self.denyRootVerdict(forResolvedPath: resolved, identities: denyIdentities) {
+            case .clear:
+                break
+            case .under(let root):
+                failures.append("'\(path)' rejected: resolves under sensitive directory '\(root)'")
+                continue
+            case .unverifiable(let prefix, let reason):
+                failures.append("'\(path)' rejected: the deny-list check could not be completed, because '\(prefix)' could not be examined (\(reason)); no attachment can be accepted until it can")
                 continue
             }
 

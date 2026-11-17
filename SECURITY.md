@@ -94,6 +94,18 @@ After resolution, paths under any of the following directories are rejected:
 - `~/Library/Application Support/Safari/`
 - `/etc/`, `/var/`, `/private/`
 
+Two tests apply to the resolved path (#671). The first compares it with each
+root as text. The second compares by file identity: the device and inode of
+every prefix of the resolved path are compared with those of each deny-listed
+directory that exists, so a spelling the text comparison does not match (a
+root-level prefix that resolution keeps, or a name that differs from the
+directory's only in letter case) is still refused. A prefix, or a deny-listed
+directory, that cannot be examined rejects the path; a deny-listed directory
+that does not exist is skipped. A deny-listed directory that exists but cannot
+be examined (for example, a permission error on one of its parents) therefore
+makes every attachment fail, with a message that names the directory and the
+system's reason; this is deliberate (an error never means allowed).
+
 This list is conservative — it catches the obvious sensitive directories
 without breaking common attachment workflows from `~/Documents/`,
 `~/Downloads/`, `~/Desktop/`.
@@ -131,9 +143,10 @@ check at validation time does not cover a path swapped afterwards.
   Anything able to replace the path in that window defeats every layer, the
   regular-file check included. Not mitigated; an in-process reader (#479) must
   re-check the opened descriptor.
-- **The deny-list matches by string prefix.** Hard links to a deny-listed file,
-  and root-level path prefixes that resolution keeps, are not recognised as the
-  deny-listed file (#671). `/dev/fd/N` names whatever the server's own
+- **The deny-list matches by location, not by file.** A path is refused when
+  the resolved string, or the identity of one of its directories, is a
+  deny-listed directory (#671). Hard links to a deny-listed file are not
+  recognised as the deny-listed file. `/dev/fd/N` names whatever the server's own
   descriptor N is (#669). The `MAIL_MCP_ATTACHMENT_ROOTS` allow-list fails
   closed for these.
 - **macOS sandboxing interaction**: if the MCP server runs with restricted
