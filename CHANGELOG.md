@@ -75,9 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   call. The two-slot cap, the cancellation behaviour and the exit-status
   semantics (`-1` for a child that could not be reaped) are unchanged. A spawn
   failure still reports `spawnFailed` with the executable path and the reason
-  `posix_spawn` gave. Remaining limit: a descendant that calls `setsid` or `setpgid` leaves
-  the group and is not reached. No such descendant has been seen with
-  `log show --style ndjson`; the tests use a shell that starts one on purpose.
+  `posix_spawn` gave. Remaining limit: a descendant that calls `setsid` or `setpgid`
+  leaves the group and is not reached, and no test covers that case. No such
+  descendant is known for `log show --style ndjson`; the tests use descendants
+  that stay in the group.
 
 - **Attachment paths must be regular files**
   ([#543](https://github.com/PsychQuant/che-apple-mail-mcp/issues/543)).
