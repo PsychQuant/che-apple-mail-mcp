@@ -1664,10 +1664,13 @@ actor MailController {
         guard !identities.isEmpty else { return .clear }
         let wanted = Dictionary(identities.compactMap { entry in entry.identity.map { ($0, entry.root) } },
                                 uniquingKeysWith: { first, _ in first })
-        let components = resolved.split(separator: "/", omittingEmptySubsequences: true)
+        // Components are the bytes between slashes, as the filesystem reads them: `String.split` works on
+        // Characters, where a slash followed by a combining mark is one Character and never splits, which would
+        // merge a deny-listed directory with the name after it and skip its identity.
+        let components = resolved.utf8.split(separator: UInt8(ascii: "/"), omittingEmptySubsequences: true)
         var prefix = ""
         for (index, component) in components.enumerated() {
-            prefix += "/" + component
+            prefix += "/" + String(decoding: component, as: UTF8.self)
             var info = stat()
             guard stat(prefix, &info) == 0 else {
                 let code = errno

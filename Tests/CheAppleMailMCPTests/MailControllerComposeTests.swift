@@ -966,6 +966,23 @@ final class MailControllerComposeTests: XCTestCase {
         try await MailController.shared.validateAttachmentPaths(["\(f.root)/ALLOWED/ok.txt"], denyRoots: [f.denied])
     }
 
+    func testValidateAttachmentPaths_aSlashBeforeACombiningMarkStillSeparatesTheDeniedDirectory() async throws {
+        // A file whose name starts with a combining mark: Swift reads "/\u{301}" as one Character, the kernel as a
+        // slash and a name. The identity walk must still stat the deny-listed directory.
+        let f = try makeDenyFixture()
+        let odd = "\u{301}odd.txt"
+        let file = "\(f.denied)/\(odd)"
+        guard FileManager.default.createFile(atPath: file, contents: Data("s".utf8)) else {
+            throw XCTSkip("the temporary volume does not accept a file name that starts with a combining mark")
+        }
+        XCTAssertEqual(MailController.denyRootVerdict(forResolvedPath: file,
+                                                      identities: MailController.denyRootIdentities([f.denied])),
+                       .under(f.denied))
+        for spelled in try specialSpellings(of: f.physical + "/denied/" + odd) {
+            await assertDenied([spelled], roots: [f.denied], containing: f.denied)
+        }
+    }
+
     func testValidateAttachmentPaths_aDenyRootThatDoesNotExistIsSkipped() async throws {
         let f = try makeDenyFixture()
         let missing = "\(f.root)/no-such-root"
