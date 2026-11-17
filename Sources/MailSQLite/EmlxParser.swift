@@ -77,6 +77,14 @@ public enum EmlxParser {
     public static func resolveEmlxPathDetailed(
         rowId: Int, mailboxURL: String
     ) -> (path: String, isPartial: Bool)? {
+        resolveEmlxPathDetailed(rowId: rowId, mailboxURL: mailboxURL, storeFinder: findStoreUUID(in:))
+    }
+
+    /// `resolveEmlxPathDetailed` with the store-folder lookup supplied by the caller, so a caller
+    /// resolving many messages of one mailbox can lookup the folder once (#682).
+    static func resolveEmlxPathDetailed(
+        rowId: Int, mailboxURL: String, storeFinder: (String) -> String?
+    ) -> (path: String, isPartial: Bool)? {
         guard let parsed = MailboxURL.decode(mailboxURL) else {
             return nil
         }
@@ -91,7 +99,7 @@ public enum EmlxParser {
         let mailboxDir = "\(accountPath)/\(mboxPath)"
 
         // Find the store UUID subdirectory inside the .mbox directory.
-        guard let storeUUID = findStoreUUID(in: mailboxDir) else {
+        guard let storeUUID = storeFinder(mailboxDir) else {
             return nil
         }
 
@@ -149,7 +157,7 @@ public enum EmlxParser {
     ///
     /// - Parameter mboxDir: Path to the .mbox directory.
     /// - Returns: The UUID directory name, or `nil` if none found.
-    private static func findStoreUUID(in mboxDir: String) -> String? {
+    static func findStoreUUID(in mboxDir: String) -> String? {
         let fm = FileManager.default
         guard let contents = try? fm.contentsOfDirectory(atPath: mboxDir) else {
             return nil

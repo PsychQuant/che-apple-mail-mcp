@@ -9,6 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`search_emails` can return each row's Message-ID**
+  ([#682](https://github.com/PsychQuant/che-apple-mail-mcp/issues/682)). The new
+  `include_message_id` (boolean, default false) adds `message_id` to every
+  `full` or `summary` row, read from the `.emlx` header block with the parser
+  `get_email` and the batch export use, so the three report the same value.
+  A non-empty string is the Message-ID; `""` means the message has no such
+  header; a missing key means the value could not be read (no readable `.emlx`,
+  a read error, a value over 4096 characters) or the row came from the
+  AppleScript fallback. The read stops at the end of the header block and looks
+  up each mailbox's store folder once per call; without the flag no file is
+  read and rows are unchanged. `true` with `ids` or `count` and a
+  non-boolean value are parameter errors. A call whose rows could not all be
+  read writes one stderr line with a count and a fixed reason. Not yet run
+  against a real mail store; the issue stays open for that check. A plugin
+  release that relies on the field must set `binary_version` to a binary that
+  contains it.
 - **`forward_email` can save the forward as a draft**
   ([#599](https://github.com/PsychQuant/che-apple-mail-mcp/issues/599)). The new
   `save_as_draft` (boolean, default false) saves a forward that carries a body

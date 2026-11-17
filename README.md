@@ -390,6 +390,18 @@ Both tools return an **envelope object** `{ results, returned, limit, truncated 
 
 `truncated` is **definitive** on the SQLite fast path (it fetches `limit + 1` internally); on the AppleScript fallback it is a best-effort `returned == limit` heuristic. Any "enumerate → batch process" consumer should check `truncated` before assuming it has the full set.
 
+#### `include_message_id` (`search_emails`, `full` and `summary`)
+
+By default a row carries no Message-ID. Set `include_message_id: true` (default `false`) and each `full` or `summary` row gets a `message_id` key: the value `get_email`, `get_emails_batch` and the batch export report for the same message, read from the message's `.emlx` header block with the same parser.
+
+| `message_id` on the row | Meaning |
+|---|---|
+| a non-empty string | the Message-ID, angle brackets kept |
+| `""` | the header block was read and has no `Message-ID` header |
+| key missing | not read: no readable `.emlx` (body not downloaded and no partial file, a mailbox that keeps none, a missing file), a read error, a value longer than 4096 characters, or the row came from the AppleScript fallback, which never fills it |
+
+A missing key means "unknown", not "new message": hold such a row back instead of treating it as one you have not seen. A row is never dropped because its value could not be read; one line per call on stderr counts the rows left without one, and names a fixed reason, never header text. The flag is rejected with projection `ids` or `count` (they return no row objects), and a value that is not a boolean is an error. With `dedup: "logical"` and `summary`, the value is the kept row's. Cost: one bounded `.emlx` read per returned row (it stops at the end of the header block; the mailbox's store folder is looked up once per mailbox), so keep `limit` modest; without the flag no file is read. **Not yet run against a real mail store**: the field is covered by synthetic `.emlx` fixtures only ([#682](https://github.com/PsychQuant/che-apple-mail-mcp/issues/682)).
+
 ---
 
 ## Installation
@@ -590,7 +602,7 @@ Most read tools prefer Apple Mail's local Envelope Index (SQLite) and on-disk `.
 | `get_emails_batch` | ✓ (per item) | ✓ (per item) |
 | `get_email_headers` | ✓ | ✓ on any error |
 | `get_email_source` | ✓ | ✓ on any error |
-| `search_emails` | ✓ | ✓ when reader unavailable |
+| `search_emails` | ✓ (with `include_message_id`: one bounded `.emlx` header read per row) | ✓ when reader unavailable (never carries `message_id`) |
 | `list_attachments` | ✓ | ✓ on any error |
 | `save_attachment` | ✓ | ✓ on extraction errors; destination errors are terminal ([#402](https://github.com/PsychQuant/che-apple-mail-mcp/issues/402)) |
 | `get_email_metadata` | ✓ | ✓ on any error (since [#71](https://github.com/PsychQuant/che-apple-mail-mcp/issues/71)) |

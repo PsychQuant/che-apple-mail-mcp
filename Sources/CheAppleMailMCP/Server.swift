@@ -25,14 +25,20 @@ class CheAppleMailMCPServer {
     private let classificationStore: ClassificationPolicyStore
     private let classificationEngine: ClassificationPlanEngine
     private let classificationLoader: (@Sendable (String) async throws -> ClassificationMessage)?
+    /// Reads one message's Message-ID from its `.emlx` path for `search_emails` with
+    /// `include_message_id`; nil in production (the header-only reader). A test passes one to
+    /// count or fail the reads (#682).
+    private let messageIDFileReader: (@Sendable (String) throws -> String)?
 
     init(databasePath: String = EnvelopeIndexReader.defaultDatabasePath,
          initialSync: Bool = true,
          classificationDirectory: URL = ClassificationPolicyStore.defaultDirectory,
          classificationLoader: (@Sendable (String) async throws -> ClassificationMessage)? = nil,
          accountMapping: [String: String]? = nil,
-         vipMailboxesPath: String? = nil) async throws {
+         vipMailboxesPath: String? = nil,
+         messageIDFileReader: (@Sendable (String) throws -> String)? = nil) async throws {
         self.accountMapping = accountMapping
+        self.messageIDFileReader = messageIDFileReader
         self.classificationStore = ClassificationPolicyStore(directory: classificationDirectory)
         self.classificationEngine = ClassificationPlanEngine(store: self.classificationStore)
         self.classificationLoader = classificationLoader
@@ -229,7 +235,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "search_emails",
-                description: "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101). Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204). For BULK collection (e.g. feeding export_emails_markdown), use `projection: \"ids\"` to get just rowId strings (far smaller payload, no per-row recipient fetch) and `dedup: \"logical\"` to collapse Gmail mailbox duplicates server-side; `projection: \"count\"` returns just the total match count for scoping (#208). Each full and summary result carries is_draft: true when the message or a copy of it has Mail's draft type (5) or draft flag; false only when it has neither and neither it nor a copy sits in a folder named as drafts; null when that cannot be established, including the AppleScript fallback. A folder name is never evidence of a draft. With dedup: logical the flag describes the row kept for each group; ids/count projections are unchanged.",
+                description: "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101). Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204). For BULK collection (e.g. feeding export_emails_markdown), use `projection: \"ids\"` to get just rowId strings (far smaller payload, no per-row recipient fetch) and `dedup: \"logical\"` to collapse Gmail mailbox duplicates server-side; `projection: \"count\"` returns just the total match count for scoping (#208). Each full and summary result carries is_draft: true when the message or a copy of it has Mail's draft type (5) or draft flag; false only when it has neither and neither it nor a copy sits in a folder named as drafts; null when that cannot be established, including the AppleScript fallback. A folder name is never evidence of a draft. With dedup: logical the flag describes the row kept for each group; ids/count projections are unchanged. Set `include_message_id: true` (default false) to add `message_id` to each full or summary row: the RFC 5322 Message-ID that get_email and the batch export report for the same message, read from the message's .emlx header block (one bounded file read per row, so it costs more than the default). Three states: a non-empty string is the value (angle brackets kept); the empty string means the message has no Message-ID header; a missing `message_id` key means it could not be read (no readable .emlx, a read error, a value longer than 4096 characters) or the row came from the AppleScript fallback, which never fills it — treat a missing key as unknown, not as a new message. Not valid with projection ids or count. Not yet run against a real mail store (tracked in #682).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -243,7 +249,8 @@ class CheAppleMailMCPServer {
                         "limit": .object(["type": .string("integer"), "description": .string("Maximum results (default: 50)")]),
                         "sort": .object(["type": .string("string"), "description": .string("Sort order by date: 'desc' (newest first, default) or 'asc' (oldest first)")]),
                         "projection": .object(["type": .string("string"), "description": .string("Result shape: 'full' (default, the {results,returned,limit,truncated} envelope of full objects), 'ids' (envelope whose `results` is an array of message rowId strings only — orders-of-magnitude smaller, for bulk collection feeding export_emails_markdown), 'summary' (envelope whose `results` elements are triage objects with only `id`/`date`/`sender`/`subject`/`mailbox`/`is_draft` — between `ids` and `full`, for human triage without the full per-row cost), or 'count' (just {count}, the total matches ignoring `limit`, for scoping). 'ids'/'summary'/'count' require the SQLite index (#208/#177).")]),
-                        "dedup": .object(["type": .string("string"), "description": .string("'none' (default) or 'logical'. 'logical' collapses mailbox-duplicate copies (same subject+sender+date_received, e.g. Gmail INBOX/Archive/All Mail) to one row server-side. Valid with projection 'ids', 'summary', or 'count' — not 'full' (#208/#177). With 'summary', each row's is_draft describes the row kept for its group.")])
+                        "dedup": .object(["type": .string("string"), "description": .string("'none' (default) or 'logical'. 'logical' collapses mailbox-duplicate copies (same subject+sender+date_received, e.g. Gmail INBOX/Archive/All Mail) to one row server-side. Valid with projection 'ids', 'summary', or 'count' — not 'full' (#208/#177). With 'summary', each row's is_draft describes the row kept for its group.")]),
+                        "include_message_id": .object(["type": .string("boolean"), "description": .string("Default false. When true, each full or summary row carries `message_id`: a non-empty string is the Message-ID (the value get_email reports), \"\" means the message has no Message-ID header, and a missing key means it could not be read or the row came from the AppleScript fallback. Reads one .emlx header block per row. Not valid with projection 'ids' or 'count'. Not yet run against a real mail store (#682).")])
                     ]),
                     "required": .array([.string("query")])
                 ])
@@ -1314,6 +1321,9 @@ class CheAppleMailMCPServer {
             let (projection, dedup) = try Self.validateSearchProjection(
                 projection: arguments["projection"]?.stringValue ?? "full",
                 dedup: arguments["dedup"]?.stringValue ?? "none")
+            // #682: the Message-ID is read per row only when asked for.
+            let includeMessageId = try Self.parseIncludeMessageId(
+                arguments["include_message_id"], projection: projection)
 
             // Use SQLite search if available
             if let reader = indexReader {
@@ -1342,11 +1352,13 @@ class CheAppleMailMCPServer {
                     case "summary":
                         // #374: triage shape adds the nullable per-message is_draft fact.
                         let page = try reader.searchSummaryPage(params, dedup: dedup)
-                        let formatted: [[String: Any]] = page.results.map(Self.formatSummaryResultForJSON)
+                        var formatted: [[String: Any]] = page.results.map(Self.formatSummaryResultForJSON)
+                        if includeMessageId { formatted = withMessageIDs(formatted, for: page.results) }
                         return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
                     default:
                         let page = try reader.searchPage(params)
-                        let formatted: [[String: Any]] = page.results.map(Self.formatSearchResultForJSON)
+                        var formatted: [[String: Any]] = page.results.map(Self.formatSearchResultForJSON)
+                        if includeMessageId { formatted = withMessageIDs(formatted, for: page.results) }
                         return formatJSON(Self.resultEnvelope(results: formatted, limit: limit, truncated: page.truncated))
                     }
                 } catch let error where projection == "full" && Self.isIndexReadFailure(error) {
@@ -2487,6 +2499,53 @@ class CheAppleMailMCPServer {
         guard let raw = arguments["opts"], !raw.isNull else { return [:] }
         guard let opts = raw.objectValue else { throw MailError.invalidParameter("opts must be an object") }
         return opts
+    }
+
+    /// #682: `include_message_id` — absent or null is false; present and not a boolean is a parameter
+    /// error (the schema is a published contract, not runtime enforcement); true needs row objects,
+    /// which `ids` and `count` do not have.
+    static func parseIncludeMessageId(_ value: Value?, projection: String) throws -> Bool {
+        // `Value.boolValue` here coerces the string "true"; `requireBool` is the strict reader (#35).
+        let flag = try requireBool(value.map { ["include_message_id": $0] } ?? [:], key: "include_message_id", default: false)
+        if flag, projection == "ids" || projection == "count" {
+            throw MailError.invalidParameter(
+                "include_message_id applies to projection 'full' or 'summary'; '\(projection)' returns no row objects")
+        }
+        return flag
+    }
+
+    /// #682: adds `message_id` to a row only when its value was read (a string, `""` for no
+    /// header); an unreadable row keeps every other field and gets no key.
+    static func applyMessageIDs(
+        _ rows: [[String: Any]], outcomes: [MessageIDLookup.Outcome]
+    ) -> [[String: Any]] {
+        zip(rows, outcomes).map { row, outcome in
+            guard case .value(let id) = outcome else { return row }
+            var withID = row
+            withID["message_id"] = id
+            return withID
+        }
+    }
+
+    /// #682: the stderr line for a call whose rows were not all readable: a fixed reason per kind
+    /// and a count, never header text. nil when every row was read.
+    static func messageIDUnreadableLine(
+        counts: [MessageIDLookup.Unreadable: Int], total: Int
+    ) -> String? {
+        guard !counts.isEmpty else { return nil }
+        let reasons = counts.sorted { $0.key.rawValue < $1.key.rawValue }
+            .map { "\($0.value) x \($0.key.rawValue)" }.joined(separator: "; ")
+        let missing = counts.values.reduce(0, +)
+        return "search_emails include_message_id: \(missing) of \(total) row(s) have no message_id (\(reasons)); the rows are still returned\n"
+    }
+
+    private func withMessageIDs(_ rows: [[String: Any]], for results: [SearchResult]) -> [[String: Any]] {
+        let lookup = messageIDFileReader.map { MessageIDLookup(readFile: $0) } ?? MessageIDLookup()
+        let outcomes = lookup.outcomes(for: results)
+        if let line = Self.messageIDUnreadableLine(counts: outcomes.unreadableCounts, total: results.count) {
+            Diagnostics.emit(line)
+        }
+        return Self.applyMessageIDs(rows, outcomes: outcomes.rows)
     }
 
     /// #177: the triage (`summary`) projection JSON — exactly `id/date/sender/

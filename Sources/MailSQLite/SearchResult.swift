@@ -21,6 +21,9 @@ public struct SearchResult: Sendable {
     public let toRecipients: [String]
     /// Observed type: 5=true, 0=false; unavailable/unsupported evidence=nil.
     public let isDraft: Bool?
+    /// The raw `mailboxes.url` of the row's mailbox, which `search_emails` needs to find the
+    /// message's `.emlx` for `include_message_id` (#682). `nil` for a result built without one.
+    public let mailboxURL: String?
 
     public init(
         id: Int,
@@ -34,7 +37,8 @@ public struct SearchResult: Sendable {
         isRead: Bool,
         isFlagged: Bool,
         toRecipients: [String],
-        isDraft: Bool? = nil
+        isDraft: Bool? = nil,
+        mailboxURL: String? = nil
     ) {
         self.id = id
         self.subject = subject
@@ -48,6 +52,7 @@ public struct SearchResult: Sendable {
         self.isFlagged = isFlagged
         self.toRecipients = toRecipients
         self.isDraft = isDraft
+        self.mailboxURL = mailboxURL
     }
 }
 
