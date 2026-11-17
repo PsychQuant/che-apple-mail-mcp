@@ -107,6 +107,43 @@ final class QuotedPrintableLinearWorkTests: XCTestCase {
         await assertLinear("soft breaks") { String(repeating: "=41=\r\n", count: $0) + "=4" }
     }
 
+    // MARK: - Source guard
+
+    /// The work counter above counts loop steps and the characters the bounded
+    /// length check looks at. It cannot see the cost of measuring the rest of the
+    /// string, so putting `distance(from:to:)` back leaves every count unchanged
+    /// (checked by mutation: the work-count tests stayed green). This guard reads
+    /// the shipped function instead and fails if it measures a distance again.
+    func testTheDecoderDoesNotMeasureTheRestOfTheString() throws {
+        let source = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // CheAppleMailMCPTests/
+            .deletingLastPathComponent()   // Tests/
+            .deletingLastPathComponent()   // <package root>/
+            .appendingPathComponent("Sources/CheAppleMailMCP/AppleScript/MailController.swift")
+        let text = try String(contentsOf: source, encoding: .utf8)
+        let signature = "func decodeQuotedPrintable(_ input: String) -> String {"
+        let start = try XCTUnwrap(text.range(of: signature), "the decoder was renamed or moved: update this guard")
+        // The body runs to the brace that closes the function.
+        var depth = 0
+        var end = text.endIndex
+        var index = text.index(before: start.upperBound)
+        while index < text.endIndex {
+            if text[index] == "{" { depth += 1 }
+            if text[index] == "}" {
+                depth -= 1
+                if depth == 0 { end = text.index(after: index); break }
+            }
+            index = text.index(after: index)
+        }
+        let body = String(text[start.lowerBound..<end])
+        XCTAssertTrue(body.contains("return String(decoding: bytes, as: UTF8.self)"),
+                      "the function body was not found whole: the guard would pass vacuously")
+        XCTAssertFalse(body.contains("distance("),
+                       "decodeQuotedPrintable measures a distance again; on every `=` that is linear in the rest of the string (#720)")
+        XCTAssertTrue(body.contains("limitedBy:"),
+                      "the bounded length check is gone from decodeQuotedPrintable (#720)")
+    }
+
     // MARK: - The algorithm before #720
 
     /// Verbatim copy of `MailController.decodeQuotedPrintable` before #720.
