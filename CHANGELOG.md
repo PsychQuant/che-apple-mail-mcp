@@ -193,6 +193,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The attachment deny-list no longer depends on how a path is spelled**
+  ([#671](https://github.com/PsychQuant/che-apple-mail-mcp/issues/671)). The
+  deny-list compared the resolved path with each sensitive directory as text, so
+  a spelling that resolution keeps and the kernel still accepts (a root-level
+  prefix such as `/.nofollow` or `/.resolve/<n>`) named a deny-listed file
+  without matching. The check now also compares the device and inode of each
+  prefix of the resolved path with those of each deny-listed directory, so any
+  spelling of a deny-listed directory is refused, including spellings that
+  differ only in letter case. A prefix or a deny-listed directory that cannot be
+  examined rejects the path; a deny-listed directory that does not exist is
+  skipped. Hard links to a deny-listed file are still not recognised (see
+  SECURITY.md). Tests use a temporary directory as the deny-listed root through
+  an internal parameter of the validator.
 - **A failed read of a direct draft's read flag says why**
   ([#653](https://github.com/PsychQuant/che-apple-mail-mcp/issues/653)). After the
   upload, the direct-write path looks at the draft's local read flag; a read that

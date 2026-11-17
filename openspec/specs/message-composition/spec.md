@@ -533,13 +533,19 @@ Whenever the call takes the GUI path after the direct write was attempted or fou
 ---
 ### Requirement: Attachment paths must be regular files
 
-When a composing tool validates its attachment paths (`compose_email`, `create_draft`, and `update_draft` for the replacement draft), the system SHALL first reject every path that has a `.` or `..` component, as `'<path>' rejected: contains a '.' or '..' path component`, because Mail receives the caller's text through the open panel's Go-to-folder field and only without such components do the textual and the physical reading of the path name the same file; a name that merely contains dots (such as `.hidden.txt`) is not such a component. Components are the bytes between slashes, as the filesystem reads them, and a path that holds a NUL byte SHALL be rejected as `'<path>' rejected: contains a NUL character` before that check, because the filesystem reads a path only up to its first NUL. The existence check SHALL use the caller's path with the kernel's lookup, so that a missing component or a trailing slash after a file is `not found`. For the remaining checks the system SHALL make a relative path absolute against the server's working directory and follow symbolic links, and the deny-list, the `MAIL_MCP_ATTACHMENT_ROOTS` allow-list and the type check SHALL all judge that one resolved path. The system SHALL reject every path that, after symlink resolution, is not a regular file: a directory (including a package directory such as `.rtfd` or `.app`), a FIFO, a socket, a character or block device, or a path whose final component is still a symbolic link after resolution. The type SHALL be read without following a final symbolic link, so a link that resolution could not remove is rejected rather than followed; a type that cannot be read SHALL be rejected as `type could not be read`. The rejection SHALL be added to the same aggregated invalid-parameter error as the existing checks (a missing path, the deny-list, the allow-list), as `'<path>' rejected: not a regular file (<kind>)`, and SHALL happen before any Mail operation, including the draft scans of `update_draft`. The system SHALL NOT open a path to decide its type. A regular file, and a symbolic link that resolves to a regular file, named by a path without `.` or `..` components, SHALL still be accepted. This is input validation, not an ineligibility reason of Requirement: Ineligible composing calls fail without side effects, and it does not extend that list.
+When a composing tool validates its attachment paths (`compose_email`, `create_draft`, and `update_draft` for the replacement draft), the system SHALL first reject every path that has a `.` or `..` component, as `'<path>' rejected: contains a '.' or '..' path component`, because Mail receives the caller's text through the open panel's Go-to-folder field and only without such components do the textual and the physical reading of the path name the same file; a name that merely contains dots (such as `.hidden.txt`) is not such a component. Components are the bytes between slashes, as the filesystem reads them, and a path that holds a NUL byte SHALL be rejected as `'<path>' rejected: contains a NUL character` before that check, because the filesystem reads a path only up to its first NUL. The existence check SHALL use the caller's path with the kernel's lookup, so that a missing component or a trailing slash after a file is `not found`. For the remaining checks the system SHALL make a relative path absolute against the server's working directory and follow symbolic links, and the deny-list, the `MAIL_MCP_ATTACHMENT_ROOTS` allow-list and the type check SHALL all judge that one resolved path. The deny-list SHALL judge it by location and not by spelling: besides comparing the resolved text with each deny-listed directory, the system SHALL compare the device and inode of every prefix of the resolved path with those of each deny-listed directory that exists, and SHALL reject the path when a prefix is one of them, so that a spelling that resolution keeps (such as a root-level `/.nofollow` or `/.resolve/<n>` prefix, or a directory name that differs only in letter case) is refused like the plain path; a prefix or a deny-listed directory that cannot be examined SHALL reject the path rather than pass it, and a deny-listed directory that does not exist SHALL be skipped. The system SHALL reject every path that, after symlink resolution, is not a regular file: a directory (including a package directory such as `.rtfd` or `.app`), a FIFO, a socket, a character or block device, or a path whose final component is still a symbolic link after resolution. The type SHALL be read without following a final symbolic link, so a link that resolution could not remove is rejected rather than followed; a type that cannot be read SHALL be rejected as `type could not be read`. The rejection SHALL be added to the same aggregated invalid-parameter error as the existing checks (a missing path, the deny-list, the allow-list), as `'<path>' rejected: not a regular file (<kind>)`, and SHALL happen before any Mail operation, including the draft scans of `update_draft`. The system SHALL NOT open a path to decide its type. A regular file, and a symbolic link that resolves to a regular file, named by a path without `.` or `..` components, SHALL still be accepted. This is input validation, not an ineligibility reason of Requirement: Ineligible composing calls fail without side effects, and it does not extend that list.
 
 #### Scenario: A FIFO is rejected without being opened
 
 - **GIVEN** a named pipe created in a temporary directory, with no writer
 - **WHEN** `validateAttachmentPaths` is called with its path
 - **THEN** it throws an invalid-parameter error naming the path and `not a regular file (FIFO)`, returns without blocking, and no blocking reader opens the pipe
+
+#### Scenario: A deny-listed directory is refused under any spelling
+
+- **GIVEN** a temporary directory used as the deny-listed root, holding a regular file
+- **WHEN** `validateAttachmentPaths` is called with that file named through a root-level `/.nofollow` or `/.resolve/<n>` prefix, or through a directory name that differs only in letter case
+- **THEN** it throws an invalid-parameter error naming the sensitive directory, and a regular file outside the root named the same way is accepted
 
 #### Scenario: A directory is rejected with the other failures
 
@@ -568,6 +574,8 @@ When a composing tool validates its attachment paths (`compose_email`, `create_d
 | `real/target.txt` (relative, no `.` or `..`) | accepted |
 | `allowed/L/secret.txt` with `MAIL_MCP_ATTACHMENT_ROOTS` = `allowed`, L a link to `outside/inner` | rejected: outside MAIL_MCP_ATTACHMENT_ROOTS allow-list |
 | `.hidden.txt`, `a..b.txt`, `...txt` (regular files) | accepted |
+| a file in a deny-listed directory, named through a root-level prefix that resolution keeps, or through a directory name that differs from the deny-listed one only in letter case | rejected: resolves under sensitive directory |
+| a file outside the deny-listed directories, named through such a root-level prefix | accepted |
 | `report.txt/` (a trailing slash after a regular file) | rejected: not found |
 
 ##### Example: attachment type names
@@ -580,6 +588,15 @@ When a composing tool validates its attachment paths (`compose_email`, `create_d
 | `/dev/null` | character device |
 | `/dev/disk0` | block device |
 | a path that does not exist | type could not be read |
+
+
+<!-- @trace
+source: idd-671-deny-list-by-location
+updated: 2026-11-17
+code:
+  - SECURITY.md
+  - CHANGELOG.md
+-->
 
 ---
 ### Requirement: forward_email can save the forward as a draft
