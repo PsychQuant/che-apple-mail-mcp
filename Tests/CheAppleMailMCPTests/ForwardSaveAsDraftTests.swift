@@ -155,4 +155,45 @@ final class ForwardSaveAsDraftTests: XCTestCase {
         }
         XCTAssertLessThanOrEqual(d.count, 2048, "Claude Code truncates tool descriptions at 2,048 characters")
     }
+
+    // MARK: - the refusal is a parameter refusal, not a row of the closed failure table
+
+    private static func repoFile(_ relative: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+    }
+
+    /// The `message-composition` spec writes the bodyless refusal as a parameter refusal of `forward_email`, not
+    /// as a reason the GUI path is ineligible, so the closed failure table of the rule keeps its nine classes. A
+    /// tenth row would be a second classification of the same refusal.
+    func testTheRuleCopiesKeepTheNineClassTableAndDescribeTheRefusalAsAParameterRefusal() throws {
+        for path in [".claude/rules/compose-wrapper-free.md", "plugin/rules/compose-wrapper-free.md"] {
+            let rule = try Self.repoFile(path)
+            XCTAssertTrue(rule.contains("封閉九類，不得依性質相似類推第十類"), "\(path): the heading keeps nine classes")
+            XCTAssertFalse(rule.contains("封閉十類"), "\(path): no ten-class heading")
+            XCTAssertFalse(rule.contains("第十一類"), "\(path): no eleventh class")
+            XCTAssertFalse(rule.contains("十類與各自的處置"), "\(path): the sentence before the table says nine")
+            XCTAssertTrue(rule.contains("九類與各自的處置"), "\(path): the sentence before the table says nine")
+            XCTAssertNil(rule.range(of: "\n| 10 |"), "\(path): the table has no row 10")
+            XCTAssertNil(rule.range(of: "第 10 類"), "\(path): nothing calls the refusal class 10")
+            XCTAssertTrue(rule.contains("| 9 |"), "\(path): the ninth row stays")
+            // The refusal stays documented: a parameter refusal at the tool's entry, before any Mail action,
+            // with the follow-up that removes it.
+            for needle in ["save_as_draft", "參數拒絕", "#673", "任何 Mail 動作之前"] {
+                XCTAssertTrue(rule.contains(needle), "\(path): the refusal paragraph must mention \(needle)")
+            }
+        }
+        let other = try Self.repoFile(".claude/rules/timeout-outcome-boundary.md")
+        XCTAssertTrue(other.contains("封閉的九類事前拒絕"), "the timeout rule counts nine classes")
+        XCTAssertFalse(other.contains("十類"), "the timeout rule does not count ten")
+    }
+
+    func testTheReadmeLinksTheNineClassHeadingAndNamesNoTenthReason() throws {
+        let readme = try Self.repoFile("README.md")
+        XCTAssertTrue(readme.contains("#呼叫失敗時怎麼辦封閉九類不得依性質相似類推第十類"), "README anchors the nine-class heading")
+        XCTAssertFalse(readme.contains("封閉十類"), "README has no ten-class anchor")
+        XCTAssertFalse(readme.contains("current ten reasons"), "README counts nine reasons")
+        XCTAssertFalse(readme.contains("the tenth"), "README names no tenth reason")
+    }
 }
