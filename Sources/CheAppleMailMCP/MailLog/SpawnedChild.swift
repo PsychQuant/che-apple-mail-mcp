@@ -19,9 +19,23 @@ final class SpawnedChild {
     /// Read ends of the child's stdout and stderr. The caller owns both and closes each exactly once.
     let stdoutFD: Int32
     let stderrFD: Int32
-    /// Set once the leader has been reaped or handed to the background reaper. A group signal after
-    /// that point could reach another group, so `signalGroup` refuses.
-    private var released = false
+    /// Who owns the leader's pid. A group signal is only allowed while it is `.owned` (unreaped, so the
+    /// number cannot be reissued). From any other state nothing may signal, or wait on, this pid or its
+    /// group by anything but the one hand-off that already holds the right to.
+    private enum State {
+        case owned
+        /// We reaped it.
+        case reaped
+        /// Handed to a background thread that waits on the pid (the leader was still ours).
+        case handedOff
+        /// `waitid` says there is no such child: someone else reaped it, so the pid may be reissued.
+        /// Never wait on it again.
+        case gone
+        /// `waitid` failed in another way: the leader may still be ours, but it cannot be observed.
+        /// `reap` hands it to a background thread, once.
+        case unobservable
+    }
+    private var state = State.owned
 
     private init(pid: pid_t, stdoutFD: Int32, stderrFD: Int32) {
         self.pid = pid
@@ -101,19 +115,20 @@ final class SpawnedChild {
     // MARK: - Lifecycle
 
     /// Waits up to `seconds` for the leader to exit, WITHOUT reaping it: it stays a zombie holding
-    /// the group number until `reap`. Returns whether it has exited.
+    /// the group number until `reap`. Returns true when waiting is over: it has exited, or it can no
+    /// longer be observed (then the group is not signalled any more and `reap` never blocks on it).
     func waitForExit(timeout seconds: TimeInterval) -> Bool {
-        if released { return true }
+        if state != .owned { return true }
         let giveUp = DispatchTime.now() + seconds
         while true {
             var info = siginfo_t()
             if waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 {
                 if info.si_pid != 0 { return true }
             } else if errno != EINTR {
-                // Not waitable: something else reaped the leader (ECHILD) or waitid itself failed. Either
-                // way the leader no longer pins the group number, or we cannot tell. Stop signalling the
-                // group, and let `reap` know it must not block on a child it cannot observe.
-                released = true
+                // Not waitable: ECHILD means something else reaped the leader (the pid may be reissued
+                // from now on); any other error means waitid itself failed. Either way the leader no
+                // longer provably pins the group number, so stop signalling and never wait blocking.
+                state = errno == ECHILD ? .gone : .unobservable
                 return true
             }
             if DispatchTime.now() >= giveUp { return false }
@@ -123,7 +138,7 @@ final class SpawnedChild {
 
     /// Signals every member of the child's group. Only valid while the leader is unreaped.
     func signalGroup(_ signal: Int32) {
-        guard !released else { return }
+        guard state == .owned else { return }
         _ = kill(-pid, signal)
     }
 
@@ -131,19 +146,23 @@ final class SpawnedChild {
     /// signal), or -1 for a child that did not exit within `seconds`. That child is handed to a
     /// background thread that reaps it whenever it does, and the group is not signalled again.
     func reap(waitingUpTo seconds: TimeInterval) -> Int32 {
-        if released { return -1 }
-        guard waitForExit(timeout: seconds) else {
-            released = true
+        if state == .owned, !waitForExit(timeout: seconds) {
+            state = .handedOff
             handOffToBackgroundReaper()
             return -1
         }
-        if released {
-            // `waitForExit` gave up on observing the child (see there). A blocking wait here could hang
-            // forever, so collect it in the background, if it can be collected at all.
+        switch state {
+        case .owned:
+            break
+        case .unobservable:
+            // A blocking wait here could hang, so collect it in the background, once.
+            state = .handedOff
             handOffToBackgroundReaper()
             return -1
+        case .reaped, .handedOff, .gone:
+            return -1
         }
-        released = true
+        state = .reaped
         var status: Int32 = 0
         while true {
             let r = waitpid(pid, &status, 0)
@@ -155,8 +174,13 @@ final class SpawnedChild {
         return signalNumber == 0 ? (status >> 8) & 0xff : signalNumber
     }
 
+    /// Test seam: how many background reaper threads have been started (each waits on a pid).
+    static var backgroundReapersStarted: Int { reaperCounter.value }
+    private static let reaperCounter = ReaperCounter()
+
     private func handOffToBackgroundReaper() {
         let pid = self.pid
+        Self.reaperCounter.increment()
         Thread.detachNewThread {
             var status: Int32 = 0
             while waitpid(pid, &status, 0) < 0, errno == EINTR {}
@@ -179,4 +203,11 @@ private func freeCStringArray(_ array: UnsafeMutablePointer<UnsafeMutablePointer
     var index = 0
     while let item = array[index] { free(item); index += 1 }
     array.deallocate()
+}
+
+private final class ReaperCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() { lock.lock(); count += 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
 }

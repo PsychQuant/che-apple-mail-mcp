@@ -71,6 +71,22 @@ final class SpawnedChildTests: XCTestCase {
         XCTAssertLessThan(elapsed, .milliseconds(500), "reap must not wait on a child it cannot observe")
     }
 
+    func testNothingWaitsOnAPidOnceTheLeaderIsKnownToBeGone() throws {
+        // Another party reaped the leader, so the pid may be reissued at any moment. Neither `reap`
+        // reached first nor after `waitForExit` may start a wait on that pid.
+        for observeFirst in [false, true] {
+            let (child, descendant) = try spawnEchoingADescendant("sleep 30 </dev/null >/dev/null 2>&1 & echo $!")
+            defer { finish(child); kill(descendant, SIGKILL) }
+            var status: Int32 = 0
+            XCTAssertEqual(waitpid(child.pid, &status, 0), child.pid)
+            let before = SpawnedChild.backgroundReapersStarted
+            if observeFirst { XCTAssertTrue(child.waitForExit(timeout: 1)) }
+            XCTAssertEqual(child.reap(waitingUpTo: 1), -1)
+            XCTAssertEqual(SpawnedChild.backgroundReapersStarted, before,
+                           "a wait by pid was started for a leader known to be gone (observeFirst: \(observeFirst))")
+        }
+    }
+
     func testSignalGroupAfterTheReapReachesNothing() throws {
         // The leader leaves at once, a descendant stays in the group. Once the leader is reaped the
         // group number is no longer ours, so a group signal must not be sent, even to a live member.
