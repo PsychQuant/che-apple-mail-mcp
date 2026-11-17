@@ -2519,8 +2519,9 @@ class CheAppleMailMCPServer {
     static func applyMessageIDs(
         _ rows: [[String: Any]], outcomes: [MessageIDLookup.Outcome]
     ) -> [[String: Any]] {
-        zip(rows, outcomes).map { row, outcome in
-            guard case .value(let id) = outcome else { return row }
+        // Indexed, not zipped: a count mismatch must never drop a row.
+        rows.enumerated().map { index, row in
+            guard index < outcomes.count, case .value(let id) = outcomes[index] else { return row }
             var withID = row
             withID["message_id"] = id
             return withID
