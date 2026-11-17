@@ -20,7 +20,9 @@ extension EmlxParser {
     /// The Message-ID of the message in the .emlx file at `path`, looking at no more than the
     /// first `maxHeaderBytes` of the message (#682).
     ///
-    /// The length line is read from the first 4096 bytes of the file; the message then comes in
+    /// The first 4096 bytes of the file are read to find the length line, whatever they hold: with
+    /// a small `maxHeaderBytes` they can already contain message bytes, so the cap bounds the bytes
+    /// of the message read after that probe, not the probe itself. The message then comes in
     /// `chunkSize` pieces and the read stops once a blank line, `\r\n\r\n` or `\n\n`, has been
     /// seen: the header block ends there (`RFC822Parser`). A message that ends inside the cap is
     /// parsed whole; a longer one whose header block does not end inside the cap throws
@@ -28,6 +30,10 @@ extension EmlxParser {
     /// does not parse within those 4096 bytes, throws, as `readEmail` does for the short file.
     /// Whenever this returns, the value is the one `readEmail` extracts for the same file.
     ///
+    /// - Parameters:
+    ///   - chunkSize: bytes per read of the message; tests use small values.
+    ///   - maxHeaderBytes: the cap on bytes of the message read after the length-line probe.
+    ///   - bytesRead: called with the size of every read (tests pin the bound with it).
     public static func readMessageID(
         atPath path: String, chunkSize: Int = 32 * 1024, maxHeaderBytes: Int = maxHeaderScanBytes,
         bytesRead: ((Int) -> Void)? = nil

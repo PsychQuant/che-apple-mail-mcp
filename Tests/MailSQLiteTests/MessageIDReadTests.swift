@@ -181,6 +181,7 @@ final class MessageIDReadTests: XCTestCase {
         XCTAssertGreaterThan(message.count, 2048)
         let r = try both(message, cap: 1024)
         XCTAssertNil(r.reader)
+        XCTAssertTrue(try read(message, cap: 1024).error is EmlxParser.HeaderBlockTooLarge)
         XCTAssertEqual(r.getEmail, "<cr@example.invalid>")
         let wide = try both(message, cap: 1_000_000)
         XCTAssertEqual(wide.reader, wide.getEmail)
@@ -250,6 +251,32 @@ final class MessageIDReadTests: XCTestCase {
         }
     }
 
+    /// A message of `total` bytes: a Message-ID header, a pad line, then `tail`, then a long body.
+    private func padded(total: Int, tail: String) -> Data {
+        let head = "Message-ID: <e@example.invalid>\nX: "
+        let pad = String(repeating: "p", count: total - head.utf8.count - tail.utf8.count)
+        return Data((head + pad + tail + String(repeating: "b", count: 5000)).utf8)
+    }
+
+    func testALFLFPairEndingOnTheLastByteOfTheCapIsFound() throws {
+        let message = padded(total: 1000, tail: "\n\n")   // bytes 999 and 1000 (1-based) are the two LFs
+        XCTAssertEqual(try read(message, cap: 1000).value, "<e@example.invalid>")
+    }
+
+    func testALFLFPairWithItsSecondByteOnePastTheCapIsNotFound() throws {
+        let message = padded(total: 1001, tail: "\n\n")   // the first LF is byte 1000, the second byte 1001
+        XCTAssertTrue(try read(message, cap: 1000).error is EmlxParser.HeaderBlockTooLarge)
+    }
+
+    func testAMessageOfExactlyCapPlusOneBytesWithNoBlankLineIsTooLarge() throws {
+        let message = padded(total: 1001, tail: "")
+        let whole = Data(message.prefix(1001))
+        XCTAssertEqual(whole.count, 1001)
+        XCTAssertTrue(try read(whole, cap: 1000).error is EmlxParser.HeaderBlockTooLarge)
+        // exactly the cap: the whole message is read and parsed
+        XCTAssertEqual(try read(Data(message.prefix(1000)), cap: 1000).value, "<e@example.invalid>")
+    }
+
     func testTheCapBoundaryIsExact() throws {
         func message(total: Int) -> Data {
             let head = "Message-ID: <b@example.invalid>\r\nX: "
@@ -261,7 +288,7 @@ final class MessageIDReadTests: XCTestCase {
         XCTAssertTrue(try read(message(total: 1001), cap: 1000).error is EmlxParser.HeaderBlockTooLarge, "one byte past it")
     }
 
-    func testANonPositiveCapReadsNothingOfTheMessage() throws {
+    func testANonPositiveCapReadsNothingBeyondTheLengthLineProbe() throws {
         for cap in [0, -5] {
             let r = try read(Data("Message-ID: <z@example.invalid>\r\n\r\nbody".utf8), cap: cap)
             XCTAssertTrue(r.error is EmlxParser.HeaderBlockTooLarge, "cap \(cap)")

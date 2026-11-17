@@ -184,7 +184,7 @@ final class SearchMessageIDTests: XCTestCase {
                                        mailboxPath: "INBOX", isRead: false, isFlagged: false, toRecipients: [], mailboxURL: MessageIDStore.mailboxURL())
                 let viaEmail = try EmlxParser.readEmail(rowId: rowId, mailboxURL: MessageIDStore.mailboxURL()).messageId
                 let outcome = MessageIDLookup().outcomes(for: [row]).rows[0]
-                if viaEmail.count > MessageIDLookup.maxLength {
+                if viaEmail.utf8.count > MessageIDLookup.maxLength {
                     XCTAssertEqual(outcome, .unreadable(.tooLong), sample.name)
                 } else {
                     XCTAssertEqual(outcome, .value(viaEmail), sample.name)

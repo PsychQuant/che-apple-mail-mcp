@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_email` and the batch export use. A non-empty string is the Message-ID and
   equals what `get_email` reports (the header block ends at the first blank
   line, see [#715](https://github.com/PsychQuant/che-apple-mail-mcp/issues/715));
-  `""` means the message has no such header. A missing key means unknown, in
+  `""` means the message has no such header, or an empty one. A missing key means unknown, in
   these cases only: no readable `.emlx` for the row; the file could not be read
   or its length line could not be parsed (including one longer than 4096
   bytes); the header block does not end within the first 256 KiB of the message
@@ -24,8 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   than 4096 UTF-8 bytes; or the row came from the AppleScript fallback. In the
   middle three `get_email` may still report a value, because it reads the whole
   file. The read stops at the end of the header block, never looks at more than
-  the first 256 KiB of a message (the length line can take up to 4096 further
-  bytes from the start of the file) and looks up each mailbox's store folder
+  the first 256 KiB of a message (the first 4096 bytes of the file are also read to find the
+  length line, whatever they hold) and looks up each mailbox's store folder
   once per call; without the flag no file is read and rows are unchanged. `true`
   with `ids` or `count` and a non-boolean value are parameter errors. A call
   whose rows could not all be read writes one stderr line with a count and a

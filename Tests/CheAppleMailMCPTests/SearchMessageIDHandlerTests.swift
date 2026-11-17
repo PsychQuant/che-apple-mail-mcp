@@ -191,6 +191,7 @@ final class SearchMessageIDHandlerTests: XCTestCase {
         XCTAssertEqual(rows["1"]?["message_id"] as? String, "<one@example.invalid>")
         let lines = stderr.split(separator: "\n").filter { $0.contains("include_message_id") }
         XCTAssertEqual(lines.count, 1, stderr)
+        guard lines.count == 1 else { return }
         XCTAssertTrue(lines[0].contains("2 of 7 row(s)"), stderr)
         XCTAssertFalse(stderr.contains("SECRET-HEADER-TEXT"), "no file text on stderr")
     }

@@ -74,7 +74,7 @@ The system SHALL reject invalid combinations with a parameter error: an unrecogn
 `search_emails` SHALL accept an optional boolean `include_message_id`, default `false`. A value that is present and not a boolean SHALL be a parameter error. When it is not `true`, the system SHALL read no `.emlx` file to build the result, and each row SHALL be byte-identical to the row the same call returns without the parameter. When it is `true` with projection `full` or `summary`, the system SHALL add a `message_id` key to each row, read from the `.emlx` header block of the row's message and parsed with the function that `get_email`, `get_emails_batch` and the batch export use for their `message_id` (`RFC822Parser.parseHeaders`, key `message-id`). Each row SHALL be in exactly one of three states:
 
 - a non-empty string: the parsed Message-ID value (angle brackets kept). It SHALL equal what `get_email`, `get_emails_batch` and the batch export report for the same message;
-- the empty string: the header block was read and has no `Message-ID` header (as those tools report it);
+- the empty string: the header block was read and has no `Message-ID` header, or one with an empty value (as those tools report it);
 - the key omitted, in exactly these cases and no others:
   1. there is no readable `.emlx` for the row (the body is not downloaded and there is no partial file, the mailbox keeps none, or the file is missing);
   2. the file could not be read or its length line could not be parsed, which includes a length line longer than 4096 bytes;
@@ -84,7 +84,7 @@ The system SHALL reject invalid combinations with a parameter error: an unrecogn
 
 In cases 2 to 4 `get_email` may still report a value, because it reads the whole file. A missing key means unknown, not "no Message-ID" and not "new message".
 
-A row SHALL never be dropped, and its other fields SHALL not change, because its `message_id` could not be read. A read that fails SHALL be reported once per call on stderr through `Diagnostics.emit`, naming a fixed reason and the count of affected rows and never any header text. The system SHALL read each `.emlx` in chunks and stop at the end of the header block, the first blank line of either kind (`\r\n\r\n` or `\n\n`); it SHALL never look at more than the first 256 KiB of a message, whatever its line endings and whether or not it has a header/body separator, and reading the length line MAY take up to 4096 further bytes from the start of the file. The system SHALL resolve the mailbox's store folder once per mailbox per call. With `dedup: "logical"` and projection `summary`, the value SHALL be the one of the kept `MIN(ROWID)` row. The value SHALL be the parsed Message-ID only, never the raw header block.
+A row SHALL never be dropped, and its other fields SHALL not change, because its `message_id` could not be read. A read that fails SHALL be reported once per call on stderr through `Diagnostics.emit`, naming a fixed reason and the count of affected rows and never any header text. The system SHALL read each `.emlx` in chunks and stop at the end of the header block, the first blank line of either kind (`\r\n\r\n` or `\n\n`); it SHALL never look at more than the first 256 KiB of a message, whatever its line endings and whether or not it has a header/body separator, and the first 4096 bytes of the file are also read to find the length line, whatever they hold. The system SHALL resolve the mailbox's store folder once per mailbox per call. With `dedup: "logical"` and projection `summary`, the value SHALL be the one of the kept `MIN(ROWID)` row. The value SHALL be the parsed Message-ID only, never the raw header block.
 
 #### Scenario: The flag is off
 
@@ -98,7 +98,7 @@ A row SHALL never be dropped, and its other fields SHALL not change, because its
 
 #### Scenario: A message without the header
 
-- **WHEN** the `.emlx` header block has no `Message-ID` header
+- **WHEN** the `.emlx` header block has no `Message-ID` header, or a `Message-ID` header with an empty value
 - **THEN** the row's `message_id` is the empty string
 
 #### Scenario: No readable file

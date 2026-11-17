@@ -42,7 +42,7 @@ public enum EmlxFormat {
     ///
     /// Shared by `extractMessageData` and the header-only Message-ID reader (#682), so both read
     /// the line the same way and fail the same way.
-    public static func parseLengthPrefix(from data: Data) throws -> (byteCount: Int, messageStart: Data.Index) {
+    static func parseLengthPrefix(from data: Data) throws -> (byteCount: Int, messageStart: Data.Index) {
         // 1. Find the first newline
         guard let newlineIndex = data.firstIndex(of: newline) else {
             throw MailSQLiteError.emlxParseFailed(
