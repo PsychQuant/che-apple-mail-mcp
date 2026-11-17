@@ -190,6 +190,47 @@ final class RFC2047LinearWorkTests: XCTestCase {
         }
     }
 
+    /// The work counter counts characters the searches look at, not characters copied. Copying the
+    /// charset before the word is known to be complete (as the code did before #720) leaves every
+    /// count unchanged while each rejected opener copies up to the same `?` (checked by mutation:
+    /// the work-count tests stayed green). This guard reads the shipped function instead.
+    func testTheCharsetIsCopiedOnlyAfterTheEndOfTheWordIsFound() throws {
+        let source = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // MailSQLiteTests/
+            .deletingLastPathComponent()   // Tests/
+            .deletingLastPathComponent()   // <package root>/
+            .appendingPathComponent("Sources/MailSQLite/RFC822Parser.swift")
+        let text = try String(contentsOf: source, encoding: .utf8)
+        let signature = "private static func parseEncodedWord("
+        let start = try XCTUnwrap(text.range(of: signature), "parseEncodedWord was renamed or moved: update this guard")
+        let open = try XCTUnwrap(text[start.upperBound...].firstIndex(of: "{"))
+        var depth = 0
+        var end = text.endIndex
+        var index = open
+        while index < text.endIndex {
+            if text[index] == "{" { depth += 1 }
+            if text[index] == "}" {
+                depth -= 1
+                if depth == 0 { end = text.index(after: index); break }
+            }
+            index = text.index(after: index)
+        }
+        let body = String(text[start.lowerBound..<end])
+        XCTAssertTrue(body.contains("return EncodedWord("),
+                      "the function body was not found whole: the guard would pass vacuously")
+        // The only copy that can be long: from the start of the input to the charset's `?`.
+        // (`String(input[afterQ1])` is the one-character encoding letter.)
+        let charsetCopy = "String(input[input.startIndex..<q1])"
+        XCTAssertEqual(body.components(separatedBy: charsetCopy).count - 1, 1,
+                       "parseEncodedWord should copy the charset once")
+        XCTAssertEqual(body.components(separatedBy: "input[input.startIndex..<").count - 1, 1,
+                       "another copy from the start of the input appeared")
+        let copy = try XCTUnwrap(body.range(of: charsetCopy), "the charset copy was not found")
+        let endSearch = try XCTUnwrap(body.range(of: "range(of: \"?=\""), "the search for the end of the word was not found")
+        XCTAssertLessThan(endSearch.lowerBound, copy.lowerBound,
+                          "the charset is copied before the end of the word is found again (#720)")
+    }
+
     func testWorkIsLinearForManyValidWordsFollowedByUnterminatedOnes() {
         assertLinear("valid then unterminated") {
             String(repeating: "=?utf-8?B?QUJD?= ", count: $0) + String(repeating: "=?utf-8?Q?ab ", count: $0)
