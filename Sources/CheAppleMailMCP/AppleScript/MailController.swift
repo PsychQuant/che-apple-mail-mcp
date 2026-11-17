@@ -1174,16 +1174,24 @@ actor MailController {
     /// each byte directly as `Character(Unicode.Scalar(byte))`, which
     /// treated `0xC3 0xA9` as two separate codepoints `Ã ©` — classic
     /// mojibake. Surfaced by #73's regression tests.
-    private func decodeQuotedPrintable(_ input: String) -> String {
+    ///
+    /// Internal (was private) so the #720 differential and work-count tests can
+    /// call it; nothing else changed.
+    func decodeQuotedPrintable(_ input: String) -> String {
         var result = input
         // Remove soft line breaks (= at end of line)
         result = result.replacingOccurrences(of: "=\r\n", with: "")
         result = result.replacingOccurrences(of: "=\n", with: "")
 
         var bytes: [UInt8] = []
+        var work = 0
         var i = result.startIndex
         while i < result.endIndex {
-            if result[i] == "=" && result.distance(from: i, to: result.endIndex) >= 3 {
+            work += 1
+            // At least three characters left (this one and two more), looked at
+            // without measuring the rest of the string (#720).
+            if result[i] == "=" && result.index(i, offsetBy: 3, limitedBy: result.endIndex) != nil {
+                work += 3
                 let hexStart = result.index(after: i)
                 let lowStart = result.index(after: hexStart)
                 if let byte = HexEscape.byte(result[hexStart], result[lowStart]) {
@@ -1203,6 +1211,7 @@ actor MailController {
             }
         }
 
+        QuotedPrintableWorkProbe.report?(work)
         return String(decoding: bytes, as: UTF8.self)
     }
 
@@ -3491,4 +3500,12 @@ enum AutomationHelp {
         LaunchServices (no Apple events; attachments must be dragged in \
         manually).
         """
+}
+
+/// #720 test seam: when set, `MailController.decodeQuotedPrintable` reports once
+/// per call the number of loop steps plus the characters its length checks
+/// examined. The work-count tests read it instead of a clock; nothing extra is
+/// measured while it is nil.
+enum QuotedPrintableWorkProbe {
+    nonisolated(unsafe) static var report: ((Int) -> Void)?
 }

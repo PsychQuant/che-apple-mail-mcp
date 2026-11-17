@@ -113,6 +113,7 @@ public enum RFC822Parser {
     /// Format: =?charset?encoding?encoded_text?=
     /// encoding: B = base64, Q = quoted-printable
     static func decodeRFC2047(_ value: String) -> String {
+        var search = TerminatorSearch(measure: terminatorSearchWorkProbe != nil)
         var result = ""
         var remaining = value[value.startIndex...]
         var lastWasEncodedWord = false
@@ -218,7 +219,7 @@ public enum RFC822Parser {
             }
 
             let afterEq = remaining[startRange.upperBound...]
-            guard let parsed = parseEncodedWord(afterEq) else {
+            guard let parsed = parseEncodedWord(afterEq, search: &search) else {
                 closeRun()
                 result += "=?"
                 remaining = remaining[startRange.upperBound...]
@@ -266,14 +267,34 @@ public enum RFC822Parser {
 
         closeRun()
         if let separator = heldSeparator { result += separator }
+        terminatorSearchWorkProbe?(search.work)
         return result
+    }
+
+    /// #720 test seam: when set, `decodeRFC2047` reports once per call how many
+    /// characters its searches for the end of an encoded-word (`?=`) examined.
+    /// The work-count tests read it instead of a clock. Nothing is measured
+    /// while it is nil, so production pays one nil check per call.
+    nonisolated(unsafe) static var terminatorSearchWorkProbe: ((Int) -> Void)?
+
+    /// State of the searches for `?=` within one `decodeRFC2047` call.
+    private struct TerminatorSearch {
+        /// Whether to count (only when the probe is set).
+        let measure: Bool
+        /// Characters examined by the searches so far; only filled when `measure`.
+        var work = 0
+        /// A search that started here found no `?=`, so none can be found from
+        /// here on either: `decodeRFC2047` only moves forward. Remembering it is
+        /// what keeps a value with many openers and no terminator linear.
+        var absentFrom: Substring.Index?
     }
 
     /// #352 verify: lets the differential test drive the pre-fix reference
     /// algorithm through the same tokenizer, so any divergence it reports is a
     /// real behavioural difference and not a second parser disagreeing.
     static func parseEncodedWordForTesting(_ input: Substring) -> (charset: String, encoding: String, text: String, endIndex: Substring.Index)? {
-        guard let w = parseEncodedWord(input) else { return nil }
+        var search = TerminatorSearch(measure: false)
+        guard let w = parseEncodedWord(input, search: &search) else { return nil }
         return (w.charset, w.encoding, w.text, w.endIndex)
     }
 
@@ -286,7 +307,7 @@ public enum RFC822Parser {
 
     /// Parse an encoded word after the initial "=?" has been consumed.
     /// Input starts right after "=?" — e.g., "utf-8?Q?=E9=84=AD?= rest"
-    private static func parseEncodedWord(_ input: Substring) -> EncodedWord? {
+    private static func parseEncodedWord(_ input: Substring, search: inout TerminatorSearch) -> EncodedWord? {
         // Find charset: everything up to first ?
         guard let q1 = input.firstIndex(of: "?") else { return nil }
         let charset = String(input[input.startIndex..<q1])
@@ -304,7 +325,15 @@ public enum RFC822Parser {
         // Find the closing ?= — search from after the text-start ?
         let textStart = input.index(after: q2)
         let textRegion = input[textStart...]
-        guard let endRange = textRegion.range(of: "?=", options: .literal) else { return nil }
+        if let absent = search.absentFrom, textStart >= absent { return nil }
+        let found = textRegion.range(of: "?=", options: .literal)
+        if search.measure {
+            search.work += textRegion.distance(from: textStart, to: found?.upperBound ?? textRegion.endIndex)
+        }
+        guard let endRange = found else {
+            search.absentFrom = textStart
+            return nil
+        }
 
         let text = String(textRegion[textRegion.startIndex..<endRange.lowerBound])
 
