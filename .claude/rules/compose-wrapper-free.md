@@ -55,6 +55,12 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 
 > 第 5、6 類的配方與 #304 之前的規則一致——差別是現在**工具自己會說**，不必靠人記得。
 
+## 表外：`forward_email` 不帶內文的 `save_as_draft`（參數拒絕，#599／#673）
+
+`forward_email` 帶 `save_as_draft: true` 而沒有 `body` 時，工具在入口、任何 Mail 動作之前以具名的 invalid-parameter 錯誤拒絕，零副作用（`message-composition` spec，Requirement: forward_email can save the forward as a draft）。這是 `forward_email` 的**參數拒絕**，不是上表的一類，也不是 GUI 路徑的不合格理由：上表仍是封閉九類，不延伸〈Ineligible composing calls fail without side effects〉的清單，也不當成拒絕其他工具或參數的前例。
+
+原因：不帶內文的轉寄是 Mail 原生 `forward` 加 `send`，沒有可以改成存檔的按鍵步驟。處置：帶一段內文（簡短的附註即可）並 `save_as_draft: true`，草稿走 paste 路徑以 ⌘S 存檔；或在 Mail 手動轉寄。`save_as_draft` 要含 #599 的 binary 才認得：較舊的 binary 會忽略它而**直接寄出**。#673（不帶內文的草稿模式）落地後移除這個拒絕。
+
 ## 兩項誠實記錄的能力損失
 
 刪掉 legacy path 不是零成本。以下兩件事在 GUI 路徑上**做不到了**（第 1 件在 opt-in 直接寫入的適用範圍內例外）：

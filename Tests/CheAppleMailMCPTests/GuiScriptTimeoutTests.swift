@@ -357,7 +357,7 @@ final class GuiScriptTimeoutTests: XCTestCase {
         let unconditional = source.components(
             separatedBy: "isPostDispatchError(error) || isTimeoutError(error)").count - 1
         XCTAssertEqual(unconditional, 2,
-                       "compose and forward-with-body always send, so they gate unconditionally")
+                       "compose and a sending forward gate unconditionally (a forward saved as a draft returns before this line, #599)")
         let sendFlowGate = source.components(
             separatedBy: "isPostDispatchError(error) || (sendFlow && isTimeoutError(error))").count - 1
         XCTAssertEqual(sendFlowGate, 1,
