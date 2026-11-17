@@ -28,15 +28,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Direct-write trigger: the timed path's two free-text pieces are pinned**
+- **Direct-write trigger: the timed path is pinned as text**
   ([#650](https://github.com/PsychQuant/che-apple-mail-mcp/issues/650)). Tests and
   docs only; nothing under `Sources/` changed. `ComposeTiming.prelude` and
   `ComposeTiming.markStatement` were not compared with fixed text on the timed
   path, so a toggle, a branch or a `delay` placed in the mark handler would have
   run between the two read-status toggles whenever timing is on and passed every
-  test. Two new tests pin them; the rule's known-gap bullet is replaced by the
-  test names and a note that Mail's behaviour for the pinned script and the
-  transport below the test seam are a documented limit, not a pending live check.
+  test. Three new tests pin the prelude, `markStatement` for every label the
+  trigger uses, and the whole timed script (four marks, their places and
+  indentation). They pin the text sent to osascript, not Mail's reaction to it;
+  the rule's known-gap bullet is replaced by the test names and a note that
+  Mail's behaviour for the pinned script, the transport below the test seam and
+  the other non-text channels are a documented limit, not a pending live check.
   The prelude is shared with the compose path's timing, so changing that now
   means updating the pin.
 - **A handler test with an address as `account_name` no longer reads the machine's

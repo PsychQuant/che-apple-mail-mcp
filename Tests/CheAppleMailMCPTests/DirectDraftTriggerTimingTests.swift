@@ -102,8 +102,8 @@ final class DirectDraftTriggerTimingTests: XCTestCase {
     /// mark lines by whatever `markStatement` returns, so on its own neither is compared with fixed text,
     /// and a statement placed in the `_cheMailMark` handler body (a toggle phrased as `set the read status
     /// of`, a branch, a `delay`) would run between the two toggles whenever timing is on while its text sits
-    /// above them. Pinning the prelude here makes the timed trigger fixed text. The prelude is shared with
-    /// the compose path's timing: a deliberate change to that has to update this copy too.
+    /// above them. The prelude is pinned here, and the whole timed script by the golden below. The prelude is
+    /// shared with the compose path's timing: a deliberate change to that has to update this copy too.
     func testTimingPreludeIsPinnedCharacterForCharacter() {
         let golden = """
             use framework "Foundation"
@@ -119,10 +119,47 @@ final class DirectDraftTriggerTimingTests: XCTestCase {
     }
 
     /// #650: `markStatement`'s output is filtered out of the timed script by test 3 whatever it is, so text
-    /// appended to it would be invisible there. The label is arbitrary here; the shape is what is pinned.
+    /// appended to it would be invisible there. Every label the trigger uses is checked with a hard-coded
+    /// expectation (not computed with `markStatement`), so output that depends on the label cannot pass.
     func testMarkStatementIsOneCallToTheHandlerAndNothingElse() {
-        XCTAssertEqual(ComposeTiming.markStatement("x"), "my _cheMailMark(\"x\")")
-        XCTAssertEqual(ComposeTiming.markStatement("trigger_unread"), "my _cheMailMark(\"trigger_unread\")")
+        for label in ["trigger_script_start", "trigger_listed", "trigger_unread", "trigger_read", "x"] {
+            XCTAssertEqual(ComposeTiming.markStatement(label), "my _cheMailMark(\"\(label)\")")
+        }
+    }
+
+    /// #650, review round 1: the whole timed trigger script, written out. Test 3 filters the mark lines by
+    /// set membership and trims them, and `dropFirst(prelude.count)` never looks at the dropped text, so
+    /// neither the number nor the place nor the indentation of the four marks was pinned. This copy fixes all
+    /// of it for the timed path, independently of `ComposeTiming`. The only thing outside it is the row id,
+    /// an integer.
+    func testTimedTriggerScriptIsPinnedWholeWithFourMarksInPlace() {
+        let golden = """
+            use framework "Foundation"
+            use scripting additions
+            on _cheMailMark(_label)
+                log "CHE_MAIL_TIMING|" & _label & "|" & ((current application's NSDate's timeIntervalSinceReferenceDate()) as text)
+            end _cheMailMark
+            tell application "Mail"
+                    my _cheMailMark("trigger_script_start")
+                set _m to missing value
+                repeat 40 times
+                    try
+                        set _m to (first message of drafts mailbox whose id is 305619)
+                        exit repeat
+                    end try
+                    delay 0.25
+                end repeat
+                if _m is missing value then error "DIRECTDRAFT: Mail did not list the new draft within 10 s"
+                    my _cheMailMark("trigger_listed")
+                set read status of _m to false
+                    my _cheMailMark("trigger_unread")
+                delay 0.5
+                set read status of _m to true
+                    my _cheMailMark("trigger_read")
+                return "toggled"
+            end tell
+            """
+        XCTAssertEqual(buildDirectDraftTriggerScript(rowId: 305619, timing: true), golden)
     }
 
     // MARK: - Task 2.1: taking only some captured marks
