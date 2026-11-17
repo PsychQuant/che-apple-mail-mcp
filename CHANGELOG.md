@@ -228,6 +228,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A message's header block ends at its first blank line**
+  ([#715](https://github.com/PsychQuant/che-apple-mail-mcp/issues/715)).
+  `RFC822Parser.parseHeaders` and `headerBodySplitOffset` looked for a CRLF blank
+  line over the whole message first and used an LF blank line only when no CRLF
+  blank line existed anywhere. A message whose header block ended with an LF blank
+  line and that had a CRLF blank line later was split at the later one, so body
+  lines were read as headers (the last `Subject:`-style line won) and the body
+  started in the wrong place; this reached `get_email`, `get_emails_batch`, the
+  Markdown export, attachment lookup and the MIME child parts. Both functions now
+  use one scan that ends the header block at the blank line that starts first.
+  Messages with consistent line endings, messages with no blank line and the
+  slice behaviour from #72 are unchanged. A blank line written `\r\n\n` ends the
+  header block at its `\n\n`; `\n\r\n` is still not read as a blank line. Whether
+  mixed line endings occur in real mail stores has not been measured.
+
 - **The attachment deny-list no longer depends on how a path is spelled**
   ([#671](https://github.com/PsychQuant/che-apple-mail-mcp/issues/671)). The
   deny-list compared the resolved path with each sensitive directory as text, so
