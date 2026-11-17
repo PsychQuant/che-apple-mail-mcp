@@ -110,7 +110,11 @@ final class SpawnedChild {
             if waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT) == 0 {
                 if info.si_pid != 0 { return true }
             } else if errno != EINTR {
-                return true   // ECHILD: nothing left to wait for
+                // Not waitable: something else reaped the leader (ECHILD) or waitid itself failed. Either
+                // way the leader no longer pins the group number, or we cannot tell. Stop signalling the
+                // group, and let `reap` know it must not block on a child it cannot observe.
+                released = true
+                return true
             }
             if DispatchTime.now() >= giveUp { return false }
             usleep(5_000)
@@ -130,11 +134,13 @@ final class SpawnedChild {
         if released { return -1 }
         guard waitForExit(timeout: seconds) else {
             released = true
-            let pid = self.pid
-            Thread.detachNewThread {
-                var status: Int32 = 0
-                while waitpid(pid, &status, 0) < 0, errno == EINTR {}
-            }
+            handOffToBackgroundReaper()
+            return -1
+        }
+        if released {
+            // `waitForExit` gave up on observing the child (see there). A blocking wait here could hang
+            // forever, so collect it in the background, if it can be collected at all.
+            handOffToBackgroundReaper()
             return -1
         }
         released = true
@@ -147,6 +153,14 @@ final class SpawnedChild {
         }
         let signalNumber = status & 0x7f
         return signalNumber == 0 ? (status >> 8) & 0xff : signalNumber
+    }
+
+    private func handOffToBackgroundReaper() {
+        let pid = self.pid
+        Thread.detachNewThread {
+            var status: Int32 = 0
+            while waitpid(pid, &status, 0) < 0, errno == EINTR {}
+        }
     }
 
     // MARK: - Helpers

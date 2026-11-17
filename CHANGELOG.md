@@ -74,8 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on a normal exit, so a descendant that holds neither pipe does not outlive the
   call. The two-slot cap, the cancellation behaviour and the exit-status
   semantics (`-1` for a child that could not be reaped) are unchanged. A spawn
-  failure still reports `spawnFailed` with the executable path and the system's
-  reason. Remaining limit: a descendant that calls `setsid` or `setpgid` leaves
+  failure still reports `spawnFailed` with the executable path and the reason
+  `posix_spawn` gave. Remaining limit: a descendant that calls `setsid` or `setpgid` leaves
   the group and is not reached. No such descendant has been seen with
   `log show --style ndjson`; the tests use a shell that starts one on purpose.
 
