@@ -16,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `get_email` and the batch export use, so the three report the same value.
   A non-empty string is the Message-ID; `""` means the message has no such
   header; a missing key means the value could not be read (no readable `.emlx`,
-  a read error, a value over 4096 characters) or the row came from the
+  a read error, a value over 4096 UTF-8 bytes, a header block over 256 KiB) or the row came from the
   AppleScript fallback. The read stops at the end of the header block and looks
   up each mailbox's store folder once per call; without the flag no file is
   read and rows are unchanged. `true` with `ids` or `count` and a

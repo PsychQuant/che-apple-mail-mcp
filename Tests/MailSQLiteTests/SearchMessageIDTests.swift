@@ -70,13 +70,37 @@ final class SearchMessageIDTests: XCTestCase {
     func testAValueOfExactlyTheLimitIsReturnedAndOneMoreIsNot() throws {
         let store = try MessageIDStore(testCase: self)
         let at = "<" + String(repeating: "y", count: MessageIDLookup.maxLength - 2) + ">"
-        XCTAssertEqual(at.count, MessageIDLookup.maxLength)
+        XCTAssertEqual(at.utf8.count, MessageIDLookup.maxLength)
         try store.write(rowId: 1, message: message(at))
         try store.write(rowId: 2, message: message(at + "z"))
         let rows = [1, 2].map { SearchResult(id: $0, subject: "", senderAddress: "", senderName: "", dateReceived: Date(), accountName: "",
                                            mailboxPath: "INBOX", isRead: false, isFlagged: false, toRecipients: [], mailboxURL: MessageIDStore.mailboxURL()) }
         let outcomes = store.withStoragePath { MessageIDLookup().outcomes(for: rows) }
         XCTAssertEqual(outcomes.rows, [.value(at), .unreadable(.tooLong)])
+    }
+
+    // The cap is in UTF-8 bytes: one base character and many combining marks is a few
+    // Characters but many bytes.
+    func testTheValueCapCountsUTF8BytesNotCharacters() throws {
+        let store = try MessageIDStore(testCase: self)
+        let marks = "<a" + String(repeating: "\u{0301}", count: 3000) + ">"
+        XCTAssertLessThan(marks.count, MessageIDLookup.maxLength)
+        XCTAssertGreaterThan(marks.utf8.count, MessageIDLookup.maxLength)
+        let row = SearchResult(id: 1, subject: "", senderAddress: "", senderName: "", dateReceived: Date(), accountName: "",
+                               mailboxPath: "INBOX", isRead: false, isFlagged: false, toRecipients: [], mailboxURL: MessageIDStore.mailboxURL())
+        try store.write(rowId: 1, message: message(marks))
+        let viaReader = store.withStoragePath { MessageIDLookup().outcomes(for: [row]).rows[0] }
+        XCTAssertEqual(viaReader, .unreadable(.tooLong))
+        let injected = store.withStoragePath { MessageIDLookup(readFile: { _ in marks }).outcomes(for: [row]).rows[0] }
+        XCTAssertEqual(injected, .unreadable(.tooLong))
+    }
+
+    func testAHeaderBlockOverTheCapIsUnreadableWithItsOwnReason() throws {
+        let store = try MessageIDStore(testCase: self)
+        try store.write(rowId: 1, message: Data("Message-ID: <x@example.invalid>\r\n".utf8) + Data(repeating: 0x41, count: 600_000))
+        let row = SearchResult(id: 1, subject: "", senderAddress: "", senderName: "", dateReceived: Date(), accountName: "",
+                               mailboxPath: "INBOX", isRead: false, isFlagged: false, toRecipients: [], mailboxURL: MessageIDStore.mailboxURL())
+        XCTAssertEqual(store.withStoragePath { MessageIDLookup().outcomes(for: [row]).rows[0] }, .unreadable(.headerTooLarge))
     }
 
     func testAMissingMailboxURLOrAnUnknownMailboxIsUnreadable() throws {
@@ -122,6 +146,18 @@ final class SearchMessageIDTests: XCTestCase {
         // A fresh instance (a new search call) looks again.
         _ = store.withStoragePath { MessageIDLookup(storeFinder: { dir in finderCalls.append(dir); return EmlxParser.findStoreUUID(in: dir) }).outcomes(for: rows) }
         XCTAssertEqual(finderCalls.count, 4)
+    }
+
+    // A mailbox with no store folder is also looked up once, not once per row.
+    func testAMailboxWithNoStoreFolderIsNotLookedUpAgain() throws {
+        let store = try MessageIDStore(testCase: self)
+        let rows = [1, 2, 3].map { SearchResult(id: $0, subject: "", senderAddress: "", senderName: "", dateReceived: Date(), accountName: "",
+                                               mailboxPath: "Nope", isRead: false, isFlagged: false, toRecipients: [], mailboxURL: MessageIDStore.mailboxURL("Nope")) }
+        var calls = 0
+        let lookup = MessageIDLookup(storeFinder: { _ in calls += 1; return nil })
+        let outcomes = store.withStoragePath { lookup.outcomes(for: rows) }
+        XCTAssertEqual(outcomes.rows, [.unreadable(.noEmlx), .unreadable(.noEmlx), .unreadable(.noEmlx)])
+        XCTAssertEqual(calls, 1)
     }
 
     // spec: with dedup logical and summary, the value is the kept MIN(ROWID) row's.

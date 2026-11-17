@@ -75,9 +75,9 @@ The system SHALL reject invalid combinations with a parameter error: an unrecogn
 
 - a non-empty string: the parsed Message-ID value (angle brackets kept, as `get_email` reports it);
 - the empty string: the header block was read and has no `Message-ID` header (as `get_email` reports it);
-- the key omitted: the value could not be read or is not returned: no readable `.emlx` for the row (including a body not downloaded and no partial file, and mailboxes that keep no `.emlx`), a read or parse error, a value longer than 4096 characters, or a path that does not fill it (the AppleScript fallback).
+- the key omitted: the value could not be read or is not returned: no readable `.emlx` for the row (including a body not downloaded and no partial file, and mailboxes that keep no `.emlx`), a read or parse error, a value longer than 4096 bytes (UTF-8), a header block larger than 256 KiB, or a path that does not fill it (the AppleScript fallback).
 
-A row SHALL never be dropped, and its other fields SHALL not change, because its `message_id` could not be read. A read that fails SHALL be reported once per call on stderr through `Diagnostics.emit`, naming a fixed reason and the count of affected rows and never any header text. The system SHALL read only as much of each `.emlx` as is needed to find the end of the header block (a bounded, chunked read), and SHALL resolve the mailbox's store folder once per mailbox per call. With `dedup: "logical"` and projection `summary`, the value SHALL be the one of the kept `MIN(ROWID)` row. The value SHALL be the parsed Message-ID only, never the raw header block.
+A row SHALL never be dropped, and its other fields SHALL not change, because its `message_id` could not be read. A read that fails SHALL be reported once per call on stderr through `Diagnostics.emit`, naming a fixed reason and the count of affected rows and never any header text. The system SHALL read only as much of each `.emlx` as is needed to find the end of the header block (a bounded, chunked read) and SHALL never look at more than the first 256 KiB of a message, whatever its line endings and whether or not it has a header/body separator; a message whose header block is not finished within that bound is in the omitted-key state. The system SHALL resolve the mailbox's store folder once per mailbox per call. With `dedup: "logical"` and projection `summary`, the value SHALL be the one of the kept `MIN(ROWID)` row. The value SHALL be the parsed Message-ID only, never the raw header block.
 
 #### Scenario: The flag is off
 
@@ -96,7 +96,7 @@ A row SHALL never be dropped, and its other fields SHALL not change, because its
 
 #### Scenario: An unreadable message
 
-- **WHEN** a row's `.emlx` file is missing, truncated, or its value is longer than 4096 characters
+- **WHEN** a row's `.emlx` file is missing, truncated, its value is longer than 4096 UTF-8 bytes (counted in bytes, so a short string of combining marks is over the limit), or its header block is not finished within 256 KiB
 - **THEN** the row is still returned with its other fields, its `message_id` key is omitted, and one line is written to stderr for the call
 
 #### Scenario: Projections without rows

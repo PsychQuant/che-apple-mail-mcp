@@ -18,6 +18,15 @@ final class SearchMessageIDHandlerTests: XCTestCase {
         var count: Int { lock.lock(); defer { lock.unlock() }; return paths.count }
     }
 
+    /// A factory whose lookup counts file reads and store-folder listings.
+    private func countingFactory(_ reads: Reads, _ listings: Reads, failing: String? = nil) -> @Sendable () -> MessageIDLookup {
+        { MessageIDLookup(readFile: { path in
+            reads.add(path)
+            if let failing, path.hasSuffix(failing) { throw NSError(domain: "SECRET-HEADER-TEXT", code: 1) }
+            return try EmlxParser.readMessageID(atPath: path)
+        }, storeFinder: { dir in listings.add(dir); return EmlxParser.findStoreUUID(in: dir) }) }
+    }
+
     private static let messages: [Int: String] = [
         1: "From: a@example.invalid\r\nMessage-ID: <one@example.invalid>\r\n\r\nbody",
         2: "From: a@example.invalid\r\nSubject: s\r\n\r\nbody",
@@ -57,7 +66,7 @@ final class SearchMessageIDHandlerTests: XCTestCase {
         guard sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK else { throw NSError(domain: "SearchMessageIDHandlerTests", code: 2) }
     }
 
-    private func makeServer(reader: (@Sendable (String) throws -> String)? = nil) async throws -> (server: CheAppleMailMCPServer, root: URL) {
+    private func makeServer(factory: (@Sendable () -> MessageIDLookup)? = nil) async throws -> (server: CheAppleMailMCPServer, root: URL) {
         let root = try makeRoot()
         let indexPath = root.appendingPathComponent("Envelope Index").path
         try writeIndex(at: indexPath)
@@ -86,7 +95,7 @@ final class SearchMessageIDHandlerTests: XCTestCase {
         let server = try await CheAppleMailMCPServer(
             databasePath: indexPath, initialSync: false,
             classificationDirectory: root.appendingPathComponent("classification", isDirectory: true),
-            accountMapping: ["UUID-A": "Fixture"], messageIDFileReader: reader)
+            accountMapping: ["UUID-A": "Fixture"], messageIDLookupFactory: factory)
         return (server, root)
     }
 
@@ -104,8 +113,9 @@ final class SearchMessageIDHandlerTests: XCTestCase {
 
     // spec-example: sqlite-query-engine / The flag is off
     func testWithoutTheFlagRowsAreIdenticalAndNoFileIsRead() async throws {
-        let reads = Reads()
-        let (server, _) = try await makeServer(reader: { reads.add($0); return "" })
+        let reads = Reads(), listings = Reads(), built = Reads()
+        let counting = countingFactory(reads, listings)
+        let (server, _) = try await makeServer(factory: { built.add("built"); return counting() })
         for projection in ["full", "summary"] {
             let base = try await search(server, ["projection": .string(projection)])
             let explicitFalse = try await search(server, ["projection": .string(projection), "include_message_id": .bool(false)])
@@ -116,6 +126,8 @@ final class SearchMessageIDHandlerTests: XCTestCase {
             XCTAssertTrue(base.rows.allSatisfy { $0["message_id"] == nil }, projection)
         }
         XCTAssertEqual(reads.count, 0, "no .emlx is read unless the flag is true")
+        XCTAssertEqual(listings.count, 0, "no store folder is listed unless the flag is true")
+        XCTAssertEqual(built.count, 0, "no lookup is even built unless the flag is true")
     }
 
     // spec-example: sqlite-query-engine / The value equals the one get_email reports
@@ -165,17 +177,14 @@ final class SearchMessageIDHandlerTests: XCTestCase {
     }
 
     func testOneReadPerRowAndAnUnreadableRowIsReportedOncePerCall() async throws {
-        let reads = Reads()
-        let (server, _) = try await makeServer(reader: { path in
-            reads.add(path)
-            if path.hasSuffix("/3.emlx") { throw NSError(domain: "SECRET-HEADER-TEXT", code: 1) }
-            return try EmlxParser.readMessageID(atPath: path)
-        })
+        let reads = Reads(), listings = Reads()
+        let (server, _) = try await makeServer(factory: countingFactory(reads, listings, failing: "/3.emlx"))
         var rows: [String: [String: Any]] = [:]
         let stderr = try await capturingStderr {
             rows = self.byID(try await self.search(server, ["include_message_id": .bool(true)]).rows)
         }
         XCTAssertEqual(reads.count, 6, "row 6 has no file; the other six are each read once")
+        XCTAssertEqual(listings.count, 1, "one mailbox, one store-folder listing")
         XCTAssertEqual(rows.count, 7)
         XCTAssertNil(rows["3"]?["message_id"])
         XCTAssertNil(rows["6"]?["message_id"])

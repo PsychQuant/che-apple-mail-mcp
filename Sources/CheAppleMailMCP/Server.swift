@@ -25,10 +25,10 @@ class CheAppleMailMCPServer {
     private let classificationStore: ClassificationPolicyStore
     private let classificationEngine: ClassificationPlanEngine
     private let classificationLoader: (@Sendable (String) async throws -> ClassificationMessage)?
-    /// Reads one message's Message-ID from its `.emlx` path for `search_emails` with
-    /// `include_message_id`; nil in production (the header-only reader). A test passes one to
-    /// count or fail the reads (#682).
-    private let messageIDFileReader: (@Sendable (String) throws -> String)?
+    /// Builds the per-call Message-ID lookup for `search_emails` with `include_message_id`; nil in
+    /// production (the real lookup). A test passes one to count or fail the file reads and the
+    /// store-folder listings (#682).
+    private let messageIDLookupFactory: (@Sendable () -> MessageIDLookup)?
 
     init(databasePath: String = EnvelopeIndexReader.defaultDatabasePath,
          initialSync: Bool = true,
@@ -36,9 +36,9 @@ class CheAppleMailMCPServer {
          classificationLoader: (@Sendable (String) async throws -> ClassificationMessage)? = nil,
          accountMapping: [String: String]? = nil,
          vipMailboxesPath: String? = nil,
-         messageIDFileReader: (@Sendable (String) throws -> String)? = nil) async throws {
+         messageIDLookupFactory: (@Sendable () -> MessageIDLookup)? = nil) async throws {
         self.accountMapping = accountMapping
-        self.messageIDFileReader = messageIDFileReader
+        self.messageIDLookupFactory = messageIDLookupFactory
         self.classificationStore = ClassificationPolicyStore(directory: classificationDirectory)
         self.classificationEngine = ClassificationPlanEngine(store: self.classificationStore)
         self.classificationLoader = classificationLoader
@@ -235,7 +235,7 @@ class CheAppleMailMCPServer {
             ),
             Tool(
                 name: "search_emails",
-                description: "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101). Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204). For BULK collection (e.g. feeding export_emails_markdown), use `projection: \"ids\"` to get just rowId strings (far smaller payload, no per-row recipient fetch) and `dedup: \"logical\"` to collapse Gmail mailbox duplicates server-side; `projection: \"count\"` returns just the total match count for scoping (#208). Each full and summary result carries is_draft: true when the message or a copy of it has Mail's draft type (5) or draft flag; false only when it has neither and neither it nor a copy sits in a folder named as drafts; null when that cannot be established, including the AppleScript fallback. A folder name is never evidence of a draft. With dedup: logical the flag describes the row kept for each group; ids/count projections are unchanged. Set `include_message_id: true` (default false) to add `message_id` to each full or summary row: the RFC 5322 Message-ID that get_email and the batch export report for the same message, read from the message's .emlx header block (one bounded file read per row, so it costs more than the default). Three states: a non-empty string is the value (angle brackets kept); the empty string means the message has no Message-ID header; a missing `message_id` key means it could not be read (no readable .emlx, a read error, a value longer than 4096 characters) or the row came from the AppleScript fallback, which never fills it — treat a missing key as unknown, not as a new message. Not valid with projection ids or count. Not yet run against a real mail store (tracked in #682).",
+                description: "Search emails across ALL accounts and mailboxes using fast SQLite index (millisecond speed on 250K+ emails). Supports searching by subject, sender, recipient, or all fields. Results include `account_name` (display name) AND `account_id` (Mail.app's globally-unique UUID) — pass `account_id` through to `save_attachment` / other AppleScript-routed tools when the display_name is ambiguous (multi-account-same-display_name configurations — see #101). Returns an envelope object {results, returned, limit, truncated} (NOT a bare array): `truncated` is true when more emails matched than `limit` — raise `limit` or narrow the query to retrieve the rest. On the SQLite fast path `truncated` is definitive (limit+1 fetch); on the AppleScript fallback it is a best-effort `returned == limit` heuristic (#204). For BULK collection (e.g. feeding export_emails_markdown), use `projection: \"ids\"` to get just rowId strings (far smaller payload, no per-row recipient fetch) and `dedup: \"logical\"` to collapse Gmail mailbox duplicates server-side; `projection: \"count\"` returns just the total match count for scoping (#208). Each full and summary result carries is_draft: true when the message or a copy of it has Mail's draft type (5) or draft flag; false only when it has neither and neither it nor a copy sits in a folder named as drafts; null when that cannot be established, including the AppleScript fallback. A folder name is never evidence of a draft. With dedup: logical the flag describes the row kept for each group; ids/count projections are unchanged. Set `include_message_id: true` (default false) to add `message_id` to each full or summary row: the RFC 5322 Message-ID that get_email and the batch export report for the same message, read from the message's .emlx header block (one bounded file read per row, so it costs more than the default). Three states: a non-empty string is the value (angle brackets kept); the empty string means the message has no Message-ID header; a missing `message_id` key means it could not be read (no readable .emlx, a read error, a value longer than 4096 bytes, a header block larger than 256 KiB) or the row came from the AppleScript fallback, which never fills it — treat a missing key as unknown, not as a new message. Not valid with projection ids or count. Not yet run against a real mail store (tracked in #682).",
                 inputSchema: .object([
                     "type": .string("object"),
                     "properties": .object([
@@ -2540,7 +2540,7 @@ class CheAppleMailMCPServer {
     }
 
     private func withMessageIDs(_ rows: [[String: Any]], for results: [SearchResult]) -> [[String: Any]] {
-        let lookup = messageIDFileReader.map { MessageIDLookup(readFile: $0) } ?? MessageIDLookup()
+        let lookup = messageIDLookupFactory?() ?? MessageIDLookup()
         let outcomes = lookup.outcomes(for: results)
         if let line = Self.messageIDUnreadableLine(counts: outcomes.unreadableCounts, total: results.count) {
             Diagnostics.emit(line)

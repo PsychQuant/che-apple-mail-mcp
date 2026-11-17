@@ -9,21 +9,32 @@ extension EmlxParser {
         RFC822Parser.messageID(in: RFC822Parser.parseHeaders(from: data))
     }
 
-    /// The Message-ID of the message in the .emlx file at `path`, reading only as much of the file
-    /// as needed to reach the end of the header block (#682).
+    /// Largest header block `readMessageID` will look at. A message whose header block is not
+    /// finished within this many bytes is unreadable, whatever its line endings: the bytes are
+    /// sender-controlled, so the read is capped instead of following the message to its end.
+    public static let maxHeaderScanBytes = 256 * 1024
+
+    /// The header block did not end within `maxHeaderScanBytes` (or the cap passed in).
+    public struct HeaderBlockTooLarge: Error, Equatable {}
+
+    /// The Message-ID of the message in the .emlx file at `path`, reading at most the first
+    /// `maxHeaderBytes` of the message (#682).
     ///
     /// The length line is read from the first 4096 bytes; the message then comes in `chunkSize`
     /// pieces and the read stops at the first CRLF CRLF, the separator `RFC822Parser.parseHeaders`
-    /// prefers. Without one the whole message is read, which is also what `parseHeaders` treats as
-    /// the header block, so the value is the one `readEmail` extracts for the same file. A file
-    /// shorter than its length line promises throws, as `readEmail` does.
+    /// prefers. A message that ends inside the cap is parsed whole, as `readEmail` does. A longer
+    /// one with no CRLF CRLF in the cap is parsed over what was read when that holds a bare-LF
+    /// blank line, and otherwise throws `HeaderBlockTooLarge`. A file shorter than its length line
+    /// promises throws, as `readEmail` does. The value is the one `readEmail` extracts for the
+    /// same file whenever this returns.
     ///
     /// - Parameters:
     ///   - chunkSize: bytes per read of the message; tests use small values.
+    ///   - maxHeaderBytes: the cap on bytes of the message looked at.
     ///   - bytesRead: called with the size of every read (tests pin the bound with it).
-    /// - Throws: `MailSQLiteError.emlxParseFailed` or a file error.
     public static func readMessageID(
-        atPath path: String, chunkSize: Int = 32 * 1024, bytesRead: ((Int) -> Void)? = nil
+        atPath path: String, chunkSize: Int = 32 * 1024, maxHeaderBytes: Int = maxHeaderScanBytes,
+        bytesRead: ((Int) -> Void)? = nil
     ) throws -> String {
         let step = max(chunkSize, 1)
         let handle = try FileHandle(forReadingFrom: URL(fileURLWithPath: path))
@@ -43,30 +54,37 @@ extension EmlxParser {
         }
 
         try handle.seek(toOffset: messageOffset)
+        let target = min(prefix.byteCount, max(maxHeaderBytes, 0))
         var message = Data()
-        var remaining = prefix.byteCount
         var scanFrom = 0
-        while remaining > 0 {
-            guard let chunk = try handle.read(upToCount: min(step, remaining)), !chunk.isEmpty else {
+        var sawCRLFCRLF = false
+        while message.count < target {
+            guard let chunk = try handle.read(upToCount: min(step, target - message.count)), !chunk.isEmpty else {
                 throw MailSQLiteError.emlxParseFailed("The .emlx file ended before its promised length")
             }
             bytesRead?(chunk.count)
             message.append(chunk)
-            remaining -= chunk.count
-            if containsCRLFCRLF(message, from: max(scanFrom - 3, 0)) { break }
+            if contains(message, [0x0D, 0x0A, 0x0D, 0x0A], from: max(scanFrom - 3, 0)) { sawCRLFCRLF = true; break }
             scanFrom = message.count
+        }
+        let wholeMessage = message.count == prefix.byteCount
+        if !sawCRLFCRLF, !wholeMessage, !contains(message, [0x0A, 0x0A], from: 0) {
+            throw HeaderBlockTooLarge()
         }
         return messageID(inMessageData: message)
     }
 
-    /// Whether `data` (zero-based) holds CR LF CR LF starting at or after `from`.
-    private static func containsCRLFCRLF(_ data: Data, from: Int) -> Bool {
-        guard data.count >= 4, from <= data.count - 4 else { return false }
+    /// Whether `data` (zero-based) holds `pattern` starting at or after `from`.
+    private static func contains(_ data: Data, _ pattern: [UInt8], from: Int) -> Bool {
+        let n = pattern.count
+        guard data.count >= n, from <= data.count - n else { return false }
         return data.withUnsafeBytes { raw -> Bool in
             let bytes = raw.bindMemory(to: UInt8.self)
             var i = from
-            while i <= bytes.count - 4 {
-                if bytes[i] == 0x0D, bytes[i + 1] == 0x0A, bytes[i + 2] == 0x0D, bytes[i + 3] == 0x0A { return true }
+            while i <= bytes.count - n {
+                var hit = true
+                for k in 0..<n where bytes[i + k] != pattern[k] { hit = false; break }
+                if hit { return true }
                 i += 1
             }
             return false
@@ -81,15 +99,16 @@ extension EmlxParser {
 /// cannot be read is `unreadable` and the caller leaves the key out.
 public final class MessageIDLookup {
 
-    /// The longest Message-ID value returned. A longer one is `unreadable(.tooLong)`: a header
-    /// that size is not an identifier, and rows of it would blow up the response.
+    /// The longest Message-ID value returned, in UTF-8 bytes. A longer one is `unreadable(.tooLong)`:
+    /// a header that size is not an identifier, and rows of it would blow up the response.
     public static let maxLength = 4096
 
     /// Why a row has no value. The raw values are the stderr wording, so none carries file text.
     public enum Unreadable: String, Sendable, Hashable {
         case noEmlx = "no readable .emlx file for the message"
         case readFailed = "the .emlx file could not be read"
-        case tooLong = "the Message-ID is longer than 4096 characters"
+        case tooLong = "the Message-ID is longer than 4096 bytes"
+        case headerTooLarge = "the header block is larger than 256 KiB"
     }
 
     public enum Outcome: Equatable, Sendable {
@@ -126,7 +145,9 @@ public final class MessageIDLookup {
         else { return .unreadable(.noEmlx) }
         do {
             let value = try readFile(resolved.path)
-            return value.count > Self.maxLength ? .unreadable(.tooLong) : .value(value)
+            return value.utf8.count > Self.maxLength ? .unreadable(.tooLong) : .value(value)
+        } catch is EmlxParser.HeaderBlockTooLarge {
+            return .unreadable(.headerTooLarge)
         } catch {
             return .unreadable(.readFailed)
         }
