@@ -67,6 +67,19 @@ The system SHALL reject invalid combinations with a parameter error: an unrecogn
 - **WHEN** `search_emails` is called with `projection: "ids"` (or `summary`, or `count`) while the SQLite envelope index is unavailable
 - **THEN** the system returns a parameter error rather than falling back to AppleScript
 
+
+##### Example: include_message_id with ids or count is a parameter error
+
+- **GIVEN** an index with seven matching messages
+- **WHEN** `search_emails` is called with `include_message_id: true` and `projection: "ids"`, or with `projection: "count"`, or with `include_message_id: "true"` (a string)
+- **THEN** each call returns a parameter error and no row
+
+##### Example: summary rows gain only message_id when the flag is set
+
+- **GIVEN** an index with seven matching messages
+- **WHEN** `search_emails` is called with `projection: "summary"` once without `include_message_id` and once with `include_message_id: true`
+- **THEN** every row of the second call has the same keys and values as the first call's row with the same `id`, plus `message_id` where it could be read
+
 ## ADDED Requirements
 
 ### Requirement: search_emails returns the Message-ID on request
@@ -130,3 +143,36 @@ A row SHALL never be dropped, and its other fields SHALL not change, because its
 
 - **WHEN** `include_message_id: true` is combined with `projection: "ids"` or `"count"`
 - **THEN** the system returns a parameter error
+
+##### Example: message_id is absent from every row when the flag is off
+
+- **GIVEN** an index with seven matching messages
+- **WHEN** `search_emails` is called with projection `full` and `summary`, each without the flag, with `false` and with `null`
+- **THEN** the three responses are byte-identical, no row has `message_id`, and no `.emlx` file was read or store folder listed
+
+##### Example: message_id equals get_email's for the fixture messages
+
+- **GIVEN** `.emlx` files whose header blocks hold a folded Message-ID (space and tab), an RFC 2047 encoded one, two Message-ID headers, CR-only and LF-only line ends, LF headers with a CRLF blank line and another Message-ID in the body, a value without angle brackets, a non-ASCII value, no header, an empty value, no blank line, an empty message, a 100,000-byte header line, and 400 header lines
+- **WHEN** the reader runs on each with chunk sizes 1, 2, 3, 5, 7, 64, 1024 and 32,768 (the small sizes only for files under 20,000 bytes), and `search_emails` runs with `include_message_id: true` on an index of seven messages
+- **THEN** every value equals `message_id` from `readEmail` (what `get_email` reports) for the same file, and every row's value equals the batch export's
+
+##### Example: the three message_id states on four rows
+
+- **GIVEN** four matching rows: one whose header is `Message-ID: <one@example.invalid>`, one with no Message-ID header, one with no `.emlx` file, and one whose value is 5,000 bytes
+- **WHEN** their Message-IDs are looked up
+- **THEN** the first row's value is `<one@example.invalid>`, the second's is `""`, the other two are omitted (no `.emlx` file; longer than 4096 bytes), and all four rows are returned
+
+##### Example: the omitted-key cases and their reasons
+
+| Row | Outcome |
+| --- | --- |
+| mailbox URL missing, or a mailbox URL that names no known mailbox | omitted: no readable `.emlx` file |
+| length line of 4,096 spaces before the byte count | omitted: the `.emlx` file could not be read; `get_email` still reports the value |
+| a header line followed by 600,000 bytes with no blank line | omitted: the header block is larger than 256 KiB |
+| a value of exactly 4,096 bytes, and one of 4,097 bytes | the first is returned; the second is omitted: longer than 4096 bytes |
+
+##### Example: the read stops at the first blank line
+
+- **GIVEN** a message whose header block ends after about 140 bytes with `\n\n`, `\r\n\n` or `\r\n\r\n`, followed by 400,000 bytes of body
+- **WHEN** it is read in 64-byte chunks
+- **THEN** the value is returned and no more than the chunk that holds the blank line is read after the first 4,096-byte read of the file; the same holds when the blank line straddles a chunk boundary, for chunk sizes 1 to 6 and every position of the blank line in them

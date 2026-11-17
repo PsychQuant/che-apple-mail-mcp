@@ -13,3 +13,13 @@
 ## 3. Docs
 
 - [x] 3.1 README search section and Performance table; CHANGELOG entry; tool description caveat about the outstanding live check.
+
+## 4. Spec examples (#480)
+
+- [x] 4.1 `include_message_id with ids or count is a parameter error`: `SearchMessageIDHandlerTests.testTheFlagIsRejectedForIdsAndCountAndWhenNotABoolean`
+- [x] 4.2 `summary rows gain only message_id when the flag is set`: `SearchMessageIDHandlerTests.testOtherFieldsAreUnchangedWhenTheFlagIsOn`
+- [x] 4.3 `message_id is absent from every row when the flag is off`: `SearchMessageIDHandlerTests.testWithoutTheFlagRowsAreIdenticalAndNoFileIsRead`
+- [x] 4.4 `message_id equals get_email's for the fixture messages`: `MessageIDReadTests.testReaderEqualsTheWholeFileParseForEverySampleAndChunkSize`, `SearchMessageIDHandlerTests.testTheValueEqualsWhatGetEmailAndTheExportReport`
+- [x] 4.5 `the three message_id states on four rows`: `SearchMessageIDTests.testThreeStatesAndTheRowsAreNeverDropped`
+- [x] 4.6 `the omitted-key cases and their reasons`: `SearchMessageIDTests` (missing mailbox, header over the cap, value at the limit), `MessageIDReadTests.testALengthLineLongerThan4096BytesHasNoKeyWhileGetEmailHasAValue`
+- [x] 4.7 `the read stops at the first blank line`: `MessageIDReadTests.testAnLFOnlyMessageIsReadNoFurtherThanTheChunkHoldingItsBlankLine`, `testABlankLineStraddlingAChunkBoundaryIsFoundForBothKinds`

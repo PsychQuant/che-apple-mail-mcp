@@ -47,7 +47,7 @@ final class SearchMessageIDTests: XCTestCase {
                                   mailboxPath: "", isRead: false, isFlagged: false, toRecipients: []).mailboxURL)
     }
 
-    // spec-example: sqlite-query-engine / A message without the header; An unreadable message
+    // spec-example: sqlite-query-engine / the three message_id states on four rows
     func testThreeStatesAndTheRowsAreNeverDropped() throws {
         let store = try MessageIDStore(testCase: self)
         let reader = try makeIndex(in: store.root)
@@ -67,6 +67,7 @@ final class SearchMessageIDTests: XCTestCase {
         XCTAssertEqual(MessageIDLookup.maxLength, 4096)
     }
 
+    // spec-example: sqlite-query-engine / the omitted-key cases and their reasons
     func testAValueOfExactlyTheLimitIsReturnedAndOneMoreIsNot() throws {
         let store = try MessageIDStore(testCase: self)
         let at = "<" + String(repeating: "y", count: MessageIDLookup.maxLength - 2) + ">"
@@ -95,6 +96,7 @@ final class SearchMessageIDTests: XCTestCase {
         XCTAssertEqual(injected, .unreadable(.tooLong))
     }
 
+    // spec-example: sqlite-query-engine / the omitted-key cases and their reasons
     func testAHeaderBlockOverTheCapIsUnreadableWithItsOwnReason() throws {
         let store = try MessageIDStore(testCase: self)
         try store.write(rowId: 1, message: Data("Message-ID: <x@example.invalid>\r\n".utf8) + Data(repeating: 0x41, count: 600_000))
@@ -103,6 +105,7 @@ final class SearchMessageIDTests: XCTestCase {
         XCTAssertEqual(store.withStoragePath { MessageIDLookup().outcomes(for: [row]).rows[0] }, .unreadable(.headerTooLarge))
     }
 
+    // spec-example: sqlite-query-engine / the omitted-key cases and their reasons
     func testAMissingMailboxURLOrAnUnknownMailboxIsUnreadable() throws {
         let store = try MessageIDStore(testCase: self)
         let nilURL = SearchResult(id: 1, subject: "", senderAddress: "", senderName: "", dateReceived: Date(), accountName: "",

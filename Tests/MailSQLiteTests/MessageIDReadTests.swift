@@ -13,7 +13,7 @@ final class MessageIDReadTests: XCTestCase {
         return RFC822Parser.parseHeaders(from: message)["message-id"] ?? ""
     }
 
-    // spec-example: sqlite-query-engine / The value equals the one get_email reports
+    // spec-example: sqlite-query-engine / message_id equals get_email's for the fixture messages
     func testReaderEqualsTheWholeFileParseForEverySampleAndChunkSize() throws {
         let store = try MessageIDStore(testCase: self)
         for (index, sample) in MessageIDSamples.all.enumerated() {
@@ -190,6 +190,7 @@ final class MessageIDReadTests: XCTestCase {
     /// A length line longer than 4096 bytes: the reader reads 4096 bytes of it and fails, so the
     /// row has no key (`readFailed`); `readEmail` reads the whole file and parses it. One of the
     /// omitted-key cases (the length line could not be parsed).
+    // spec-example: sqlite-query-engine / the omitted-key cases and their reasons
     func testALengthLineLongerThan4096BytesHasNoKeyWhileGetEmailHasAValue() throws {
         let store = try MessageIDStore(testCase: self)
         let message = Data("Message-ID: <long-length-line@example.invalid>\r\n\r\nbody".utf8)
@@ -221,6 +222,7 @@ final class MessageIDReadTests: XCTestCase {
         return (value, reads.dropFirst().reduce(0, +), reads.first ?? 0)
     }
 
+    // spec-example: sqlite-query-engine / the read stops at the first blank line
     func testAnLFOnlyMessageIsReadNoFurtherThanTheChunkHoldingItsBlankLine() throws {
         for separator in ["\n\n", "\r\n\n", "\r\n\r\n"] {
             let head = "Message-ID: <stop@example.invalid>\n" + "X: " + String(repeating: "p", count: 100)
@@ -235,6 +237,7 @@ final class MessageIDReadTests: XCTestCase {
         }
     }
 
+    // spec-example: sqlite-query-engine / the read stops at the first blank line
     func testABlankLineStraddlingAChunkBoundaryIsFoundForBothKinds() throws {
         for separator in ["\n\n", "\r\n\n", "\r\n\r\n"] {
             for pad in 0..<9 {

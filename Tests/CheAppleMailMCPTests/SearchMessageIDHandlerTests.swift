@@ -111,7 +111,7 @@ final class SearchMessageIDHandlerTests: XCTestCase {
         Dictionary(uniqueKeysWithValues: rows.map { ($0["id"] as? String ?? "", $0) })
     }
 
-    // spec-example: sqlite-query-engine / The flag is off
+    // spec-example: sqlite-query-engine / message_id is absent from every row when the flag is off
     func testWithoutTheFlagRowsAreIdenticalAndNoFileIsRead() async throws {
         let reads = Reads(), listings = Reads(), built = Reads()
         let counting = countingFactory(reads, listings)
@@ -130,7 +130,7 @@ final class SearchMessageIDHandlerTests: XCTestCase {
         XCTAssertEqual(built.count, 0, "no lookup is even built unless the flag is true")
     }
 
-    // spec-example: sqlite-query-engine / The value equals the one get_email reports
+    // spec-example: sqlite-query-engine / message_id equals get_email's for the fixture messages
     func testTheValueEqualsWhatGetEmailAndTheExportReport() async throws {
         let (server, root) = try await makeServer()
         for projection in ["full", "summary"] {
@@ -162,6 +162,7 @@ final class SearchMessageIDHandlerTests: XCTestCase {
         }
     }
 
+    // spec-example: sqlite-query-engine / summary rows gain only message_id when the flag is set
     func testOtherFieldsAreUnchangedWhenTheFlagIsOn() async throws {
         let (server, _) = try await makeServer()
         for projection in ["full", "summary"] {
@@ -196,7 +197,7 @@ final class SearchMessageIDHandlerTests: XCTestCase {
         XCTAssertFalse(stderr.contains("SECRET-HEADER-TEXT"), "no file text on stderr")
     }
 
-    // spec-example: sqlite-query-engine / Projections without rows
+    // spec-example: sqlite-query-engine / include_message_id with ids or count is a parameter error
     func testTheFlagIsRejectedForIdsAndCountAndWhenNotABoolean() async throws {
         let (server, _) = try await makeServer()
         for projection in ["ids", "count"] {
