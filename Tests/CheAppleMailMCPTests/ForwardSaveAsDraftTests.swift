@@ -168,6 +168,7 @@ final class ForwardSaveAsDraftTests: XCTestCase {
     /// as a reason the GUI path is ineligible, so the closed failure table of the rule keeps its nine classes. A
     /// tenth row would be a second classification of the same refusal.
     func testTheRuleCopiesKeepTheNineClassTableAndDescribeTheRefusalAsAParameterRefusal() throws {
+        var bodies: [String] = []
         for path in [".claude/rules/compose-wrapper-free.md", "plugin/rules/compose-wrapper-free.md"] {
             let rule = try Self.repoFile(path)
             XCTAssertTrue(rule.contains("封閉九類，不得依性質相似類推第十類"), "\(path): the heading keeps nine classes")
@@ -175,15 +176,30 @@ final class ForwardSaveAsDraftTests: XCTestCase {
             XCTAssertFalse(rule.contains("第十一類"), "\(path): no eleventh class")
             XCTAssertFalse(rule.contains("十類與各自的處置"), "\(path): the sentence before the table says nine")
             XCTAssertTrue(rule.contains("九類與各自的處置"), "\(path): the sentence before the table says nine")
-            XCTAssertNil(rule.range(of: "\n| 10 |"), "\(path): the table has no row 10")
             XCTAssertNil(rule.range(of: "第 10 類"), "\(path): nothing calls the refusal class 10")
-            XCTAssertTrue(rule.contains("| 9 |"), "\(path): the ninth row stays")
-            // The refusal stays documented: a parameter refusal at the tool's entry, before any Mail action,
-            // with the follow-up that removes it.
-            for needle in ["save_as_draft", "參數拒絕", "#673", "任何 Mail 動作之前"] {
-                XCTAssertTrue(rule.contains(needle), "\(path): the refusal paragraph must mention \(needle)")
+
+            // The table has exactly the rows 1 to 9, whatever the spacing of a stray row.
+            let rows = rule.components(separatedBy: "\n").compactMap { line -> Int? in
+                guard line.hasPrefix("|") else { return nil }
+                let cells = line.split(separator: "|", omittingEmptySubsequences: false)
+                guard cells.count > 2 else { return nil }
+                return Int(cells[1].trimmingCharacters(in: .whitespaces))
             }
+            XCTAssertEqual(rows, Array(1...9), "\(path): the failure table has exactly the rows 1 to 9")
+
+            // The refusal is documented in its own section after the table, not in the table or the heading.
+            let marker = "## 表外：`forward_email` 不帶內文的 `save_as_draft`"
+            let start = try XCTUnwrap(rule.range(of: marker), "\(path): the section after the table")
+            let rest = rule[start.upperBound...]
+            let section = String(rest[..<(rest.range(of: "\n## ")?.lowerBound ?? rest.endIndex)])
+            for needle in ["參數拒絕", "#673", "#599", "任何 Mail 動作之前", "零副作用", "簡短的附註",
+                           "在 Mail 手動轉寄", "不是上表的一類", "封閉九類"] {
+                XCTAssertTrue(section.contains(needle), "\(path): the refusal section must mention \(needle)")
+            }
+            bodies.append(rule.hasPrefix("<!--") ? String(rule[rule.range(of: "-->\n")!.upperBound...]).trimmingCharacters(in: .newlines)
+                                                 : rule.trimmingCharacters(in: .newlines))
         }
+        XCTAssertEqual(bodies[0], bodies[1], "the two rule copies differ only in the plugin's import comment")
         let other = try Self.repoFile(".claude/rules/timeout-outcome-boundary.md")
         XCTAssertTrue(other.contains("封閉的九類事前拒絕"), "the timeout rule counts nine classes")
         XCTAssertFalse(other.contains("十類"), "the timeout rule does not count ten")
@@ -195,5 +211,7 @@ final class ForwardSaveAsDraftTests: XCTestCase {
         XCTAssertFalse(readme.contains("封閉十類"), "README has no ten-class anchor")
         XCTAssertFalse(readme.contains("current ten reasons"), "README counts nine reasons")
         XCTAssertFalse(readme.contains("the tenth"), "README names no tenth reason")
+        XCTAssertTrue(readme.contains("One more refusal is not a row of that table: `forward_email` with `save_as_draft: true` and no body is refused at the tool's entry, before any Mail call, as a parameter refusal"),
+                      "README describes the bodyless refusal as a parameter refusal outside the table")
     }
 }
