@@ -175,6 +175,17 @@ final class LogShowRunnerProcessTests: XCTestCase {
         assertCleanedUp(leader: "p", descendants: ["g"])
     }
 
+    func testAStop_triesSIGTERMBeforeSIGKILL() {
+        // A leader that cleans up on TERM can only do so if TERM arrives, and before KILL.
+        let (_, end, _) = read(runner(
+            "trap 'echo termed > \'\(path("t"))\'; exit 0' TERM; echo $$ > '\(path("p"))'; echo a; while true; do sleep 1; done"),
+            stopAfter: 1)
+        XCTAssertEqual(end, .stoppedByHandler)
+        XCTAssertEqual(try? String(contentsOfFile: path("t"), encoding: .utf8), "termed\n",
+                       "the leader never saw SIGTERM")
+        assertCleanedUp(leader: "p")
+    }
+
     func testAGroupThatIgnoresSIGTERM_isStillKilled() {
         // The leader and the descendant both ignore TERM (an ignored signal survives exec), so only
         // the SIGKILL that follows the grace period can end them.
