@@ -71,13 +71,20 @@ The system SHALL reject invalid combinations with a parameter error: an unrecogn
 
 ### Requirement: search_emails returns the Message-ID on request
 
-`search_emails` SHALL accept an optional boolean `include_message_id`, default `false`. A value that is present and not a boolean SHALL be a parameter error. When it is not `true`, the system SHALL read no `.emlx` file to build the result, and each row SHALL be byte-identical to the row the same call returns without the parameter. When it is `true` with projection `full` or `summary`, the system SHALL add a `message_id` key to each row, read from the `.emlx` header block of the row's message and parsed with the function that `get_email`, `get_emails_batch` and the batch export use for their `message_id` (`RFC822Parser.parseHeaders`, key `message-id`), so that, for a message whose header block ends inside the 256 KiB bound, the value equals what those tools report for the same message. The two can differ only for a message larger than the 256 KiB bound: if it has a bare-LF blank line inside the bound and a CRLF blank line only after it, the reader ends the header block at the first blank line of either kind inside the bound, while `get_email` prefers a CRLF blank line anywhere in the message and so reads the lines between the two as headers; a message whose lines end in lone CR and which is larger than the bound has no `message_id` here, while `get_email` reports a value. Each row SHALL be in exactly one of three states:
+`search_emails` SHALL accept an optional boolean `include_message_id`, default `false`. A value that is present and not a boolean SHALL be a parameter error. When it is not `true`, the system SHALL read no `.emlx` file to build the result, and each row SHALL be byte-identical to the row the same call returns without the parameter. When it is `true` with projection `full` or `summary`, the system SHALL add a `message_id` key to each row, read from the `.emlx` header block of the row's message and parsed with the function that `get_email`, `get_emails_batch` and the batch export use for their `message_id` (`RFC822Parser.parseHeaders`, key `message-id`). Each row SHALL be in exactly one of three states:
 
-- a non-empty string: the parsed Message-ID value (angle brackets kept, as `get_email` reports it);
-- the empty string: the header block was read and has no `Message-ID` header (as `get_email` reports it);
-- the key omitted: the value could not be read or is not returned: no readable `.emlx` for the row (including a body not downloaded and no partial file, and mailboxes that keep no `.emlx`), a read or parse error, a value longer than 4096 bytes (UTF-8), a header block larger than 256 KiB, or a path that does not fill it (the AppleScript fallback).
+- a non-empty string: the parsed Message-ID value (angle brackets kept). It SHALL equal what `get_email`, `get_emails_batch` and the batch export report for the same message;
+- the empty string: the header block was read and has no `Message-ID` header (as those tools report it);
+- the key omitted, in exactly these cases and no others:
+  1. there is no readable `.emlx` for the row (the body is not downloaded and there is no partial file, the mailbox keeps none, or the file is missing);
+  2. the file could not be read or its length line could not be parsed, which includes a length line longer than 4096 bytes;
+  3. the header block does not end within the first 256 KiB of the message (this includes a message larger than that whose lines end in lone CR);
+  4. the Message-ID value is longer than 4096 bytes (UTF-8);
+  5. the row came from the AppleScript fallback, which never fills it.
 
-A row SHALL never be dropped, and its other fields SHALL not change, because its `message_id` could not be read. A read that fails SHALL be reported once per call on stderr through `Diagnostics.emit`, naming a fixed reason and the count of affected rows and never any header text. The system SHALL read each `.emlx` in chunks and stop at the end of a CRLF-terminated header block, and SHALL never look at more than the first 256 KiB of a message, whatever its line endings and whether or not it has a header/body separator; a message whose header block is not finished within that bound is in the omitted-key state. The system SHALL resolve the mailbox's store folder once per mailbox per call. With `dedup: "logical"` and projection `summary`, the value SHALL be the one of the kept `MIN(ROWID)` row. The value SHALL be the parsed Message-ID only, never the raw header block.
+In cases 2 to 4 `get_email` may still report a value, because it reads the whole file. A missing key means unknown, not "no Message-ID" and not "new message".
+
+A row SHALL never be dropped, and its other fields SHALL not change, because its `message_id` could not be read. A read that fails SHALL be reported once per call on stderr through `Diagnostics.emit`, naming a fixed reason and the count of affected rows and never any header text. The system SHALL read each `.emlx` in chunks and stop at the end of the header block, the first blank line of either kind (`\r\n\r\n` or `\n\n`); it SHALL never look at more than the first 256 KiB of a message, whatever its line endings and whether or not it has a header/body separator, and reading the length line MAY take up to 4096 further bytes from the start of the file. The system SHALL resolve the mailbox's store folder once per mailbox per call. With `dedup: "logical"` and projection `summary`, the value SHALL be the one of the kept `MIN(ROWID)` row. The value SHALL be the parsed Message-ID only, never the raw header block.
 
 #### Scenario: The flag is off
 
@@ -86,30 +93,40 @@ A row SHALL never be dropped, and its other fields SHALL not change, because its
 
 #### Scenario: The value equals the one get_email reports
 
-- **WHEN** `search_emails` is called with `include_message_id: true` for a message whose header block has a folded `Message-ID`, an RFC 2047 encoded one, duplicate `Message-ID` headers, CR-only, LF-only or CRLF line ends, or a value without angle brackets
+- **WHEN** `search_emails` is called with `include_message_id: true` for a message whose header block has a folded `Message-ID`, an RFC 2047 encoded one, duplicate `Message-ID` headers, CR-only, LF-only, CRLF or mixed (LF then CRLF) blank lines, a message larger than 256 KiB whose header block ends inside the first 256 KiB, or a value without angle brackets
 - **THEN** the row's `message_id` equals `message_id` from `get_email` for the same message, and equals the batch export's
-
-#### Scenario: Where the value can differ from get_email's
-
-- **WHEN** a message larger than 256 KiB has a bare-LF blank line inside the first 256 KiB and a CRLF blank line only after them, or has lone-CR line ends
-- **THEN** the row has the value of the header block ended at the first blank line inside the bound, or no `message_id` key respectively, and `get_email` may report another value
 
 #### Scenario: A message without the header
 
 - **WHEN** the `.emlx` header block has no `Message-ID` header
 - **THEN** the row's `message_id` is the empty string
 
-#### Scenario: An unreadable message
+#### Scenario: No readable file
 
-- **WHEN** a row's `.emlx` file is missing, truncated, its value is longer than 4096 UTF-8 bytes (counted in bytes, so a short string of combining marks is over the limit), or its header block is not finished within 256 KiB
+- **WHEN** a row's `.emlx` file is missing, or its mailbox URL is missing or unknown
 - **THEN** the row is still returned with its other fields, its `message_id` key is omitted, and one line is written to stderr for the call
 
-#### Scenario: Projections without rows
+#### Scenario: A file that cannot be read or parsed
 
-- **WHEN** `include_message_id: true` is combined with `projection: "ids"` or `"count"`
-- **THEN** the system returns a parameter error
+- **WHEN** a row's `.emlx` file is truncated, or its length line is not a number, or is longer than 4096 bytes
+- **THEN** the row is still returned with its other fields, its `message_id` key is omitted, and one line is written to stderr for the call, while `get_email` may report a value for a long length line
+
+#### Scenario: A header block that does not end in the first 256 KiB
+
+- **WHEN** a message's header block is not finished within its first 256 KiB, including a message larger than that whose lines end in lone CR
+- **THEN** the row's `message_id` key is omitted, no more than the first 256 KiB of the message is read, and `get_email` may report a value
+
+#### Scenario: A value that is too long
+
+- **WHEN** the Message-ID value is longer than 4096 UTF-8 bytes (counted in bytes, so a short string of combining marks is over the limit)
+- **THEN** the row's `message_id` key is omitted
 
 #### Scenario: The AppleScript fallback
 
 - **WHEN** `include_message_id: true` and the SQLite index is unavailable for projection `full`
 - **THEN** the rows come from the AppleScript fallback and carry no `message_id` key
+
+#### Scenario: Projections without rows
+
+- **WHEN** `include_message_id: true` is combined with `projection: "ids"` or `"count"`
+- **THEN** the system returns a parameter error
