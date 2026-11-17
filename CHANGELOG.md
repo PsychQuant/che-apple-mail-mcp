@@ -242,6 +242,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   slice behaviour from #72 are unchanged. A blank line written `\r\n\n` ends the
   header block at its `\n\n`; `\n\r\n` is still not read as a blank line. Whether
   mixed line endings occur in real mail stores has not been measured.
+  The Message-ID recipe in the repair command, which mirrors the parser, ends the
+  header block the same way, and the shared spelling fixture follows.
 
 - **The attachment deny-list no longer depends on how a path is spelled**
   ([#671](https://github.com/PsychQuant/che-apple-mail-mcp/issues/671)). The
