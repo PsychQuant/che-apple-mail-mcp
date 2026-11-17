@@ -17,22 +17,17 @@ extension EmlxParser {
     /// The header block did not end within `maxHeaderScanBytes` (or the cap passed in).
     public struct HeaderBlockTooLarge: Error, Equatable {}
 
-    /// The Message-ID of the message in the .emlx file at `path`, reading at most the first
-    /// `maxHeaderBytes` of the message (#682).
+    /// The Message-ID of the message in the .emlx file at `path`, looking at no more than the
+    /// first `maxHeaderBytes` of the message (#682).
     ///
-    /// The length line is read from the first 4096 bytes; the message then comes in `chunkSize`
-    /// pieces and the read stops at the first CRLF CRLF, the separator `RFC822Parser.parseHeaders`
-    /// prefers. A message that ends inside the cap is parsed whole, as `readEmail` does. A longer
-    /// one with no CRLF CRLF in the cap is parsed over what was read when that holds a bare-LF
-    /// blank line, and otherwise throws `HeaderBlockTooLarge`. A file shorter than its length line
-    /// promises throws, as `readEmail` does. The value is the one `readEmail` extracts for the
-    /// same file when the message ends inside the cap or its CRLF CRLF does; a bare-LF blank line
-    /// is where the parse ends only if no CRLF CRLF follows inside the cap.
+    /// The length line is read from the first 4096 bytes of the file; the message then comes in
+    /// `chunkSize` pieces and the read stops once a blank line, `\r\n\r\n` or `\n\n`, has been
+    /// seen: the header block ends there (`RFC822Parser`). A message that ends inside the cap is
+    /// parsed whole; a longer one whose header block does not end inside the cap throws
+    /// `HeaderBlockTooLarge`. A file shorter than its length line promises, or a length line that
+    /// does not parse within those 4096 bytes, throws, as `readEmail` does for the short file.
+    /// Whenever this returns, the value is the one `readEmail` extracts for the same file.
     ///
-    /// - Parameters:
-    ///   - chunkSize: bytes per read of the message; tests use small values.
-    ///   - maxHeaderBytes: the cap on bytes of the message looked at.
-    ///   - bytesRead: called with the size of every read (tests pin the bound with it).
     public static func readMessageID(
         atPath path: String, chunkSize: Int = 32 * 1024, maxHeaderBytes: Int = maxHeaderScanBytes,
         bytesRead: ((Int) -> Void)? = nil
@@ -58,18 +53,22 @@ extension EmlxParser {
         let target = min(prefix.byteCount, max(maxHeaderBytes, 0))
         var message = Data()
         var scanFrom = 0
-        var sawCRLFCRLF = false
+        var sawBlankLine = false
         while message.count < target {
             guard let chunk = try handle.read(upToCount: min(step, target - message.count)), !chunk.isEmpty else {
                 throw MailSQLiteError.emlxParseFailed("The .emlx file ended before its promised length")
             }
             bytesRead?(chunk.count)
             message.append(chunk)
-            if contains(message, [0x0D, 0x0A, 0x0D, 0x0A], from: max(scanFrom - 3, 0)) { sawCRLFCRLF = true; break }
+            let from = max(scanFrom - 3, 0)
+            if contains(message, [0x0D, 0x0A, 0x0D, 0x0A], from: from) || contains(message, [0x0A, 0x0A], from: from) {
+                sawBlankLine = true
+                break
+            }
             scanFrom = message.count
         }
         let wholeMessage = message.count == prefix.byteCount
-        if !sawCRLFCRLF, !wholeMessage, !contains(message, [0x0A, 0x0A], from: 0) {
+        if !sawBlankLine, !wholeMessage {
             throw HeaderBlockTooLarge()
         }
         return messageID(inMessageData: message)
@@ -78,7 +77,7 @@ extension EmlxParser {
     /// Whether `data` (zero-based) holds `pattern` starting at or after `from`.
     private static func contains(_ data: Data, _ pattern: [UInt8], from: Int) -> Bool {
         let n = pattern.count
-        guard data.count >= n, from <= data.count - n else { return false }
+        guard from >= 0, !pattern.isEmpty, data.count >= n, from <= data.count - n else { return false }
         return data.withUnsafeBytes { raw -> Bool in
             let bytes = raw.bindMemory(to: UInt8.self)
             var i = from
