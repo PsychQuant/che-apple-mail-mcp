@@ -279,9 +279,12 @@ public enum RFC822Parser {
     }
 
     /// #720 test seam: when set, `decodeRFC2047` reports once per call how many
-    /// characters its searches for the end of an encoded-word (`?=`) examined.
-    /// The work-count tests read it instead of a clock. Nothing is measured
-    /// while it is nil, so production pays one nil check per call.
+    /// characters its searches examined: the search for the `?` that ends a
+    /// charset and the search for the end of an encoded-word (`?=`). The
+    /// work-count tests read it instead of a clock. Nothing is measured while it
+    /// is nil, so production pays one nil check per call. It is not
+    /// synchronized: tests set and clear it around one call, and it must not be
+    /// set while other code decodes concurrently.
     nonisolated(unsafe) static var terminatorSearchWorkProbe: ((Int) -> Void)?
 
     /// State of the searches for `?=` within one `decodeRFC2047` call.
@@ -294,6 +297,18 @@ public enum RFC822Parser {
         /// here on either: `decodeRFC2047` only moves forward. Remembering it is
         /// what keeps a value with many openers and no terminator linear.
         var absentFrom: Substring.Index?
+        /// The last search for the `?` that ends a charset: where it started, and the `?` it found
+        /// (nil: none from there on). Every search runs over a suffix of the same value to its end,
+        /// so a search that starts later but not after that `?` finds the same one, and after a
+        /// nil none. The search compares Characters: a `?` joined with a following mark is not a
+        /// `?`, while the opener search (literal) still finds the `=?` in front of it, so without
+        /// this every such opener scanned to the end of the value.
+        var question: (from: Substring.Index, at: Substring.Index?)?
+        /// The last check of what follows a charset's `?` (the encoding letter and the second `?`),
+        /// keyed by that `?`. The `?` is a whole Character found from a start at or before it, and
+        /// the Characters after it do not depend on where the search started, so the answer is the
+        /// same for every opener that reaches that `?`.
+        var afterCharset: (q1: Substring.Index, result: (encoding: String, textStart: Substring.Index)?)?
     }
 
     /// #352 verify: lets the differential test drive the pre-fix reference
@@ -312,25 +327,63 @@ public enum RFC822Parser {
         let endIndex: Substring.Index
     }
 
-    /// Parse an encoded word after the initial "=?" has been consumed.
-    /// Input starts right after "=?" — e.g., "utf-8?Q?=E9=84=AD?= rest"
-    private static func parseEncodedWord(_ input: Substring, search: inout TerminatorSearch) -> EncodedWord? {
-        // Find charset: everything up to first ?
-        guard let q1 = input.firstIndex(of: "?") else { return nil }
-        let charset = String(input[input.startIndex..<q1])
-
+    /// The encoding letter after the charset's `?` at `q1`, and where the text starts (after the
+    /// second `?`); nil when they are not there. Looking at a Character is not constant work (it
+    /// can carry any number of combining marks), so the caller remembers the answer per `q1`.
+    private static func encodingAndTextStart(
+        _ input: Substring, q1: Substring.Index, search: inout TerminatorSearch
+    ) -> (encoding: String, textStart: Substring.Index)? {
         // Find encoding: single char after charset's ?
         let afterQ1 = input.index(after: q1)
         guard afterQ1 < input.endIndex else { return nil }
+        if search.measure { search.work += input[afterQ1].unicodeScalars.count }
         let encoding = String(input[afterQ1]).uppercased()
         guard encoding == "B" || encoding == "Q" else { return nil }
 
         // After encoding there must be another ?
         let q2 = input.index(after: afterQ1)
+        if search.measure, q2 < input.endIndex { search.work += input[q2].unicodeScalars.count }
         guard q2 < input.endIndex, input[q2] == "?" else { return nil }
 
+        return (encoding, input.index(after: q2))
+    }
+
+    /// Parse an encoded word after the initial "=?" has been consumed.
+    /// Input starts right after "=?" — e.g., "utf-8?Q?=E9=84=AD?= rest"
+    private static func parseEncodedWord(_ input: Substring, search: inout TerminatorSearch) -> EncodedWord? {
+        // Find charset: everything up to first ?
+        // The search for that `?` is remembered for the call (#720): a later opener that starts at or
+        // after where the last search started, and not after the `?` it found, gets the same answer.
+        let q1: Substring.Index
+        if let last = search.question, input.startIndex >= last.from,
+           last.at.map({ input.startIndex <= $0 }) ?? true {
+            guard let at = last.at else { return nil }
+            q1 = at
+        } else {
+            let questionMark = input.firstIndex(of: "?")
+            if search.measure {
+                search.work += input.distance(from: input.startIndex, to: questionMark ?? input.endIndex)
+            }
+            search.question = (input.startIndex, questionMark)
+            guard let at = questionMark else { return nil }
+            q1 = at
+        }
+
+        // Everything from here to the start of the text depends only on q1, so it is worked out
+        // once per q1 for the call (#720): openers that reach the same `?` get the same answer.
+        let encoding: String
+        let textStart: Substring.Index
+        if let last = search.afterCharset, last.q1 == q1 {
+            guard let known = last.result else { return nil }
+            (encoding, textStart) = known
+        } else {
+            let result = encodingAndTextStart(input, q1: q1, search: &search)
+            search.afterCharset = (q1, result)
+            guard let known = result else { return nil }
+            (encoding, textStart) = known
+        }
+
         // Find the closing ?= — search from after the text-start ?
-        let textStart = input.index(after: q2)
         let textRegion = input[textStart...]
         if let absent = search.absentFrom, textStart >= absent { return nil }
         let found = textRegion.range(of: "?=", options: .literal)
@@ -343,6 +396,9 @@ public enum RFC822Parser {
         }
 
         let text = String(textRegion[textRegion.startIndex..<endRange.lowerBound])
+        // Copied only now that the word is complete: the word is consumed, so these copies never
+        // overlap (copying before the checks made every rejected opener copy to the same `?`).
+        let charset = String(input[input.startIndex..<q1])
 
         return EncodedWord(
             charset: charset,

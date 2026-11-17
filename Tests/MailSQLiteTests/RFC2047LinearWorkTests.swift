@@ -75,6 +75,22 @@ final class RFC2047LinearWorkTests: XCTestCase {
         XCTAssertGreaterThan(count, 100_000)
     }
 
+    /// Every string up to length 6 over characters that change how Characters are formed around a
+    /// `?`: a combining mark (U+0301) joins the character before it, a prepended concatenation mark
+    /// (U+0600) joins the character after it.
+    func testEveryShortStringWithJoiningMarksMatchesTheReference() {
+        let alphabet: [String] = ["=", "?", "Q", "B", "\u{0301}", "\u{0600}", "a", " "]
+        var count = 0
+        func extend(_ prefix: String, _ remaining: Int) {
+            assertSame(prefix)
+            count += 1
+            if remaining == 0 { return }
+            for c in alphabet { extend(prefix + c, remaining - 1) }
+        }
+        extend("", 6)
+        XCTAssertGreaterThan(count, 250_000)
+    }
+
     /// Every sequence of up to 5 encoded-word pieces.
     func testEverySequenceOfEncodedWordPiecesMatchesTheReference() {
         let pieces = ["=?utf-8?B?", "=?utf-8?Q?", "=?x?B?", "=?utf8?q?", "?=", " ", "\r\n ", "QQ==", "gA==", "=E6", "a_b", "é", "="]
@@ -97,6 +113,8 @@ final class RFC2047LinearWorkTests: XCTestCase {
             "=?iso-8859-1?Q?caf=E9?=", "=?iso-8859-1?B?Y2Fm6Q==?=", "=?utf-8?B?gA==?=", "=?utf-8?B?%%%?=", "=?big5?B?pKQ=?=",
             "=?x?B?QUJD", "=?utf-8?Q?no end", "=?utf-8?B?", "=?utf-8?", "=?", "=?a?Z?x?=", "=?a?B?x?",
             "?=", "=", "?", "plain", "é", " ", "\t", "\r\n", "\r\n\t", "(", ")", "QQ==",
+            "=?\u{0301}", "?\u{0301}", "\u{0600}?", "=?utf-8\u{0301}?Q?a?=", "=?utf-8?Q\u{0301}?a?=",
+            "?Q\u{0301}\u{0301}", "?B?\u{0301}", "?Z\u{0301}", "=?utf-8?Q?\u{0301}a?=",
         ]
         for _ in 0..<6000 {
             var value = ""
@@ -158,6 +176,76 @@ final class RFC2047LinearWorkTests: XCTestCase {
 
     func testWorkIsLinearForManyValidWords() {
         assertLinear("many valid words") { String(repeating: "=?utf-8?B?QUJD?= ", count: $0) }
+    }
+
+    /// A `?` followed by a combining mark is one Character, so the search for the `?` that ends the
+    /// charset does not see it, while the search for the opener (literal) does. Found by the
+    /// cross-model review of #720.
+    func testWorkIsLinearWhenTheOpenersQuestionMarkJoinsACombiningMark() {
+        assertLinear("combining mark after every opener") { String(repeating: "=?\u{0301}", count: $0) }
+        assertLinear("the same, then one charset end near the end") {
+            String(repeating: "=?\u{0301}", count: $0) + "?Q?"
+        }
+        assertLinear("the same, then a whole word at the end") {
+            String(repeating: "=?\u{0301}", count: $0) + "?Q?x?="
+        }
+    }
+
+    /// The Character after the charset's `?` (and after the encoding letter) can carry any number
+    /// of combining marks, so looking at it is not constant work. Openers that all reach the same
+    /// `?` must not each look at it again. Found by the cross-model review of round 1 of #720.
+    func testWorkIsLinearWhenTheEncodingLetterCarriesManyMarks() {
+        let marks = { (n: Int) in String(repeating: "\u{0301}", count: n) }
+        assertLinear("invalid encoding letter with marks") {
+            String(repeating: "=?\u{0301}", count: $0) + "?Z" + marks($0)
+        }
+        assertLinear("valid encoding letter with marks") {
+            String(repeating: "=?\u{0301}", count: $0) + "?Q" + marks($0)
+        }
+        assertLinear("second question mark with marks") {
+            String(repeating: "=?\u{0301}", count: $0) + "?Q?" + marks($0)
+        }
+    }
+
+    /// The work counter counts characters the searches look at, not characters copied. Copying the
+    /// charset before the word is known to be complete (as the code did before #720) leaves every
+    /// count unchanged while each rejected opener copies up to the same `?` (checked by mutation:
+    /// the work-count tests stayed green). This guard reads the shipped function instead.
+    func testTheCharsetIsCopiedOnlyAfterTheEndOfTheWordIsFound() throws {
+        let source = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // MailSQLiteTests/
+            .deletingLastPathComponent()   // Tests/
+            .deletingLastPathComponent()   // <package root>/
+            .appendingPathComponent("Sources/MailSQLite/RFC822Parser.swift")
+        let text = try String(contentsOf: source, encoding: .utf8)
+        let signature = "private static func parseEncodedWord("
+        let start = try XCTUnwrap(text.range(of: signature), "parseEncodedWord was renamed or moved: update this guard")
+        let open = try XCTUnwrap(text[start.upperBound...].firstIndex(of: "{"))
+        var depth = 0
+        var end = text.endIndex
+        var index = open
+        while index < text.endIndex {
+            if text[index] == "{" { depth += 1 }
+            if text[index] == "}" {
+                depth -= 1
+                if depth == 0 { end = text.index(after: index); break }
+            }
+            index = text.index(after: index)
+        }
+        let body = String(text[start.lowerBound..<end])
+        XCTAssertTrue(body.contains("return EncodedWord("),
+                      "the function body was not found whole: the guard would pass vacuously")
+        // The only copy that can be long: from the start of the input to the charset's `?`.
+        // (`String(input[afterQ1])` is the one-character encoding letter.)
+        let charsetCopy = "String(input[input.startIndex..<q1])"
+        XCTAssertEqual(body.components(separatedBy: charsetCopy).count - 1, 1,
+                       "parseEncodedWord should copy the charset once")
+        XCTAssertEqual(body.components(separatedBy: "input[input.startIndex..<").count - 1, 1,
+                       "another copy from the start of the input appeared")
+        let copy = try XCTUnwrap(body.range(of: charsetCopy), "the charset copy was not found")
+        let endSearch = try XCTUnwrap(body.range(of: "range(of: \"?=\""), "the search for the end of the word was not found")
+        XCTAssertLessThan(endSearch.lowerBound, copy.lowerBound,
+                          "the charset is copied before the end of the word is found again (#720)")
     }
 
     func testWorkIsLinearForManyValidWordsFollowedByUnterminatedOnes() {

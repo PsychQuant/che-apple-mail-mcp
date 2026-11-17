@@ -3504,8 +3504,10 @@ enum AutomationHelp {
 
 /// #720 test seam: when set, `MailController.decodeQuotedPrintable` reports once
 /// per call the number of loop steps plus the characters its length checks
-/// examined. The work-count tests read it instead of a clock; nothing extra is
-/// measured while it is nil.
+/// examined. The work-count tests read it instead of a clock. While it is nil the
+/// decoder still adds to a local counter (one integer add per step) and reports
+/// nothing. Tests set and clear it around one call; it is not synchronized, so it
+/// must not be set while other code decodes concurrently.
 enum QuotedPrintableWorkProbe {
     nonisolated(unsafe) static var report: ((Int) -> Void)?
 }
