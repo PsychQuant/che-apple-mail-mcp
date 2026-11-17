@@ -235,8 +235,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blank line existed anywhere. A message whose header block ended with an LF blank
   line and that had a CRLF blank line later was split at the later one, so body
   lines were read as headers (the last `Subject:`-style line won) and the body
-  started in the wrong place; this reached `get_email`, `get_emails_batch`, the
-  Markdown export, attachment lookup and the MIME child parts. Both functions now
+  started in the wrong place; this reached `get_email`, `get_emails_batch`, `get_email_headers`, the
+  Markdown export, attachment lookup, the MIME child parts and the classification
+  tools. Both functions now
   use one scan that ends the header block at the blank line that starts first.
   Messages with consistent line endings, messages with no blank line and the
   slice behaviour from #72 are unchanged. A blank line written `\r\n\n` ends the

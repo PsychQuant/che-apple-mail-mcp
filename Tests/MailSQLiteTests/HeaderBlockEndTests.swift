@@ -61,18 +61,27 @@ final class HeaderBlockEndTests: XCTestCase {
         Row(name: "CR LF LF blank line, later CRLF blank line",
             raw: "A: 1\r\n\nB: x\r\n\r\nbody", bodyStart: 7, headers: ["a": "1"]),
         // `\n\r\n` matches neither pattern: not a blank line, same as before.
+        Row(name: "LF CR LF CR is not a blank line",
+            raw: "\n\r\n\r", bodyStart: nil, headers: [:]),
+        // A stray LF LF inside otherwise CRLF headers ends the block there
+        // (RFC 5322 section 2.1: the first empty line).
+        Row(name: "stray LF LF inside CRLF headers",
+            raw: "A: 1\r\nB: 2\n\nC: 3\r\n\r\nbody", bodyStart: 12, headers: ["a": "1", "b": "2"]),
         Row(name: "LF CR LF is not a blank line",
             raw: "A: 1\n\r\nB: 2\r\n\r\nbody", bodyStart: 15, headers: ["a": "1", "b": "2"]),
     ]
 
     /// `raw` as Data, or as a slice of a larger buffer so that `startIndex` is 5
-    /// and `endIndex` is short of the base end. Returns the data and its start.
+    /// and `endIndex` is short of the base end. The padding holds blank lines of
+    /// its own (`\n\n` before, `\n\r\n` after), so a scan that starts before
+    /// `startIndex` or runs past `endIndex` returns a different value instead of
+    /// only trapping. Returns the data and its start.
     private func data(_ raw: String, sliced: Bool) -> (Data, Int) {
         let bytes = Data(raw.utf8)
         guard sliced else { return (bytes, 0) }
-        var base = Data("XXXXX".utf8)
+        var base = Data("\n\nXXX".utf8)
         base.append(bytes)
-        base.append(Data("ZZZ".utf8))
+        base.append(Data("\n\r\n".utf8))
         return (base[5..<(5 + bytes.count)], 5)
     }
 
@@ -180,8 +189,10 @@ final class HeaderBlockEndTests: XCTestCase {
         XCTAssertTrue(text.contains("second paragraph"))
     }
 
-    /// Attachment: LF headers at the top, a text part with a CRLF blank line in
-    /// its body before the attachment part.
+    /// Attachment: the top-level header block ends with an LF blank line and a
+    /// text part further down holds a CRLF blank line. The old scan split the
+    /// whole message at that later CRLF blank line, so the top-level headers were
+    /// read from the wrong block and the multipart declaration was lost.
     func testAnAttachmentIsFoundWhenALaterBlankLineUsesCRLF() throws {
         let row = try install(
             "From: a@example.invalid\nSubject: s\nMIME-Version: 1.0\n"
@@ -193,5 +204,26 @@ final class HeaderBlockEndTests: XCTestCase {
         let data = try EmlxParser.attachmentData(
             rowId: row, mailboxURL: mailboxURL, attachmentName: "a.bin")
         XCTAssertEqual(String(decoding: data, as: UTF8.self), "Hello")
+    }
+
+    /// `\r\n\n` as the blank line, read through `readEmail`.
+    func testReadEmailEndsTheHeaderBlockAtACrLfLfBlankLine() throws {
+        let row = try install("Subject: s\r\nFrom: a@example.invalid\r\n\nbody text")
+        let content = try EmlxParser.readEmail(rowId: row, mailboxURL: mailboxURL, format: "text")
+        XCTAssertEqual(content.subject, "s")
+        XCTAssertEqual(content.sender, "a@example.invalid")
+        XCTAssertEqual(content.textBody ?? "", "body text")
+    }
+
+    /// Attachment names come from the child part's own header block: a
+    /// header-looking line after the child's first blank line must not rename it.
+    func testAttachmentNamesComeFromTheChildsFirstHeaderBlock() throws {
+        let body = Data((
+            "--BB\r\nContent-Type: application/octet-stream; name=\"a.bin\"\n\n"
+            + "x\r\n\r\nContent-Type: text/plain; name=\"b.txt\"\r\n"
+            + "--BB--\r\n").utf8)
+        let names = try MIMEParser.enumerateAttachmentNames(
+            body, headers: ["content-type": "multipart/mixed; boundary=\"BB\""])
+        XCTAssertEqual(names, ["a.bin"])
     }
 }
