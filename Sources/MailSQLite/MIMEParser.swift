@@ -670,11 +670,11 @@ public enum MIMEParser {
                 guard encoded.distance(from: hexStart, to: encoded.endIndex) >= 2 else {
                     return nil
                 }
-                let hexEnd = encoded.index(hexStart, offsetBy: 2)
-                let hex = String(encoded[hexStart..<hexEnd])
-                guard let byte = UInt8(hex, radix: 16) else { return nil }
+                let lowStart = encoded.index(after: hexStart)
+                // #641: two ASCII hex digits, not `UInt8(_, radix: 16)`, which accepts a sign.
+                guard let byte = HexEscape.byte(encoded[hexStart], encoded[lowStart]) else { return nil }
                 bytes.append(byte)
-                idx = hexEnd
+                idx = encoded.index(after: lowStart)
             } else if let scalar = ch.asciiValue {
                 bytes.append(scalar)
                 idx = encoded.index(after: idx)

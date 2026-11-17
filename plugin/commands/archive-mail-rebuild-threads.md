@@ -132,7 +132,7 @@ for key, entry in new_threads:
 
 **頂層加 `rebuilt_from` 欄位**，記錄這次是從 frontmatter 重建的（而非 archive-mail 增量維護）。方便區分。
 
-`unreadable_dates` 只進 Step 6 的報告，不寫進 `.threads.json`：thread entry 的欄位不變，這些信仍在 `messages` 裡，排在該 thread 最後。
+`unreadable_dates` 只進 Step 6 的報告，不寫進 `.threads.json`：thread entry 的欄位不變，這些信仍在 `messages` 裡；讀得出日期的依那一天排，連日期都讀不出的排在該 thread 最後。只有日期、沒有時區或時區不明的值，一天之內的先後無法從歸檔還原（歸檔只存寄件人寫的日期）；時區名稱讀不懂的值（例如裸 `CST`）依它寫明的那一天排，排在那一天的開頭；RFC 的 `-0000` 依 UTC 時刻排（#644）。
 
 ### Step 6: 輸出報告
 
@@ -158,7 +158,7 @@ Backup: .threads.json.bak.20260422_150109
 Issues:
   ⚠️ 2024-07-14_Old-email.md: missing frontmatter (legacy md, needs backfill)
   ⚠️ 2024-07-14_Another-old.md: missing thread_key
-  ⚠️ 2024-07-14_Odd-date.md: date unreadable (sorted last in its thread, kept)
+  ⚠️ 2024-07-14_Odd-date.md: date unreadable (placed by its day if one can be read, otherwise last in its thread; kept)
 
 ═══════════════════════════════════════════
 ```

@@ -225,6 +225,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   found a directory this write created and has not yet written into it, the
   cleanup can remove it first. Two related gaps are tracked in
   [#666](https://github.com/PsychQuant/che-apple-mail-mcp/issues/666).
+- **A signed or fullwidth digit pair is no longer decoded as a hex escape**
+  ([#641](https://github.com/PsychQuant/che-apple-mail-mcp/issues/641)). The
+  quoted-printable decoders and the percent decoder read the two characters after
+  `=` or `%` with `UInt8(_, radix: 16)`, which accepts a leading sign, so `=+5`
+  decoded to the control byte 0x05, `=-0` to NUL and `%+5` to 0x05. All three
+  decoders (`RFC822Parser` for bodies and RFC 2047 `Q` words, `MIMEParser` for RFC
+  5987 / RFC 2231 file names, and the AppleScript fallback in `MailController`) now
+  read one shared `HexEscape.byte(_:_:)`, which takes ASCII `0-9A-Fa-f` only, so a
+  sign, a space or a fullwidth digit leaves the `=` as text and `%+5` returns nil
+  like any other malformed percent escape; lowercase escapes decode as before. The
+  AppleScript fallback also stops dropping the two characters after a malformed
+  `=`: `=ZZ` keeps `ZZ`. A guard test fails on a `radix: 16` parse in `Sources`.
+
 - **A draft is not reported as uploaded when its queued action could not be read**
   ([#630](https://github.com/PsychQuant/che-apple-mail-mcp/issues/630)). While
   waiting for the upload, the direct-write path treats a remote id with no queued
