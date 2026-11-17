@@ -114,6 +114,7 @@ final class RFC2047LinearWorkTests: XCTestCase {
             "=?x?B?QUJD", "=?utf-8?Q?no end", "=?utf-8?B?", "=?utf-8?", "=?", "=?a?Z?x?=", "=?a?B?x?",
             "?=", "=", "?", "plain", "é", " ", "\t", "\r\n", "\r\n\t", "(", ")", "QQ==",
             "=?\u{0301}", "?\u{0301}", "\u{0600}?", "=?utf-8\u{0301}?Q?a?=", "=?utf-8?Q\u{0301}?a?=",
+            "?Q\u{0301}\u{0301}", "?B?\u{0301}", "?Z\u{0301}", "=?utf-8?Q?\u{0301}a?=",
         ]
         for _ in 0..<6000 {
             var value = ""
@@ -187,6 +188,22 @@ final class RFC2047LinearWorkTests: XCTestCase {
         }
         assertLinear("the same, then a whole word at the end") {
             String(repeating: "=?\u{0301}", count: $0) + "?Q?x?="
+        }
+    }
+
+    /// The Character after the charset's `?` (and after the encoding letter) can carry any number
+    /// of combining marks, so looking at it is not constant work. Openers that all reach the same
+    /// `?` must not each look at it again. Found by the cross-model review of round 1 of #720.
+    func testWorkIsLinearWhenTheEncodingLetterCarriesManyMarks() {
+        let marks = { (n: Int) in String(repeating: "\u{0301}", count: n) }
+        assertLinear("invalid encoding letter with marks") {
+            String(repeating: "=?\u{0301}", count: $0) + "?Z" + marks($0)
+        }
+        assertLinear("valid encoding letter with marks") {
+            String(repeating: "=?\u{0301}", count: $0) + "?Q" + marks($0)
+        }
+        assertLinear("second question mark with marks") {
+            String(repeating: "=?\u{0301}", count: $0) + "?Q?" + marks($0)
         }
     }
 
