@@ -24,7 +24,7 @@ import Foundation
 enum TimeoutOutcomeKind: CaseIterable {
     /// A GUI flow that may have sent the message (compose, reply, forward).
     case sendFlow
-    /// A GUI flow that saves a draft (`create_draft`, `reply_email` with `save_as_draft`).
+    /// A GUI flow that saves a draft (`create_draft`, `reply_email` or `forward_email` with `save_as_draft`).
     case draftSave
     /// The scoped draft deletion inside `update_draft`.
     case draftDelete

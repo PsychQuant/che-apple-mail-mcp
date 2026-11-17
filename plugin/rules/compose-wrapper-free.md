@@ -3,7 +3,7 @@
      (issue #s below refer to PsychQuant/che-apple-mail-mcp). This plugin copy
      exists so plugin users get the discipline without cloning the repo; re-sync
      it when the upstream rule changes materially. Imported by plugin-upgrade,
-     shell v2.43.0; re-synced for #304, #404 and #534. -->
+     shell v2.43.0; re-synced for #304, #404, #534 and #599. -->
 
 # 建立信件：已移除觸發上游引文問題的注入路徑（#304 / #310）
 
@@ -61,6 +61,12 @@ AppleScript 的 `set content` / `set html content` / outgoing-message 建構中�
 | 9 | **暫時，只適用 `reply_email`**（#534）：`attachments` 非空，草稿與寄出皆然。在任何 Mail 動作、附件檔案檢查與 AppleScript 之前拒絕；工具入口的引數解析（包括第 1 類的 format 拒絕）先執行 | 以 `save_as_draft: true` 且**不帶 `attachments`** 回信，再到 Mail 的草稿匣開啟該回信、把檔案拖進撰寫視窗。原因：附件那一步在貼上內文之後寫入回信的 `content`，把貼上的內文與引用原信一起洗掉，卻回報成功。#608 落地後移除本列 |
 
 > 第 5、6 類的配方與 #304 之前的規則一致——差別是現在**工具自己會說**，不必靠人記得。
+
+## 表外：`forward_email` 不帶內文的 `save_as_draft`（參數拒絕，#599／#673）
+
+`forward_email` 帶 `save_as_draft: true` 而沒有 `body` 時，工具在入口、任何 Mail 動作之前以具名的 invalid-parameter 錯誤拒絕，零副作用（`message-composition` spec，Requirement: forward_email can save the forward as a draft）。這是 `forward_email` 的**參數拒絕**，不是上表的一類，也不是 GUI 路徑的不合格理由：上表仍是封閉九類，不延伸〈Ineligible composing calls fail without side effects〉的清單，也不當成拒絕其他工具或參數的前例。
+
+原因：不帶內文的轉寄是 Mail 原生 `forward` 加 `send`，沒有可以改成存檔的按鍵步驟。處置：帶一段內文（簡短的附註即可）並 `save_as_draft: true`，草稿走 paste 路徑以 ⌘S 存檔；或在 Mail 手動轉寄。`save_as_draft` 要含 #599 的 binary 才認得：較舊的 binary 會忽略它而**直接寄出**。#673（不帶內文的草稿模式）落地後移除這個拒絕。
 
 ## 兩項誠實記錄的能力損失
 

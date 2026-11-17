@@ -44,8 +44,8 @@ TaskCreate(subject="confirm_phase4_execute_or_iterate",
 | **Filter ambiguity** | 「陳老師」、「最近的信」、「VIP 寄來的」 | 🔴 必 confirm |
 | **Bulk operation** | search 結果 ≥ 5 封 | 🟡 建議 confirm |
 | **Destructive** | delete_email、empty Trash、bulk move | 🔴 必 confirm |
-| **Compose 寄出** | compose_email、reply_email | 🔴 必 confirm |
-| **Outbound side effect** | mark_as_junk、forward_email | 🟡 建議 confirm |
+| **Compose 寄出** | compose_email、reply_email、forward_email（`save_as_draft: true` 存成草稿、不寄出，但存好的草稿只差一個動作就會寄出，收件人與內文仍要確認；`forward_email` 存草稿要有 `body`，且要含 #599 的 binary，較舊的 binary 會忽略這個參數而直接寄出） | 🔴 必 confirm |
+| **Outbound side effect** | mark_as_junk | 🟡 建議 confirm |
 
 **Skip confirm**(可以直接執行):
 - 明確 Message-ID 的 read-only 操作(get_email、list_attachments)

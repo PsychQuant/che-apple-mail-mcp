@@ -46,6 +46,21 @@ final class MailControllerHtmlExtractionTests: XCTestCase {
                       "quoted-printable =XX hex sequences must be decoded; got: \(result)")
     }
 
+    // MARK: - quoted-printable: a hex escape is two ASCII hex digits (#641)
+
+    func testExtractHTMLBody_quotedPrintable_keepsWhatFollowsAMalformedEscape() async {
+        // spec-example: hex-escape-decoding / hex escape decoding
+        let mime = multipart(
+            htmlBody: "<p>a=ZZb a=+5b a=-0b a=\u{FF10}\u{FF15}b a=5 b caf=c3=a9 end=4</p>",
+            encoding: "quoted-printable"
+        )
+        let result = await MailController.shared.extractHTMLBody(from: mime)
+        XCTAssertTrue(result.contains("<p>a=ZZb a=+5b a=-0b a=\u{FF10}\u{FF15}b a=5 b café end=4</p>"),
+                      "only two ASCII hex digits form an escape, and the text after a bare = is kept; got: \(result)")
+        XCTAssertFalse(result.unicodeScalars.contains { $0.value < 0x20 && $0 != "\r" && $0 != "\n" },
+                       "a signed pair must not decode to a control byte; got: \(result.debugDescription)")
+    }
+
     // MARK: - base64 (#73 NEW)
 
     func testExtractHTMLBody_base64_decodesPayload() async {

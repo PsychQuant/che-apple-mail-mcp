@@ -43,8 +43,8 @@ enum ToolAccess: CaseIterable {
     /// Markdown. `save_attachment` alone would be.
     case writeFile
     /// Can send mail. A sent message cannot be recalled, a retry sends a second
-    /// one (#242), and mail leaves for third parties. `reply_email` also has a
-    /// draft mode, but it can send.
+    /// one (#242), and mail leaves for third parties. `reply_email` and
+    /// `forward_email` also have a draft mode (#599), but both can send.
     case send
 
     var annotations: Tool.Annotations {
