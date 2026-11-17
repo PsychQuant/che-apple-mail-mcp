@@ -96,6 +96,35 @@ final class DirectDraftTriggerTimingTests: XCTestCase {
         XCTAssertEqual(rest.joined(separator: "\n"), Self.untimedTrigger)
     }
 
+    // MARK: - #650: the timed path's two remaining free-text pieces
+
+    /// #650, evasions 4 and 5 on the timed path. Test 3 above removes the prelude by its length and the
+    /// mark lines by whatever `markStatement` returns, so on its own neither is compared with fixed text,
+    /// and a statement placed in the `_cheMailMark` handler body (a toggle phrased as `set the read status
+    /// of`, a branch, a `delay`) would run between the two toggles whenever timing is on while its text sits
+    /// above them. Pinning the prelude here makes the timed trigger fixed text. The prelude is shared with
+    /// the compose path's timing: a deliberate change to that has to update this copy too.
+    func testTimingPreludeIsPinnedCharacterForCharacter() {
+        let golden = """
+            use framework "Foundation"
+            use scripting additions
+            on _cheMailMark(_label)
+                log "CHE_MAIL_TIMING|" & _label & "|" & ((current application's NSDate's timeIntervalSinceReferenceDate()) as text)
+            end _cheMailMark
+
+            """
+        XCTAssertEqual(ComposeTiming.prelude, golden,
+                       "ComposeTiming.prelude is shared with the compose path's timing; the timed direct-write trigger runs it between the two read-status toggles, so a change here is a change to that script (#650, rule item 8)")
+        XCTAssertEqual(ComposeTiming.logPrefix, "CHE_MAIL_TIMING|")
+    }
+
+    /// #650: `markStatement`'s output is filtered out of the timed script by test 3 whatever it is, so text
+    /// appended to it would be invisible there. The label is arbitrary here; the shape is what is pinned.
+    func testMarkStatementIsOneCallToTheHandlerAndNothingElse() {
+        XCTAssertEqual(ComposeTiming.markStatement("x"), "my _cheMailMark(\"x\")")
+        XCTAssertEqual(ComposeTiming.markStatement("trigger_unread"), "my _cheMailMark(\"trigger_unread\")")
+    }
+
     // MARK: - Task 2.1: taking only some captured marks
 
     func testTakingMatchingMarksLeavesTheOthersInTheBuffer() {
