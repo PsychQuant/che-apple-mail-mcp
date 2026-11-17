@@ -130,8 +130,8 @@ final class DirectDraftTriggerTimingTests: XCTestCase {
     /// #650, review round 1: the whole timed trigger script, written out. Test 3 filters the mark lines by
     /// set membership and trims them, and `dropFirst(prelude.count)` never looks at the dropped text, so
     /// neither the number nor the place nor the indentation of the four marks was pinned. This copy fixes all
-    /// of it for the timed path, independently of `ComposeTiming`. The only thing outside it is the row id,
-    /// an integer.
+    /// of it for the timed path, independently of `ComposeTiming`. The builder is assumed to be a pure
+    /// function of the row id; only one row id is exercised.
     func testTimedTriggerScriptIsPinnedWholeWithFourMarksInPlace() {
         let golden = """
             use framework "Foundation"

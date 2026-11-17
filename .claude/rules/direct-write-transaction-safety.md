@@ -70,7 +70,7 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
 就是 `buildDirectDraftTriggerScript` 在同一個 `timing` 下的輸出）與 `uploadState`（`DraftStoreWriterTests`；讀取失敗見 `DirectDraftPathOutcomeTests`，#630），
 `readFlag` 與 `createdText` 由 `DirectDraftPathOutcomeTests` 走過（#484；`readFlag` 讀取失敗寫 stderr、找不到列不寫，也在那裡，#653），`markDirectDraftRead` 在那裡是替身，真的那個沒有測試。
 
-逃逸寫法 4、5（下面那張清單的編號，不是上面八項保證的編號）在計時路徑上的偵測缺口，由 #650 以文字釘住補上。原本計時路徑的 script 在 `ComposeTiming.prelude` 與 `markStatement` 兩處不是固定文字（`testTimedTriggerIsTheUntimedOnePlusItsMarks` 先剝掉前導長度與標記行再比對，標記行以集合成員與去掉縮排的方式比對），現在有三條釘住：prelude 逐字（`testTimingPreludeIsPinnedCharacterForCharacter`）、`markStatement` 對觸發用到的每個標籤的輸出（`testMarkStatementIsOneCallToTheHandlerAndNothingElse`），以及開著計時送出的整份 script 寫死、四個標記的數量、位置與縮排都固定（`testTimedTriggerScriptIsPinnedWholeWithFourMarksInPlace`，row id 以外都是固定文字）。這些釘住的是**送給 osascript 的 script 文字**，不是 Mail 對它的反應：Mail 對這份固定 script 的行為（一次上傳、已讀狀態）靠 #463 與 #488（50 封、五種間隔）的 live 證據，不是待補的 live 關卡（`deferred-live-verification.md` 不適用：沒有留下 KNOWN GATE）。文字以外的管道沒有任何測試走過：`scriptRunnerOverride` 之下的子程序傳輸層（所有 script 共用，不是直接寫入專屬）、osascript 本身與 `use scripting additions` 載入的東西、逾時秒數、決定是否計時的環境變數。這些是記錄下來的界線，不是待辦；加 live 檢查也不會移除它們。計時 prelude 與 compose 路徑共用，改它要同步更新釘住的副本，而且照上面的規則先取得本節要求的證據，不能因為「只是計時」就順手改。
+逃逸寫法 4、5（下面那張清單的編號，不是上面八項保證的編號）在計時路徑上的偵測缺口，由 #650 以文字釘住補上。原本計時路徑的 script 在 `ComposeTiming.prelude` 與 `markStatement` 兩處不是固定文字（`testTimedTriggerIsTheUntimedOnePlusItsMarks` 先剝掉前導長度與標記行再比對，標記行以集合成員與去掉縮排的方式比對），現在有三條釘住：prelude 逐字（`testTimingPreludeIsPinnedCharacterForCharacter`）、`markStatement` 對觸發用到的每個標籤的輸出（`testMarkStatementIsOneCallToTheHandlerAndNothingElse`），以及開著計時送出的整份 script 寫死、四個標記的數量、位置與縮排都固定（`testTimedTriggerScriptIsPinnedWholeWithFourMarksInPlace`，row id 以外都是固定文字）。這些釘住的是 **`buildDirectDraftTriggerScript` 交給 script 傳輸層的文字**（對 row id 305619；builder 是純函式是假設，沒有測試保證），不是實際送到 osascript 的位元組，也不是 Mail 對它的反應：Mail 對這份固定 script 的行為（一次上傳、已讀狀態）靠 #463 與 #488（50 封、五種間隔）的 live 證據，不是待補的 live 關卡（`deferred-live-verification.md` 不適用：沒有留下 KNOWN GATE）。文字以外的管道沒有任何測試走過：`scriptRunnerOverride` 之下的子程序傳輸層（所有 script 共用，不是直接寫入專屬；它怎麼把文字交給 osascript 也在這裡）、osascript 本身與 `use scripting additions` 載入的東西、逾時秒數、決定是否計時的環境變數。這些是記錄下來的界線，不是待辦；加 live 檢查也不會移除它們。計時 prelude 與 compose 路徑共用，改它要同步更新釘住的副本，而且照上面的規則先取得本節要求的證據，不能因為「只是計時」就順手改。
 
 結構檢查擋不住所有削弱方式。#490 第 4 輪驗證找到下列六種寫法，這兩條守門測試都不會轉紅。#492 之後，每一種都有別的測試會轉紅，列在各項後面，都實際改過原始碼確認：
 
@@ -83,7 +83,7 @@ opt-in 直接寫入（`create_draft` + `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`，
    只在計時時才多加的，`testTimedTriggerIsTheUntimedOnePlusItsMarks`；
    藏在計時用的 `_cheMailMark` handler 本體（`ComposeTiming.prelude`）裡的，`testTimingPreludeIsPinnedCharacterForCharacter`；
    接在 `ComposeTiming.markStatement` 輸出後面的，`testMarkStatementIsOneCallToTheHandlerAndNothingElse`；增減、搬動標記行的，`testTimedTriggerScriptIsPinnedWholeWithFourMarksInPlace`（#650）；
-5. 用 `if` 等控制流程包住兩次切換：同第 4 項前兩條；在計時用的 handler 本體裡放 `if`、`repeat`、`delay`：`testTimingPreludeIsPinnedCharacterForCharacter`；
+5. 用 `if` 等控制流程包住兩次切換：同第 4 項前兩條；依標籤才輸出控制流程的 `markStatement`：`testMarkStatementIsOneCallToTheHandlerAndNothingElse` 與 `testTimedTriggerScriptIsPinnedWholeWithFourMarksInPlace`；在計時用的 handler 本體裡放 `if`、`repeat`、`delay`：`testTimingPreludeIsPinnedCharacterForCharacter`；
 6. 另寫一條名稱不同、不經 `attemptSteps` 的平行路徑：再開一次 `DraftStoreWriter(` 或再寫一次 `writer.insert(`，
    `testTheStoreIsOpenedAndWrittenInOnePlace` 會轉紅。
 

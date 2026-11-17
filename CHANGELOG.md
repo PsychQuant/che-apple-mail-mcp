@@ -36,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run between the two read-status toggles whenever timing is on and passed every
   test. Three new tests pin the prelude, `markStatement` for every label the
   trigger uses, and the whole timed script (four marks, their places and
-  indentation). They pin the text sent to osascript, not Mail's reaction to it;
+  indentation). They pin the text the builder hands to the script transport (for one row id), not the bytes osascript receives and not Mail's reaction to it;
   the rule's known-gap bullet is replaced by the test names and a note that
   Mail's behaviour for the pinned script, the transport below the test seam and
   the other non-text channels are a documented limit, not a pending live check.
