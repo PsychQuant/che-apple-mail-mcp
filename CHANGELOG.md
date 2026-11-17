@@ -59,6 +59,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`get_mail_log_events` signals the `log` child's whole process group**
+  ([#646](https://github.com/PsychQuant/che-apple-mail-mcp/issues/646)).
+  The runner now starts `/usr/bin/log` with `posix_spawn` in a process group of
+  its own (`POSIX_SPAWN_SETPGROUP`), with only stdin (`/dev/null`), stdout and
+  stderr inherited (`POSIX_SPAWN_CLOEXEC_DEFAULT`) and default signal handling,
+  and reaps it itself. Every stop sends SIGTERM to the group, gives the leader
+  two seconds, sends SIGKILL to the group, and only then reaps the leader, so
+  the group number cannot belong to anyone else while it is signalled. A
+  descendant that held the child's stderr (or stdout) can no longer keep the
+  stderr reader thread and its descriptor alive: on a natural end the leader is
+  observed without being reaped, and if stderr has not closed within the
+  existing 2 s the group gets SIGKILL before the reap. The group is also swept
+  on a normal exit, so a descendant that holds neither pipe does not outlive the
+  call. The two-slot cap, the cancellation behaviour and the exit-status
+  semantics (`-1` for a child that could not be reaped) are unchanged. A spawn
+  failure still reports `spawnFailed` with the executable path and the reason
+  `posix_spawn` gave. Remaining limit: a descendant that calls `setsid` or `setpgid`
+  leaves the group and is not reached, and no test covers that case. No such
+  descendant is known for `log show --style ndjson`; the tests use descendants
+  that stay in the group.
+
 - **Attachment paths must be regular files**
   ([#543](https://github.com/PsychQuant/che-apple-mail-mcp/issues/543)).
   `compose_email` and `create_draft` validated attachments only by existence,
@@ -77,6 +98,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the server's working directory. **Behaviour change:** directories are rejected
   too, including package documents such as `.rtfd` or `.app` bundles that Mail
   might have attached before, and so are paths with `.` or `..` components.
+- **Direct-write trigger: the timed path is pinned as text**
+  ([#650](https://github.com/PsychQuant/che-apple-mail-mcp/issues/650)). Tests and
+  docs only; nothing under `Sources/` changed. `ComposeTiming.prelude` and
+  `ComposeTiming.markStatement` were not compared with fixed text on the timed
+  path, so a toggle, a branch or a `delay` placed in the mark handler would have
+  run between the two read-status toggles whenever timing is on and passed every
+  test. Three new tests pin the prelude, `markStatement` for every label the
+  trigger uses, and the whole timed script (four marks, their places and
+  indentation). They pin the text the builder hands to the script transport (for one row id), not the bytes osascript receives and not Mail's reaction to it;
+  the rule's known-gap bullet is replaced by the test names and a note that
+  Mail's behaviour for the pinned script, the transport below the test seam and
+  the other non-text channels are a documented limit, not a pending live check.
+  The prelude is shared with the compose path's timing, so changing that now
+  means updating the pin.
 
 - **A handler test with an address as `account_name` no longer reads the machine's
   accounts** ([#633](https://github.com/PsychQuant/che-apple-mail-mcp/issues/633)).

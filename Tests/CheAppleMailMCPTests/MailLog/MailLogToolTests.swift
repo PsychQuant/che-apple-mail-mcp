@@ -41,6 +41,16 @@ final class MailLogToolTests: XCTestCase {
         }
     }
 
+    /// #466 owes a live check (deferred-live-verification.md): the `events` parameter must say it has only
+    /// been run on synthetic events. Remove this sentence, and this test, only once the live check is posted.
+    func testEventsParameterCarriesTheUnverifiedCaveat() throws {
+        guard case .object(let schema) = MailLogTool.definition.inputSchema,
+              case .object(let properties)? = schema["properties"],
+              case .object(let events)? = properties["events"],
+              case .string(let text)? = events["description"] else { return XCTFail("no events description") }
+        XCTAssertTrue(text.contains("Not yet run against a real Mail log (tests use synthetic events only, #466)."))
+    }
+
     func testSchemaListsExactlyTheParametersTheValidatorAccepts() throws {
         guard case .object(let schema) = MailLogTool.definition.inputSchema,
               case .object(let properties)? = schema["properties"] else { return XCTFail("no properties") }

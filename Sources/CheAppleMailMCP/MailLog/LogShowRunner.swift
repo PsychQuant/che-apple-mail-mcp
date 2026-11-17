@@ -7,8 +7,8 @@ import Foundation
 /// hour of Mail's logs is ~90 MB, and parts of it (message arguments) derive
 /// from mail content. So: absolute executable path, argument array (no shell),
 /// stdin closed, line-by-line streaming (never the whole output in memory),
-/// a byte cap, a wall-clock deadline, and the child is always terminated and
-/// reaped once we stop reading.
+/// a byte cap, a wall-clock deadline, and the child's whole process group is always
+/// signalled and the child reaped once we stop reading (#646).
 ///
 /// Reading is `poll`-sliced rather than "block until EOF". A grandchild that
 /// inherits the stdout pipe keeps EOF from ever arriving after we kill the
@@ -73,52 +73,64 @@ final class LogShowRunner: LogEventSource {
     func read(_ request: LogReadRequest, cancellation: LogReadCancellation,
               onLine: (Data) -> Bool) -> LogReadEnd {
         if cancellation.isCancelled { return .cancelled }
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = makeArguments(request)
         var environment = ProcessInfo.processInfo.environment
         environment["LANG"] = "en_US.UTF-8"
-        process.environment = environment
-        let stdout = Pipe(), stderr = Pipe()
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = stdout
-        process.standardError = stderr
+        let child: SpawnedChild
         do {
-            try process.run()
+            child = try SpawnedChild.spawn(executablePath: executableURL.path,
+                                           arguments: makeArguments(request),
+                                           environment: environment)
         } catch {
-            return .spawnFailed("could not launch \(executableURL.path): \(error.localizedDescription)")
+            let why = (error as? SpawnFailure)?.message ?? error.localizedDescription
+            return .spawnFailed("could not launch \(executableURL.path): \(why)")
         }
 
         let tail = TailBuffer(limit: Self.stderrTailBytes)
         let stderrDone = DispatchSemaphore(value: 0)
-        let stderrHandle = stderr.fileHandleForReading
+        let stderrFD = child.stderrFD
+        Self.liveStderrReaderCounter.increment()
         Thread.detachNewThread {
-            while let chunk = try? stderrHandle.read(upToCount: 4096), !chunk.isEmpty {
-                tail.append(chunk)
+            var chunk = [UInt8](repeating: 0, count: 4096)
+            while true {
+                let n = Darwin.read(stderrFD, &chunk, chunk.count)
+                if n > 0 { tail.append(Data(chunk[0..<n])); continue }
+                if n < 0, errno == EINTR { continue }
+                break
             }
             // The reader owns the descriptor and closes it itself, after its last read: closing it from the
             // calling thread while a read is still blocked (a descendant can hold the pipe open past any
             // wait) would let the number be reused by the next call's pipe (verify round 3, 14; round 4, 11/15).
-            try? stderrHandle.close()
+            close(stderrFD)
+            Self.liveStderrReaderCounter.decrement()
             stderrDone.signal()
         }
 
-        let stopped = pump(fd: stdout.fileHandleForReading.fileDescriptor,
-                           cancellation: cancellation, onLine: onLine)
+        let stopped = pump(fd: child.stdoutFD, cancellation: cancellation, onLine: onLine)
 
         let end: LogReadEnd
         if let stopped {
-            Self.terminateAndReap(process)
+            _ = Self.stopGroup(child)
             end = stopped
         } else {
-            // Natural EOF. The child should be exiting; bound the wait anyway.
-            let status = Self.waitForExit(process, seconds: 5)
-            _ = stderrDone.wait(timeout: .now() + 2)
+            // Natural EOF. The leader should be exiting; bound the wait anyway. It is observed, not
+            // reaped, so its group number stays ours while we signal (#646).
+            let status: Int32
+            if child.waitForExit(timeout: 5) {
+                let stderrFinished = stderrDone.wait(timeout: .now() + 2) == .success
+                // A descendant may still hold stderr, or hold nothing and simply linger. The leader is a
+                // zombie, so the group number cannot have been reused: signal, then reap.
+                child.signalGroup(SIGKILL)
+                if !stderrFinished { _ = stderrDone.wait(timeout: .now() + 2) }
+                status = child.reap(waitingUpTo: 2)
+            } else {
+                status = Self.stopGroup(child)
+                _ = stderrDone.wait(timeout: .now() + 2)
+            }
             end = .exhausted(exitStatus: status,
                              stderrTail: String(decoding: tail.snapshot(), as: UTF8.self)
                                 .trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        try? stdout.fileHandleForReading.close()
+        close(child.stdoutFD)
         return end
     }
 
@@ -174,28 +186,31 @@ final class LogShowRunner: LogEventSource {
 
     // MARK: - Process lifecycle
 
-    /// SIGTERM, short grace, then SIGKILL — and always wait, so no zombie.
-    private static func terminateAndReap(_ process: Process) {
-        if process.isRunning { process.terminate() }
-        let exited = DispatchSemaphore(value: 0)
-        Thread.detachNewThread { process.waitUntilExit(); exited.signal() }
-        if exited.wait(timeout: .now() + 2) == .timedOut {
-            // isRunning guards a pid that was reaped (and may be reused) in the gap.
-            let pid = process.processIdentifier
-            if pid > 0, process.isRunning { kill(pid, SIGKILL) }
-            _ = exited.wait(timeout: .now() + 2)
-        }
+    /// #646 — SIGTERM to the whole group, a short grace for the leader, then SIGKILL to the group
+    /// (it sweeps whatever ignored SIGTERM), and only then reap. Both signals go out while the leader
+    /// is unreaped, so the group number cannot belong to anyone else. Returns the leader's status,
+    /// or -1 for one that could not be reaped.
+    private static func stopGroup(_ child: SpawnedChild) -> Int32 {
+        child.signalGroup(SIGTERM)
+        _ = child.waitForExit(timeout: 2)
+        child.signalGroup(SIGKILL)
+        return child.reap(waitingUpTo: 2)
     }
 
-    private static func waitForExit(_ process: Process, seconds: TimeInterval) -> Int32 {
-        let exited = DispatchSemaphore(value: 0)
-        Thread.detachNewThread { process.waitUntilExit(); exited.signal() }
-        if exited.wait(timeout: .now() + seconds) == .timedOut {
-            terminateAndReap(process)
-        }
-        // `terminationStatus` raises on a process that is still running (an unkillable child).
-        return process.isRunning ? -1 : process.terminationStatus
-    }
+    // MARK: - Test seam
+
+    /// Stderr reader threads that have started and not yet closed their descriptor. A reader that a
+    /// descendant keeps blocked shows here; a read that returned has none left.
+    static var liveStderrReaders: Int { liveStderrReaderCounter.value }
+    private static let liveStderrReaderCounter = LiveCounter()
+}
+
+private final class LiveCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() { lock.lock(); count += 1; lock.unlock() }
+    func decrement() { lock.lock(); count -= 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
 }
 
 /// Keeps only the last `limit` bytes appended, under a lock (two threads touch it).
