@@ -155,6 +155,20 @@ final class LogShowRunnerTests: XCTestCase {
         let (_, end, secs) = collect(shRunner("echo a; sleep \(hold)", deadline: 1))
         XCTAssertEqual(end, .deadline)
         XCTAssertLessThan(secs, .seconds(10), "deadline must not depend on the pipe reaching EOF (took \(secs))")
+        // #646: the group is signalled, so the pkill above is only a safety net.
+        let clock = ContinuousClock()
+        let giveUp = clock.now.advanced(by: .seconds(3))
+        while Self.isRunning("sleep \(hold)"), clock.now < giveUp { Thread.sleep(forTimeInterval: 0.05) }
+        XCTAssertFalse(Self.isRunning("sleep \(hold)"), "the grandchild survived the deadline")
+    }
+
+    private static func isRunning(_ pattern: String) -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        p.arguments = ["-f", pattern]
+        p.standardOutput = FileHandle.nullDevice
+        try? p.run(); p.waitUntilExit()
+        return p.terminationStatus == 0
     }
 
     private static func run(_ path: String, _ arguments: [String]) {
