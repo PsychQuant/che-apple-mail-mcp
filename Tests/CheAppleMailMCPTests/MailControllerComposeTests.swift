@@ -990,6 +990,42 @@ final class MailControllerComposeTests: XCTestCase {
         await assertDenied([f.secret], roots: [missing, f.denied], containing: f.denied)
     }
 
+    func testValidateAttachmentPaths_aDenyRootThatCannotBeExaminedSaysSoAndRejectsEveryAttachment() async throws {
+        let f = try makeDenyFixture()
+        guard getuid() != 0 else { throw XCTSkip("root can examine a directory with no permissions") }
+        let locked = "\(f.root)/locked"
+        try FileManager.default.createDirectory(atPath: locked, withIntermediateDirectories: false)
+        let unreadableRoot = "\(locked)/inner"
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked)
+        addTeardownBlock { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked) }
+        do {
+            try await MailController.shared.validateAttachmentPaths([f.ok], denyRoots: [unreadableRoot])
+            XCTFail("an unexaminable deny root must reject the attachment")
+        } catch let error as MailError {
+            guard case .invalidParameter(let msg) = error else { return XCTFail("unexpected error \(error)") }
+            XCTAssertTrue(msg.contains("the deny-list check could not be completed"), msg)
+            XCTAssertTrue(msg.contains(unreadableRoot), msg)
+            XCTAssertTrue(msg.contains("Permission denied"), "the errno description must be in the message: \(msg)")
+        }
+    }
+
+    func testValidateAttachmentPaths_theDefaultPrivateRootIsReachedBySpellingsThatKeepThePrefix() async throws {
+        // #710: resolution strips a leading /private, so an ordinary path never matches that default root as
+        // text. A spelling that keeps the prefix does reach its directory, and the identity comparison refuses it.
+        let f = try makeDenyFixture()
+        for spelled in try specialSpellings(of: f.physical + "/allowed/ok.txt") {
+            do {
+                try await MailController.shared.validateAttachmentPaths([spelled])
+                XCTFail("\(spelled) is under the default /private root and must be refused")
+            } catch let error as MailError {
+                guard case .invalidParameter(let msg) = error else { return XCTFail("unexpected \(error)") }
+                XCTAssertTrue(msg.contains("resolves under sensitive directory '/private'"), msg)
+            }
+        }
+        // The same file by its ordinary spelling is accepted (the existing /tmp behaviour).
+        try await MailController.shared.validateAttachmentPaths([f.ok])
+    }
+
     func testValidateAttachmentPaths_aTempFileIsAcceptedUnderTheDefaultList() async throws {
         let tmp = "/tmp/che-apple-mail-671-\(UUID().uuidString).txt"
         FileManager.default.createFile(atPath: tmp, contents: Data("ok".utf8))
@@ -1002,7 +1038,7 @@ final class MailControllerComposeTests: XCTestCase {
         let roots = MailController.denyRootIdentities([f.denied])
         XCTAssertEqual(roots.count, 1)
         // A deny root that exists but cannot be examined (identity nil) rejects every path.
-        let blind: [(root: String, identity: MailController.FileIdentity?)] = [("/some/root", nil)]
+        let blind: [MailController.DenyRootIdentity] = [("/some/root", nil, "Operation not permitted")]
         guard case .unverifiable = MailController.denyRootVerdict(forResolvedPath: f.ok, identities: blind) else {
             return XCTFail("an unreadable deny root must make the verdict unverifiable")
         }
@@ -1012,6 +1048,12 @@ final class MailControllerComposeTests: XCTestCase {
             return XCTFail("a prefix that cannot be examined must make the verdict unverifiable")
         }
         XCTAssertEqual(prefix, "\(f.root)/missing-dir")
+        // A bare /.resolve/<n> is EINVAL; as the final component it still rejects (the exemption is for non-final).
+        if FileManager.default.fileExists(atPath: "/.resolve/0" + f.physical) {
+            guard case .unverifiable = MailController.denyRootVerdict(forResolvedPath: "/.resolve/0", identities: roots) else {
+                return XCTFail("a final EINVAL prefix must make the verdict unverifiable")
+            }
+        }
         // The ordinary case is clear, and the denied one names the root.
         XCTAssertEqual(MailController.denyRootVerdict(forResolvedPath: f.ok, identities: roots), .clear)
         XCTAssertEqual(MailController.denyRootVerdict(forResolvedPath: f.secret, identities: roots), .under(f.denied))
@@ -1028,7 +1070,7 @@ final class MailControllerComposeTests: XCTestCase {
             guard case .invalidParameter(let msg) = error else {
                 return XCTFail("expected invalidParameter, got \(error)", file: file, line: line)
             }
-            XCTAssertTrue(msg.contains("sensitive director") && msg.contains(fragment),
+            XCTAssertTrue(msg.contains("resolves under sensitive directory") && msg.contains(fragment),
                           "'\(msg)' must name the sensitive directory '\(fragment)'", file: file, line: line)
         } catch {
             XCTFail("unexpected error: \(error)", file: file, line: line)

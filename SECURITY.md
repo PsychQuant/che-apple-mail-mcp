@@ -101,7 +101,10 @@ directory that exists, so a spelling the text comparison does not match (a
 root-level prefix that resolution keeps, or a name that differs from the
 directory's only in letter case) is still refused. A prefix, or a deny-listed
 directory, that cannot be examined rejects the path; a deny-listed directory
-that does not exist is skipped.
+that does not exist is skipped. A deny-listed directory that exists but cannot
+be examined (for example, a permission error on one of its parents) therefore
+makes every attachment fail, with a message that names the directory and the
+system's reason; this is deliberate (an error never means allowed).
 
 This list is conservative — it catches the obvious sensitive directories
 without breaking common attachment workflows from `~/Documents/`,

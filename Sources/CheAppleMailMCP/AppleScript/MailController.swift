@@ -1641,13 +1641,17 @@ actor MailController {
     /// The identity of each deny root that exists (`stat` follows a link such as `/var`, so the identity is the
     /// directory's). A root that does not exist has nothing to protect and is skipped. A root that exists but
     /// cannot be examined is returned with a nil identity, so that the verdict fails closed.
-    static func denyRootIdentities(_ roots: [String]) -> [(root: String, identity: FileIdentity?)] {
+    /// `failure` is the system's description of why the directory could not be examined.
+    typealias DenyRootIdentity = (root: String, identity: FileIdentity?, failure: String?)
+
+    static func denyRootIdentities(_ roots: [String]) -> [DenyRootIdentity] {
         roots.compactMap { root in
             var info = stat()
             if stat(root, &info) == 0 {
-                return (root, FileIdentity(device: Int64(info.st_dev), inode: UInt64(info.st_ino)))
+                return (root, FileIdentity(device: Int64(info.st_dev), inode: UInt64(info.st_ino)), nil)
             }
-            return (errno == ENOENT || errno == ENOTDIR) ? nil : (root, nil)
+            let code = errno
+            return (code == ENOENT || code == ENOTDIR) ? nil : (root, nil, String(cString: strerror(code)))
         }
     }
 
@@ -1657,9 +1661,9 @@ actor MailController {
     /// rejects the path. The one exception is `EINVAL` on a prefix that is followed by a longer one, which is how
     /// the kernel answers a bare `/.resolve/<n>` (it names no directory until a path follows).
     static func denyRootVerdict(forResolvedPath resolved: String,
-                                identities: [(root: String, identity: FileIdentity?)]) -> DenyRootVerdict {
+                                identities: [DenyRootIdentity]) -> DenyRootVerdict {
         if let blind = identities.first(where: { $0.identity == nil }) {
-            return .unverifiable(prefix: blind.root, reason: "the directory cannot be examined")
+            return .unverifiable(prefix: blind.root, reason: blind.failure ?? "the directory cannot be examined")
         }
         guard !identities.isEmpty else { return .clear }
         let wanted = Dictionary(identities.compactMap { entry in entry.identity.map { ($0, entry.root) } },
@@ -1808,7 +1812,7 @@ actor MailController {
                 failures.append("'\(path)' rejected: resolves under sensitive directory '\(root)'")
                 continue
             case .unverifiable(let prefix, let reason):
-                failures.append("'\(path)' rejected: could not verify '\(prefix)' against the sensitive directories (\(reason))")
+                failures.append("'\(path)' rejected: the deny-list check could not be completed, because '\(prefix)' could not be examined (\(reason)); no attachment can be accepted until it can")
                 continue
             }
 

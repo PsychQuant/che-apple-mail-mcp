@@ -203,7 +203,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   spelling of a deny-listed directory is refused, including spellings that
   differ only in letter case. A prefix or a deny-listed directory that cannot be
   examined rejects the path; a deny-listed directory that does not exist is
-  skipped. Hard links to a deny-listed file are still not recognised (see
+  skipped. When a deny-listed directory exists but cannot be examined, every
+  attachment is refused with a message that says the deny-list check could not
+  be completed and names the directory and the system's reason. Hard links to a
+  deny-listed file are still not recognised (see
   SECURITY.md). Tests use a temporary directory as the deny-listed root through
   an internal parameter of the validator.
 - **A failed read of a direct draft's read flag says why**
