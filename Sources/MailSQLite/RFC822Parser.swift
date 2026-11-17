@@ -272,9 +272,12 @@ public enum RFC822Parser {
     }
 
     /// #720 test seam: when set, `decodeRFC2047` reports once per call how many
-    /// characters its searches for the end of an encoded-word (`?=`) examined.
-    /// The work-count tests read it instead of a clock. Nothing is measured
-    /// while it is nil, so production pays one nil check per call.
+    /// characters its searches examined: the search for the `?` that ends a
+    /// charset and the search for the end of an encoded-word (`?=`). The
+    /// work-count tests read it instead of a clock. Nothing is measured while it
+    /// is nil, so production pays one nil check per call. It is not
+    /// synchronized: tests set and clear it around one call, and it must not be
+    /// set while other code decodes concurrently.
     nonisolated(unsafe) static var terminatorSearchWorkProbe: ((Int) -> Void)?
 
     /// State of the searches for `?=` within one `decodeRFC2047` call.
@@ -287,6 +290,13 @@ public enum RFC822Parser {
         /// here on either: `decodeRFC2047` only moves forward. Remembering it is
         /// what keeps a value with many openers and no terminator linear.
         var absentFrom: Substring.Index?
+        /// The last search for the `?` that ends a charset: where it started, and the `?` it found
+        /// (nil: none from there on). Every search runs over a suffix of the same value to its end,
+        /// so a search that starts later but not after that `?` finds the same one, and after a
+        /// nil none. The search compares Characters: a `?` joined with a following mark is not a
+        /// `?`, while the opener search (literal) still finds the `=?` in front of it, so without
+        /// this every such opener scanned to the end of the value.
+        var question: (from: Substring.Index, at: Substring.Index?)?
     }
 
     /// #352 verify: lets the differential test drive the pre-fix reference
@@ -309,8 +319,22 @@ public enum RFC822Parser {
     /// Input starts right after "=?" — e.g., "utf-8?Q?=E9=84=AD?= rest"
     private static func parseEncodedWord(_ input: Substring, search: inout TerminatorSearch) -> EncodedWord? {
         // Find charset: everything up to first ?
-        guard let q1 = input.firstIndex(of: "?") else { return nil }
-        let charset = String(input[input.startIndex..<q1])
+        // The search for that `?` is remembered for the call (#720): a later opener that starts at or
+        // after where the last search started, and not after the `?` it found, gets the same answer.
+        let q1: Substring.Index
+        if let last = search.question, input.startIndex >= last.from,
+           last.at.map({ input.startIndex <= $0 }) ?? true {
+            guard let at = last.at else { return nil }
+            q1 = at
+        } else {
+            let questionMark = input.firstIndex(of: "?")
+            if search.measure {
+                search.work += input.distance(from: input.startIndex, to: questionMark ?? input.endIndex)
+            }
+            search.question = (input.startIndex, questionMark)
+            guard let at = questionMark else { return nil }
+            q1 = at
+        }
 
         // Find encoding: single char after charset's ?
         let afterQ1 = input.index(after: q1)
@@ -336,6 +360,9 @@ public enum RFC822Parser {
         }
 
         let text = String(textRegion[textRegion.startIndex..<endRange.lowerBound])
+        // Copied only now that the word is complete: the word is consumed, so these copies never
+        // overlap (copying before the checks made every rejected opener copy to the same `?`).
+        let charset = String(input[input.startIndex..<q1])
 
         return EncodedWord(
             charset: charset,
