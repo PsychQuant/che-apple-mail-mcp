@@ -368,8 +368,7 @@ public enum RFC822Parser {
                     }
                     break
                 }
-                let hex = String(text[next1]) + String(text[next2])
-                if let byte = UInt8(hex, radix: 16) {
+                if let byte = HexEscape.byte(text[next1], text[next2]) {
                     data.append(byte)
                     i = text.index(after: next2)
                     continue

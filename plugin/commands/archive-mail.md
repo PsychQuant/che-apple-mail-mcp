@@ -2606,35 +2606,46 @@ def reconcile_dates(emails, today=None):
             "date_excluded_count": len(excluded), "date_excluded": excluded}
 
 
-def thread_sort_key(date_text, file):
-    """Total order for thread messages (#556): readable before unreadable, then by instant, then file name.
-
-    A value with a known zone is placed by its UTC day and UTC time; a date-only or zone-less value by the day as
-    written, at the start of that day for date-only. That position is an approximation, not data."""
-    name = file if isinstance(file, str) else ""
+def _thread_position(date_text):
+    """-> (key without the file name, readable). readable is True only when parse_archive_date reads the value and,
+    with a zone, it converts to UTC; only those values may become first_message / last_message."""
     parsed = parse_archive_date(date_text)
     if parsed is None:
-        return (1, "", "", name)
+        day = to_ymd(date_text)   # a zone name the recipe refuses (#644): the day as written is still known
+        return ((0, day, "00:00:00"), False) if day else ((1, "", ""), False)
     if isinstance(parsed, datetime):
         if parsed.tzinfo is not None:
             try:
                 parsed = parsed.astimezone(timezone.utc)
             except OverflowError:  # year 1 / 9999 with an offset: treat as unreadable, never crash
-                return (1, "", "", name)
-        return (0, parsed.date().isoformat(), parsed.time().isoformat(), name)
-    return (0, parsed.isoformat(), "00:00:00", name)
+                return (1, "", ""), False
+        return (0, parsed.date().isoformat(), parsed.time().isoformat()), True
+    return (0, parsed.isoformat(), "00:00:00"), True
+
+
+def thread_sort_key(date_text, file):
+    """Total order for thread messages (#556): placed values before unplaced ones, then by instant, then file name.
+
+    A value with a known zone is placed by its UTC day and UTC time (an RFC -0000 time is UTC, so it sits with its Z
+    twin); a date-only or zone-less value by the day as written, at the start of that day for date-only; a value
+    whose zone name the recipe refuses (a bare CST) at the start of the day to_ymd reads (#644). Within about a day,
+    the true order of date-only, zone-less and zone-unknown values cannot be recovered from the archive: the
+    position is an approximation, not data. A value with no readable day sorts last."""
+    return _thread_position(date_text)[0] + (file if isinstance(file, str) else "",)
 
 
 def thread_order(messages):
-    """messages: list of {"date", "file"} dicts. Returns (sorted copy, unreadable files). Nothing is dropped."""
+    """messages: list of {"date", "file"} dicts. Returns (sorted copy, unreadable files). Nothing is dropped.
+    unreadable lists every value parse_archive_date cannot read, including those placed by their day (#644)."""
     ordered = sorted(messages, key=lambda m: thread_sort_key(m.get("date"), m.get("file")))
-    unreadable = [m.get("file") for m in ordered if thread_sort_key(m.get("date"), m.get("file"))[0] == 1]
+    unreadable = [m.get("file") for m in ordered if not _thread_position(m.get("date"))[1]]
     return ordered, unreadable
 
 
 def thread_bounds(messages):
-    """first_message / last_message: the raw `date` string of the earliest / latest readable message, else None."""
-    readable = [m for m in messages if thread_sort_key(m.get("date"), m.get("file"))[0] == 0]
+    """first_message / last_message: the raw `date` string of the earliest / latest readable message, else None.
+    A value placed only by its day (#644) is not readable here, so the bounds keep their meaning."""
+    readable = [m for m in messages if _thread_position(m.get("date"))[1]]
     if not readable:
         return {"first_message": None, "last_message": None}
     keyed = sorted(readable, key=lambda m: thread_sort_key(m.get("date"), m.get("file")))

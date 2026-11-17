@@ -1185,16 +1185,18 @@ actor MailController {
         while i < result.endIndex {
             if result[i] == "=" && result.distance(from: i, to: result.endIndex) >= 3 {
                 let hexStart = result.index(after: i)
-                let hexEnd = result.index(hexStart, offsetBy: 2)
-                let hex = String(result[hexStart..<hexEnd])
-                if let byte = UInt8(hex, radix: 16) {
+                let lowStart = result.index(after: hexStart)
+                if let byte = HexEscape.byte(result[hexStart], result[lowStart]) {
                     bytes.append(byte)
+                    i = result.index(after: lowStart)
                 } else {
                     // Malformed `=XX` — pass the literal `=` through as
-                    // its UTF-8 encoding (1 byte for ASCII).
+                    // its UTF-8 encoding (1 byte for ASCII) and go on from
+                    // the next character: the two after it are text (#641;
+                    // this branch used to skip them, so `=ZZ` came out `=`).
                     bytes.append(contentsOf: result[i].utf8)
+                    i = hexStart
                 }
-                i = hexEnd
             } else {
                 bytes.append(contentsOf: result[i].utf8)
                 i = result.index(after: i)
