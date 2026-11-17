@@ -84,7 +84,7 @@ final class SearchMessageIDTests: XCTestCase {
     func testTheValueCapCountsUTF8BytesNotCharacters() throws {
         let store = try MessageIDStore(testCase: self)
         let marks = "<a" + String(repeating: "\u{0301}", count: 3000) + ">"
-        XCTAssertLessThan(marks.count, MessageIDLookup.maxLength)
+        XCTAssertLessThan(marks.count, MessageIDLookup.maxLength, "few Characters")
         XCTAssertGreaterThan(marks.utf8.count, MessageIDLookup.maxLength)
         let row = SearchResult(id: 1, subject: "", senderAddress: "", senderName: "", dateReceived: Date(), accountName: "",
                                mailboxPath: "INBOX", isRead: false, isFlagged: false, toRecipients: [], mailboxURL: MessageIDStore.mailboxURL())

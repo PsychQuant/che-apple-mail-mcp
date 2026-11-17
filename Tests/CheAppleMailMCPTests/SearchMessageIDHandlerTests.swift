@@ -209,6 +209,17 @@ final class SearchMessageIDHandlerTests: XCTestCase {
         }
     }
 
+    // A count mismatch must never drop or reorder a row.
+    func testApplyMessageIDsKeepsEveryRowInOrder() {
+        let rows: [[String: Any]] = [["id": "a"], ["id": "b"], ["id": "c"]]
+        let full = CheAppleMailMCPServer.applyMessageIDs(rows, outcomes: [.value("<a>"), .unreadable(.noEmlx), .value("")])
+        XCTAssertEqual(full.map { $0["id"] as? String }, ["a", "b", "c"])
+        XCTAssertEqual(full.map { $0["message_id"] as? String }, ["<a>", nil, ""])
+        let short = CheAppleMailMCPServer.applyMessageIDs(rows, outcomes: [.value("<a>")])
+        XCTAssertEqual(short.map { $0["id"] as? String }, ["a", "b", "c"], "fewer outcomes than rows drops nothing")
+        XCTAssertEqual(short.map { $0["message_id"] as? String }, ["<a>", nil, nil])
+    }
+
     func testTheSchemaAndDescriptionDeclareTheFlag() throws {
         let tool: Tool = try XCTUnwrap(CheAppleMailMCPServer.defineTools().first(where: { $0.name == "search_emails" }))
         guard case .object(let schema) = tool.inputSchema,
@@ -227,6 +238,8 @@ final class SearchMessageIDHandlerTests: XCTestCase {
             XCTAssertTrue(text.contains("message_id"), text)
             XCTAssertTrue(text.contains("Not yet run against a real mail store"), "the outstanding live check is stated")
             XCTAssertTrue(text.contains("AppleScript fallback"), text)
+            XCTAssertTrue(text.contains("4096 bytes"), text)
+            XCTAssertTrue(text.contains("256 KiB"), text)
         }
     }
 

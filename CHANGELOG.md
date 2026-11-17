@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   header; a missing key means the value could not be read (no readable `.emlx`,
   a read error, a value over 4096 UTF-8 bytes, a header block over 256 KiB) or the row came from the
   AppleScript fallback. The read stops at the end of the header block and looks
-  up each mailbox's store folder once per call; without the flag no file is
+  up each mailbox's store folder once per call; it never looks at more than the first 256 KiB of a message, and for a message larger than that the value can differ from `get_email`'s (a bare-LF blank line inside the first 256 KiB with a CRLF blank line only later; lone-CR line ends give no key), see the README; without the flag no file is
   read and rows are unchanged. `true` with `ids` or `count` and a
   non-boolean value are parameter errors. A call whose rows could not all be
   read writes one stderr line with a count and a fixed reason. Not yet run

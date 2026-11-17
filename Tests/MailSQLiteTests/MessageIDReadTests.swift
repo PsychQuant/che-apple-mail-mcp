@@ -145,6 +145,68 @@ final class MessageIDReadTests: XCTestCase {
         }
     }
 
+
+    // MARK: - Where the reader and get_email differ (recorded by tests, see the pull request)
+
+    /// What `get_email` reports (`readEmail`) next to what the reader returns, for the same bytes.
+    private func both(_ message: Data, cap: Int) throws -> (reader: String?, getEmail: String) {
+        let store = try MessageIDStore(testCase: self)
+        let path = try store.write(rowId: 1, message: message)
+        let getEmail = try store.withStoragePath {
+            try EmlxParser.readEmail(rowId: 1, mailboxURL: MessageIDStore.mailboxURL()).messageId
+        }
+        return (try? EmlxParser.readMessageID(atPath: path, chunkSize: 64, maxHeaderBytes: cap), getEmail)
+    }
+
+    /// D1: larger than the cap, a bare-LF blank line inside it, a CRLF CRLF only later. The reader
+    /// ends the header block at the first blank line; `get_email`'s parser prefers a CRLF blank
+    /// line anywhere in the message and so reads the lines between the two as headers.
+    func testDifferenceD1BareLFBlankLineInsideTheCapAndACRLFBlankLineBeyondIt() throws {
+        let filler = String(repeating: "filler line\n", count: 400)   // > the 1024-byte cap
+        let message = Data(("Message-ID: <header@example.invalid>\n\nMessage-ID: <between@example.invalid>\n"
+            + filler + "\r\n\r\nafter").utf8)
+        XCTAssertGreaterThan(message.count, 1024 * 2)
+        let r = try both(message, cap: 1024)
+        XCTAssertEqual(r.reader, "<header@example.invalid>")
+        XCTAssertEqual(r.getEmail, "<between@example.invalid>")
+        XCTAssertNotEqual(r.reader, r.getEmail, "the recorded difference")
+        // Inside the cap the two agree: the same bytes with a cap that reaches the CRLF CRLF.
+        let wide = try both(message, cap: 1_000_000)
+        XCTAssertEqual(wide.reader, wide.getEmail)
+    }
+
+    /// D2: lone-CR line ends, larger than the cap: the reader has no key (no separator it can use
+    /// inside the cap); `get_email` parses the whole message as headers.
+    func testDifferenceD2LoneCRMessageLargerThanTheCap() throws {
+        let message = Data(("Message-ID: <cr@example.invalid>\r" + String(repeating: "X-Pad: yyyyyyyy\r", count: 300)).utf8)
+        XCTAssertGreaterThan(message.count, 2048)
+        let r = try both(message, cap: 1024)
+        XCTAssertNil(r.reader)
+        XCTAssertEqual(r.getEmail, "<cr@example.invalid>")
+        let wide = try both(message, cap: 1_000_000)
+        XCTAssertEqual(wide.reader, wide.getEmail)
+    }
+
+    func testTheCapBoundaryIsExact() throws {
+        func message(total: Int) -> Data {
+            let head = "Message-ID: <b@example.invalid>\r\nX: "
+            let tail = "\r\n\r\n"
+            let pad = String(repeating: "p", count: total - head.utf8.count - tail.utf8.count)
+            return Data((head + pad + tail + String(repeating: "b", count: 5000)).utf8)
+        }
+        XCTAssertEqual(try read(message(total: 1000), cap: 1000).value, "<b@example.invalid>", "separator ends exactly at the cap")
+        XCTAssertTrue(try read(message(total: 1001), cap: 1000).error is EmlxParser.HeaderBlockTooLarge, "one byte past it")
+    }
+
+    func testANonPositiveCapReadsNothingOfTheMessage() throws {
+        for cap in [0, -5] {
+            let r = try read(Data("Message-ID: <z@example.invalid>\r\n\r\nbody".utf8), cap: cap)
+            XCTAssertTrue(r.error is EmlxParser.HeaderBlockTooLarge, "cap \(cap)")
+            XCTAssertLessThanOrEqual(r.total, 4096)
+        }
+        XCTAssertEqual(try read(Data(), cap: 0).value, "", "an empty message has no header whatever the cap")
+    }
+
     // MARK: - Unreadable
 
     func testAMissingFileThrows() throws {

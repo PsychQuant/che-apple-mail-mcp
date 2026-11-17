@@ -26,7 +26,8 @@ extension EmlxParser {
     /// one with no CRLF CRLF in the cap is parsed over what was read when that holds a bare-LF
     /// blank line, and otherwise throws `HeaderBlockTooLarge`. A file shorter than its length line
     /// promises throws, as `readEmail` does. The value is the one `readEmail` extracts for the
-    /// same file whenever this returns.
+    /// same file when the message ends inside the cap or its CRLF CRLF does; a bare-LF blank line
+    /// is where the parse ends only if no CRLF CRLF follows inside the cap.
     ///
     /// - Parameters:
     ///   - chunkSize: bytes per read of the message; tests use small values.
