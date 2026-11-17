@@ -51,7 +51,7 @@ public enum RFC822Parser {
     /// Honors `data.startIndex` (slice safety, #72).
     private static func headerBlockEnd(in data: Data) -> (headerEnd: Int, bodyStart: Int)? {
         guard data.count >= 2 else { return nil }
-        let last = data.endIndex - 1   // last index at which a 2-byte pattern fits
+        let last = data.endIndex - 1   // last valid byte index; a pattern start is always before it
         for i in data.startIndex..<last {
             let b = data[i]
             if b == 0x0A {
