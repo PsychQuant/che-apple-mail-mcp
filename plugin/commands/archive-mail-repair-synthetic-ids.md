@@ -353,10 +353,9 @@ def parse_message_id(headers_text):
     """The Message-ID of one candidate as RFC822Parser would store it, or the reason this recipe will not say."""
     if not isinstance(headers_text, str):
         raise ValueError("the header text must be a string")
-    end = headers_text.find("\r\n\r\n")
-    if end < 0:
-        end = headers_text.find("\n\n")
-    block = headers_text if end < 0 else headers_text[:end]
+    # The header block ends at the blank line that starts first, as in RFC822Parser (#715).
+    ends = [end for end in (headers_text.find("\r\n\r\n"), headers_text.find("\n\n")) if end >= 0]
+    block = headers_text[:min(ends)] if ends else headers_text
     if any(character in block for character in AMBIGUOUS_LINE_BOUNDARIES):
         return _unusable("ambiguous-line-boundary")
     for fold in _FOLDS:

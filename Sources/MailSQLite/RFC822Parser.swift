@@ -7,67 +7,58 @@ public enum RFC822Parser {
     /// Parse raw message data and extract headers as a dictionary.
     /// Header names are lowercased. Values are decoded (folding removed, RFC 2047 decoded).
     ///
+    /// The header block ends at the first blank line, `\r\n\r\n` or `\n\n`,
+    /// whichever starts first (#715).
+    ///
     /// - Parameter data: Raw RFC 822 message data.
     /// - Returns: Dictionary mapping lowercase header names to decoded values.
     public static func parseHeaders(from data: Data) -> [String: String] {
-        // findDoubleCRLF returns an absolute Data index (slice-safe per #72).
-        if let splitIdx = findDoubleCRLF(in: data) {
-            return parseHeaderBlock(data[data.startIndex..<splitIdx])
+        // headerBlockEnd returns absolute Data indexes (slice-safe per #72).
+        if let end = headerBlockEnd(in: data) {
+            return parseHeaderBlock(data[data.startIndex..<end.headerEnd])
         }
         // No body separator found — treat entire data as headers.
         return parseHeaderBlock(data)
     }
 
-    /// Find the absolute Data index where the body begins (after `\r\n\r\n`
-    /// or `\n\n`). Returns an index suitable for `data[returnedIndex...]`,
-    /// or nil if no separator is found.
+    /// Find the absolute Data index where the body begins (after the first
+    /// blank line, `\r\n\r\n` or `\n\n`, whichever starts first, #715).
+    /// Returns an index suitable for `data[returnedIndex...]`, or nil if no
+    /// separator is found.
     ///
     /// **Slice safety (#72)**: `data` may be a slice with non-zero
     /// `startIndex`. The returned value is an absolute Data index relative
     /// to the original buffer — callers can write `data[offset...]` and
     /// `data.endIndex` directly without manual `data.startIndex` arithmetic.
     public static func headerBodySplitOffset(in data: Data) -> Int? {
-        // Look for \r\n\r\n
-        if data.count >= 4 {
-            for i in data.startIndex..<(data.endIndex - 3) {
-                if data[i] == 0x0D && data[i + 1] == 0x0A
-                    && data[i + 2] == 0x0D && data[i + 3] == 0x0A {
-                    return i + 4
-                }
-            }
-        }
-        // Fallback: look for \n\n (some messages use bare LF)
-        if data.count >= 2 {
-            for i in data.startIndex..<(data.endIndex - 1) {
-                if data[i] == 0x0A && data[i + 1] == 0x0A {
-                    return i + 2
-                }
-            }
-        }
-        return nil
+        headerBlockEnd(in: data)?.bodyStart
     }
 
     // MARK: - Private
 
-    /// Find the absolute Data index of the `\r\n\r\n` (or fallback `\n\n`)
-    /// separator. Returns the index of the **first** byte of the separator,
-    /// suitable for `data[..<returnedIndex]` to slice the headers.
+    /// The one scan both public functions share (#715): the first blank line of
+    /// either kind. `headerEnd` is the absolute index of the first byte of the
+    /// separator (the header slice is `data[..<headerEnd]`), `bodyStart` the
+    /// index just after it.
+    ///
+    /// The scan is a single pass, so the earliest start wins. The two patterns
+    /// cannot start on the same byte (CR versus LF) and `\r\n\r\n` holds no
+    /// `\n\n`, so the order of the two checks does not matter. A blank line
+    /// whose ends differ matches only when it contains `\n\n`: `\r\n\n` ends
+    /// at its second byte (the header slice then ends in a lone CR), `\n\r\n`
+    /// is not a blank line, as before.
     ///
     /// Honors `data.startIndex` (slice safety, #72).
-    private static func findDoubleCRLF(in data: Data) -> Int? {
-        if data.count >= 4 {
-            for i in data.startIndex..<(data.endIndex - 3) {
-                if data[i] == 0x0D && data[i + 1] == 0x0A
-                    && data[i + 2] == 0x0D && data[i + 3] == 0x0A {
-                    return i
-                }
-            }
-        }
-        if data.count >= 2 {
-            for i in data.startIndex..<(data.endIndex - 1) {
-                if data[i] == 0x0A && data[i + 1] == 0x0A {
-                    return i
-                }
+    private static func headerBlockEnd(in data: Data) -> (headerEnd: Int, bodyStart: Int)? {
+        guard data.count >= 2 else { return nil }
+        let last = data.endIndex - 1   // last valid byte index; a pattern start is always before it
+        for i in data.startIndex..<last {
+            let b = data[i]
+            if b == 0x0A {
+                if data[i + 1] == 0x0A { return (i, i + 2) }
+            } else if b == 0x0D, i + 3 <= last,
+                      data[i + 1] == 0x0A, data[i + 2] == 0x0D, data[i + 3] == 0x0A {
+                return (i, i + 4)
             }
         }
         return nil
