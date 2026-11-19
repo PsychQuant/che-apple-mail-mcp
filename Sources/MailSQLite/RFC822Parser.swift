@@ -21,6 +21,13 @@ public enum RFC822Parser {
         return parseHeaderBlock(data)
     }
 
+    /// The Message-ID value for a parsed header dictionary: `""` when the message has no such
+    /// header. The one place `readEmail` (so `get_email`, `get_emails_batch` and the batch
+    /// export) and the header-only reader (#682) take the value from, so they cannot drift.
+    static func messageID(in headers: [String: String]) -> String {
+        headers["message-id"] ?? ""
+    }
+
     /// Find the absolute Data index where the body begins (after the first
     /// blank line, `\r\n\r\n` or `\n\n`, whichever starts first, #715).
     /// Returns an index suitable for `data[returnedIndex...]`, or nil if no

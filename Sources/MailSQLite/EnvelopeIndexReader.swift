@@ -936,7 +936,8 @@ public final class EnvelopeIndexReader {
                 isRead: isRead,
                 isFlagged: isFlagged,
                 toRecipients: toAddrs,
-                isDraft: Self.draftFlag(stmt, column: 8)
+                isDraft: Self.draftFlag(stmt, column: 8),
+                mailboxURL: mailboxUrl
             ))
         }
 
@@ -1011,7 +1012,8 @@ public final class EnvelopeIndexReader {
                 id: rowId, subject: subject, senderAddress: senderAddr, senderName: senderName,
                 dateReceived: dateReceived, accountName: acctName, accountId: acctId,
                 mailboxPath: mbPath, isRead: false, isFlagged: false, toRecipients: [],
-                isDraft: Self.draftFlag(stmt, column: 6)
+                isDraft: Self.draftFlag(stmt, column: 6),
+                mailboxURL: mailboxUrl
             ))
         }
 
