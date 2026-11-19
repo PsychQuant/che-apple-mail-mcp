@@ -228,6 +228,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Header and fallback body decoding do linear work**
+  ([#720](https://github.com/PsychQuant/che-apple-mail-mcp/issues/720)). Two
+  decoders did work that grew with the square of the value's length: the RFC 2047
+  encoded-word decode that `parseHeaderBlock` applies to every header value
+  except `content-*`, and the quoted-printable decode of the HTML body on the
+  AppleScript fallback path. Both now do work linear in the length of the value.
+  This is a performance fix only: the decoded output is unchanged (a differential
+  test compares both decoders with the previous algorithm, kept as a test-only
+  reference), and which text counts as an encoded-word, the charset run handling
+  (#352) and the `content-*` exemption (#115) are untouched. The tests count the
+  work through a seam instead of timing it.
+
 - **A message's header block ends at its first blank line**
   ([#715](https://github.com/PsychQuant/che-apple-mail-mcp/issues/715)).
   `RFC822Parser.parseHeaders` and `headerBodySplitOffset` looked for a CRLF blank
