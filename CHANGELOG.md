@@ -251,6 +251,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`forward_email` no longer sends a bare forward when `body` has the wrong type**
+  ([#674](https://github.com/PsychQuant/che-apple-mail-mcp/issues/674)). `body`
+  is optional, and a value that was present but not a string (a number, a
+  boolean, an array, an object) was read as no body: without `save_as_draft` the
+  forward was sent without the note, and with it the call was refused for the
+  wrong reason. Such a call is now refused before any Mail action with
+  `'body' must be a string, got: <type>`, checked before the account is resolved.
+  An explicit `body: null` is refused the same way (`got: null`): callers that
+  passed null to mean "no note" must now leave the key out. A missing `body` is
+  still a forward without a body, and a string (the empty string included)
+  behaves as before. One case reads oddly: a
+  string that parses as a `data:` URL is decoded as binary data by the MCP SDK
+  before it reaches the tool, so it is refused as `got: data`, and the message
+  says so.
+
 - **Header and fallback body decoding do linear work**
   ([#720](https://github.com/PsychQuant/che-apple-mail-mcp/issues/720)). Two
   decoders did work that grew with the square of the value's length: the RFC 2047
