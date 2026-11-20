@@ -1,7 +1,7 @@
 # che-apple-mail-mcp
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![macOS](https://img.shields.io/badge/macOS-13.0%2B-blue)](https://www.apple.com/macos/)
+[![macOS](https://img.shields.io/badge/macOS-26.0%2B-blue)](https://www.apple.com/macos/)
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
@@ -435,7 +435,7 @@ Use `make release-signed VERSION=vX.Y.Z` for distribution.
 
 ### Requirements
 
-- macOS 13.0+
+- macOS 26.0+ (v4.x is the last line for macOS 13–15)
 - Xcode Command Line Tools (for the build-it-yourself route below)
 - Apple Mail with at least one account configured
 
@@ -894,7 +894,7 @@ folders or messages are created. Do not commit private account/path fixtures.
 - **Read path**: SQLite (Envelope Index) + `.emlx` file parser, with AppleScript fallback for EWS / unparseable `.emlx`
 - **Write/state path**: AppleScript via `NSAppleScript`
 - **Transport**: stdio
-- **Platform**: macOS 13.0+ (Ventura and later)
+- **Platform**: macOS 26.0+ (Tahoe and later); macOS 13–15 stay on v4.x
 
 ---
 

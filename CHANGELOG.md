@@ -82,6 +82,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: requires macOS 26**
+  ([#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)). The
+  minimum system goes from macOS 13 to macOS 26; macOS 13, 14 and 15 stay on
+  v4.x. The cause is a new dependency, `SwiftMail` (SMTP and IMAP, for sending
+  without Mail, #729), which needs macOS 15, and below macOS 26 the release
+  binary would also need `libswiftCompatibilitySpan.dylib`, which macOS 15 does
+  not ship. Nothing else changes in this entry: no tool uses the dependency yet.
+  `Package.resolved` is now under version control, so a release binary can be
+  rebuilt from the same dependency versions (24 packages, up from 7).
 - **`get_mail_log_events` signals the `log` child's whole process group**
   ([#646](https://github.com/PsychQuant/che-apple-mail-mcp/issues/646)).
   The runner now starts `/usr/bin/log` with `posix_spawn` in a process group of

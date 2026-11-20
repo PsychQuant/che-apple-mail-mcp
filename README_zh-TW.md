@@ -1,7 +1,7 @@
 # che-apple-mail-mcp
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![macOS](https://img.shields.io/badge/macOS-13.0%2B-blue)](https://www.apple.com/macos/)
+[![macOS](https://img.shields.io/badge/macOS-26.0%2B-blue)](https://www.apple.com/macos/)
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
@@ -315,7 +315,7 @@ compose_email、create_draft、update_draft 支援 signature 物件：`{"mode":"
 
 ### 系統需求
 
-- macOS 13.0+
+- macOS 26.0+（macOS 13–15 請停在 v4.x）
 - Xcode 命令列工具
 - Apple Mail 已設定至少一個帳戶
 
@@ -446,7 +446,7 @@ claude
 - **框架**：[MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) v0.10.0
 - **自動化**：透過 `NSAppleScript` 執行 AppleScript
 - **傳輸**：stdio
-- **平台**：macOS 13.0+（Ventura 及更新版本）
+- **平台**：macOS 26.0+（Tahoe 及更新版本）；macOS 13–15 停在 v4.x
 
 ---
 
