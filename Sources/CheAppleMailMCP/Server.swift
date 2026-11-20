@@ -1471,7 +1471,11 @@ class CheAppleMailMCPServer {
             }
             let accountId = try resolveAccountId(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
             let to = toArray.compactMap { $0.stringValue }
-            let body = arguments["body"]?.stringValue
+            // #674: `body` is optional here, so a lenient read made a body that was
+            // present but not a string look like no body — and the bare forward was
+            // sent without the caller's note. Missing or null means no body; any
+            // other non-string is refused by name before any Mail call.
+            let body = try optionalString(arguments, key: "body")
             let format = try parseBodyFormatArgument(arguments["format"])
             let saveAsDraft = try requireBool(arguments, key: "save_as_draft", default: false)
             return try await mailController.forwardEmail(id: id, mailbox: mailbox, accountName: accountName, to: to, body: body, format: format, accountId: accountId, saveAsDraft: saveAsDraft)
@@ -2908,6 +2912,19 @@ func requireBool(_ arguments: [String: Value], key: String, default defaultValue
         return bool
     }
     throw MailError.invalidParameter("'\(key)' must be a boolean (true/false), got: \(typeName(of: value))")
+}
+
+/// #674: type-strict optional string. Returns nil when the key is missing or
+/// null; **throws** when it is present with any other value that is not a
+/// string. `arguments[key]?.stringValue` returns nil for both cases, which
+/// turned "a body of the wrong type" into "no body".
+func optionalString(_ arguments: [String: Value], key: String) throws -> String? {
+    guard let value = arguments[key] else { return nil }
+    if case .null = value { return nil }
+    guard case .string(let string) = value else {
+        throw MailError.invalidParameter("'\(key)' must be a string, got: \(typeName(of: value))")
+    }
+    return string
 }
 
 /// Issue #35: type-strict optional string-array extraction. Returns nil when
