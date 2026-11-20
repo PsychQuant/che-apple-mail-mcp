@@ -1105,7 +1105,39 @@ private func buildReplyForwardPasteScript(
             end if
         """
         : "\(rfCleanupBody)\n        error _mErr"
-    let rfPreHandlerTail = send ? "\n    delay \(stepDelay)" : ""
+    // #700: a dispatched keystroke is not a sent message. Before returning the
+    // success label, look (in Mail's own context) for the windows this call
+    // opened: Mail closes a compose window when it accepts the send, so the
+    // label is returned only once none of `_newIds` is left. If one is still
+    // there when the wait ends, raise SENDUNCONFIRMED — inside the `try`, with
+    // `_dispatched` already true, so the handler marks it POSTDISPATCH and
+    // leaves the window alone (it is the user's only evidence). The check can
+    // only withhold the success label; it never reports "not sent". A foreign
+    // window that happened to open during the first delay is in `_newIds` too
+    // and keeps the result unconfirmed — the conservative direction.
+    // "Window closed" means Mail accepted the message for sending, not that
+    // the server took it. Not yet run against a live send (#700).
+    let confirmWait = resolvedDelay(envKey: "CHE_MAIL_SEND_CONFIRM_WAIT", fallback: 10)
+    let confirmInterval = 0.5
+    let confirmPolls = max(1, Int((confirmWait / confirmInterval).rounded(.up)))
+    let rfConfirmBlock = [
+        "",
+        "    set _stillOpen to true",
+        "    repeat \(confirmPolls) times",
+        "        delay \(confirmInterval)",
+        "        tell application \"Mail\"",
+        "            set _nowIds to (id of every window)",
+        "        end tell",
+        "        set _stillOpen to false",
+        "        repeat with _nid in _newIds",
+        "            if _nowIds contains (contents of _nid) then set _stillOpen to true",
+        "        end repeat",
+        "        if not _stillOpen then exit repeat",
+        "    end repeat",
+        "    if _stillOpen then error \"SENDUNCONFIRMED: a compose window this call opened was still open "
+            + "\(Double(confirmPolls) * confirmInterval) seconds after the send keystroke\"",
+    ].joined(separator: "\n")
+    let rfPreHandlerTail = send ? rfConfirmBlock : ""
     let rfPostTryTail = send ? "" : "\n    delay \(stepDelay)"
     s += """
 

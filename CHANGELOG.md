@@ -251,6 +251,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`reply_email` and `forward_email` no longer report a send they did not see
+  leave the compose window**
+  ([#700](https://github.com/PsychQuant/che-apple-mail-mcp/issues/700)). The
+  send script returned `Reply sent successfully (paste path)` a fixed 0.7 s after
+  the send keystroke without looking at the window again, so a keystroke Mail
+  did not act on was reported as a sent reply while the reply stayed open in its
+  compose window. After the keystroke the script now checks, in Mail's own
+  context, for the windows this call opened (by window id), every 0.5 s for up
+  to 10 s (`CHE_MAIL_SEND_CONFIRM_WAIT`, 0 to 10 seconds). It returns the success
+  message only once none of them is left. If one is still open when the wait
+  ends, the call fails with an unknown send state: the message says the compose
+  window was still open, that the tool is not retrying, and to look at that
+  window; the window is not closed. The success message is unchanged and means
+  the keystroke was dispatched and the compose window closed, which is Mail
+  accepting the message for sending, not the server accepting it. A forward with
+  a body uses the same script. The draft mode and `compose_email` (#730) are not
+  changed. Not yet run against a live send: #700 stays open until it is.
+
 - **Header and fallback body decoding do linear work**
   ([#720](https://github.com/PsychQuant/che-apple-mail-mcp/issues/720)). Two
   decoders did work that grew with the square of the value's length: the RFC 2047

@@ -87,6 +87,21 @@ Apple Event。Mail 端那個 Apple Event 最後有沒有完成，沒有可靠的
 （#549、#536）。呼叫端若把「沒搜到」讀成「沒寄出」就會重寄，而重寄正是 `NOT retrying` 要擋的事。
 所以訊息只提供「可以看哪裡」與「看到、沒看到各代表什麼」，把決定留給使用者。
 
+## 寄出後的視窗確認不是判決（#700）
+
+`reply_email` 與帶 body 的 `forward_email` 在寄信按鍵之後，會在同一支 script 裡看這次呼叫開出來的 compose 視窗
+還在不在（依視窗 id，最多等 10 秒）。這不在上面三條的範圍內，界線如下，同樣是封閉的：
+
+- 它發生在 script 還在執行的時候，不是逾時之後；逾時之後可用的觀察來源仍只有第 1 條的兩個。
+- 它只能**扣住**成功訊息。視窗還在 → 回報 `UNKNOWN`、`NOT retrying`，並說出觀察到的事（視窗仍開著）；
+  不得回報成「沒寄出」。視窗不在 → 回傳原本就有的成功訊息，沒有新增任何欄位或詞彙。
+- 「視窗關閉」是 Mail 接受寄出，不是伺服器收下；工具描述與 README 都這樣寫。
+- 錯誤以 `POSTDISPATCH: SENDUNCONFIRMED:` 開頭，所以三個站點的 `isPostDispatchError(error) || isTimeoutError(error)`
+  條件式不必改；`unknownReplyForwardSendStateError` 多一個分支，既有的兩個分支逐字不變。
+
+守門測試：`SendConfirmedByWindowCloseTests`。它檢查的是產生的 script 的結構與 Swift 端的訊息，
+不是 Mail 的實際行為；寄出成功後視窗 id 是否離開 `id of every window`，要靠 live 驗證（#700 在那之前不關）。
+
 ## 相關
 
 - #522（本規則的出處）、#415（residue 來源）、#550（reply / forward 逾時時曾說「already dispatched」，現改用與 compose 相同的「may or may not have fired」）

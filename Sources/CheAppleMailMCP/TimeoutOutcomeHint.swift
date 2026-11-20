@@ -69,7 +69,26 @@ func timeoutVerificationHint(_ kind: TimeoutOutcomeKind) -> String {
 /// Every other input keeps the post-dispatch wording unchanged. The hint sits
 /// before the clamped echo, because `clampedErrorEcho` cuts the original error at
 /// 200 characters and a timeout description is longer than that.
+///
+/// #700 — the send script now checks that the compose window it opened closed
+/// after the send keystroke. When it did not, the script raises
+/// `POSTDISPATCH: SENDUNCONFIRMED: …`. That is an observation (the window was
+/// still open), not a verdict: the message says so, keeps UNKNOWN and NOT
+/// retrying, and points at the window. The other two branches are unchanged.
 func unknownReplyForwardSendStateError(noun: String, error: Error) -> MailError {
+    if isUnconfirmedSendError(error) {
+        return MailError.scriptFailed(
+            message: "the send keystroke was dispatched, but a compose window this call opened was "
+                + "still open when the check ended — the \(noun) has not been confirmed as sent "
+                + "and the send state is UNKNOWN. NOT retrying (that could send a duplicate). "
+                + "Look at that compose window in Mail: if the \(noun) is still in it, send it "
+                + "there or close it, and answer any sheet Mail is showing on it. The window was "
+                + "not closed by this call. "
+                + timeoutVerificationHint(.sendFlow)
+                + " Original error: "
+                + clampedErrorEcho(error.localizedDescription),
+            code: -1)
+    }
     if isTimeoutError(error) {
         return MailError.scriptFailed(
             message: "the GUI send flow hit its deadline — the send keystroke may or may "
@@ -92,4 +111,14 @@ func unknownReplyForwardSendStateError(noun: String, error: Error) -> MailError 
             + " Original error: "
             + clampedErrorEcho(error.localizedDescription),
         code: -1)
+}
+
+/// #700 — true when the send script reported that a compose window it opened
+/// was still there after the send keystroke. Prefix-only, like
+/// `isPostDispatchError`: a token echoed mid-message must not classify.
+func isUnconfirmedSendError(_ error: Error) -> Bool {
+    if case MailError.scriptFailed(let message, _) = error {
+        return message.hasPrefix("POSTDISPATCH: SENDUNCONFIRMED:")
+    }
+    return false
 }
