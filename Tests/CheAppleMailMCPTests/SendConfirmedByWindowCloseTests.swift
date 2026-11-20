@@ -66,15 +66,17 @@ final class SendConfirmedByWindowCloseTests: XCTestCase {
                               "the unconfirmed error is raised inside the try, so the handler marks it POSTDISPATCH")
             XCTAssertLessThan(handler, done, "the success label comes after the check")
 
-            // The window that is watched is the front window, recorded in the
-            // same Mail `tell` that has just checked it is one this call opened,
-            // and before the keystroke is dispatched.
+            // The window that is watched is the front window. Its id is read
+            // once, before the keystroke; that same value is checked to be one
+            // this call opened, so the watched id is the checked id.
             let record = try XCTUnwrap(index(of: "set _sentWindowId to (id of front window)", in: script))
             XCTAssertLessThan(record, dispatch)
-            let guardStart = try XCTUnwrap(script[..<record].range(of: "tell application \"Mail\"", options: .backwards))
-            let guardBlock = String(script[guardStart.lowerBound..<record])
-            XCTAssertTrue(guardBlock.contains("if (id of front window) is not in _newIds then error"), guardBlock)
-            XCTAssertFalse(guardBlock.contains("end tell"), "the id is read in the tell that checked it: \(guardBlock)")
+            let lastGuard = String(script[record..<dispatch])
+            let membership = try XCTUnwrap(lastGuard.range(of: "if _sentWindowId is not in _newIds then error"))
+            let guardEnd = try XCTUnwrap(lastGuard.range(of: "end tell"))
+            XCTAssertLessThan(membership.lowerBound, guardEnd.lowerBound, "checked in the tell that read it")
+            XCTAssertFalse(lastGuard.contains("id of front window) is not in"),
+                           "the last guard must not read the front window a second time: \(lastGuard)")
             XCTAssertEqual(script.components(separatedBy: "set _sentWindowId to").count - 1, 1)
 
             // Only that one window is watched (not every id in `_newIds`), and
@@ -128,7 +130,7 @@ final class SendConfirmedByWindowCloseTests: XCTestCase {
             for script in [replyScript(draft: false), forwardScript(draft: false)] {
                 let setting = "\(Self.waitKey)=\(value ?? "unset")"
                 XCTAssertTrue(script.contains("repeat \(checks) times\n        delay 0.5\n"), setting)
-                XCTAssertTrue(script.contains("was still open \(seconds) seconds after the keystroke\""), setting)
+                XCTAssertTrue(script.contains("was still open at least \(seconds) seconds after the keystroke\""), setting)
             }
         }
     }
@@ -146,7 +148,7 @@ final class SendConfirmedByWindowCloseTests: XCTestCase {
 
     private static let unconfirmed = MailError.scriptFailed(
         message: "POSTDISPATCH: SENDUNCONFIRMED: the compose window the send keystroke went to was "
-            + "still open 10.0 seconds after the keystroke",
+            + "still open at least 10.0 seconds after the keystroke",
         code: -1)
 
     // spec-example: message-composition / unconfirmed send message
@@ -222,6 +224,42 @@ final class SendConfirmedByWindowCloseTests: XCTestCase {
         // without the post-dispatch sentinel, it does not select the new branch.
         for text in ["POSTDISPATCH: window gone (SENDUNCONFIRMED: no)", "SENDUNCONFIRMED: no sentinel"] {
             XCTAssertFalse(isUnconfirmedSendError(MailError.scriptFailed(message: text, code: -1)), text)
+        }
+    }
+
+    // spec-example: message-composition / unconfirmed send message
+    func testAnErrorRaisedByACheck_getsTheExistingPostDispatchMessage() async throws {
+        // The check runs inside the `try`, after `_dispatched` is set, so the
+        // handler marks whatever it raises with the post-dispatch sentinel.
+        for script in [replyScript(draft: false), forwardScript(draft: false)] {
+            let flag = try XCTUnwrap(index(of: "set _dispatched to true", in: script))
+            let poll = try XCTUnwrap(index(of: "set _nowIds to (id of every window)", in: script))
+            let handler = try XCTUnwrap(index(of: "on error _mErr", in: script))
+            XCTAssertLessThan(flag, poll)
+            XCTAssertLessThan(poll, handler)
+            let handlerBody = String(script[handler...])
+            let branch = try XCTUnwrap(handlerBody.range(of: "else if _dispatched then"))
+            let mark = try XCTUnwrap(handlerBody.range(of: "error \"POSTDISPATCH: \" & _mErr"))
+            XCTAssertLessThan(branch.lowerBound, mark.lowerBound)
+        }
+        // What the tool then reports for such an error (the Example's fourth row).
+        let raised = MailError.scriptFailed(
+            message: "POSTDISPATCH: Mail got an error: AppleEvent timed out. (-1712)", code: -1)
+        XCTAssertFalse(isUnconfirmedSendError(raised))
+        await MailController.shared.setTestSeams(scriptRunner: { _ in throw raised }, refusal: { nil })
+        do {
+            let result = try await MailController.shared.replyEmail(
+                id: "123", mailbox: "INBOX", accountName: "a@example.org", body: "text", attachments: nil)
+            XCTFail("a failed check must not be reported as \(result.debugDescription)")
+        } catch {
+            XCTAssertEqual(
+                message(error),
+                "the send keystroke was already dispatched but a GUI step failed afterwards — "
+                    + "the send state is UNKNOWN and the reply/forward may already be on the wire. "
+                    + "Check Mail's Sent mailbox / Outbox and the original thread before re-sending. "
+                    + "The compose window (if still open) was left untouched for inspection. "
+                    + timeoutVerificationHint(.sendFlow)
+                    + " Original error: AppleScript error (-1): POSTDISPATCH: Mail got an error: AppleEvent timed out. (-1712)")
         }
     }
 

@@ -1109,8 +1109,9 @@ private func buildReplyForwardPasteScript(
     // success label, look (in Mail's own context) for the compose window the
     // keystroke went to: Mail closes a compose window when it accepts the
     // send, so the label is returned only once that window id is gone. The id
-    // is the front window's, read in the same `tell` that has just checked it
-    // is one of `_newIds` (the windows this call opened) — not all of
+    // is the front window's, read ONCE and then checked to be one of `_newIds`
+    // (the windows this call opened), so the watched id is the checked id even
+    // if focus moves in between — not all of
     // `_newIds`, which can hold a viewer window Mail happened to open during
     // the first delay and which would never close. If the window is still
     // there when the wait ends, raise SENDUNCONFIRMED — inside the `try`, with
@@ -1138,13 +1139,19 @@ private func buildReplyForwardPasteScript(
         "        end if",
         "    end repeat",
         "    if _stillOpen then error \"SENDUNCONFIRMED: the compose window the send keystroke went to was still open "
-            + "\(Double(confirmPolls) * confirmInterval) seconds after the keystroke\"",
+            + "at least \(Double(confirmPolls) * confirmInterval) seconds after the keystroke\"",
     ].joined(separator: "\n")
-    // The last pre-dispatch guard also records which window the keystroke goes to.
+    // The last pre-dispatch guard of a send reads the front window's id once,
+    // checks that value and keeps it: the id that is watched is the id that was
+    // checked. (The draft form keeps `frontGuard` as it is.)
     let rfDispatchGuard = send
-        ? frontGuard.replacingOccurrences(
-            of: "    end tell",
-            with: "        set _sentWindowId to (id of front window)\n    end tell")
+        ? """
+            tell application "Mail"
+                if (count of windows) is 0 then error "no Mail window to target (stopping before the next keystroke)"
+                set _sentWindowId to (id of front window)
+                if _sentWindowId is not in _newIds then error "our reply/forward window is not frontmost (focus changed) — stopping before the next keystroke"
+            end tell
+        """
         : frontGuard
     let rfPreHandlerTail = send ? rfConfirmBlock : ""
     let rfPostTryTail = send ? "" : "\n    delay \(stepDelay)"

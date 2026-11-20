@@ -271,7 +271,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CHE_MAIL_SEND_CONFIRM_WAIT` (0 to 10 seconds, default 10): it is rounded up
   to a multiple of 0.5 s and at least one check always runs, so 0 still waits
   0.5 s. `CHE_MAIL_MAILTO_STEP_DELAY` no longer sets the pause after the send
-  keystroke on this path (it still sets the other pauses). A forward with a body
+  keystroke on this path (it still sets the other pauses). If a check itself
+  fails (Mail does not answer, for example), the call reports the unknown send
+  state it already reported for any failure after the keystroke. A forward with a body
   uses the same script. The draft mode, a forward without a body (#731) and
   `compose_email` (#730) are not changed. Not yet run against a live send: #700
   stays open until it is.
