@@ -258,16 +258,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the send keystroke without looking at the window again, so a keystroke Mail
   did not act on was reported as a sent reply while the reply stayed open in its
   compose window. After the keystroke the script now checks, in Mail's own
-  context, for the windows this call opened (by window id), every 0.5 s for up
-  to 10 s (`CHE_MAIL_SEND_CONFIRM_WAIT`, 0 to 10 seconds). It returns the success
-  message only once none of them is left. If one is still open when the wait
-  ends, the call fails with an unknown send state: the message says the compose
-  window was still open, that the tool is not retrying, and to look at that
-  window; the window is not closed. The success message is unchanged and means
-  the keystroke was dispatched and the compose window closed, which is Mail
-  accepting the message for sending, not the server accepting it. A forward with
-  a body uses the same script. The draft mode and `compose_email` (#730) are not
-  changed. Not yet run against a live send: #700 stays open until it is.
+  context, for the compose window the keystroke went to (by window id), every
+  0.5 s for up to 10 s. It returns the success message only once that window is
+  gone. If it is still open when the wait ends, the call fails with an unknown
+  send state: the message says the compose window was still open, that the tool
+  is not retrying, and to look at that window and any sheet on it; the window is
+  not closed, and the message does not tell you to send from it, because an open
+  window does not show that nothing went out. The success message is unchanged
+  and means the keystroke was dispatched and the compose window closed, which is
+  Mail accepting the message for sending, not the server accepting it; a window
+  closed by hand during the wait looks the same. The wait is set with
+  `CHE_MAIL_SEND_CONFIRM_WAIT` (0 to 10 seconds, default 10): it is rounded up
+  to a multiple of 0.5 s and at least one check always runs, so 0 still waits
+  0.5 s. `CHE_MAIL_MAILTO_STEP_DELAY` no longer sets the pause after the send
+  keystroke on this path (it still sets the other pauses). A forward with a body
+  uses the same script. The draft mode, a forward without a body (#731) and
+  `compose_email` (#730) are not changed. Not yet run against a live send: #700
+  stays open until it is.
 
 - **Header and fallback body decoding do linear work**
   ([#720](https://github.com/PsychQuant/che-apple-mail-mcp/issues/720)). Two

@@ -89,18 +89,23 @@ Apple Event。Mail 端那個 Apple Event 最後有沒有完成，沒有可靠的
 
 ## 寄出後的視窗確認不是判決（#700）
 
-`reply_email` 與帶 body 的 `forward_email` 在寄信按鍵之後，會在同一支 script 裡看這次呼叫開出來的 compose 視窗
-還在不在（依視窗 id，最多等 10 秒）。這不在上面三條的範圍內，界線如下，同樣是封閉的：
+`reply_email` 與帶 body 的 `forward_email` 在寄信按鍵之後，會在同一支 script 裡看按鍵落下的那個 compose 視窗
+還在不在（依視窗 id，最多等 10 秒；只看那一個視窗，不看呼叫期間出現的其他視窗）。這不在上面三條的範圍內，
+界線如下，同樣是封閉的：
 
 - 它發生在 script 還在執行的時候，不是逾時之後；逾時之後可用的觀察來源仍只有第 1 條的兩個。
 - 它只能**扣住**成功訊息。視窗還在 → 回報 `UNKNOWN`、`NOT retrying`，並說出觀察到的事（視窗仍開著）；
-  不得回報成「沒寄出」。視窗不在 → 回傳原本就有的成功訊息，沒有新增任何欄位或詞彙。
+  不得回報成「沒寄出」，也不得叫呼叫端從那個視窗寄信（視窗還在不代表第一次沒有生效）。
+  視窗不在 → 回傳原本就有的成功訊息，沒有新增任何欄位或詞彙。
+- 它分不出「寄出」與「有人在等待期間手動關掉視窗」；兩者都是視窗不在。
 - 「視窗關閉」是 Mail 接受寄出，不是伺服器收下；工具描述與 README 都這樣寫。
 - 錯誤以 `POSTDISPATCH: SENDUNCONFIRMED:` 開頭，所以三個站點的 `isPostDispatchError(error) || isTimeoutError(error)`
   條件式不必改；`unknownReplyForwardSendStateError` 多一個分支，既有的兩個分支逐字不變。
 
 守門測試：`SendConfirmedByWindowCloseTests`。它檢查的是產生的 script 的結構與 Swift 端的訊息，
 不是 Mail 的實際行為；寄出成功後視窗 id 是否離開 `id of every window`，要靠 live 驗證（#700 在那之前不關）。
+這個假設若不成立，每一次成功的寄出都會被回報成寄送狀態未知（不會重寄）；目前沒有關掉確認的開關，
+所以發布含這個確認的版本之前要先做 live 驗證。不帶 body 的轉寄（#731）與 `compose_email`（#730）沒有這個確認。
 
 ## 相關
 

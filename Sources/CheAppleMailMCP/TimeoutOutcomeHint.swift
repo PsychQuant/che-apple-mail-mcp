@@ -74,15 +74,18 @@ func timeoutVerificationHint(_ kind: TimeoutOutcomeKind) -> String {
 /// after the send keystroke. When it did not, the script raises
 /// `POSTDISPATCH: SENDUNCONFIRMED: …`. That is an observation (the window was
 /// still open), not a verdict: the message says so, keeps UNKNOWN and NOT
-/// retrying, and points at the window. The other two branches are unchanged.
+/// retrying, and points at the window. It does not tell the caller to send the
+/// message from that window: an open window does not show the first send had no
+/// effect. The other two branches are unchanged.
 func unknownReplyForwardSendStateError(noun: String, error: Error) -> MailError {
     if isUnconfirmedSendError(error) {
         return MailError.scriptFailed(
-            message: "the send keystroke was dispatched, but a compose window this call opened was "
+            message: "the send keystroke was dispatched, but the compose window it went to was "
                 + "still open when the check ended — the \(noun) has not been confirmed as sent "
                 + "and the send state is UNKNOWN. NOT retrying (that could send a duplicate). "
-                + "Look at that compose window in Mail: if the \(noun) is still in it, send it "
-                + "there or close it, and answer any sheet Mail is showing on it. The window was "
+                + "Look at that compose window in Mail and at any sheet Mail is showing on it. "
+                + "A window that is still open, even with the message still in it, does not show "
+                + "that nothing went out; let the user decide what to do with it. The window was "
                 + "not closed by this call. "
                 + timeoutVerificationHint(.sendFlow)
                 + " Original error: "
