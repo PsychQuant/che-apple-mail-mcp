@@ -1105,11 +1105,59 @@ private func buildReplyForwardPasteScript(
             end if
         """
         : "\(rfCleanupBody)\n        error _mErr"
-    let rfPreHandlerTail = send ? "\n    delay \(stepDelay)" : ""
+    // #700: a dispatched keystroke is not a sent message. Before returning the
+    // success label, look (in Mail's own context) for the compose window the
+    // keystroke went to: Mail closes a compose window when it accepts the
+    // send, so the label is returned only once that window id is gone. The id
+    // is the front window's, read ONCE and then checked to be one of `_newIds`
+    // (the windows this call opened), so the watched id is the checked id even
+    // if focus moves in between — not all of
+    // `_newIds`, which can hold a viewer window Mail happened to open during
+    // the first delay and which would never close. If the window is still
+    // there when the wait ends, raise SENDUNCONFIRMED — inside the `try`, with
+    // `_dispatched` already true, so the handler marks it POSTDISPATCH and
+    // leaves the window alone (it is the user's only evidence). The check can
+    // only withhold the success label; it never reports "not sent". It cannot
+    // tell a sent message from a window someone closed by hand during the wait.
+    // "Window closed" means Mail accepted the message for sending, not that
+    // the server took it. Not yet run against a live send (#700).
+    // The wait replaces the fixed `stepDelay` this path used to end with.
+    let confirmWait = resolvedDelay(envKey: "CHE_MAIL_SEND_CONFIRM_WAIT", fallback: 10)
+    let confirmInterval = 0.5
+    let confirmPolls = max(1, Int((confirmWait / confirmInterval).rounded(.up)))
+    let rfConfirmBlock = [
+        "",
+        "    set _stillOpen to true",
+        "    repeat \(confirmPolls) times",
+        "        delay \(confirmInterval)",
+        "        tell application \"Mail\"",
+        "            set _nowIds to (id of every window)",
+        "        end tell",
+        "        if _nowIds does not contain _sentWindowId then",
+        "            set _stillOpen to false",
+        "            exit repeat",
+        "        end if",
+        "    end repeat",
+        "    if _stillOpen then error \"SENDUNCONFIRMED: the compose window the send keystroke went to was still open "
+            + "at least \(Double(confirmPolls) * confirmInterval) seconds after the keystroke\"",
+    ].joined(separator: "\n")
+    // The last pre-dispatch guard of a send reads the front window's id once,
+    // checks that value and keeps it: the id that is watched is the id that was
+    // checked. (The draft form keeps `frontGuard` as it is.)
+    let rfDispatchGuard = send
+        ? """
+            tell application "Mail"
+                if (count of windows) is 0 then error "no Mail window to target (stopping before the next keystroke)"
+                set _sentWindowId to (id of front window)
+                if _sentWindowId is not in _newIds then error "our reply/forward window is not frontmost (focus changed) — stopping before the next keystroke"
+            end tell
+        """
+        : frontGuard
+    let rfPreHandlerTail = send ? rfConfirmBlock : ""
     let rfPostTryTail = send ? "" : "\n    delay \(stepDelay)"
     s += """
 
-    \(frontGuard)
+    \(rfDispatchGuard)
         tell application "System Events"
             tell process "Mail"
                 set frontmost to true
