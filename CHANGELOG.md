@@ -258,8 +258,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward was sent without the note, and with it the call was refused for the
   wrong reason. Such a call is now refused before any Mail action with
   `'body' must be a string, got: <type>`, checked before the account is resolved.
-  A missing `body` or `body: null` is still a forward without a body, and a
-  string (the empty string included) behaves as before. One case reads oddly: a
+  An explicit `body: null` is refused the same way (`got: null`): callers that
+  passed null to mean "no note" must now leave the key out. A missing `body` is
+  still a forward without a body, and a string (the empty string included)
+  behaves as before. One case reads oddly: a
   string that parses as a `data:` URL is decoded as binary data by the MCP SDK
   before it reaches the tool, so it is refused as `got: data`, and the message
   says so.

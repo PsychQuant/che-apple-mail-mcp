@@ -70,6 +70,11 @@ final class ForwardBodyTypeTests: XCTestCase {
             (.array([.string("note")]), nil, "array"),
             (.object(["text": .string("note")]), nil, "object"),
             (.int(5), .bool(true), "integer"),
+            // An explicit null is a value that is present and not a string (the
+            // maintainer's decision on #674): refused in both modes, not read as
+            // a missing key.
+            (.null, nil, "null"),
+            (.null, .bool(true), "null"),
         ]
         for (body, flag, type) in rows {
             let outcome = try await run(body: body, flag: flag)
@@ -106,21 +111,24 @@ final class ForwardBodyTypeTests: XCTestCase {
     }
 
     // spec-example: message-composition / forward_email body types
-    func testAMissingOrNullBody_isABareForward_whenSending_andRefusedAsADraft() async throws {
-        for body in [nil, Value.null] {
-            // Sending: the native forward, no keystroke. An explicit null is read
-            // as leaving the key out.
-            let sent = try await run(body: body)
-            XCTAssertNil(sent.error)
-            XCTAssertEqual(sent.scripts.count, 1)
-            let script = try XCTUnwrap(sent.scripts.first)
-            XCTAssertTrue(script.contains("send fwdMsg"), "bare forward: \(script.suffix(120))")
-            XCTAssertFalse(script.contains("keystroke"))
-            // As a draft: the bare-forward draft refusal, as before (#673).
-            let draft = try await run(body: body, flag: .bool(true))
-            XCTAssertTrue(try XCTUnwrap(draft.invalidParameter).contains("#673"))
-            XCTAssertEqual(draft.scripts, [])
-        }
+    func testAMissingBody_isABareForward_whenSending_andRefusedAsADraft() async throws {
+        // Sending: Mail's native forward verb, then its send command, no keystroke.
+        let sent = try await run(body: nil)
+        XCTAssertNil(sent.error)
+        XCTAssertEqual(sent.scripts.count, 1)
+        let script = try XCTUnwrap(sent.scripts.first)
+        let forward = try XCTUnwrap(script.range(of: "set fwdMsg to forward originalMsg with opening window"))
+        let send = try XCTUnwrap(script.range(of: "send fwdMsg"))
+        XCTAssertLessThan(forward.upperBound, send.lowerBound)
+        XCTAssertFalse(script.contains("keystroke"))
+        // As a draft: the bare-forward draft refusal, as before (#673), which
+        // tells the caller to pass a body.
+        let draft = try await run(body: nil, flag: .bool(true))
+        let message = try XCTUnwrap(draft.invalidParameter)
+        XCTAssertTrue(message.contains("#673"), message)
+        XCTAssertTrue(message.contains("cannot save a forward without a body as a draft"), message)
+        XCTAssertTrue(message.contains("Pass a body"), message)
+        XCTAssertEqual(draft.scripts, [])
     }
 
     // spec-example: message-composition / forward_email body types
