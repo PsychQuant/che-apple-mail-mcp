@@ -1,10 +1,10 @@
 ## Context
 
-- 維護者 2026-11-21 的決定（#729、#742 的 Decision）：首選直接對伺服器操作；憑證另外授權、存在這個工具自己的 keychain 項目、先一個帳號；先做寄送；試點帳號 iCloud；連線用 `Cocoanetics/SwiftMail`；最低系統提高到 macOS 15。
+- 維護者 2026-11-21 的決定（#729、#742 的 Decision）：首選直接對伺服器操作；憑證另外授權、存在這個工具自己的 keychain 項目、先一個帳號；先做寄送；試點帳號 iCloud；連線用 `Cocoanetics/SwiftMail`；最低系統提高到 macOS 26（先決定 15，查證 `libswiftCompatibilitySpan.dylib` 之後改為 26）。
 - #716：寄件工具兩階段，寄出是對既有草稿的另一次呼叫，而且那個工具不能寫內容。
 - `docs/imap-smtp-assessment.md`（#308）：APPEND 不是投遞；信封與標頭分開；寄件備份與提交是兩個階段；結果未知不重送。
 - `.claude/rules/timeout-outcome-boundary.md`：只有正面觀察算證據；不得把「沒看到」報成「沒發生」。
-- 已做過的驗證：加入 SwiftMail、把最低系統改成 macOS 15 之後，debug 編譯通過，`make test` 全過（1766 + 546，0 失敗）。沒有做過任何實際連線。
+- 已做過的驗證：加入 SwiftMail 之後，debug 與 release（arm64、x86_64）編譯通過，`make test` 全過；目標 macOS 15 時 release binary 硬性載入 `libswiftCompatibilitySpan.dylib`，目標 26 時不會（#742 的兩則 Note）。沒有做過任何實際連線。
 
 ## Goals / Non-Goals
 
@@ -94,7 +94,7 @@ SwiftMail 自己把 `swift-nio-imap` 釘在一個 commit，SwiftPM 不接受以�
 - [沒有對真的伺服器跑過] → 工具描述寫明「尚未對真的伺服器執行」；issue 保持開啟並貼 `blocked-on-setup`，直到維護者設好憑證、同意後跑過只寄給自己的測試（`deferred-live-verification.md`）。
 - [SwiftMail 的行為與這裡的假設不同] → 連線層藏在一個協定後面，測試用替身走每一個分支；實際連線時逐項核對。
 - [本機與伺服器不一致] → 結果寫明本機索引要等 Mail 同步；這個工具不改本機資料。
-- [最低系統提高] → macOS 13、14 的使用者停在 v4；寫進 CHANGELOG 的 BREAKING。
+- [最低系統提高] → macOS 13、14、15 的使用者停在 v4；寫進 CHANGELOG 的 BREAKING。要再降低，得把 `libswiftCompatibilitySpan.dylib` 跟 binary 一起發布，並在 macOS 15 上實測。
 - [binary 變大、編譯變久] → release 編譯的數字記在 issue 上。
 - [部署目標改變換了 Foundation 行為（#538、#561）] → 完整測試已在新目標下通過（debug）；release 的 binary 另外啟動檢查。
 - [寄件身分] → From 必須在 `allowed_from` 或等於 `address`，否則拒絕。

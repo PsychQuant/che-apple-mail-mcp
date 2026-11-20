@@ -8,7 +8,7 @@
 - 新的 capability `direct-transport`：帳號設定檔、憑證（這個 server 自己的 keychain 項目）、SMTP 提交、寄件備份補存、草稿移除、已寄出紀錄。
 - 結果分階段回報：提交（已提交／沒寄出／結果未知）、寄件備份、草稿移除各自一個狀態。提交之後的階段失敗，再呼叫一次只補做未完成的階段，不重寄。
 - 新的命令列模式，讓維護者把憑證從 stdin 存進 keychain，以及清掉一筆「結果未知」的紀錄。這兩件事不做成 MCP 工具，agent 不能自己做。
-- **BREAKING**：最低系統從 macOS 13 提高到 macOS 15（`SwiftMail` 套件的要求）。
+- **BREAKING**：最低系統從 macOS 13 提高到 macOS 26。`SwiftMail` 要求 macOS 15；而目標低於 26 時，release 的 binary 會硬性載入 macOS 15 沒有的 `libswiftCompatibilitySpan.dylib`。
 - 加入相依 `Cocoanetics/SwiftMail`（釘在 1.17.0 那個 tag 的 commit）；`Package.resolved` 開始納入版本控制。
 
 ## Non-Goals

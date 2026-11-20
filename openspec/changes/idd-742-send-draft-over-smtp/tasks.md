@@ -1,6 +1,6 @@
 ## 1. 最低系統與相依（第一個 PR，不改行為）
 
-- [ ] 1.1 `Package.swift`：最低系統改為 macOS 15；加入 `SwiftMail`（釘 1.17.0 的 commit）。
+- [ ] 1.1 `Package.swift`：最低系統改為 macOS 26；加入 `SwiftMail`（釘 1.17.0 的 commit）。
 - [ ] 1.2 `Package.resolved` 納入版本控制（從 `.gitignore` 移除）。
 - [ ] 1.3 `README.md`、`README_zh-TW.md` 的系統需求與徽章；`CHANGELOG.md` 的 BREAKING。
 - [ ] 1.4 `make test` 全過；release 的 universal binary 建得出來並能啟動；把編譯時間與 binary 大小記到 issue。
