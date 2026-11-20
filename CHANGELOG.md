@@ -257,8 +257,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   boolean, an array, an object) was read as no body: without `save_as_draft` the
   forward was sent without the note, and with it the call was refused for the
   wrong reason. Such a call is now refused before any Mail action with
-  `'body' must be a string, got: <type>`. A missing `body` or `body: null` is
-  still a forward without a body, and a string behaves as before.
+  `'body' must be a string, got: <type>`, checked before the account is resolved.
+  A missing `body` or `body: null` is still a forward without a body, and a
+  string (the empty string included) behaves as before. One case reads oddly: a
+  string that parses as a `data:` URL is decoded as binary data by the MCP SDK
+  before it reaches the tool, so it is refused as `got: data`, and the message
+  says so.
 
 - **Header and fallback body decoding do linear work**
   ([#720](https://github.com/PsychQuant/che-apple-mail-mcp/issues/720)). Two

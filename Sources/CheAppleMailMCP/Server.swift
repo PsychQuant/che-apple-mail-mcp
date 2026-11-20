@@ -383,7 +383,7 @@ class CheAppleMailMCPServer {
                         "account_name": .object(["type": .string("string"), "description": .string("The mail account")]),
                         "account_id": .object(["type": .string("string"), "description": .string("Optional account UUID for disambiguation when multiple accounts share a display_name (see #101). From search_emails results.")]),
                         "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Recipients to forward to")]),
-                        "body": .object(["type": .string("string"), "description": .string("Optional message to add (interpreted according to 'format'). Caveat (#609): with a body, the to recipients are added to the forward after the body is pasted, and the forward is sent unless save_as_draft is true; that this leaves the pasted body and Mail's quote intact is expected from Mail's scripting dictionary but not yet verified live.")]),
+                        "body": .object(["type": .string("string"), "description": .string("Optional message to add (interpreted according to 'format'). Leave the key out (or pass null) for a forward without a body; a value that is present must be a string, and any other type is refused by name before anything is sent (#674). Caveat (#609): with a body, the to recipients are added to the forward after the body is pasted, and the forward is sent unless save_as_draft is true; that this leaves the pasted body and Mail's quote intact is expected from Mail's scripting dictionary but not yet verified live.")]),
                         "save_as_draft": .object(["type": .string("boolean"), "description": .string("If true, save the forward as a draft instead of sending it (default: false, which SENDS). Requires a body for now: a forward without a body and save_as_draft: true is refused by name (#673). Use when a human should review before send.")]),
                         "format": .object(["type": .string("string"), "enum": .array([.string("plain")]), "description": .string("Body format. \"plain\" is the ONLY supported value and the default when omitted: the body is delivered verbatim through Mail's own editor. \"markdown\" and \"html\" were removed in #304 — no path this server ships today can deliver rich text without assigning the AppleScript html-content property, and that triggered the reported upstream regression FB11734014, wrapping the whole letter in <blockquote type=\"cite\"> (invisible to the sender, shown as quoted text by Gmail and Outlook). This is a product integration limit, not proof of impossibility: #306 reports rich-paste drafts and HTML-combination Sent/received MIME passing. Those ASCII results do not establish other OS versions, CJK, or sending with every flavor (#310). Passing either value fails with that explanation; see #308 / #309 for alternative rich-text architectures.")]),
                     ]),
@@ -1469,13 +1469,15 @@ class CheAppleMailMCPServer {
                   let toArray = arguments["to"]?.arrayValue else {
                 throw MailError.invalidParameter("mailbox, account_name, and to are required")
             }
-            let accountId = try resolveAccountId(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
-            let to = toArray.compactMap { $0.stringValue }
             // #674: `body` is optional here, so a lenient read made a body that was
             // present but not a string look like no body — and the bare forward was
             // sent without the caller's note. Missing or null means no body; any
-            // other non-string is refused by name before any Mail call.
+            // other non-string is refused by name before any Mail call. Checked
+            // before the account is resolved, so a caller with both problems is
+            // told about the body first.
             let body = try optionalString(arguments, key: "body")
+            let accountId = try resolveAccountId(accountId: decodeAccountId(arguments, tool: invokedTool), accountName: accountName, tool: invokedTool)
+            let to = toArray.compactMap { $0.stringValue }
             let format = try parseBodyFormatArgument(arguments["format"])
             let saveAsDraft = try requireBool(arguments, key: "save_as_draft", default: false)
             return try await mailController.forwardEmail(id: id, mailbox: mailbox, accountName: accountName, to: to, body: body, format: format, accountId: accountId, saveAsDraft: saveAsDraft)
@@ -2922,7 +2924,15 @@ func optionalString(_ arguments: [String: Value], key: String) throws -> String?
     guard let value = arguments[key] else { return nil }
     if case .null = value { return nil }
     guard case .string(let string) = value else {
-        throw MailError.invalidParameter("'\(key)' must be a string, got: \(typeName(of: value))")
+        // The MCP SDK decodes a JSON string that parses as a data: URL into
+        // binary data, so the caller did send a string; say why it reads as data.
+        let dataNote: String
+        if case .data = value {
+            dataNote = " (a string that parses as a data: URL is decoded as binary data before it reaches this tool, so it cannot be used as '\(key)')"
+        } else {
+            dataNote = ""
+        }
+        throw MailError.invalidParameter("'\(key)' must be a string, got: \(typeName(of: value))\(dataNote)")
     }
     return string
 }
