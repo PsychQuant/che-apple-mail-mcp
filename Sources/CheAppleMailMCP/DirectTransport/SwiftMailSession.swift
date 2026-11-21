@@ -38,7 +38,7 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
             try await imap.login(username: account.address, password: password)
         } catch {
             try? await imap.disconnect()
-            throw Failure(description: "could not log in to the IMAP server \(account.imap.host):\(account.imap.port) (\(redact(describe(error), password: password, username: account.address))); nothing was submitted")
+            throw Failure(description: "could not log in to the IMAP server \(account.imap.host):\(account.imap.port) (\(clip(redact(describe(error), password: password, username: account.address)))); nothing was submitted")
         }
         return SwiftMailSession(account: account, password: password, imap: imap)
     }
@@ -58,19 +58,28 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
         MessageID(raw)?.description
     }
 
-    /// `text` with the password removed, and the base64 forms a login sends it in
-    /// (AUTH PLAIN's `\0user\0password`, AUTH LOGIN's password alone).
+    /// `text` with the password removed, in every form a login sends it: as is,
+    /// as an IMAP quoted string (`\` and `"` escaped), and base64-encoded for AUTH
+    /// LOGIN and for AUTH PLAIN with an empty or the user's authorization identity.
+    /// Applied to the whole text before it is cut to length, so a password that
+    /// straddles the cut cannot survive as a prefix.
     static func redact(_ text: String, password: String, username: String) -> String {
         guard !password.isEmpty else { return text }
-        let forms = [password,
+        let quoted = password.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let forms = [password, quoted,
                      Data(password.utf8).base64EncodedString(),
-                     Data("\u{0}\(username)\u{0}\(password)".utf8).base64EncodedString()]
-        return forms.reduce(text) { $0.replacingOccurrences(of: $1, with: "[redacted]") }
+                     Data("\u{0}\(username)\u{0}\(password)".utf8).base64EncodedString(),
+                     Data("\(username)\u{0}\(username)\u{0}\(password)".utf8).base64EncodedString()]
+        // Longest first, so a form that contains another is removed whole.
+        return forms.sorted { $0.count > $1.count }.reduce(text) { $0.replacingOccurrences(of: $1, with: "[redacted]") }
     }
 
     private func redact(_ text: String) -> String {
         Self.redact(text, password: password, username: account.address)
     }
+
+    /// At most 300 characters. Only ever applied after `redact`.
+    static func clip(_ text: String) -> String { String(text.prefix(300)) }
 
     /// Runs `body`, handing out any error as a redacted `Failure`.
     private func guarded<T>(_ body: () async throws -> T) async throws -> T {
@@ -79,7 +88,7 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
         } catch let refusal as SendDraftRefusal {
             throw refusal
         } catch {
-            throw Failure(description: redact(Self.describe(error)))
+            throw Failure(description: Self.clip(redact(Self.describe(error))))
         }
     }
 
@@ -190,7 +199,7 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
             try await server.login(username: account.address, password: password)
         } catch {
             try? await server.disconnect()
-            throw Failure(description: "could not log in to the SMTP server \(account.smtp.host):\(account.smtp.port) (\(redact(Self.describe(error))))")
+            throw Failure(description: "could not log in to the SMTP server \(account.smtp.host):\(account.smtp.port) (\(Self.clip(redact(Self.describe(error)))))")
         }
         smtp = server
     }
@@ -206,9 +215,9 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
             outcome = Self.classify(.failure(error))
         }
         switch outcome {
-        case .accepted(let reply): return .accepted(reply: redact(reply))
-        case .notAccepted(let reply): return .notAccepted(reply: reply.map { redact($0) })
-        case .unknown(let detail): return .unknown(detail: redact(detail))
+        case .accepted(let reply): return .accepted(reply: Self.clip(redact(reply)))
+        case .notAccepted(let reply): return .notAccepted(reply: reply.map { Self.clip(redact($0)) })
+        case .unknown(let detail): return .unknown(detail: Self.clip(redact(detail)))
         }
     }
 
@@ -264,9 +273,9 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
         }
     }
 
-    /// An error's text on one line, at most 300 characters. Not a redaction:
-    /// callers that hand it out pass it through `redact`.
+    /// An error's whole text on one line. Not a redaction and not cut: callers
+    /// that hand it out pass it through `redact` and then `clip`.
     private static func describe(_ error: Error) -> String {
-        String(describing: error).replacingOccurrences(of: "\n", with: " ").prefix(300).description
+        String(describing: error).replacingOccurrences(of: "\n", with: " ")
     }
 }

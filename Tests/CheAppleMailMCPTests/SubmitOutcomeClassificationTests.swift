@@ -59,6 +59,18 @@ final class SubmitOutcomeClassificationTests: XCTestCase {
         XCTAssertTrue(out.contains("535 auth failed"))
     }
 
+    func testThePasswordIsRedactedBeforeTheTextIsCut_andInItsQuotedAndAuthzidForms() {
+        let password = #"p"a\ss-word-0123"#
+        // The password straddles character 300: cut first, its prefix would survive.
+        let text = String(repeating: "x", count: 290) + password
+        let out = SwiftMailSession.clip(SwiftMailSession.redact(text, password: password, username: "me@x.example"))
+        XCTAssertFalse(out.contains(#"p"a\ss"#), out)
+        let quoted = #"LOGIN me@x.example "p\"a\\ss-word-0123""#
+        XCTAssertFalse(SwiftMailSession.redact(quoted, password: password, username: "me@x.example").contains("ss-word"))
+        let authz = Data("me@x.example\u{0}me@x.example\u{0}\(password)".utf8).base64EncodedString()
+        XCTAssertFalse(SwiftMailSession.redact("AUTH PLAIN \(authz)", password: password, username: "me@x.example").contains(authz))
+    }
+
     /// A To, Cc or Bcc field the envelope left empty may hold text the server
     /// could not parse: the draft is then refused.
     func testAHeaderFieldWithNoEnvelopeAddressIsNotCovered() {

@@ -32,25 +32,36 @@ enum DirectTransportCredential {
         return text
     }
 
-    /// Creates or replaces the item for `address`. An existing item is updated in
-    /// place, so a failure leaves the old password working rather than none.
+    /// Creates or replaces the item for `address`.
+    ///
+    /// The item is always one this binary added, so its access list trusts only
+    /// this binary. An existing item is never updated in place: another program
+    /// could have created an item under this service whose access list lets it
+    /// read the value, and writing the password into it would hand it over. So a
+    /// duplicate is deleted (which fails for an item this binary may not touch)
+    /// and the item added again. If that second add fails, the old item is gone:
+    /// the message says so, and the person running the command runs it again.
     static func store(address: String, password: String) throws {
         let match: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: address,
         ]
-        let updated = SecItemUpdate(match as CFDictionary, [kSecValueData as String: Data(password.utf8)] as CFDictionary)
-        if updated == errSecSuccess { return }
-        guard updated == errSecItemNotFound else {
-            throw Failure(description: "the existing keychain item for \(address) could not be replaced (OSStatus \(updated)); it is unchanged")
-        }
         var add = match
         add[kSecValueData as String] = Data(password.utf8)
         add[kSecAttrLabel as String] = "che-apple-mail-mcp direct transport (\(address))"
-        let status = SecItemAdd(add as CFDictionary, nil)
-        guard status == errSecSuccess else {
-            throw Failure(description: "the keychain item for \(address) could not be stored (OSStatus \(status))")
+        let first = SecItemAdd(add as CFDictionary, nil)
+        if first == errSecSuccess { return }
+        guard first == errSecDuplicateItem else {
+            throw Failure(description: "the keychain item for \(address) could not be stored (OSStatus \(first))")
+        }
+        let deleted = SecItemDelete(match as CFDictionary)
+        guard deleted == errSecSuccess else {
+            throw Failure(description: "an existing keychain item for \(address) could not be removed (OSStatus \(deleted)); it is unchanged and nothing was stored. Delete it in Keychain Access if this binary did not create it")
+        }
+        let second = SecItemAdd(add as CFDictionary, nil)
+        guard second == errSecSuccess else {
+            throw Failure(description: "the old keychain item for \(address) was removed but the new one could not be stored (OSStatus \(second)); run the command again")
         }
     }
 }
