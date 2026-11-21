@@ -193,12 +193,25 @@ struct SendDraftFlow {
         guard !draft.hasInvalidRecipient else {
             throw SendDraftRefusal(description: "a recipient field of the draft holds text that is not an address; nothing was submitted")
         }
-        // Check 5: the header can be sent without its Bcc fields.
+        // Check 5: the header can be sent without its Bcc fields. Its fields are
+        // read here once, with the same parser, for check 6.
         let outgoing: Data
+        let headerFields: [(name: String, value: String)]
         do {
             outgoing = try BccRemoval.strip(draft.message)
+            headerFields = try BccRemoval.fields(in: draft.message)
         } catch {
             throw SendDraftRefusal(description: "\(error); nothing was submitted")
+        }
+        // Check 6 (#745): not a draft in Mail's draft layout. Mail rebuilds a
+        // draft when it sends it; the stored form (an empty plain-text part,
+        // draft-only headers) is not what Mail sends, and this tool writes no
+        // content. Only Mail's own mark counts: inferring the layout from the
+        // MIME structure would refuse other clients' ordinary messages.
+        // A header that cannot be parsed was refused by check 5, so it never
+        // reaches this check as "unmarked".
+        if Self.carriesMailsDraftMark(headerFields) {
+            throw SendDraftRefusal(description: "the draft carries \(Self.mailDraftField): \(Self.mailDraftMark), the mark Mail writes on the drafts it saves. Mail stores such a draft in a layout it rebuilds when it sends it (in the drafts compared for #745: an empty plain-text part, the body in HTML and draft-only headers), and this tool sends a draft as stored, so it does not send it. Create the draft with append_draft, which stores it in the form it is sent, or send this one from Mail. Nothing was submitted")
         }
 
         // The SMTP connection is opened only now, so a call that only completes
@@ -348,6 +361,22 @@ struct SendDraftFlow {
         } catch {
             notes.append("The record of sent drafts could not be updated (\(error)); it may report a stage that is done as pending, and a later call then repeats only that stage. The message will not be submitted again.")
             return false
+        }
+    }
+
+    static let mailDraftField = "X-Uniform-Type-Identifier"
+    static let mailDraftMark = "com.apple.mail-draft"
+
+    /// Whether the message carries the mark Mail writes on the drafts it saves
+    /// (#745, #463 S3). Field name and value are compared without regard to
+    /// ASCII case, the value after unfolding and trimming.
+    /// `fields` come from `BccRemoval.fields`: names lowercased, values already
+    /// unfolded (a CR or LF cannot remain, the parser refuses a bare one).
+    static func carriesMailsDraftMark(_ fields: [(name: String, value: String)]) -> Bool {
+        fields.contains { field in
+            DirectTransportConfig.equalIgnoringASCIICase(field.name, mailDraftField)
+                && DirectTransportConfig.equalIgnoringASCIICase(
+                    field.value.trimmingCharacters(in: .whitespaces), mailDraftMark)
         }
     }
 

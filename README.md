@@ -853,6 +853,11 @@ explicit.
 `send_draft` sends one draft that already exists in the server's drafts mailbox over SMTP, without Mail
 ([#729](https://github.com/PsychQuant/che-apple-mail-mcp/issues/729)). It writes no content: the message submitted
 is the draft as the server stores it, with its `Bcc` fields removed, and recipients come from its To, Cc and Bcc.
+A new submission of a draft carrying `X-Uniform-Type-Identifier: com.apple.mail-draft`, the mark Mail writes on the
+drafts it saves, is refused ([#745](https://github.com/PsychQuant/che-apple-mail-mcp/issues/745)). Mail stores such drafts in a layout it
+rebuilds when it sends them (in the drafts compared: an empty plain-text part, the body in HTML, draft-only headers),
+and this tool sends a draft as stored. Only that mark is checked, not the MIME structure. Make the draft with
+`append_draft`, or send it from Mail.
 It works only for accounts listed in `~/.claude/.mail/direct-transport.json`; any other account is refused, and
 no Mail path is used instead.
 
