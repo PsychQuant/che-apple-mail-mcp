@@ -109,7 +109,7 @@ final class SendDraftToolTests: XCTestCase {
         let both = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"),
                                   "message_id": .string("<d1@icloud.example>"), "subject_match": .string("Report")], env)
         XCTAssertTrue(both?.contains("exactly one of") == true, both ?? "not refused")
-        for bad in ["no-at-sign", "<a b@icloud.example>", "<d1@icloud.example>\r\nX: y", ""] {
+        for bad in ["no-at-sign", "<a b@icloud.example>", "<d1@icloud.example>\r\nX: y", "", "<" + String(repeating: "a", count: 990) + "@icloud.example>"] {
             let message = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"), "message_id": .string(bad)], env)
             XCTAssertTrue(message?.contains("message_id must be") == true, "\(bad.debugDescription): \(message ?? "not refused")")
         }

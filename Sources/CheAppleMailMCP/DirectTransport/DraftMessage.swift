@@ -48,26 +48,34 @@ enum DraftMessage {
     /// (`7bit`) when it is ASCII and no line passes the RFC 5322 limit, and
     /// base64 in lines of 76 otherwise.
     static func bodyPart(_ body: String) -> (encoding: String, bytes: Data) {
+        // One pass: normalise the line endings and note whether the text is ASCII
+        // and how long its longest line is, without splitting it into lines.
         var normalised: [UInt8] = []
-        let source = Array(body.utf8)
-        var index = 0
-        while index < source.count {
-            let byte = source[index]
-            if byte == 0x0D {
-                normalised += [0x0D, 0x0A]
-                if index + 1 < source.count, source[index + 1] == 0x0A { index += 1 }
-            } else if byte == 0x0A {
-                normalised += [0x0D, 0x0A]
+        normalised.reserveCapacity(body.utf8.count + 2)
+        var ascii = true
+        var longestLine = 0
+        var line = 0
+        var pendingCR = false
+        for byte in body.utf8 {
+            if pendingCR {
+                pendingCR = false
+                if byte == 0x0A { continue }
+            }
+            if byte == 0x0D || byte == 0x0A {
+                normalised.append(0x0D); normalised.append(0x0A)
+                longestLine = max(longestLine, line); line = 0
+                pendingCR = byte == 0x0D
             } else {
                 normalised.append(byte)
+                if byte >= 0x80 { ascii = false }
+                line += 1
             }
-            index += 1
         }
-        if !(normalised.count >= 2 && normalised.suffix(2) == [0x0D, 0x0A]) { normalised += [0x0D, 0x0A] }
+        longestLine = max(longestLine, line)
+        if !(normalised.count >= 2 && normalised[normalised.count - 2] == 0x0D && normalised[normalised.count - 1] == 0x0A) {
+            normalised.append(0x0D); normalised.append(0x0A)
+        }
 
-        let ascii = normalised.allSatisfy { $0 < 0x80 }
-        let longestLine = normalised.split(separator: 0x0A, omittingEmptySubsequences: false)
-            .map { $0.last == 0x0D ? $0.count - 1 : $0.count }.max() ?? 0
         if ascii && longestLine <= DirectDraft.maxLineOctets {
             return ("7bit", Data(normalised))
         }

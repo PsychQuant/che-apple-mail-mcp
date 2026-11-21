@@ -864,7 +864,7 @@ Message-ID. That is not the layout Mail gives its own drafts, so `send_draft` ca
 ([#745](https://github.com/PsychQuant/che-apple-mail-mcp/issues/745) describes what goes wrong with a draft
 Mail saved). The result is `appended`, `not_appended` (the server refused, or the connection, login or
 drafts-mailbox lookup failed before the APPEND was sent) or `unknown`; after `unknown` the tool does not retry.
-Calls are not de-duplicated: a repeated call whose draft is stored creates a second draft beside the first. It returns `message_id`, which `send_draft` accepts as a third
+Calls are not de-duplicated: if two calls both store their drafts, there are two drafts. It returns `message_id`, which `send_draft` accepts as a third
 way to choose the draft, so writing a draft and sending it can both happen with Mail closed.
 
 ### Setup

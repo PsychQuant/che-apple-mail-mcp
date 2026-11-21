@@ -82,8 +82,10 @@ struct AppendDraftFlow {
                 ])
             }
             if hits.count > 1 {
+                // The Message-ID is new to this call (a random UUID), so any hit is
+                // this call's message; more than one means the server holds copies.
                 return result(.appended, [
-                    "\(determined); a search afterwards found it in the drafts mailbox \(hits.count) times under this Message-ID, so no UID is reported.",
+                    "\(determined); a search afterwards found it in the drafts mailbox \(hits.count) times under this Message-ID, so no UID is reported. send_draft refuses a Message-ID that matches more than one draft: remove the extra copies first.",
                     Self.indexNoteAppended, Self.notDeduplicatedNote,
                 ])
             }
@@ -113,7 +115,7 @@ enum AppendDraftTool {
     static let maxRecipients = 100
 
     /// Kept here so the test of the caveats reads the same text the server lists.
-    static let description = "Create a new plain-text draft in the server's drafts mailbox over IMAP, without Mail (#744, #729). NOT YET RUN AGAINST A REAL MAIL SERVER: until the result is recorded on issue #744, treat every outcome as unverified, including whether Mail and other clients show the result as an editable draft. Only for accounts listed in the server's direct-transport.json, with a password stored by running the binary with --direct-transport-set-credential <address>; any other account is refused and no Mail path is used instead. Takes account_name or account_id, to, cc and bcc (lists of bare addresses, at least one recipient in all; display names are refused), subject (not empty), body (plain text) and optionally from_name (the sender's display name; the sender's address is always the account's). It accepts no attachment, format, reply or signature argument. The tool builds the whole message itself: one text/plain part in UTF-8 with a new Message-ID, not the layout Mail gives its own drafts, so that send_draft can submit it as stored. Bcc recipients are kept in the draft's Bcc field. outcome is appended (the server completed the command, or a search afterwards found the message; uid is given when the server reports one), not_appended (the server refused the command, or the call stopped before the APPEND was sent: the connection, the login or finding the drafts mailbox failed), or unknown: whether the server stored the draft could not be established, and the tool is NOT retrying. Calls are not de-duplicated: a repeated call whose draft is stored creates a second draft beside the first, so after unknown look in the drafts mailbox for the message_id before calling again. The result carries message_id, which send_draft accepts to send this draft. Mail's local index is not changed and shows the draft when Mail next syncs."
+    static let description = "Create a new plain-text draft in the server's drafts mailbox over IMAP, without Mail (#744, #729). NOT YET RUN AGAINST A REAL MAIL SERVER: until the result is recorded on issue #744, treat every outcome as unverified, including whether Mail and other clients show the result as an editable draft. Only for accounts listed in the server's direct-transport.json, with a password stored by running the binary with --direct-transport-set-credential <address>; any other account is refused and no Mail path is used instead. Takes account_name or account_id, to, cc and bcc (lists of bare addresses, at least one recipient in all; display names are refused), subject (not empty), body (plain text) and optionally from_name (the sender's display name; the sender's address is always the account's). It accepts no attachment, format, reply or signature argument. The tool builds the whole message itself: one text/plain part in UTF-8 with a new Message-ID, not the layout Mail gives its own drafts, so that send_draft can submit it as stored. Bcc recipients are kept in the draft's Bcc field. outcome is appended (the server completed the command, or a search afterwards found the message; uid is given when the server reports one), not_appended (the server refused the command, or the call stopped before the APPEND was sent: the connection, the login or finding the drafts mailbox failed), or unknown: whether the server stored the draft could not be established, and the tool is NOT retrying. Calls are not de-duplicated: if two calls both store their drafts, there are two drafts, so after unknown look in the drafts mailbox for the message_id before calling again. The result carries message_id, which send_draft accepts to send this draft. Mail's local index is not changed and shows the draft when Mail next syncs."
 
     struct Environment {
         let stateDirectory: URL
@@ -126,6 +128,14 @@ enum AppendDraftTool {
     static func run(_ arguments: [String: Value], _ environment: Environment) async throws -> String {
         if let extra = arguments.keys.sorted().first(where: { !argumentNames.contains($0) }) {
             throw MailError.invalidParameter("append_draft does not accept \(printable(extra)); it takes only account_name, account_id, to, cc, bcc, subject, body and from_name")
+        }
+        // The recipient count is checked on the raw lists, before any element is copied.
+        let listed = ["to", "cc", "bcc"].reduce(0) { total, key in
+            if case .array(let items)? = arguments[key] { return total + items.count }
+            return total
+        }
+        if listed > maxRecipients {
+            throw MailError.invalidParameter("append_draft takes at most \(maxRecipients) recipients in to, cc and bcc together. Nothing was appended")
         }
         let accountName = try string(arguments, "account_name")
         let accountID = try string(arguments, "account_id")
@@ -206,8 +216,11 @@ enum AppendDraftTool {
         // Every error text below is redacted again here, whatever its source did:
         // the result is the boundary the password must not cross.
         func scrubbed(_ result: AppendDraftResult) -> String {
+            // The mailbox name came from the server, so it is text like any other.
             render(AppendDraftResult(
-                outcome: result.outcome, messageID: result.messageID, mailbox: result.mailbox, uid: result.uid,
+                outcome: result.outcome, messageID: result.messageID,
+                mailbox: result.mailbox.map { SwiftMailSession.redact($0, password: password, username: account.address) },
+                uid: result.uid,
                 uidValidity: result.uidValidity,
                 notes: result.notes.map { SwiftMailSession.redact($0, password: password, username: account.address) }))
         }

@@ -43,7 +43,7 @@
 
 ### 不經 Mail 寫到伺服器的 send_draft(#742)與 append_draft(#744)不是這裡的例外
 
-`send_draft` 與 `append_draft` 用 IMAP 與 SMTP 直接對伺服器讀寫,不碰 Envelope Index 與 `.emlx`,也不經 Mail;Mail 下次同步時自己跟上,
+`send_draft`(IMAP 與 SMTP)與 `append_draft`(只用 IMAP)直接對伺服器讀寫,不碰 Envelope Index 與 `.emlx`,也不經 Mail;Mail 下次同步時自己跟上,
 所以沒有本規則要防的本機 split-brain。它的保證見 `direct-transport.md`。下面的「唯一例外」仍只講寫進本機 store,
 不得拿這兩個工具當「可以寫本機 store」的前例。
 

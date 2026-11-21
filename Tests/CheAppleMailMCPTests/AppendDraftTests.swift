@@ -150,6 +150,30 @@ final class AppendDraftTests: XCTestCase {
         }
     }
 
+    func testEachEncodedWordIsValidOnItsOwn_andAtMost75Characters() throws {
+        let mixed = String(repeating: "a測😀é", count: 120)
+        let built = message(fromName: String(repeating: "鄭😀", count: 30), subject: mixed)
+        let regex = try NSRegularExpression(pattern: #"=\?utf-8\?B\?([A-Za-z0-9+/=]+)\?="#)
+        let headers = headerBlock(built)
+        let matches = regex.matches(in: headers, range: NSRange(headers.startIndex..., in: headers))
+        XCTAssertGreaterThan(matches.count, 4)
+        for match in matches {
+            let word = try XCTUnwrap(Range(match.range, in: headers).map { String(headers[$0]) })
+            XCTAssertLessThanOrEqual(word.count, 75, word)
+            let payload = try XCTUnwrap(Range(match.range(at: 1), in: headers).map { String(headers[$0]) })
+            let bytes = try XCTUnwrap(Data(base64Encoded: payload))
+            XCTAssertNotNil(String(data: bytes, encoding: .utf8), "a character split across encoded words: \(word)")
+        }
+    }
+
+    func testABodyOfLineBreaksIsNormalisedInOnePass() {
+        let built = message(body: String(repeating: "\n", count: 1_000_000))
+        XCTAssertTrue(headerBlock(built).contains("Content-Transfer-Encoding: 7bit"))
+        XCTAssertEqual(bodyBlock(built).utf8.count, 2_000_000)
+        let mixed = message(body: "a\r\n\r\rb\n")
+        XCTAssertEqual(bodyBlock(mixed), "a\r\n\r\n\r\nb\r\n")
+    }
+
     func testManyRecipientsFoldWithoutSplittingAnAddress() throws {
         let many = (0..<80).map { "recipient-number-\($0)@a-rather-long-domain.example" }
         let built = message(to: many)
@@ -559,6 +583,22 @@ final class AppendDraftTests: XCTestCase {
         XCTAssertEqual(opened.count, 1, "the second call opened no connection")
     }
 
+    func testTheServersMailboxNameIsRedactedInTheResult() async throws {
+        let session = FakeSession()
+        session.draftsMailboxName = "Drafts-secret-pw"
+        let text = try await AppendDraftTool.run(arguments(), try environment(config: config, session: session))
+        XCTAssertFalse(text.contains("secret-pw"), text)
+        XCTAssertTrue(session.calls.contains("appendDraft:Drafts-secret-pw"), "the real name is still the one appended to")
+    }
+
+    func testTooManyRecipientsAreRefusedBeforeAnyConnection() async throws {
+        let opened = Opened()
+        let many: [Value] = (0...AppendDraftTool.maxRecipients).map { .string("r\($0)@x.example") }
+        let message = await failure(arguments(["to": .array(many)]), try environment(config: config, opened: opened))
+        XCTAssertTrue(message?.contains("at most \(AppendDraftTool.maxRecipients) recipients") == true, message ?? "not refused")
+        XCTAssertEqual(opened.count, 0)
+    }
+
     func testEveryCallHasItsOwnMessageID() async throws {
         let session = FakeSession()
         let dir = try environment(config: config).stateDirectory
@@ -604,7 +644,7 @@ final class AppendDraftTests: XCTestCase {
         let description = AppendDraftTool.description
         XCTAssertTrue(description.contains("NOT YET RUN AGAINST A REAL MAIL SERVER"))
         XCTAssertTrue(description.contains("#744"))
-        XCTAssertTrue(description.contains("second draft"))
+        XCTAssertTrue(description.contains("if two calls both store their drafts, there are two drafts"))
         XCTAssertTrue(description.contains("no Mail path is used instead"))
     }
 

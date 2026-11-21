@@ -454,7 +454,7 @@ claude
 與選填的 `from_name`，內容由工具自己組：單一 `text/plain`（UTF-8）、新的 Message-ID。這不是 Mail 自己存草稿的版面，所以
 `send_draft` 可以把它原樣送出（Mail 存的草稿原樣送出會有什麼問題，見
 [#745](https://github.com/PsychQuant/che-apple-mail-mcp/issues/745)）。結果是 `appended`、`not_appended`（伺服器拒絕，或在 APPEND 送出之前
-連線、登入或找草稿匣就失敗）或 `unknown`；`unknown` 之後工具不重試。呼叫不會去重：再呼叫一次而草稿也存進去了，就會多一封。它回傳 `message_id`，`send_draft` 可以用它選草稿，所以建草稿與寄出都能在
+連線、登入或找草稿匣就失敗）或 `unknown`；`unknown` 之後工具不重試。呼叫不會去重：兩次呼叫都存進去了，就有兩封。它回傳 `message_id`，`send_draft` 可以用它選草稿，所以建草稿與寄出都能在
 Mail 關著時完成。
 
 ### 設定
