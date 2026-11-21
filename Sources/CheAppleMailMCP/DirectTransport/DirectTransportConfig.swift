@@ -31,9 +31,10 @@ struct DirectTransportConfig: Equatable {
         let allowedFrom: [String]
 
         /// Whether `address` may appear in the From field of a draft this account sends.
+        /// Only ASCII letter case is ignored: Unicode case folding would let a
+        /// different address (a Kelvin sign for a K, say) pass as an allowed one.
         func mayUseFrom(_ candidate: String) -> Bool {
-            let wanted = candidate.lowercased()
-            return ([address] + allowedFrom).contains { $0.lowercased() == wanted }
+            ([address] + allowedFrom).contains { DirectTransportConfig.equalIgnoringASCIICase($0, candidate) }
         }
     }
 
@@ -46,10 +47,16 @@ struct DirectTransportConfig: Equatable {
     /// one, `accountName` is compared with each account's `address`.
     func account(accountID: String?, accountName: String?) -> Account? {
         if let id = accountID, !id.isEmpty {
-            return accounts.first { $0.accountID.lowercased() == id.lowercased() }
+            return accounts.first { Self.equalIgnoringASCIICase($0.accountID, id) }
         }
         guard let name = accountName, !name.isEmpty else { return nil }
-        return accounts.first { $0.address.lowercased() == name.lowercased() }
+        return accounts.first { Self.equalIgnoringASCIICase($0.address, name) }
+    }
+
+    /// Byte equality after folding only `A`-`Z` to `a`-`z`.
+    static func equalIgnoringASCIICase(_ a: String, _ b: String) -> Bool {
+        func fold(_ text: String) -> [UInt8] { text.utf8.map { (65...90).contains($0) ? $0 + 32 : $0 } }
+        return fold(a) == fold(b)
     }
 
     struct Problem: Error, CustomStringConvertible {
@@ -80,8 +87,13 @@ struct DirectTransportConfig: Equatable {
         var accounts: [Account] = []
         for (index, item) in list.enumerated() {
             let account = try parseAccount(item, at: index)
-            if accounts.contains(where: { $0.accountID.lowercased() == account.accountID.lowercased() }) {
+            if accounts.contains(where: { equalIgnoringASCIICase($0.accountID, account.accountID) }) {
                 throw Problem(detail: "account \(account.accountID) appears more than once")
+            }
+            // account_name is matched against the address, so two entries with one
+            // address would make the file's order choose the server.
+            if accounts.contains(where: { equalIgnoringASCIICase($0.address, account.address) }) {
+                throw Problem(detail: "the address \(account.address) appears in more than one account")
             }
             accounts.append(account)
         }
@@ -96,6 +108,9 @@ struct DirectTransportConfig: Equatable {
         try onlyKeys(entry, accountKeys, in: place)
         for key in accountKeys where entry[key] == nil { throw Problem(detail: "\(place) lacks `\(key)`") }
         let accountID = try nonEmptyString(entry["account_id"], "\(place).account_id")
+        guard UUID(uuidString: accountID) != nil else {
+            throw Problem(detail: "\(place).account_id must be the Mail account's UUID (from list_accounts)")
+        }
         let address = try nonEmptyString(entry["address"], "\(place).address")
         guard isAddress(address) else { throw Problem(detail: "\(place).address is not an email address") }
         guard let sentCopyText = entry["sent_copy"] as? String, let sentCopy = SentCopy(rawValue: sentCopyText) else {
@@ -120,6 +135,13 @@ struct DirectTransportConfig: Equatable {
         guard let object = value as? [String: Any] else { throw Problem(detail: "\(place) must be an object") }
         try onlyKeys(object, ["host", "port"], in: place)
         let host = try nonEmptyString(object["host"], "\(place).host")
+        // A DNS name: letters, digits, hyphens and dots, nothing else.
+        let hostBytes = Array(host.utf8)
+        guard hostBytes.allSatisfy({ (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0)
+                                     || $0 == 0x2D || $0 == 0x2E }),
+              hostBytes.first != 0x2E, hostBytes.first != 0x2D, hostBytes.count <= 253 else {
+            throw Problem(detail: "\(place).host must be a host name (letters, digits, hyphens and dots)")
+        }
         // JSONSerialization reads 587 as an NSNumber; a string or a fraction is refused.
         guard let number = object["port"] as? NSNumber, CFGetTypeID(number) == CFNumberGetTypeID(),
               !CFNumberIsFloatType(number), (1...65535).contains(number.intValue) else {

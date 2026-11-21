@@ -38,7 +38,10 @@ final class BccRemovalTests: XCTestCase {
             ("To: a@x.example\r\nResent-Bcc: b@x.example\r\n\r\nbody", "Resent-Bcc"),
             (" continued\r\nTo: a@x.example\r\n\r\nbody", "continuation line"),
             ("To: a@x.example\r\nnot a field\r\n\r\nbody", "not a header field"),
-            ("To: a@x.example\r\nBcc : b@x.example\r\n\r\nbody", "white space"),
+            ("To: a@x.example\r\nBcc : b@x.example\r\n\r\nbody", "outside printable ASCII"),
+            ("To: a@x.example\r\n: b@x.example\r\n\r\nbody", "empty"),
+            ("To: a@x.example\r\nB\u{1}cc: b@x.example\r\n\r\nbody", "outside printable ASCII"),
+            ("To: a@x.example\r\nBc\u{00E7}: b@x.example\r\n\r\nbody", "outside printable ASCII"),
             ("To: a@x.example\r\nSubject: s\r\n", "end of the header section"),
             ("To: a@x.example\r\n\n\r\nbody", "a line feed without a carriage return"),
         ]
@@ -47,5 +50,10 @@ final class BccRemovalTests: XCTestCase {
                 XCTAssertTrue("\(error)".contains(reason), "\(reason): \(error)")
             }
         }
+    }
+
+    func testTheFieldNamesAreListedLowercasedOncePerField() throws {
+        let input = "From: me@x.example\r\nTO: a@x.example,\r\n b@x.example\r\nBcc: c@x.example\r\n\r\nTo: not a header"
+        XCTAssertEqual(try BccRemoval.fieldNames(in: Data(input.utf8)), ["from", "to", "bcc"])
     }
 }

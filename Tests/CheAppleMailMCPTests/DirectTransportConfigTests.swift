@@ -14,7 +14,7 @@ final class DirectTransportConfigTests: XCTestCase {
     }
 
     private let valid = """
-    {"accounts": [{"account_id": "UUID-I", "address": "me@icloud.example",
+    {"accounts": [{"account_id": "AAAAAAAA-2222-4333-8444-555555555555", "address": "me@icloud.example",
       "smtp": {"host": "smtp.mail.me.com", "port": 587}, "imap": {"host": "imap.mail.me.com", "port": 993},
       "sent_copy": "append", "allowed_from": ["alias@icloud.example"]}]}
     """
@@ -25,7 +25,7 @@ final class DirectTransportConfigTests: XCTestCase {
 
     func testAValidFileIsRead() throws {
         let config = try XCTUnwrap(try DirectTransportConfig.load(from: try file(valid)))
-        let account = try XCTUnwrap(config.account(accountID: "UUID-I", accountName: nil))
+        let account = try XCTUnwrap(config.account(accountID: "AAAAAAAA-2222-4333-8444-555555555555", accountName: nil))
         XCTAssertEqual(account.address, "me@icloud.example")
         XCTAssertEqual(account.smtp, .init(host: "smtp.mail.me.com", port: 587))
         XCTAssertEqual(account.imap, .init(host: "imap.mail.me.com", port: 993))
@@ -35,9 +35,9 @@ final class DirectTransportConfigTests: XCTestCase {
 
     func testAnAccountIsFoundByItsIdOrItsAddress_andNotOtherwise() throws {
         let config = try XCTUnwrap(try DirectTransportConfig.load(from: try file(valid)))
-        XCTAssertNotNil(config.account(accountID: "uuid-i", accountName: nil), "ASCII case of the id is ignored")
+        XCTAssertNotNil(config.account(accountID: "aaaaaaaa-2222-4333-8444-555555555555", accountName: nil), "ASCII case of the id is ignored")
         XCTAssertNotNil(config.account(accountID: nil, accountName: "ME@icloud.example"))
-        XCTAssertNil(config.account(accountID: "UUID-Z", accountName: "me@icloud.example"),
+        XCTAssertNil(config.account(accountID: "99999999-2222-4333-8444-555555555555", accountName: "me@icloud.example"),
                      "an id that is given chooses the account; the name is not consulted")
         XCTAssertNil(config.account(accountID: nil, accountName: "iCloud"))
         XCTAssertNil(config.account(accountID: nil, accountName: nil))
@@ -58,6 +58,9 @@ final class DirectTransportConfigTests: XCTestCase {
             (valid.replacingOccurrences(of: #"{"accounts""#, with: #"{"extra": 1, "accounts""#), "extra"),
             (valid.replacingOccurrences(of: #"["alias@icloud.example"]"#, with: #"[5]"#), "allowed_from"),
             (valid.replacingOccurrences(of: #""smtp.mail.me.com""#, with: #""""#), "host"),
+            (valid.replacingOccurrences(of: #""smtp.mail.me.com""#, with: #""smtp.mail.me.com evil""#), "host"),
+            (valid.replacingOccurrences(of: #""smtp.mail.me.com""#, with: #""smtp.mail.me.com\r\nX""#), "host"),
+            (valid.replacingOccurrences(of: "AAAAAAAA-2222-4333-8444-555555555555", with: "my-icloud"), "UUID"),
         ]
         for (text, word) in cases {
             XCTAssertThrowsError(try DirectTransportConfig.load(from: try file(text)), word) { error in
@@ -68,10 +71,27 @@ final class DirectTransportConfigTests: XCTestCase {
         }
     }
 
+    func testTwoAccountsWithOneAddressAreRefused_soTheFileOrderNeverChoosesTheServer() throws {
+        let a = #"{"account_id": "AAAAAAAA-2222-4333-8444-555555555555", "address": "me@icloud.example", "smtp": {"host": "s", "port": 587}, "imap": {"host": "i", "port": 993}, "sent_copy": "provider", "allowed_from": []}"#
+        let b = a.replacingOccurrences(of: "AAAAAAAA", with: "BBBBBBBB").replacingOccurrences(of: "me@icloud", with: "ME@icloud")
+        XCTAssertThrowsError(try DirectTransportConfig.load(from: try file(#"{"accounts": [\#(a), \#(b)]}"#))) { error in
+            XCTAssertTrue("\(error)".contains("more than one account"), "\(error)")
+        }
+    }
+
+    func testOnlyASCIILetterCaseIsIgnoredWhenTheFromIsCompared() throws {
+        let account = try XCTUnwrap(try DirectTransportConfig.load(from: try file(valid))?.accounts.first)
+        XCTAssertTrue(account.mayUseFrom("ME@ICLOUD.EXAMPLE"))
+        // U+212A KELVIN SIGN lowercases to "k" under Unicode folding.
+        XCTAssertFalse(account.mayUseFrom("me@icloud.example".replacingOccurrences(of: "e", with: "\u{212A}")))
+        XCTAssertTrue(DirectTransportConfig.equalIgnoringASCIICase("Kelvin", "kELVIN"))
+        XCTAssertFalse(DirectTransportConfig.equalIgnoringASCIICase("\u{212A}elvin", "kelvin"))
+    }
+
     func testTwoEntriesForOneAccountAreRefused() throws {
-        let one = #"{"account_id": "UUID-I", "address": "me@icloud.example", "smtp": {"host": "s", "port": 587}, "imap": {"host": "i", "port": 993}, "sent_copy": "provider", "allowed_from": []}"#
+        let one = #"{"account_id": "AAAAAAAA-2222-4333-8444-555555555555", "address": "me@icloud.example", "smtp": {"host": "s", "port": 587}, "imap": {"host": "i", "port": 993}, "sent_copy": "provider", "allowed_from": []}"#
         XCTAssertThrowsError(try DirectTransportConfig.load(from: try file(#"{"accounts": [\#(one), \#(one)]}"#))) { error in
-            XCTAssertTrue("\(error)".contains("UUID-I"), "\(error)")
+            XCTAssertTrue("\(error)".contains("AAAAAAAA-2222-4333-8444-555555555555"), "\(error)")
         }
     }
 }

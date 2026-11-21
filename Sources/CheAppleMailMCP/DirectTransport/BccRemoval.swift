@@ -8,8 +8,8 @@ import Foundation
 /// `Bcc` field is kept. When a line could hide a `Bcc` field from this reader,
 /// the draft is refused instead of sent: a header line that does not end in
 /// CRLF, a `Resent-Bcc` field, a continuation line with no field above it, a
-/// line that is neither a field nor a continuation, or a field name with white
-/// space in it.
+/// line that is neither a field nor a continuation, or a field name that is not
+/// RFC 5322 `ftext` (empty, or holding a byte outside printable ASCII).
 enum BccRemoval {
     struct Refused: Error, CustomStringConvertible {
         let reason: String
@@ -19,8 +19,30 @@ enum BccRemoval {
     private static let cr: UInt8 = 0x0D
     private static let lf: UInt8 = 0x0A
 
+    /// The lowercased names of the header fields, in order, each once per field.
+    /// Throws for the same headers `strip` refuses.
+    static func fieldNames(in message: Data) throws -> [String] {
+        try parse([UInt8](message)).fields.map(\.name)
+    }
+
     static func strip(_ message: Data) throws -> Data {
         let bytes = [UInt8](message)
+        let parsed = try parse(bytes)
+        var kept: [UInt8] = []
+        for field in parsed.fields where field.name != "bcc" {
+            for line in field.lines { kept += line; kept += [cr, lf] }
+        }
+        kept += [cr, lf]
+        kept += bytes[parsed.bodyStart...]
+        return Data(kept)
+    }
+
+    private struct Field {
+        let name: String
+        var lines: [ArraySlice<UInt8>]
+    }
+
+    private static func parse(_ bytes: [UInt8]) throws -> (fields: [Field], bodyStart: Int) {
         var lines: [ArraySlice<UInt8>] = []   // header lines without their CRLF
         var index = 0
         var headerEnd: Int?
@@ -43,31 +65,26 @@ enum BccRemoval {
             throw Refused(reason: "no blank line marks the end of the header section")
         }
 
-        var kept: [UInt8] = []
-        var dropping = false
-        var sawField = false
+        var fields: [Field] = []
         for line in lines {
             let first = line[line.startIndex]
             if first == 0x20 || first == 0x09 {          // a continuation line
-                guard sawField else { throw Refused(reason: "a continuation line with no field above it") }
-                if !dropping { kept += line; kept += [cr, lf] }
+                guard !fields.isEmpty else { throw Refused(reason: "a continuation line with no field above it") }
+                fields[fields.count - 1].lines.append(line)
                 continue
             }
             guard let colon = line.firstIndex(of: 0x3A) else {
                 throw Refused(reason: "a line that is not a header field")
             }
             let name = line[line.startIndex..<colon]
-            if name.contains(where: { $0 == 0x20 || $0 == 0x09 }) {
-                throw Refused(reason: "a field name with white space in it")
+            // ftext: printable US-ASCII except the colon (RFC 5322 section 3.6.8).
+            guard !name.isEmpty, name.allSatisfy({ $0 >= 33 && $0 <= 126 }) else {
+                throw Refused(reason: "a field name that is empty or holds a byte outside printable ASCII")
             }
             let lowered = String(decoding: name, as: UTF8.self).lowercased()
             if lowered == "resent-bcc" { throw Refused(reason: "a Resent-Bcc field") }
-            sawField = true
-            dropping = lowered == "bcc"
-            if !dropping { kept += line; kept += [cr, lf] }
+            fields.append(Field(name: lowered, lines: [line]))
         }
-        kept += [cr, lf]
-        kept += bytes[bodyStart...]
-        return Data(kept)
+        return (fields, bodyStart)
     }
 }
