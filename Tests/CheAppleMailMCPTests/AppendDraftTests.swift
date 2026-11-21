@@ -151,22 +151,32 @@ final class AppendDraftTests: XCTestCase {
     }
 
     func testEachEncodedWordIsValidOnItsOwn_andAtMost75Characters() throws {
-        let mixed = String(repeating: "a測😀é", count: 120)
-        let built = message(fromName: String(repeating: "鄭😀", count: 30), subject: mixed)
-        let regex = try NSRegularExpression(pattern: #"=\?utf-8\?B\?([A-Za-z0-9+/=]+)\?="#)
-        let headers = headerBlock(built)
-        let matches = regex.matches(in: headers, range: NSRange(headers.startIndex..., in: headers))
-        XCTAssertGreaterThan(matches.count, 4)
-        for match in matches {
-            let word = try XCTUnwrap(Range(match.range, in: headers).map { String(headers[$0]) })
-            XCTAssertLessThanOrEqual(word.count, 75, word)
-            let payload = try XCTUnwrap(Range(match.range(at: 1), in: headers).map { String(headers[$0]) })
-            let bytes = try XCTUnwrap(Data(base64Encoded: payload))
-            XCTAssertNotNil(String(data: bytes, encoding: .utf8), "a character split across encoded words: \(word)")
+        let subject = String(repeating: "a測😀é", count: 120)
+        let name = String(repeating: "鄭😀", count: 30)
+        let fields = try BccRemoval.fields(in: message(fromName: name, subject: subject).mime)
+        let word = try NSRegularExpression(pattern: #"^=\?utf-8\?B\?([A-Za-z0-9+/]+={0,2})\?=$"#)
+        for (field, expected, suffix) in [("subject", subject, ""), ("from", name, " <me@icloud.example>")] {
+            var value = try XCTUnwrap(fields.first { $0.name.lowercased() == field }?.value).trimmingCharacters(in: .whitespaces)
+            XCTAssertTrue(value.hasSuffix(suffix), value)
+            value = String(value.dropLast(suffix.count))
+            // Every whitespace-separated token of the field is one complete encoded word.
+            let tokens = value.split(whereSeparator: { $0 == " " || $0 == "\r" || $0 == "\n" || $0 == "\t" }).map(String.init)
+            XCTAssertGreaterThan(tokens.count, 1, field)
+            var decoded = ""
+            for token in tokens {
+                XCTAssertLessThanOrEqual(token.count, 75, token)
+                let range = NSRange(token.startIndex..., in: token)
+                let match = try XCTUnwrap(word.firstMatch(in: token, range: range), "\(field): not a complete encoded word: \(token)")
+                let payload = try XCTUnwrap(Range(match.range(at: 1), in: token).map { String(token[$0]) })
+                let text = try XCTUnwrap(Data(base64Encoded: payload).flatMap { String(data: $0, encoding: .utf8) },
+                                         "\(field): a character split across encoded words: \(token)")
+                decoded += text
+            }
+            XCTAssertEqual(decoded, expected, field)
         }
     }
 
-    func testABodyOfLineBreaksIsNormalisedInOnePass() {
+    func testABodyOfLineBreaksAndMixedEndingsIsNormalised() {
         let built = message(body: String(repeating: "\n", count: 1_000_000))
         XCTAssertTrue(headerBlock(built).contains("Content-Transfer-Encoding: 7bit"))
         XCTAssertEqual(bodyBlock(built).utf8.count, 2_000_000)
@@ -588,13 +598,20 @@ final class AppendDraftTests: XCTestCase {
         session.draftsMailboxName = "Drafts-secret-pw"
         let text = try await AppendDraftTool.run(arguments(), try environment(config: config, session: session))
         XCTAssertFalse(text.contains("secret-pw"), text)
+        let shown = try XCTUnwrap((JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])?["mailbox"] as? String)
+        XCTAssertTrue(shown.hasPrefix("Drafts-") && shown != "Drafts-secret-pw", "the result keeps a redacted name: \(shown)")
         XCTAssertTrue(session.calls.contains("appendDraft:Drafts-secret-pw"), "the real name is still the one appended to")
     }
 
-    func testTooManyRecipientsAreRefusedBeforeAnyConnection() async throws {
+    func testTooManyRecipientsAcrossTheListsAreRefusedBeforeTheirElementsAreRead() async throws {
         let opened = Opened()
-        let many: [Value] = (0...AppendDraftTool.maxRecipients).map { .string("r\($0)@x.example") }
-        let message = await failure(arguments(["to": .array(many)]), try environment(config: config, opened: opened))
+        let third = AppendDraftTool.maxRecipients / 3 + 1
+        func list(_ prefix: String) -> Value { .array((0..<third).map { .string("\(prefix)\($0)@x.example") }) }
+        // Each list is under the cap, the total is over it, and one element is not even a string.
+        var bcc = (0..<third).map { Value.string("b\($0)@x.example") }
+        bcc[0] = .int(7)
+        let message = await failure(arguments(["to": list("t"), "cc": list("c"), "bcc": .array(bcc)]),
+                                    try environment(config: config, opened: opened))
         XCTAssertTrue(message?.contains("at most \(AppendDraftTool.maxRecipients) recipients") == true, message ?? "not refused")
         XCTAssertEqual(opened.count, 0)
     }

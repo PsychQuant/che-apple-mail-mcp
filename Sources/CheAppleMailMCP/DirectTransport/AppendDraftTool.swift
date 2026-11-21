@@ -85,7 +85,7 @@ struct AppendDraftFlow {
                 // The Message-ID is new to this call (a random UUID), so any hit is
                 // this call's message; more than one means the server holds copies.
                 return result(.appended, [
-                    "\(determined); a search afterwards found it in the drafts mailbox \(hits.count) times under this Message-ID, so no UID is reported. send_draft refuses a Message-ID that matches more than one draft: remove the extra copies first.",
+                    "\(determined); a search afterwards found it in the drafts mailbox \(hits.count) times under this Message-ID, so no UID is reported. send_draft refuses a Message-ID that matches more than one draft; look at the matches in the drafts mailbox before deciding which to keep.",
                     Self.indexNoteAppended, Self.notDeduplicatedNote,
                 ])
             }
