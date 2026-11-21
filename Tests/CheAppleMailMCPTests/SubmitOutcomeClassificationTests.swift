@@ -48,4 +48,23 @@ final class SubmitOutcomeClassificationTests: XCTestCase {
             return XCTFail("a cancellation outside SwiftMail's contract should be unknown")
         }
     }
+
+    func testThePasswordAndItsLoginEncodingsAreRedacted() {
+        let password = "abcd-efgh-ijkl-mnop"
+        let plain = Data("\u{0}me@x.example\u{0}\(password)".utf8).base64EncodedString()
+        let login = Data(password.utf8).base64EncodedString()
+        let text = "535 auth failed for \(password); AUTH PLAIN \(plain); AUTH LOGIN \(login)"
+        let out = SwiftMailSession.redact(text, password: password, username: "me@x.example")
+        XCTAssertFalse(out.contains(password) || out.contains(plain) || out.contains(login), out)
+        XCTAssertTrue(out.contains("535 auth failed"))
+    }
+
+    /// A To, Cc or Bcc field the envelope left empty may hold text the server
+    /// could not parse: the draft is then refused.
+    func testAHeaderFieldWithNoEnvelopeAddressIsNotCovered() {
+        XCTAssertTrue(SwiftMailSession.envelopeCoversHeader(fieldNames: ["from", "to"], to: 1, cc: 0, bcc: 0))
+        XCTAssertFalse(SwiftMailSession.envelopeCoversHeader(fieldNames: ["to", "cc"], to: 1, cc: 0, bcc: 0))
+        XCTAssertFalse(SwiftMailSession.envelopeCoversHeader(fieldNames: ["to", "bcc"], to: 1, cc: 0, bcc: 0))
+        XCTAssertTrue(SwiftMailSession.envelopeCoversHeader(fieldNames: ["to", "cc"], to: 1, cc: 2, bcc: 0))
+    }
 }

@@ -1,56 +1,52 @@
 import Foundation
 import SwiftMail
 
-/// `DirectTransportSession` over SwiftMail (#742): one IMAP and one SMTP
-/// connection, opened and authenticated before any draft is looked at, so a
-/// login failure happens before the record of sent drafts is touched.
+/// `DirectTransportSession` over SwiftMail (#742). The IMAP connection is opened
+/// and logged in by `open`; the SMTP connection only by `prepareSubmission`, so
+/// a call that completes pending stages never needs the SMTP server.
 ///
-/// Not covered by the unit tests, which use a stand-in: this file is exercised
-/// only against a real server (task 5 of the change).
+/// Every text this type hands out (errors, server replies) passes through
+/// `redact`, which removes the password and the encodings a login sends it in:
+/// a server that has received the password could echo it back.
+///
+/// Not covered by the unit tests beyond its pure helpers: this file is
+/// exercised only against a real server (task 5 of the change).
 final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
+    private let account: DirectTransportConfig.Account
+    private let password: String
     private let imap: IMAPServer
-    private let smtp: SMTPServer
+    private var smtp: SMTPServer?
 
-    private init(imap: IMAPServer, smtp: SMTPServer) {
+    private init(account: DirectTransportConfig.Account, password: String, imap: IMAPServer) {
+        self.account = account
+        self.password = password
         self.imap = imap
-        self.smtp = smtp
     }
 
-    struct OpenFailed: Error, CustomStringConvertible {
+    /// An error whose text has been redacted.
+    struct Failure: Error, CustomStringConvertible {
         let description: String
     }
 
-    /// Connects and logs in to both servers. The password is used here and not kept.
+    /// Connects and logs in to the IMAP server.
     static func open(account: DirectTransportConfig.Account, password: String) async throws -> SwiftMailSession {
-        // Never `.automatic` or `.plainText`: the password must not cross an
-        // unencrypted connection, so STARTTLS is required, not opportunistic, and
-        // the certificate is fully verified.
         let imap = IMAPServer(host: account.imap.host, port: account.imap.port,
-                              transportSecurity: Self.transportSecurity(forPort: account.imap.port),
-                              certificateVerificationPolicy: .fullVerification, minimumTLSVersion: .tlsv12)
-        let smtp = SMTPServer(host: account.smtp.host, port: account.smtp.port,
-                              transportSecurity: Self.transportSecurity(forPort: account.smtp.port),
+                              transportSecurity: transportSecurity(forPort: account.imap.port),
                               certificateVerificationPolicy: .fullVerification, minimumTLSVersion: .tlsv12)
         do {
             try await imap.connect()
             try await imap.login(username: account.address, password: password)
         } catch {
             try? await imap.disconnect()
-            throw OpenFailed(description: "could not log in to the IMAP server \(account.imap.host):\(account.imap.port) (\(Self.describe(error))); nothing was submitted")
+            throw Failure(description: "could not log in to the IMAP server \(account.imap.host):\(account.imap.port) (\(redact(describe(error), password: password, username: account.address))); nothing was submitted")
         }
-        do {
-            try await smtp.connect()
-            try await smtp.login(username: account.address, password: password)
-        } catch {
-            try? await imap.disconnect()
-            try? await smtp.disconnect()
-            throw OpenFailed(description: "could not log in to the SMTP server \(account.smtp.host):\(account.smtp.port) (\(Self.describe(error))); nothing was submitted")
-        }
-        return SwiftMailSession(imap: imap, smtp: smtp)
+        return SwiftMailSession(account: account, password: password, imap: imap)
     }
 
     /// Implicit TLS on the two ports that use it (465 SMTPS, 993 IMAPS); required
     /// STARTTLS on every other port, which fails when the server does not offer it.
+    /// Never `.automatic` or `.plainText`: the password must not cross an
+    /// unencrypted connection.
     static func transportSecurity(forPort port: Int) -> MailTransportSecurity {
         port == 465 || port == 993 ? .implicitTLS : .startTLS
     }
@@ -62,17 +58,48 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
         MessageID(raw)?.description
     }
 
-    func draftsMailbox() async throws -> String { try await specialUse(.drafts, named: "\\Drafts") }
-    func sentMailbox() async throws -> String { try await specialUse(.sent, named: "\\Sent") }
+    /// `text` with the password removed, and the base64 forms a login sends it in
+    /// (AUTH PLAIN's `\0user\0password`, AUTH LOGIN's password alone).
+    static func redact(_ text: String, password: String, username: String) -> String {
+        guard !password.isEmpty else { return text }
+        let forms = [password,
+                     Data(password.utf8).base64EncodedString(),
+                     Data("\u{0}\(username)\u{0}\(password)".utf8).base64EncodedString()]
+        return forms.reduce(text) { $0.replacingOccurrences(of: $1, with: "[redacted]") }
+    }
+
+    private func redact(_ text: String) -> String {
+        Self.redact(text, password: password, username: account.address)
+    }
+
+    /// Runs `body`, handing out any error as a redacted `Failure`.
+    private func guarded<T>(_ body: () async throws -> T) async throws -> T {
+        do {
+            return try await body()
+        } catch let refusal as SendDraftRefusal {
+            throw refusal
+        } catch {
+            throw Failure(description: redact(Self.describe(error)))
+        }
+    }
+
+    func draftsMailbox() async throws -> String {
+        try await specialUse(.drafts, named: "\\Drafts", consequence: "nothing was submitted")
+    }
+
+    func sentMailbox() async throws -> String {
+        try await specialUse(.sent, named: "\\Sent", consequence: "the sent copy was not stored")
+    }
 
     /// Only the attribute the server reports counts. SwiftMail's `draftsFolder`
     /// falls back to matching folder names, which the spec does not allow.
-    private func specialUse(_ attribute: Mailbox.Info.Attributes, named label: String) async throws -> String {
-        let marked = try await imap.listMailboxes().filter { $0.attributes.contains(attribute) }
+    private func specialUse(_ attribute: Mailbox.Info.Attributes, named label: String,
+                            consequence: String) async throws -> String {
+        let marked = try await guarded { try await imap.listMailboxes() }.filter { $0.attributes.contains(attribute) }
         guard marked.count == 1, let only = marked.first else {
             throw SendDraftRefusal(description: marked.isEmpty
-                ? "the server marks no mailbox \(label); nothing was submitted"
-                : "the server marks \(marked.count) mailboxes \(label); nothing was submitted")
+                ? "the server marks no mailbox \(label); \(consequence)"
+                : "the server marks \(marked.count) mailboxes \(label); \(consequence)")
         }
         return only.name
     }
@@ -86,58 +113,124 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
     }
 
     private func summaries(matching criteria: [SearchCriteria], in mailbox: String) async throws -> [DraftSummary] {
-        try await imap.selectMailbox(mailbox)
-        let found: MessageIdentifierSet<UID> = try await imap.search(criteria: criteria)
-        var result: [DraftSummary] = []
-        for uid in found.toArray() {
-            guard let info = try await imap.fetchMessageInfo(for: uid) else { continue }
-            result.append(DraftSummary(uid: uid.value, subject: info.subject ?? "", messageID: info.messageId?.description))
+        try await guarded {
+            let selection = try await imap.selectMailbox(mailbox)
+            let found: MessageIdentifierSet<UID> = try await imap.search(criteria: criteria)
+            var result: [DraftSummary] = []
+            for uid in found.toArray() {
+                // A hit whose envelope cannot be read might be the second match:
+                // dropping it would make one match look unique.
+                guard let info = try await imap.fetchMessageInfo(for: uid) else {
+                    throw SendDraftRefusal(description: "the server found a draft whose envelope it then did not return, so the match cannot be shown to be unique; nothing was submitted")
+                }
+                result.append(DraftSummary(uid: uid.value, subject: info.subject ?? "",
+                                           messageID: info.messageId?.description,
+                                           uidValidity: selection.uidValidity.value))
+            }
+            return result
         }
-        return result
     }
 
-    func fetchDraft(uid: UInt32, in mailbox: String) async throws -> FetchedDraft {
-        try await imap.selectMailbox(mailbox)
-        let id = UID(uid)
-        let message = try await imap.fetchRawMessage(identifier: id)
-        guard let info = try await imap.fetchMessageInfo(for: id) else {
-            throw SendDraftRefusal(description: "the server returned no envelope for the draft; nothing was submitted")
+    /// Selects `mailbox` and throws unless its UIDVALIDITY is still `expected`.
+    private func select(_ mailbox: String, expecting expected: UInt32) async throws {
+        let selection = try await imap.selectMailbox(mailbox)
+        guard selection.uidValidity.value == expected else {
+            throw SendDraftRefusal(description: "the drafts mailbox changed its UIDVALIDITY while it was in use, so the draft's UID may name another message; nothing more was done")
         }
-        let recipientEntries = info.toAddresses + info.ccAddresses + info.bccAddresses
-        let invalid = recipientEntries.contains { if case .invalid = $0 { return true } else { return false } }
-            || info.fromAddresses.contains { if case .invalid = $0 { return true } else { return false } }
-        return FetchedDraft(uid: uid, message: message, messageID: info.messageId?.description,
-                            subject: info.subject ?? "",
-                            from: info.fromAddresses.mailboxes.map(\.address),
-                            recipients: recipientEntries.mailboxes.map(\.address),
-                            hasInvalidRecipient: invalid)
+    }
+
+    func fetchDraft(_ summary: DraftSummary, in mailbox: String) async throws -> FetchedDraft {
+        try await guarded {
+            try await select(mailbox, expecting: summary.uidValidity)
+            let id = UID(summary.uid)
+            let message = try await imap.fetchRawMessage(identifier: id)
+            guard let info = try await imap.fetchMessageInfo(for: id) else {
+                throw SendDraftRefusal(description: "the server returned no envelope for the draft; nothing was submitted")
+            }
+            let names = Set((try? BccRemoval.fieldNames(in: message)) ?? [])
+            let invalid: (AddressListEntry) -> Bool = { if case .invalid = $0 { return true } else { return false } }
+            let recipientEntries = info.toAddresses + info.ccAddresses + info.bccAddresses
+            let covered = Self.envelopeCoversHeader(
+                fieldNames: names, to: info.toAddresses.mailboxes.count, cc: info.ccAddresses.mailboxes.count,
+                bcc: info.bccAddresses.mailboxes.count)
+            return FetchedDraft(uid: summary.uid, message: message, messageID: info.messageId?.description,
+                                subject: info.subject ?? "",
+                                from: info.fromAddresses.mailboxes.map(\.address),
+                                recipients: recipientEntries.mailboxes.map(\.address),
+                                hasInvalidRecipient: recipientEntries.contains(where: invalid) || !covered,
+                                hasInvalidSender: info.fromAddresses.contains(where: invalid)
+                                    || (names.contains("from") && info.fromAddresses.mailboxes.isEmpty),
+                                uidValidity: summary.uidValidity)
+        }
+    }
+
+    /// Whether every To, Cc and Bcc field the header holds has at least one
+    /// address in the server's envelope. A field the envelope left empty may
+    /// hold text the server could not parse, which the checks cannot see.
+    static func envelopeCoversHeader(fieldNames: Set<String>, to: Int, cc: Int, bcc: Int) -> Bool {
+        !(fieldNames.contains("to") && to == 0)
+            && !(fieldNames.contains("cc") && cc == 0)
+            && !(fieldNames.contains("bcc") && bcc == 0)
+    }
+
+    func sentCopyExists(messageID: String, in mailbox: String) async throws -> Bool {
+        try await guarded {
+            try await imap.selectMailbox(mailbox)
+            let found: MessageIdentifierSet<UID> = try await imap.search(criteria: [.header("Message-ID", messageID)])
+            return !found.toArray().isEmpty
+        }
+    }
+
+    func prepareSubmission() async throws {
+        let server = SMTPServer(host: account.smtp.host, port: account.smtp.port,
+                                transportSecurity: Self.transportSecurity(forPort: account.smtp.port),
+                                certificateVerificationPolicy: .fullVerification, minimumTLSVersion: .tlsv12)
+        do {
+            try await server.connect()
+            try await server.login(username: account.address, password: password)
+        } catch {
+            try? await server.disconnect()
+            throw Failure(description: "could not log in to the SMTP server \(account.smtp.host):\(account.smtp.port) (\(redact(Self.describe(error))))")
+        }
+        smtp = server
     }
 
     func submit(_ message: Data, from sender: String, to recipients: [String]) async -> SubmitOutcome {
+        guard let smtp else { return .notAccepted(reply: nil) }
+        let outcome: SubmitOutcome
         do {
             let result = try await smtp.sendRawMessage(message, from: EmailAddress(address: sender),
                                                        to: recipients.map { EmailAddress(address: $0) })
-            return Self.classify(.success(result))
+            outcome = Self.classify(.success(result))
         } catch {
-            return Self.classify(.failure(error))
+            outcome = Self.classify(.failure(error))
+        }
+        switch outcome {
+        case .accepted(let reply): return .accepted(reply: redact(reply))
+        case .notAccepted(let reply): return .notAccepted(reply: reply.map { redact($0) })
+        case .unknown(let detail): return .unknown(detail: redact(detail))
         }
     }
 
     func appendSentCopy(_ message: Data, to mailbox: String) async throws {
-        try await imap.append(rawMessage: message, to: mailbox, flags: [.seen], internalDate: Date())
+        try await guarded {
+            try await imap.append(rawMessage: message, to: mailbox, flags: [.seen], internalDate: Date())
+        }
     }
 
     func canExpungeOneMessage() async -> Bool { await imap.supportsUIDPlus }
 
-    func removeDraft(uid: UInt32, in mailbox: String) async throws {
-        try await imap.selectMailbox(mailbox)
-        let one = UIDSet(UID(uid))
-        try await imap.store(flags: [.deleted], on: one, operation: .add)
-        try await imap.expunge(messages: one)
+    func removeDraft(_ draft: FetchedDraft, in mailbox: String) async throws {
+        try await guarded {
+            try await select(mailbox, expecting: draft.uidValidity)
+            let one = UIDSet(UID(draft.uid))
+            try await imap.store(flags: [.deleted], on: one, operation: .add)
+            try await imap.expunge(messages: one)
+        }
     }
 
     func close() async {
-        try? await smtp.disconnect()
+        try? await smtp?.disconnect()
         try? await imap.disconnect()
     }
 
@@ -171,7 +264,8 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
         }
     }
 
-    /// An error's text for a result, without anything that could hold a password.
+    /// An error's text on one line, at most 300 characters. Not a redaction:
+    /// callers that hand it out pass it through `redact`.
     private static func describe(_ error: Error) -> String {
         String(describing: error).replacingOccurrences(of: "\n", with: " ").prefix(300).description
     }
