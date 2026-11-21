@@ -163,11 +163,12 @@ struct DirectTransportConfig: Equatable {
         }
     }
 
-    /// One `@` with something on each side and no white space: enough to catch a
-    /// mistyped entry. The server checks the address itself.
+    /// One `@` with something on each side, all printable ASCII, and none of the
+    /// characters that separate or quote addresses (`,;:<>()[]"\\` and space).
     private static func isAddress(_ text: String) -> Bool {
         let parts = text.split(separator: "@", omittingEmptySubsequences: false)
+        let forbidden = Set(",;:<>()[]\"\\ ".utf8)
         return parts.count == 2 && !parts[0].isEmpty && !parts[1].isEmpty
-            && !text.contains(where: { $0.isWhitespace })
+            && text.utf8.allSatisfy { $0 >= 0x21 && $0 <= 0x7E && !forbidden.contains($0) }
     }
 }

@@ -16,8 +16,9 @@
    service 建的，存取清單讓它讀得到。工具結果與紀錄裡的錯誤文字與伺服器回覆，先整段遮蔽密碼（原文、IMAP quoted
    string、AUTH PLAIN／LOGIN 的 base64）**再**截斷；先截斷會留下密碼的前半段。伺服器回報的草稿欄位（Message-ID、
    主旨、位址）若含密碼，整個呼叫拒絕。
-   已知殘留（#742 verify r2）：讀取時只以 service 與 account 比對，別的程式若先以同樣名稱建了項目，讀到的會是它的值。
-   它拿不到我們的密碼，只會讓登入失敗；根本解法是 data-protection keychain，要 entitlement 與 provisioning profile，
+   已知殘留（#742 verify r2、r3）：讀取時只以 service 與 account 比對，別的程式若先以同樣名稱建了項目，讀到的會是它的值，
+   並以它登入設定的伺服器。它拿不到我們的密碼（寫入一律新增本程式自己的項目），但它自己放進去的值會被送到設定的伺服器；
+   規格明寫這個殘留，不宣稱已擋住。根本解法是 data-protection keychain，要 entitlement 與 provisioning profile，
    這次不做。
 3. **送密碼之前一定先有 TLS。** 465 與 993 用 implicit TLS，其他連接埠一律要求 STARTTLS（伺服器不提供就失敗）；
    憑證完整驗證、TLS 至少 1.2。不得用 `.automatic` 或 `.plainText`（#742 的 commit 安全審查抓過一次）。SMTP 只在

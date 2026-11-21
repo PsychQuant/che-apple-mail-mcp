@@ -61,6 +61,8 @@ final class DirectTransportConfigTests: XCTestCase {
             (valid.replacingOccurrences(of: #""smtp.mail.me.com""#, with: #""smtp.mail.me.com evil""#), "host"),
             (valid.replacingOccurrences(of: #""smtp.mail.me.com""#, with: #""smtp.mail.me.com\r\nX""#), "host"),
             (valid.replacingOccurrences(of: "AAAAAAAA-2222-4333-8444-555555555555", with: "my-icloud"), "UUID"),
+            (valid.replacingOccurrences(of: #""address": "me@icloud.example""#, with: #""address": "a,me@icloud.example""#), "address"),
+            (valid.replacingOccurrences(of: #""address": "me@icloud.example""#, with: #""address": "me@icl\u0000oud.example""#), "address"),
         ]
         for (text, word) in cases {
             XCTAssertThrowsError(try DirectTransportConfig.load(from: try file(text)), word) { error in

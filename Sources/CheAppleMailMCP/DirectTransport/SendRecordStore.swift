@@ -81,11 +81,13 @@ struct SendRecordStore {
         }
     }
 
+    /// A change that is visible but not durable counts as made: what a later
+    /// call reads is the new record.
     func put(_ record: SendRecord) throws {
         try withLock {
             var file = try read()
             file.entries[record.messageID] = record
-            try write(file)
+            do { try write(file) } catch is NotDurable {}
         }
     }
 
@@ -108,9 +110,16 @@ struct SendRecordStore {
             guard let entry = file.entries[messageID] else { return .absent }
             if entry.effectiveState == .submitted { return .submitted }
             file.entries.removeValue(forKey: messageID)
-            try write(file)
+            do { try write(file) } catch is NotDurable {}
             return .removed
         }
+    }
+
+    /// The change was written and is visible, but its directory could not be
+    /// synchronised, so it might not survive a system crash.
+    struct NotDurable: Error, CustomStringConvertible {
+        let errno: Int32
+        var description: String { "\(SendRecordStore.fileName) was changed, but its directory could not be synchronised (errno \(errno)); the change may not survive a system crash" }
     }
 
     struct Busy: Error, CustomStringConvertible {
@@ -151,17 +160,26 @@ struct SendRecordStore {
         try withLock {
             var file = try read()
             guard file.entries.removeValue(forKey: messageID) != nil else { return }
-            try write(file)
+            do { try write(file) } catch is NotDurable {}
         }
     }
 
     private var url: URL { directory.appendingPathComponent(Self.fileName) }
 
     private func read() throws -> File {
+        // A symlink is refused, never followed: a link whose target is gone would
+        // read as "no record", and that allows a second submission.
+        var info = stat()
+        if lstat(url.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFLNK {
+            throw Problem(detail: "is a symbolic link; the record must be a plain file")
+        }
         let data: Data
         do {
             data = try Data(contentsOf: url)
         } catch CocoaError.fileReadNoSuchFile {
+            guard lstat(url.path, &info) != 0, errno == ENOENT else {
+                throw Problem(detail: "cannot be read")
+            }
             return File(entries: [:])
         } catch {
             throw Problem(detail: "cannot be read (\(error.localizedDescription))")
@@ -192,11 +210,12 @@ struct SendRecordStore {
             throw Problem(detail: "cannot be replaced (errno \(errno))")
         }
         // The rename is durable only once the directory is: the claim must survive
-        // a crash before the SMTP transaction it guards.
+        // a crash before the SMTP transaction it guards. The new record is visible
+        // already, so a failure here is not "nothing changed".
         let directoryFD = open(directory.path, O_RDONLY | O_CLOEXEC)
-        guard directoryFD >= 0 else { throw Problem(detail: "its directory cannot be opened to be synchronised (errno \(errno))") }
+        guard directoryFD >= 0 else { throw NotDurable(errno: errno) }
         defer { close(directoryFD) }
-        guard fsync(directoryFD) == 0 else { throw Problem(detail: "its directory cannot be synchronised (errno \(errno))") }
+        guard fsync(directoryFD) == 0 else { throw NotDurable(errno: errno) }
     }
 
     private func withLock<T>(_ body: () throws -> T) throws -> T {

@@ -41,9 +41,65 @@ enum BccRemoval {
         }
     }
 
-    /// How many addresses an address-list field value names: its `@` signs
-    /// outside quoted strings and comments. Not a parser; compared with the
-    /// server's envelope, a difference means the envelope left something out.
+    /// How many addresses an address-list field value names, or nil when the
+    /// value is not plainly a list of addresses. The value is split at commas
+    /// outside quoted strings, comments and angle brackets; each element must hold
+    /// exactly one `@` outside quoted strings and comments. One group
+    /// (`name: list;`, name not empty, list possibly empty) may make up the whole
+    /// value. Anything else, a stray word between two addresses included, is nil:
+    /// the server's envelope may have dropped it, and the checks could not see it.
+    static func addressList(inFieldValue value: String) -> Int? {
+        var text = value.trimmingCharacters(in: .whitespaces)
+        if let colon = topLevelIndex(of: ":", in: text) {
+            let name = text[..<colon].trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, text.hasSuffix(";") else { return nil }
+            text = String(text[text.index(after: colon)..<text.index(before: text.endIndex)])
+                .trimmingCharacters(in: .whitespaces)
+            if text.isEmpty { return 0 }
+        }
+        guard !text.isEmpty else { return nil }
+        var count = 0
+        for element in splitTopLevel(text) {
+            guard addressCount(inFieldValue: element) == 1,
+                  topLevelIndex(of: ":", in: element) == nil, topLevelIndex(of: ";", in: element) == nil else { return nil }
+            count += 1
+        }
+        return count
+    }
+
+    /// The first `character` outside quoted strings, comments and angle brackets.
+    private static func topLevelIndex(of character: Character, in text: String) -> String.Index? {
+        var depth = 0, angle = 0, quoted = false, escaped = false
+        for index in text.indices {
+            let c = text[index]
+            if escaped { escaped = false; continue }
+            if c == "\\" && (quoted || depth > 0) { escaped = true; continue }
+            if c == "\"" && depth == 0 { quoted.toggle(); continue }
+            if quoted { continue }
+            if c == "(" { depth += 1; continue }
+            if c == ")" && depth > 0 { depth -= 1; continue }
+            if depth > 0 { continue }
+            if c == "<" { angle += 1; continue }
+            if c == ">" && angle > 0 { angle -= 1; continue }
+            if angle == 0 && c == character { return index }
+        }
+        return nil
+    }
+
+    private static func splitTopLevel(_ text: String) -> [String] {
+        var parts: [String] = []
+        var rest = Substring(text)
+        while let comma = topLevelIndex(of: ",", in: String(rest)) {
+            let offset = String(rest).distance(from: String(rest).startIndex, to: comma)
+            let cut = rest.index(rest.startIndex, offsetBy: offset)
+            parts.append(String(rest[..<cut]))
+            rest = rest[rest.index(after: cut)...]
+        }
+        parts.append(String(rest))
+        return parts
+    }
+
+    /// The `@` signs of a field value outside quoted strings and comments.
     static func addressCount(inFieldValue value: String) -> Int {
         var count = 0, depth = 0, quoted = false, escaped = false
         for scalar in value.unicodeScalars {

@@ -267,6 +267,23 @@ final class SendDraftFlowTests: XCTestCase {
         XCTAssertFalse(session.calls.contains("submit"))
         XCTAssertEqual(result.sentCopy, .notAttempted)
         XCTAssertTrue(result.notes.contains(SendDraftFlow.localIndexNote))
+        XCTAssertEqual(session.drafts.count, 1, "the draft stays on the server")
+    }
+
+    func testAPendingStageIsNotDoneUnderALoginThatDiffersOnlyInCase() async throws {
+        let session = FakeSession()
+        session.drafts = [draft()]
+        session.appendError = Boom()
+        let (flow, records) = flow(session)
+        _ = try await flow.run(.subject("Report"))
+        session.appendError = nil
+        let recased = DirectTransportConfig.Account(accountID: "UUID-I", address: "ME@icloud.example",
+                                                    smtp: account.smtp, imap: account.imap, sentCopy: .append,
+                                                    allowedFrom: ["me@icloud.example"])
+        let other = SendDraftFlow(account: recased, session: session, records: records,
+                                  localMessageID: { _ in nil }, now: { Date() })
+        let message = await refusal { try await other.run(.subject("Report")) }
+        XCTAssertTrue(message?.contains("another account or server") == true, message ?? "not refused")
     }
 
     func testEveryResultSaysTheLocalIndexIsNotChanged() async throws {

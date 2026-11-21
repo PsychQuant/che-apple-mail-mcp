@@ -18,6 +18,18 @@ final class SendRecordStoreTests: XCTestCase {
                    updatedAt: Date(timeIntervalSince1970: 1_800_000_000), serverReply: nil)
     }
 
+    /// A link whose target is gone would read as "no record" and allow a
+    /// second submission: the record must be a plain file.
+    func testARecordThatIsASymbolicLinkIsRefused() throws {
+        let (store, dir) = try store()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: dir.appendingPathComponent(SendRecordStore.fileName).path,
+                                                   withDestinationPath: "/nonexistent/sent.json")
+        XCTAssertThrowsError(try store.entry(for: "<a@x>")) { error in
+            XCTAssertTrue("\(error)".contains("symbolic link"), "\(error)")
+        }
+    }
+
     func testAnAbsentRecordIsEmpty() throws {
         let (store, _) = try store()
         XCTAssertNil(try store.entry(for: "<a@x>"))

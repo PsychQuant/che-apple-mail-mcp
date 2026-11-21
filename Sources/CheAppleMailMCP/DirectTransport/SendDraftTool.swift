@@ -57,12 +57,26 @@ enum SendDraftTool {
         }
         if let id = accountID, !id.isEmpty, let name = accountName, !name.isEmpty,
            let byID = config.account(accountID: id, accountName: nil),
-           !DirectTransportConfig.equalIgnoringASCIICase(byID.address, name) {
+           let byName = config.account(accountID: nil, accountName: name), byName != byID {
             throw MailError.invalidParameter("account_id and account_name name different accounts (\(byID.address) and \(name)); give one of them")
         }
         guard let account = config.account(accountID: accountID, accountName: accountName) else {
             throw MailError.operationFailed("direct transport is not configured for \(accountID ?? accountName ?? "this account"). Nothing was submitted, and no Mail path is used instead")
         }
+        let records = SendRecordStore(directory: environment.stateDirectory)
+        do {
+            // One call at a time, from the keychain read to closing the session:
+            // a second call is refused without waiting on anything.
+            return try await records.withSubmissionLock {
+                try await runHoldingTheLock(selector, account: account, records: records, environment)
+            }
+        } catch let busy as SendRecordStore.Busy {
+            throw MailError.operationFailed(busy.description)
+        }
+    }
+
+    private static func runHoldingTheLock(_ selector: DraftSelector, account: DirectTransportConfig.Account,
+                                          records: SendRecordStore, _ environment: Environment) async throws -> String {
         let password: String
         do {
             guard let stored = try environment.password(account.address) else {
@@ -73,34 +87,26 @@ enum SendDraftTool {
             throw MailError.operationFailed("\(failure). Nothing was submitted")
         }
 
-        let records = SendRecordStore(directory: environment.stateDirectory)
+        let session: DirectTransportSession
         do {
-            // One call at a time, from opening the session to closing it.
-            return try await records.withSubmissionLock {
-                let session: DirectTransportSession
-                do {
-                    session = try await environment.openSession(account, password)
-                } catch {
-                    throw MailError.operationFailed("\(error)")
-                }
-                let flow = SendDraftFlow(account: account, session: session, records: records,
-                                         localMessageID: environment.localMessageID, now: environment.now)
-                let result: SendDraftResult
-                do {
-                    result = try await flow.run(selector)
-                } catch let refusal as SendDraftRefusal {
-                    await session.close()
-                    throw MailError.operationFailed(refusal.description)
-                } catch {
-                    await session.close()
-                    throw MailError.operationFailed("send_draft stopped (\(error)); nothing more was done")
-                }
-                await session.close()
-                return render(result)
-            }
-        } catch let busy as SendRecordStore.Busy {
-            throw MailError.operationFailed(busy.description)
+            session = try await environment.openSession(account, password)
+        } catch {
+            throw MailError.operationFailed("\(error)")
         }
+        let flow = SendDraftFlow(account: account, session: session, records: records,
+                                 localMessageID: environment.localMessageID, now: environment.now)
+        let result: SendDraftResult
+        do {
+            result = try await flow.run(selector)
+        } catch let refusal as SendDraftRefusal {
+            await session.close()
+            throw MailError.operationFailed(refusal.description)
+        } catch {
+            await session.close()
+            throw MailError.operationFailed("send_draft stopped (\(error)); nothing more was done")
+        }
+        await session.close()
+        return render(result)
     }
 
     static func render(_ result: SendDraftResult) -> String {

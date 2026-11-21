@@ -46,6 +46,10 @@ final class DirectTransportCLITests: XCTestCase {
         XCTAssertEqual(DirectTransportCLI.setCredential(address: "me@icloud.example", readPassword: { "\n" }, store: store).status, 65)
         XCTAssertEqual(DirectTransportCLI.setCredential(address: "me@icloud.example", readPassword: { "a\nb\n" }, store: store).status, 65)
         XCTAssertEqual(DirectTransportCLI.setCredential(address: "me@icloud.example", readPassword: { nil }, store: store).status, 66)
+        // The redaction marker would reproduce these, so they could not be hidden.
+        for marker in ["[redacted]", "redacted", "act"] {
+            XCTAssertEqual(DirectTransportCLI.setCredential(address: "me@icloud.example", readPassword: { marker }, store: store).status, 65, marker)
+        }
         XCTAssertTrue(stored.pairs.isEmpty)
     }
 

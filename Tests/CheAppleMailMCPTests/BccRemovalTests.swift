@@ -62,6 +62,17 @@ final class BccRemovalTests: XCTestCase {
         XCTAssertEqual(BccRemoval.addressCount(inFieldValue: #" "say \"hi@\"" <a@x.example>"#), 1)
     }
 
+    /// A value must read plainly as addresses; a stray word between two is nil.
+    func testAnAddressListIsCountedOnlyWhenEveryElementIsOneAddress() {
+        XCTAssertEqual(BccRemoval.addressList(inFieldValue: " a@x.example, \"Doe, J\" <b@x.example>"), 2)
+        XCTAssertEqual(BccRemoval.addressList(inFieldValue: " undisclosed-recipients:;"), 0)
+        XCTAssertEqual(BccRemoval.addressList(inFieldValue: " Team: a@x.example, b@x.example;"), 2)
+        XCTAssertNil(BccRemoval.addressList(inFieldValue: " a@x.example, junk"))
+        XCTAssertNil(BccRemoval.addressList(inFieldValue: " a@x.example,"))
+        XCTAssertNil(BccRemoval.addressList(inFieldValue: " :;"), "a group needs a name")
+        XCTAssertNil(BccRemoval.addressList(inFieldValue: " a@b@x.example"))
+    }
+
     func testTheFieldNamesAreListedLowercasedOncePerField() throws {
         let input = "From: me@x.example\r\nTO: a@x.example,\r\n b@x.example\r\nBcc: c@x.example\r\n\r\nTo: not a header"
         XCTAssertEqual(try BccRemoval.fieldNames(in: Data(input.utf8)), ["from", "to", "bcc"])

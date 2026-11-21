@@ -59,6 +59,19 @@ final class SubmitOutcomeClassificationTests: XCTestCase {
         XCTAssertTrue(out.contains("535 auth failed"))
     }
 
+    func testAPasswordInServerTextIsDetectedInEveryLoginForm() {
+        let pw = "abcd-efgh-ijkl-mnop"
+        XCTAssertTrue(SwiftMailSession.containsPassword("<\(pw)@x>", password: pw, username: "me@x.example"))
+        let b64 = Data(pw.utf8).base64EncodedString()
+        XCTAssertTrue(SwiftMailSession.containsPassword("Re: \(b64)", password: pw, username: "me@x.example"))
+        XCTAssertFalse(SwiftMailSession.containsPassword("<d1@x>", password: pw, username: "me@x.example"))
+    }
+
+    func testTheSearchTermIsTheMessageIDWithoutBrackets() {
+        XCTAssertEqual(SwiftMailSession.searchTerm(for: "<a.b@x.example>"), "a.b@x.example")
+        XCTAssertEqual(SwiftMailSession.searchTerm(for: "a.b@x.example"), "a.b@x.example")
+    }
+
     func testThePasswordIsRedactedBeforeTheTextIsCut_andInItsQuotedAndAuthzidForms() {
         let password = #"p"a\ss-word-0123"#
         // The password straddles character 300: cut first, its prefix would survive.
@@ -81,6 +94,8 @@ final class SubmitOutcomeClassificationTests: XCTestCase {
         let ok = try agree("From: Me <me@x.example>\r\nTo: a@x.example\r\n")
         XCTAssertTrue(ok.sender && ok.recipients)
         XCTAssertFalse(try agree("From: me@x.example\r\nTo: a@x.example, b@@x\r\n").recipients, "one address dropped")
+        XCTAssertFalse(try agree("From: me@x.example\r\nTo: a@x.example, junk\r\n").recipients,
+                       "a stray word the envelope left out")
         XCTAssertFalse(try agree("From: me@x.example\r\nTo: a@x.example\r\nTo: b@x.example\r\n").recipients, "To twice")
         XCTAssertFalse(try agree("From: me@x.example\r\nTo: a@x.example\r\nCc: junk\r\n").recipients, "a Cc the envelope left empty")
         XCTAssertTrue(try agree("From: me@x.example\r\nTo: undisclosed-recipients:;\r\nBcc: a@x.example\r\n", to: 0, bcc: 1).recipients,

@@ -65,17 +65,35 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
     /// straddles the cut cannot survive as a prefix.
     static func redact(_ text: String, password: String, username: String) -> String {
         guard !password.isEmpty else { return text }
-        let quoted = password.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-        let forms = [password, quoted,
-                     Data(password.utf8).base64EncodedString(),
-                     Data("\u{0}\(username)\u{0}\(password)".utf8).base64EncodedString(),
-                     Data("\(username)\u{0}\(username)\u{0}\(password)".utf8).base64EncodedString()]
         // Longest first, so a form that contains another is removed whole.
-        return forms.sorted { $0.count > $1.count }.reduce(text) { $0.replacingOccurrences(of: $1, with: "[redacted]") }
+        return passwordForms(password: password, username: username).sorted { $0.count > $1.count }
+            .reduce(text) { $0.replacingOccurrences(of: $1, with: redactionMarker) }
+    }
+
+    /// What replaces the password. `--direct-transport-set-credential` refuses a
+    /// password that occurs in it, so the marker never reproduces one.
+    static let redactionMarker = "[redacted]"
+
+    static func passwordForms(password: String, username: String) -> [String] {
+        let quoted = password.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        return [password, quoted,
+                Data(password.utf8).base64EncodedString(),
+                Data("\u{0}\(username)\u{0}\(password)".utf8).base64EncodedString(),
+                Data("\(username)\u{0}\(username)\u{0}\(password)".utf8).base64EncodedString()]
     }
 
     private func redact(_ text: String) -> String {
         Self.redact(text, password: password, username: account.address)
+    }
+
+    /// Whether `text` holds the password in any of the forms `redact` removes.
+    static func containsPassword(_ text: String, password: String, username: String) -> Bool {
+        guard !password.isEmpty else { return false }
+        return passwordForms(password: password, username: username).contains { text.contains($0) }
+    }
+
+    private func containsPassword(_ text: String) -> Bool {
+        Self.containsPassword(text, password: password, username: account.address)
     }
 
     /// At most 300 characters. Only ever applied after `redact`.
@@ -114,7 +132,17 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
     }
 
     func drafts(withMessageID messageID: String, in mailbox: String) async throws -> [DraftSummary] {
-        try await summaries(matching: [.header("Message-ID", messageID)], in: mailbox)
+        try await summaries(matching: [.header("Message-ID", Self.searchTerm(for: messageID))], in: mailbox)
+    }
+
+    /// The Message-ID without its angle brackets: header search is a substring
+    /// search, and a header written without brackets would not hold them.
+    /// Hits are then compared in full.
+    static func searchTerm(for messageID: String) -> String {
+        var term = Substring(messageID)
+        if term.hasPrefix("<") { term = term.dropFirst() }
+        if term.hasSuffix(">") { term = term.dropLast() }
+        return String(term)
     }
 
     func drafts(withSubjectContaining subject: String, in mailbox: String) async throws -> [DraftSummary] {
@@ -156,18 +184,22 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
             guard let info = try await imap.fetchMessageInfo(for: id) else {
                 throw SendDraftRefusal(description: "the server returned no envelope for the draft; nothing was submitted")
             }
-            let fields = (try? BccRemoval.fields(in: message)) ?? []
-            // The Message-ID the record is keyed by must be the one in the bytes submitted.
-            let headerIDs = fields.filter { $0.name == "message-id" }.map(\.value)
-            guard headerIDs.count == 1, let headerID = Self.canonicalMessageID(headerIDs[0]),
-                  headerID == info.messageId?.description else {
-                throw SendDraftRefusal(description: "the draft's Message-ID header is missing, repeated, or not the one the server's envelope reports; nothing was submitted")
+            // A header this reader cannot parse is refused at check 5 (Bcc removal
+            // reads it the same way); until then, nothing here is decided from it.
+            let fields = try? BccRemoval.fields(in: message)
+            if let fields {
+                // The Message-ID the record is keyed by must be the one in the bytes submitted.
+                let headerIDs = fields.filter { $0.name == "message-id" }.map(\.value)
+                guard headerIDs.count == 1, let headerID = Self.canonicalMessageID(headerIDs[0]),
+                      SendDraftFlow.same(headerID, info.messageId?.description) else {
+                    throw SendDraftRefusal(description: "the draft's Message-ID header is missing, repeated, or not the one the server's envelope reports; nothing was submitted")
+                }
             }
             let invalid: (AddressListEntry) -> Bool = { if case .invalid = $0 { return true } else { return false } }
             let recipientEntries = info.toAddresses + info.ccAddresses + info.bccAddresses
-            let agreement = Self.addressFieldsAgree(
+            let agreement = fields.map { fields in Self.addressFieldsAgree(
                 fields: fields, from: info.fromAddresses.mailboxes.count, to: info.toAddresses.mailboxes.count,
-                cc: info.ccAddresses.mailboxes.count, bcc: info.bccAddresses.mailboxes.count)
+                cc: info.ccAddresses.mailboxes.count, bcc: info.bccAddresses.mailboxes.count) } ?? (sender: true, recipients: true)
             let draft = FetchedDraft(uid: summary.uid, message: message, messageID: info.messageId?.description,
                                      subject: info.subject ?? "",
                                      from: info.fromAddresses.mailboxes.map(\.address),
@@ -178,7 +210,7 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
             // A server that has the password could put it in what it reports; none
             // of that text reaches a result or the record.
             let reported = [draft.messageID ?? "", draft.subject] + draft.from + draft.recipients
-            guard reported.allSatisfy({ redact($0) == $0 }) else {
+            guard !reported.contains(where: containsPassword) else {
                 throw SendDraftRefusal(description: "the draft's header holds the account password; nothing was submitted")
             }
             return draft
@@ -196,35 +228,27 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
             let values = fields.filter { $0.name == name }.map(\.value)
             if values.isEmpty { return !required && envelope == 0 }
             guard values.count == 1 else { return false }
-            let count = BccRemoval.addressCount(inFieldValue: values[0])
-            // A field naming no address is text the checks cannot read, unless it
-            // is blank or an empty group such as `undisclosed-recipients:;`.
-            if count == 0 { return !required && envelope == 0 && Self.isBlankOrEmptyGroup(values[0]) }
+            // Blank is an empty list; otherwise it must read plainly as addresses
+            // (an empty group such as `undisclosed-recipients:;` counts 0).
+            if values[0].trimmingCharacters(in: .whitespaces).isEmpty { return !required && envelope == 0 }
+            guard let count = BccRemoval.addressList(inFieldValue: values[0]) else { return false }
+            if count == 0 { return !required && envelope == 0 }
             return count == envelope
         }
         return (agrees("from", from, required: true),
                 agrees("to", to, required: false) && agrees("cc", cc, required: false) && agrees("bcc", bcc, required: false))
     }
 
-    /// Blank, or `display-name:;` with nothing between the colon and the semicolon.
-    static func isBlankOrEmptyGroup(_ value: String) -> Bool {
-        let trimmed = value.trimmingCharacters(in: .whitespaces)
-        if trimmed.isEmpty { return true }
-        guard trimmed.hasSuffix(";"), let colon = trimmed.firstIndex(of: ":") else { return false }
-        return trimmed[trimmed.index(after: colon)..<trimmed.index(before: trimmed.endIndex)]
-            .trimmingCharacters(in: .whitespaces).isEmpty
-    }
-
     func sentCopyExists(messageID: String, in mailbox: String) async throws -> Bool {
         try await guarded {
             try await imap.selectMailbox(mailbox)
             // SEARCH HEADER is a substring search: each hit's own Message-ID must equal it.
-            let found: MessageIdentifierSet<UID> = try await imap.search(criteria: [.header("Message-ID", messageID)])
+            let found: MessageIdentifierSet<UID> = try await imap.search(criteria: [.header("Message-ID", Self.searchTerm(for: messageID))])
             for uid in found.toArray() {
                 guard let info = try await imap.fetchMessageInfo(for: uid) else {
                     throw Failure(description: "the server found a message in the sent mailbox whose envelope it then did not return")
                 }
-                if info.messageId?.description == messageID { return true }
+                if SendDraftFlow.same(info.messageId?.description, messageID) { return true }
             }
             return false
         }

@@ -29,6 +29,9 @@ enum DirectTransportCLI {
         guard !password.contains(where: \.isNewline) else {
             return Outcome(status: 65, message: "the password spans more than one line; nothing was stored")
         }
+        guard !SwiftMailSession.redactionMarker.contains(password) else {
+            return Outcome(status: 65, message: "the password occurs in the text that replaces it in output, so it could not be hidden; nothing was stored")
+        }
         do {
             try store(address, password)
         } catch {

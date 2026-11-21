@@ -164,7 +164,7 @@ struct SendDraftFlow {
                     throw SendDraftRefusal(description: "this draft was already submitted at \(Self.iso(existing.submittedAt ?? existing.updatedAt)); nothing was submitted")
                 }
                 guard DirectTransportConfig.equalIgnoringASCIICase(existing.accountID, account.accountID),
-                      existing.server == Self.server(of: account) else {
+                      Self.same(existing.server, Self.server(of: account)) else {
                     throw SendDraftRefusal(description: "this Message-ID was submitted from another account or server (\(existing.accountID), \(existing.server ?? "unknown server")); its pending stages are done only there. Nothing was submitted")
                 }
                 guard existing.draftDigest == draft.digest else {
@@ -208,7 +208,15 @@ struct SendDraftFlow {
                                     sentCopy: account.sentCopy == .append ? .pending : .skipped,
                                     draftRemoval: .pending, updatedAt: now(), serverReply: nil,
                                     submittedAt: nil, draftDigest: draft.digest, server: Self.server(of: account))
-        if try records.claim(attempting) != nil {
+        let existing: SendRecord?
+        do {
+            existing = try records.claim(attempting)
+        } catch {
+            // A claim that cannot be made durable is not a basis for a transaction.
+            // If it was written, later calls read it as unknown.
+            throw SendDraftRefusal(description: "the record of sent drafts could not be written safely (\(error)); nothing was submitted. If a later call reports this draft as UNKNOWN, it was not sent: \(DirectTransportCLI.forgetInstruction(for: messageID))")
+        }
+        if existing != nil {
             throw SendDraftRefusal(description: "another call is submitting this draft or has submitted it; nothing was submitted")
         }
 
@@ -263,7 +271,7 @@ struct SendDraftFlow {
     private func removalAlreadyHappened(_ messageID: String) throws -> SendDraftResult? {
         guard var entry = try records.entry(for: messageID), entry.effectiveState == .submitted,
               DirectTransportConfig.equalIgnoringASCIICase(entry.accountID, account.accountID),
-              entry.server == Self.server(of: account),
+              Self.same(entry.server, Self.server(of: account)),
               entry.sentCopy != .pending, entry.draftRemoval == .pending else { return nil }
         entry.draftRemoval = .done
         entry.updatedAt = now()
@@ -291,13 +299,13 @@ struct SendDraftFlow {
                 }
                 record.sentCopy = .done
             } catch {
-                notes.append("The sent copy could not be stored (\(error)); call send_draft again for this draft to store it. The message will not be submitted again.")
+                notes.append("The sent copy could not be stored (\(error)); call send_draft again with this draft's draft_id to store it (a subject_match is a new selection). The message will not be submitted again.")
             }
             record.updatedAt = now()
             // The draft is the only source for a sent copy the record does not show
             // as stored: it is not removed until the record says so.
             if !save(record, &notes) && record.sentCopy == .done {
-                notes.append("The draft was therefore left in the drafts mailbox; call send_draft again for it.")
+                notes.append("The draft was therefore left in the drafts mailbox; call send_draft again with its draft_id.")
                 notes.append(Self.localIndexNote)
                 return SendDraftResult(outcome: .submitted, messageID: record.messageID, serverReply: record.serverReply,
                                        sentCopy: .pending, draftRemoval: .pending, resumed: resumed, notes: notes)
@@ -309,7 +317,7 @@ struct SendDraftFlow {
                     try await session.removeDraft(draft, in: draftsBox)
                     record.draftRemoval = .done
                 } catch {
-                    notes.append("The draft could not be removed from the drafts mailbox (\(error)); call send_draft again for this draft to remove it. The message will not be submitted again.")
+                    notes.append("The draft could not be removed from the drafts mailbox (\(error)); call send_draft again with this draft's draft_id to remove it (a subject_match is a new selection). The message will not be submitted again.")
                 }
             } else {
                 notes.append("The server cannot expunge one message by its UID, so the draft was left in the drafts mailbox rather than expunging other messages. Delete it in Mail; the message will not be submitted again.")
@@ -337,7 +345,8 @@ struct SendDraftFlow {
 
     /// The login and server a submission is bound to.
     static func server(of account: DirectTransportConfig.Account) -> String {
-        "\(account.address.lowercased())@\(account.imap.host.lowercased()):\(account.imap.port)"
+        // The login exactly as it is sent; host names are not case-sensitive.
+        "\(account.address)@\(account.imap.host.lowercased()):\(account.imap.port)"
     }
 
     /// Equal scalar by scalar: Swift's `==` treats canonically equivalent Unicode

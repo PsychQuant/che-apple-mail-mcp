@@ -113,7 +113,7 @@ final class SendDraftToolTests: XCTestCase {
         XCTAssertFalse(record.contains("secret-pw"))
     }
 
-    /// spec-example: direct-transport / The description carries the caveat
+    /// Scenario: The description carries the caveat.
     func testTheListedDescriptionSaysItHasNotRunAgainstARealServer_andNamesTheIssue() throws {
         let tool = try XCTUnwrap(CheAppleMailMCPServer.defineTools().first { $0.name == "send_draft" })
         let text = try XCTUnwrap(tool.description)
@@ -136,11 +136,29 @@ final class SendDraftToolTests: XCTestCase {
         XCTAssertEqual(opened.count, 0)
     }
 
+    func testANameThatIsNoConfiguredAccountDoesNotVetoTheID() async throws {
+        let session = SendDraftFlowTests.FakeSession()
+        session.drafts = [draft()]
+        let env = try environment(config: config, session: session)
+        let text = try await SendDraftTool.run(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"),
+                                                "account_name": .string("iCloud"), "subject_match": .string("Report")], env)
+        XCTAssertTrue(text.contains("\"submitted\""), text)
+    }
+
     func testAccountIDAndNameThatNameDifferentAccountsAreRefused() async throws {
         let env = try environment(config: config)
+        let two = """
+        {"accounts": [{"account_id": "AAAAAAAA-2222-4333-8444-555555555555", "address": "me@icloud.example",
+          "smtp": {"host": "smtp.example", "port": 587}, "imap": {"host": "imap.example", "port": 993},
+          "sent_copy": "append", "allowed_from": []},
+         {"account_id": "BBBBBBBB-2222-4333-8444-555555555555", "address": "other@icloud.example",
+          "smtp": {"host": "smtp.example", "port": 587}, "imap": {"host": "imap.example", "port": 993},
+          "sent_copy": "append", "allowed_from": []}]}
+        """
+        let both = try environment(config: two)
         let message = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"),
-                                     "account_name": .string("someone@else.example"),
-                                     "subject_match": .string("Report")], env)
+                                     "account_name": .string("other@icloud.example"),
+                                     "subject_match": .string("Report")], both)
         XCTAssertTrue(message?.contains("different accounts") == true, message ?? "not refused")
     }
 
