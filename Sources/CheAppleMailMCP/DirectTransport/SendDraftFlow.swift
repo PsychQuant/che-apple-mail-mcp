@@ -102,7 +102,7 @@ struct SendDraftFlow {
         if let existing = try records.entry(for: messageID) {
             switch existing.effectiveState {
             case .unknown, .attempting:
-                throw SendDraftRefusal(description: "an earlier submission of this draft ended with its state UNKNOWN; the tool is NOT retrying. Check the recipients' mail or the sent mailbox, then clear the entry with `--direct-transport-forget '\(messageID)'` if it was not sent")
+                throw SendDraftRefusal(description: "an earlier submission of this draft ended with its state UNKNOWN; the tool is NOT retrying. Check the recipients' mail or the sent mailbox, then, if it was not sent, \(DirectTransportCLI.forgetInstruction(for: messageID))")
             case .submitted:
                 if existing.sentCopy == .pending || existing.draftRemoval == .pending {
                     return try await finishStages(existing, draft: draft, draftsBox: draftsBox, resumed: true)
@@ -158,7 +158,7 @@ struct SendDraftFlow {
             try records.put(record)
             return SendDraftResult(outcome: .unknown, messageID: messageID, serverReply: nil,
                                    sentCopy: .notAttempted, draftRemoval: .notAttempted, resumed: false,
-                                   notes: ["The send state is UNKNOWN (\(detail)). The tool is NOT retrying, and a later send_draft for this draft is refused until the entry is cleared with `--direct-transport-forget '\(messageID)'`. Nothing here establishes whether the server took the message: look in the recipients' mail or the sent mailbox before deciding."])
+                                   notes: ["The send state is UNKNOWN (\(detail)). The tool is NOT retrying, and a later send_draft for this draft is refused until you \(DirectTransportCLI.forgetInstruction(for: messageID)). Nothing here establishes whether the server took the message: look in the recipients' mail or the sent mailbox before deciding."])
         }
     }
 

@@ -96,6 +96,16 @@ final class DirectTransportCLITests: XCTestCase {
         XCTAssertNil(SwiftMailSession.canonicalMessageID("no-at-sign"))
     }
 
+    /// The Message-ID comes from the draft, which anyone can write. The command
+    /// printed for a person to paste must not let it out of its quotes.
+    func testThePrintedForgetCommandCannotBeBrokenOutOf() {
+        XCTAssertEqual(DirectTransportCLI.forgetCommand(for: "<a@x>"), "--direct-transport-forget '<a@x>'")
+        XCTAssertEqual(DirectTransportCLI.forgetCommand(for: "<a'$(touch p)'@x>"),
+                       #"--direct-transport-forget '<a'\''$(touch p)'\''@x>'"#)
+        XCTAssertNil(DirectTransportCLI.forgetCommand(for: "<a\n@x>"), "a control character: no command is printed")
+        XCTAssertNil(DirectTransportCLI.forgetCommand(for: "<a\u{1B}[2J@x>"))
+    }
+
     func testAnAbsentEntryRemovesNothing() {
         XCTAssertEqual(DirectTransportCLI.forget(messageID: "<none@x>", records: records()).status, 1)
     }

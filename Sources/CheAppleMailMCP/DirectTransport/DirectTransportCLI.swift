@@ -61,6 +61,25 @@ enum DirectTransportCLI {
         }
     }
 
+    /// The forget command for a person to paste, with the Message-ID in POSIX
+    /// single quotes (each `'` written as `'\''`). The Message-ID comes from the
+    /// draft, which anyone can write, so it must not be able to leave its quotes.
+    /// Nil when it holds a control character: no command is printed then.
+    static func forgetCommand(for messageID: String) -> String? {
+        guard !messageID.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) else {
+            return nil
+        }
+        return "--direct-transport-forget '" + messageID.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// How to clear an unknown entry, as a sentence for a result or a refusal.
+    static func forgetInstruction(for messageID: String) -> String {
+        if let command = forgetCommand(for: messageID) {
+            return "clear the entry by running the server binary with `\(command)`"
+        }
+        return "clear the entry for this Message-ID from direct-transport-sent.json by hand (it holds a control character, so no command is printed)"
+    }
+
     /// One trailing CRLF, LF or CR, as a terminal or `printf '%s\n'` leaves it.
     /// A CRLF is a single `Character` in Swift, so one `dropLast()` removes it.
     private static func stripLineEnd(_ text: String) -> String {
