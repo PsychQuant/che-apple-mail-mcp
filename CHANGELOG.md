@@ -26,7 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `not_sent` or `unknown`; an unknown send is not retried and is cleared only by
   `--direct-transport-forget '<message-id>'`. After a submission the sent copy
   and the draft's removal are separate stages that a later call resumes without
-  submitting again. Mail's local index is not changed. New dependency: SwiftMail
+  submitting again, only from the same account and only while the draft is
+  byte for byte the one submitted. One call runs at a time, and the SMTP server
+  is contacted only to submit. Errors and server replies are redacted of the
+  password. Mail's local index is not changed. New dependency: SwiftMail
   1.17.0, pinned by revision.
 
 - **`search_emails` can return each row's Message-ID**

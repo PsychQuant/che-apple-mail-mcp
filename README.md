@@ -883,11 +883,13 @@ other port, with the certificate verified and TLS 1.2 or later.
 |---|---|---|
 | `submitted` | The server accepted the message. `sent_copy` and `draft_removal` then report `done`, `pending` or `skipped` | A `pending` stage is finished by calling `send_draft` again with the same draft; it is not submitted again |
 | `not_sent` | Refused before the server accepted it | Fix the cause in the reply and call again |
-| `unknown` | The connection ended after the message was handed over; the tool is not retrying | Look in the recipients' mail or the sent mailbox. Only if it was not sent, run `--direct-transport-forget '<message-id>'` (quoted: zsh reads the angle brackets as redirections) and call again |
+| `unknown` | Whether the server took the message could not be established (for example the connection ended after it was handed over); the tool is not retrying | Look in the recipients' mail or the sent mailbox. Only if it was not sent, run `--direct-transport-forget '<message-id>'` (quoted: zsh reads the angle brackets as redirections) and call again |
 
 Each submission is recorded by Message-ID in `~/.claude/.mail/direct-transport-sent.json`, so the same draft is never
-submitted twice: an entry whose state is unknown is cleared only by the command-line mode, and a submitted entry
-cannot be cleared at all. Mail's local index is not changed; it catches up when Mail next syncs.
+submitted twice: an entry whose state is unknown is cleared only by the command-line mode, which refuses while a
+`send_draft` call is running, and a submitted entry cannot be cleared at all. One `send_draft` call runs at a time. A
+pending stage is completed only from the account that submitted the draft and only while the draft on the server is
+byte for byte the one submitted. The SMTP server is contacted only to submit. Mail's local index is not changed; it catches up when Mail next syncs.
 
 ## Development tests
 

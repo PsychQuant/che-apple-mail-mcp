@@ -476,10 +476,11 @@ claude
 |---|---|---|
 | `submitted` | 伺服器接受了這封信。`sent_copy` 與 `draft_removal` 回報 `done`、`pending` 或 `skipped` | `pending` 的階段，用同一份草稿再呼叫一次 `send_draft` 就會補做，不會再送一次 |
 | `not_sent` | 伺服器接受之前就被拒絕 | 依回覆修正後再呼叫 |
-| `unknown` | 信交出去之後連線中斷；工具不會重試 | 去收件人的信或寄件備份確認。確定沒寄出，才執行 `--direct-transport-forget '<message-id>'`（要加引號，否則 zsh 會把角括號當成重導向）後再呼叫 |
+| `unknown` | 無法確定伺服器有沒有收下（例如信交出去之後連線中斷）；工具不會重試 | 去收件人的信或寄件備份確認。確定沒寄出，才執行 `--direct-transport-forget '<message-id>'`（要加引號，否則 zsh 會把角括號當成重導向）後再呼叫 |
 
 每次提交都以 Message-ID 記在 `~/.claude/.mail/direct-transport-sent.json`，同一份草稿不會送兩次：狀態不明的紀錄
-只能用命令列模式清除，已提交的紀錄不能清除。Mail 的本機索引不會改，等 Mail 下次同步才跟上。
+只能用命令列模式清除（有 `send_draft` 正在執行時不清），已提交的紀錄不能清除。一次只執行一個 `send_draft`。補做
+`pending` 的階段，只在同一個帳號、而且伺服器上的草稿與提交時逐位元組相同時才做。只有提交時才連 SMTP 伺服器。Mail 的本機索引不會改，等 Mail 下次同步才跟上。
 
 ## 疑難排解
 
