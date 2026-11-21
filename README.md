@@ -836,6 +836,59 @@ read-time observation, not a durable message identity. Consumer adoption
 (including the archive-mail default exclusion tracked by plugins#127) remains
 explicit.
 
+## Direct transport (send_draft)
+
+> **Not yet run against a real mail server.** Until the result is recorded on
+> [#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742), treat every outcome as unverified.
+
+`send_draft` sends one draft that already exists in the server's drafts mailbox over SMTP, without Mail
+([#729](https://github.com/PsychQuant/che-apple-mail-mcp/issues/729)). It writes no content: the message submitted
+is the draft as the server stores it, with its `Bcc` fields removed, and recipients come from its To, Cc and Bcc.
+It works only for accounts listed in `~/.claude/.mail/direct-transport.json`; any other account is refused, and
+no Mail path is used instead.
+
+### Setup
+
+1. Write `~/.claude/.mail/direct-transport.json`. Every key is required; unknown keys are refused.
+
+   ```json
+   {"accounts": [{
+     "account_id": "<the Mail account UUID from list_accounts>",
+     "address": "you@icloud.com",
+     "smtp": {"host": "smtp.mail.me.com", "port": 587},
+     "imap": {"host": "imap.mail.me.com", "port": 993},
+     "sent_copy": "append",
+     "allowed_from": []
+   }]}
+   ```
+
+   `sent_copy` is `append` when the tool should store the sent copy in the server's sent mailbox, or `provider`
+   when the provider stores it itself. `allowed_from` lists other addresses this account may send as.
+2. Store the password (for iCloud, an app-specific password) in the server's own keychain item, by running the
+   binary in a terminal. The password is read from standard input, without echo, and never printed:
+
+   ```bash
+   ~/bin/CheAppleMailMCP --direct-transport-set-credential you@icloud.com
+   ```
+
+   The item's service is `che-apple-mail-mcp.direct-transport`. No MCP tool can create, change or read it, and the
+   server never reads Mail's passwords. Login uses the full `address` as the user name.
+
+Both connections use TLS before the password is sent: implicit TLS on ports 465 and 993, required STARTTLS on any
+other port, with the certificate verified and TLS 1.2 or later.
+
+### Outcomes
+
+| `outcome` | Meaning | What to do |
+|---|---|---|
+| `submitted` | The server accepted the message. `sent_copy` and `draft_removal` then report `done`, `pending` or `skipped` | A `pending` stage is finished by calling `send_draft` again with the same draft; it is not submitted again |
+| `not_sent` | Refused before the server accepted it | Fix the cause in the reply and call again |
+| `unknown` | The connection ended after the message was handed over; the tool is not retrying | Look in the recipients' mail or the sent mailbox. Only if it was not sent, run `--direct-transport-forget <message-id>` and call again |
+
+Each submission is recorded by Message-ID in `~/.claude/.mail/direct-transport-sent.json`, so the same draft is never
+submitted twice: an entry whose state is unknown is cleared only by the command-line mode, and a submitted entry
+cannot be cleared at all. Mail's local index is not changed; it catches up when Mail next syncs.
+
 ## Development tests
 
 Run `make test` on macOS with Xcode Command Line Tools, Python 3 and `jq` on

@@ -431,6 +431,56 @@ claude
 
 ---
 
+## 直接傳送（send_draft）
+
+> **尚未對真實郵件伺服器跑過。** 在結果記到 [#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)
+> 之前，每一種結果都當成未經驗證。
+
+`send_draft` 經 SMTP 寄出伺服器草稿匣裡已有的一封草稿，不經 Mail（[#729](https://github.com/PsychQuant/che-apple-mail-mcp/issues/729)）。
+它不寫任何內容：送出的就是伺服器存的那份草稿，去掉 `Bcc` 欄位；收件人取自 To、Cc、Bcc。只限
+`~/.claude/.mail/direct-transport.json` 列出的帳號；其他帳號一律拒絕，也不改走 Mail。
+
+### 設定
+
+1. 寫 `~/.claude/.mail/direct-transport.json`。每個欄位都必填，不認得的欄位會被拒絕。
+
+   ```json
+   {"accounts": [{
+     "account_id": "<list_accounts 回報的 Mail 帳號 UUID>",
+     "address": "you@icloud.com",
+     "smtp": {"host": "smtp.mail.me.com", "port": 587},
+     "imap": {"host": "imap.mail.me.com", "port": 993},
+     "sent_copy": "append",
+     "allowed_from": []
+   }]}
+   ```
+
+   `sent_copy` 為 `append` 表示由工具把寄出的副本存進伺服器的寄件備份；為 `provider` 表示供應商自己會存。
+   `allowed_from` 列出這個帳號可以用來寄信的其他位址。
+2. 在終端機執行 binary，把密碼（iCloud 用 App 專用密碼）存進伺服器自己的 keychain 項目。密碼從標準輸入讀、
+   不顯示，也不會印出：
+
+   ```bash
+   ~/bin/CheAppleMailMCP --direct-transport-set-credential you@icloud.com
+   ```
+
+   項目的 service 是 `che-apple-mail-mcp.direct-transport`。沒有任何 MCP 工具能建立、修改或讀出它，伺服器也
+   不讀 Mail 的密碼。登入時以完整的 `address` 當使用者名稱。
+
+兩條連線在送出密碼之前都先建立 TLS：連接埠 465 與 993 用 implicit TLS，其他連接埠一律要求 STARTTLS；
+憑證要驗證，TLS 版本至少 1.2。
+
+### 結果
+
+| `outcome` | 意思 | 怎麼處理 |
+|---|---|---|
+| `submitted` | 伺服器接受了這封信。`sent_copy` 與 `draft_removal` 回報 `done`、`pending` 或 `skipped` | `pending` 的階段，用同一份草稿再呼叫一次 `send_draft` 就會補做，不會再送一次 |
+| `not_sent` | 伺服器接受之前就被拒絕 | 依回覆修正後再呼叫 |
+| `unknown` | 信交出去之後連線中斷；工具不會重試 | 去收件人的信或寄件備份確認。確定沒寄出，才執行 `--direct-transport-forget <message-id>` 後再呼叫 |
+
+每次提交都以 Message-ID 記在 `~/.claude/.mail/direct-transport-sent.json`，同一份草稿不會送兩次：狀態不明的紀錄
+只能用命令列模式清除，已提交的紀錄不能清除。Mail 的本機索引不會改，等 Mail 下次同步才跟上。
+
 ## 疑難排解
 
 | 問題 | 解決方法 |

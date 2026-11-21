@@ -6,6 +6,10 @@ GUI 流程或草稿刪除逾時之後，Mail 端已接受的 Apple Event 有沒�
 訊息可以告訴呼叫端**去哪裡找證據**，不可以替呼叫端下結論。下列三條都是封閉列舉；
 **不得依性質相似類推第四條**，要加就先改本檔。
 
+範圍：本檔管的是交給 Mail 的 Apple Event。`send_draft`（#742）不經 Mail，它的 `not_sent` 只來自 SMTP 伺服器在
+接受之前對這一筆交易的明確答覆，其餘一律 `unknown`；那是 `direct-transport.md` 第 7 條的規則，不是下面
+第 3 條的例外，也不得拿來在 GUI 路徑上加判決。
+
 1. **只有正面觀察算證據。** 逾時後可以被當作觀察的來源只有兩個：
    - `search_emails`（讀 Envelope Index）回傳一列符合的資料；
    - `list_drafts`（問 Mail）回傳一列符合的草稿。
