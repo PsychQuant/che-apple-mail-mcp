@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**The most comprehensive Apple Mail MCP server** - 60 tools with SQLite-powered millisecond search across 250K+ emails.
+**The most comprehensive Apple Mail MCP server** - 61 tools with SQLite-powered millisecond search across 250K+ emails.
 
 An MCP server for your Apple Mail: the accounts set up in Mail, the messages Mail keeps on this Mac, and the mailboxes on your mail servers. It does not always go through the Mail app:
 
@@ -13,7 +13,7 @@ An MCP server for your Apple Mail: the accounts set up in Mail, the messages Mai
 |---|---|---|
 | Mail's local store (SQLite and `.emlx`), read directly | reading, searching, exporting | Full Disk Access; data is as fresh as Mail's last sync |
 | The Mail app (AppleScript, its compose window) | most writes: compose, reply, forward, move, flag, delete | Mail running; Automation and, for compose, Accessibility |
-| The mail server directly (IMAP and SMTP) | `send_draft` ([#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)) | an entry in `direct-transport.json` and an app-specific password; Mail need not run, applies no signature, and shows the change after its next sync |
+| The mail server directly (IMAP and SMTP) | `send_draft` ([#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)), `append_draft` ([#744](https://github.com/PsychQuant/che-apple-mail-mcp/issues/744)) | an entry in `direct-transport.json` and an app-specific password; Mail need not run, applies no signature, and shows the change after its next sync |
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -23,7 +23,7 @@ An MCP server for your Apple Mail: the accounts set up in Mail, the messages Mai
 
 | Feature | Other MCPs | che-apple-mail-mcp |
 |---------|------------|-------------------|
-| Total Tools | ~20 | **60** |
+| Total Tools | ~20 | **61** |
 | Language | Python | **Swift (Native)** |
 | Search Speed | Seconds (AppleScript) | **Milliseconds (SQLite)** |
 | Search Fields | Subject/Sender | **Subject/Sender/Recipient/Date** |
@@ -101,7 +101,7 @@ you these are missing (#353):
 
 | Shipped by the plugin | Present with MCP-only |
 |---|---|
-| All 60 MCP tools | ✅ yes |
+| All 61 MCP tools | ✅ yes |
 | `/archive-mail` + `-migrate` / `-rebuild-threads` / `-repair-synthetic-ids` / `-view` | ❌ the archiving SOP does not exist |
 | `rules/compose-wrapper-free.md` — what the cite-block was, and what a refused compose call means | ⚠️ background: since [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304) the known body-injection trigger has been removed; this rule explains the reported upstream regression FB11734014 and current refusal recipes |
 | `rules/confirmation-triggers.md`, `rules/false-positive-detection.md` | ❌ no confirmation discipline on destructive operations |
@@ -169,7 +169,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## All 60 Tools
+## All 61 Tools
 
 ### Compose signatures
 
@@ -250,7 +250,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 </details>
 
 <details>
-<summary><b>Compose (6)</b></summary>
+<summary><b>Compose (7)</b></summary>
 
 | Tool | Description |
 |------|-------------|
@@ -259,6 +259,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 | `forward_email` | Forward email. Optional `body` + `format`. Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0+ / #44). A bodyless forward assigns nothing and needs no Accessibility grant; with a body, same rules as `reply_email` ([#218](https://github.com/PsychQuant/che-apple-mail-mcp/issues/218) / [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)). **Sends** unless `save_as_draft: true`, which saves the forward as a draft through the same paste path (body required for now: a bare forward with `save_as_draft` is refused, [#673](https://github.com/PsychQuant/che-apple-mail-mcp/issues/673)); read the saved draft's To recipients and body back before sending it ([#599](https://github.com/PsychQuant/che-apple-mail-mcp/issues/599)) |
 | `redirect_email` | Redirect email (keeps original sender) |
 | `send_draft` | Send one draft already in the server's drafts mailbox over SMTP, without Mail ([#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)). Not yet run against a real server. Only for accounts in `direct-transport.json`; see "Direct transport (send_draft)" below |
+| `append_draft` | Create a new plain-text draft in the server's drafts mailbox over IMAP, without Mail ([#744](https://github.com/PsychQuant/che-apple-mail-mcp/issues/744)). Not yet run against a real server. Only for accounts in `direct-transport.json`; bare addresses only; returns the `message_id` that `send_draft` accepts. See "Direct transport" below |
 | `open_mailto` | Open mailto URL |
 
 #### Reply-as-draft example (v2.4.0+)
@@ -844,7 +845,7 @@ read-time observation, not a durable message identity. Consumer adoption
 (including the archive-mail default exclusion tracked by plugins#127) remains
 explicit.
 
-## Direct transport (send_draft)
+## Direct transport (send_draft, append_draft)
 
 > **Not yet run against a real mail server.** Until the result is recorded on
 > [#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742), treat every outcome as unverified.
@@ -854,6 +855,16 @@ explicit.
 is the draft as the server stores it, with its `Bcc` fields removed, and recipients come from its To, Cc and Bcc.
 It works only for accounts listed in `~/.claude/.mail/direct-transport.json`; any other account is refused, and
 no Mail path is used instead.
+
+`append_draft` ([#744](https://github.com/PsychQuant/che-apple-mail-mcp/issues/744)) creates a new plain-text
+draft in the same accounts' drafts mailbox over IMAP, also without Mail. It has **not yet been run against a
+real mail server** either. It takes `to`, `cc`, `bcc` (bare addresses, at least one in all), `subject`, `body`
+and an optional `from_name`, and builds the whole message itself: one `text/plain` part in UTF-8 with a new
+Message-ID. That is not the layout Mail gives its own drafts, so `send_draft` can submit it as stored
+([#745](https://github.com/PsychQuant/che-apple-mail-mcp/issues/745) describes what goes wrong with a draft
+Mail saved). The result is `appended`, `not_appended` or `unknown`; after `unknown` the tool does not retry,
+and a second call always creates a second draft. It returns `message_id`, which `send_draft` accepts as a third
+way to choose the draft, so writing a draft and sending it can both happen with Mail closed.
 
 ### Setup
 

@@ -138,7 +138,7 @@ enum AppendDraftTool {
                 try await runHoldingTheLock(built, account: account, environment)
             }
         } catch is SendRecordStore.Busy {
-            throw MailError.operationFailed("another direct-transport call is running; nothing was appended. Try again when it has finished")
+            throw MailError.operationFailed("another send_draft or append_draft call is running; nothing was appended. Try again when it has finished")
         }
     }
 

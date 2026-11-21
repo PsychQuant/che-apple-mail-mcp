@@ -123,7 +123,7 @@ struct SendRecordStore {
     }
 
     struct Busy: Error, CustomStringConvertible {
-        var description: String { "another send_draft call is running; nothing was submitted. Try again when it has finished" }
+        var description: String { "another send_draft or append_draft call is running; nothing was submitted. Try again when it has finished" }
     }
 
     /// Runs `body` holding the submission lock, which one `send_draft` call at a

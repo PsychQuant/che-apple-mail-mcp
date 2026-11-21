@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**最完整的 Apple Mail MCP 伺服器** - 60 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
+**最完整的 Apple Mail MCP 伺服器** - 61 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
 
 這是給你的 Apple Mail 用的 MCP：Mail 裡設好的帳號、Mail 存在這台 Mac 上的信，以及郵件伺服器上的信匣。它不一定經過 Mail 這個 App：
 
@@ -13,7 +13,7 @@
 |---|---|---|
 | 直接讀 Mail 的本機資料（SQLite 與 `.emlx`） | 讀信、搜尋、匯出 | 完全磁碟取用權限；資料新舊取決於 Mail 上次同步 |
 | Mail App（AppleScript、撰寫視窗） | 大部分寫入：撰寫、回覆、轉寄、搬移、標記、刪除 | Mail 開著；自動化權限，撰寫另需輔助使用 |
-| 直接連郵件伺服器（IMAP 與 SMTP） | `send_draft`（[#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)） | `direct-transport.json` 的設定與 App 專用密碼；不需要 Mail 開著、不套用簽名，Mail 要等下次同步才看得到 |
+| 直接連郵件伺服器（IMAP 與 SMTP） | `send_draft`（[#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)）、`append_draft`（[#744](https://github.com/PsychQuant/che-apple-mail-mcp/issues/744)） | `direct-transport.json` 的設定與 App 專用密碼；不需要 Mail 開著、不套用簽名，Mail 要等下次同步才看得到 |
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -23,7 +23,7 @@
 
 | 功能 | 其他 MCP | che-apple-mail-mcp |
 |------|----------|-------------------|
-| 工具總數 | ~20 | **60** |
+| 工具總數 | ~20 | **61** |
 | 開發語言 | Python | **Swift (原生)** |
 | 搜尋速度 | 秒級 (AppleScript) | **毫秒級 (SQLite)** |
 | 搜尋欄位 | 主旨/寄件人 | **主旨/寄件人/收件人/日期** |
@@ -65,7 +65,7 @@ claude plugin install che-apple-mail-mcp@che-apple-mail-mcp
 
 | plugin 提供 | 只裝 MCP |
 |---|---|
-| 全部 60 個 MCP 工具 | ✅ 有 |
+| 全部 61 個 MCP 工具 | ✅ 有 |
 | `/archive-mail` 與 `-migrate` / `-rebuild-threads` / `-repair-synthetic-ids` / `-view` | ❌ 整套歸檔 SOP 不存在 |
 | `rules/compose-wrapper-free.md`——正式信件的 cite-block 紀律 | ❌ **影響最大**：對正式信件產生 `<blockquote type="cite">` 本文是 CRITICAL 缺陷，而這條規則正是防它的 |
 | `rules/confirmation-triggers.md`、`rules/false-positive-detection.md` | ❌ 破壞性操作沒有確認紀律 |
@@ -99,7 +99,7 @@ OneDrive）——同步活動會造成 MCP 連線逾時。
 
 ---
 
-## 全部 60 個工具
+## 全部 61 個工具
 
 ### 新建郵件的簽名
 
@@ -180,7 +180,7 @@ compose_email、create_draft、update_draft 支援 signature 物件：`{"mode":"
 </details>
 
 <details>
-<summary><b>撰寫 (6)</b></summary>
+<summary><b>撰寫 (7)</b></summary>
 
 | 工具 | 說明 |
 |------|------|
@@ -189,6 +189,7 @@ compose_email、create_draft、update_draft 支援 signature 物件：`{"mode":"
 | `forward_email` | 轉寄郵件 |
 | `redirect_email` | 重導向郵件（保留原始寄件者） |
 | `send_draft` | 經 SMTP 寄出伺服器草稿匣裡已有的一封草稿，不經 Mail（[#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)）。尚未對真實伺服器跑過。只限 `direct-transport.json` 列出的帳號，設定見下方「直接傳送（send_draft）」 |
+| `append_draft` | 經 IMAP 在伺服器的草稿匣建立一封新的純文字草稿，不經 Mail（[#744](https://github.com/PsychQuant/che-apple-mail-mcp/issues/744)）。尚未對真實伺服器跑過。只限 `direct-transport.json` 列出的帳號；只收純位址；回傳 `send_draft` 可用的 `message_id`。見下方「直接傳送」 |
 | `open_mailto` | 開啟 mailto URL |
 
 </details>
@@ -439,7 +440,7 @@ claude
 
 ---
 
-## 直接傳送（send_draft）
+## 直接傳送（send_draft、append_draft）
 
 > **尚未對真實郵件伺服器跑過。** 在結果記到 [#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)
 > 之前，每一種結果都當成未經驗證。
@@ -447,6 +448,14 @@ claude
 `send_draft` 經 SMTP 寄出伺服器草稿匣裡已有的一封草稿，不經 Mail（[#729](https://github.com/PsychQuant/che-apple-mail-mcp/issues/729)）。
 它不寫任何內容：送出的就是伺服器存的那份草稿，去掉 `Bcc` 欄位；收件人取自 To、Cc、Bcc。只限
 `~/.claude/.mail/direct-transport.json` 列出的帳號；其他帳號一律拒絕，也不改走 Mail。
+
+`append_draft`（[#744](https://github.com/PsychQuant/che-apple-mail-mcp/issues/744)）經 IMAP 在同一批帳號的草稿匣建立一封新的
+純文字草稿，同樣不經 Mail，也**尚未對真實郵件伺服器跑過**。它接受 `to`、`cc`、`bcc`（純位址，合計至少一個）、`subject`、`body`
+與選填的 `from_name`，內容由工具自己組：單一 `text/plain`（UTF-8）、新的 Message-ID。這不是 Mail 自己存草稿的版面，所以
+`send_draft` 可以把它原樣送出（Mail 存的草稿原樣送出會有什麼問題，見
+[#745](https://github.com/PsychQuant/che-apple-mail-mcp/issues/745)）。結果是 `appended`、`not_appended` 或 `unknown`；`unknown`
+之後工具不重試，而再呼叫一次一定會多一封草稿。它回傳 `message_id`，`send_draft` 可以用它選草稿，所以建草稿與寄出都能在
+Mail 關著時完成。
 
 ### 設定
 

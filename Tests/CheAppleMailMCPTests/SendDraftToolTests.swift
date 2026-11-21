@@ -175,7 +175,7 @@ final class SendDraftToolTests: XCTestCase {
         try await records.withSubmissionLock {
             let message = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"),
                                          "subject_match": .string("Report")], env)
-            XCTAssertTrue(message?.contains("another send_draft call is running") == true, message ?? "not refused")
+            XCTAssertTrue(message?.contains("another send_draft or append_draft call is running") == true, message ?? "not refused")
         }
         XCTAssertEqual(opened.count, 0)
     }
