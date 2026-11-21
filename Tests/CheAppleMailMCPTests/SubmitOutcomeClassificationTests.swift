@@ -12,6 +12,15 @@ final class SubmitOutcomeClassificationTests: XCTestCase {
         SwiftMailSession.classify(.failure(SMTPSendError(phase: phase, acceptance: acceptance, reason: reason)))
     }
 
+    /// Requirement: Connections are encrypted before the password is sent.
+    func testEveryPortGetsTLS_implicitOn465And993_requiredStartTLSOtherwise() {
+        XCTAssertEqual(SwiftMailSession.transportSecurity(forPort: 993), .implicitTLS)
+        XCTAssertEqual(SwiftMailSession.transportSecurity(forPort: 465), .implicitTLS)
+        for port in [587, 143, 25, 2525] {
+            XCTAssertEqual(SwiftMailSession.transportSecurity(forPort: port), .startTLS, "\(port)")
+        }
+    }
+
     func testAFinal2xxIsAccepted_withTheReply() {
         let outcome = SwiftMailSession.classify(.success(SMTPSendResult(response: SMTPResponse(code: 250, message: "2.0.0 OK queued"))))
         XCTAssertEqual(outcome, .accepted(reply: "250 2.0.0 OK queued"))

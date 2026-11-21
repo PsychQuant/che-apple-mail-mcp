@@ -22,8 +22,15 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
 
     /// Connects and logs in to both servers. The password is used here and not kept.
     static func open(account: DirectTransportConfig.Account, password: String) async throws -> SwiftMailSession {
-        let imap = IMAPServer(host: account.imap.host, port: account.imap.port)
-        let smtp = SMTPServer(host: account.smtp.host, port: account.smtp.port)
+        // Never `.automatic` or `.plainText`: the password must not cross an
+        // unencrypted connection, so STARTTLS is required, not opportunistic, and
+        // the certificate is fully verified.
+        let imap = IMAPServer(host: account.imap.host, port: account.imap.port,
+                              transportSecurity: Self.transportSecurity(forPort: account.imap.port),
+                              certificateVerificationPolicy: .fullVerification, minimumTLSVersion: .tlsv12)
+        let smtp = SMTPServer(host: account.smtp.host, port: account.smtp.port,
+                              transportSecurity: Self.transportSecurity(forPort: account.smtp.port),
+                              certificateVerificationPolicy: .fullVerification, minimumTLSVersion: .tlsv12)
         do {
             try await imap.connect()
             try await imap.login(username: account.address, password: password)
@@ -40,6 +47,12 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
             throw OpenFailed(description: "could not log in to the SMTP server \(account.smtp.host):\(account.smtp.port) (\(Self.describe(error))); nothing was submitted")
         }
         return SwiftMailSession(imap: imap, smtp: smtp)
+    }
+
+    /// Implicit TLS on the two ports that use it (465 SMTPS, 993 IMAPS); required
+    /// STARTTLS on every other port, which fails when the server does not offer it.
+    static func transportSecurity(forPort port: Int) -> MailTransportSecurity {
+        port == 465 || port == 993 ? .implicitTLS : .startTLS
     }
 
     func draftsMailbox() async throws -> String { try await specialUse(.drafts, named: "\\Drafts") }

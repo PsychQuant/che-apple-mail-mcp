@@ -23,6 +23,15 @@ The password for a configured account SHALL be read, at call time, from a generi
 - **WHEN** `send_draft` is called for a configured account whose keychain item does not exist
 - **THEN** the call fails naming `--direct-transport-set-credential`, and no connection is opened
 
+### Requirement: Connections are encrypted before the password is sent
+
+Every connection to a configured server SHALL be protected by TLS before the password is sent: implicit TLS when the configured port is 465 or 993, and STARTTLS on any other port, required rather than opportunistic, so that a server that does not offer STARTTLS fails the connection. The server's certificate SHALL be verified against the trusted roots and the configured host name, and the connection SHALL NOT negotiate a TLS version older than 1.2. No plaintext transport SHALL be used. A connection that fails any of these SHALL be refused before any draft is read, and nothing SHALL be submitted.
+
+#### Scenario: A server that does not offer STARTTLS
+
+- **WHEN** the configured SMTP port is 587 and the server does not offer STARTTLS
+- **THEN** the call fails before logging in, the password is not sent, and nothing is submitted
+
 ### Requirement: send_draft sends one existing draft and cannot write content
 
 The `send_draft` tool SHALL accept exactly these arguments: `account_name`, `account_id`, `draft_id` and `subject_match`. A call that carries any other argument, including `body`, `to`, `cc`, `bcc` and `attachments`, SHALL be refused by name before any connection is opened. Exactly one of `draft_id` and `subject_match` SHALL be given. The tool SHALL select the draft in the account's drafts mailbox on the server: with `subject_match`, the drafts whose subject equals it exactly; with `draft_id`, the drafts whose Message-ID equals the Message-ID of that local message row. The drafts mailbox SHALL be the one the server reports with the special-use attribute `\Drafts`; when the server reports none, or more than one, the call SHALL be refused. When the selection matches no draft or more than one, the call SHALL be refused and nothing SHALL be submitted. The tool SHALL NOT run AppleScript, SHALL NOT require Mail to be running, and SHALL NOT modify the local Envelope Index or any `.emlx` file.
