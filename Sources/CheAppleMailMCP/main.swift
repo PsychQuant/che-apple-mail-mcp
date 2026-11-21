@@ -36,6 +36,20 @@ case .checkFDAQuiet:
     exit(SetupCLI.runCheckFDAQuiet())
 case .setup:
     await SetupWindow.run()
+case .setDirectTransportCredential(let address):
+    let outcome = DirectTransportCLI.setCredential(
+        address: address, readPassword: DirectTransportCLI.readPasswordFromStandardInput,
+        store: { try DirectTransportCredential.store(address: $0, password: $1) })
+    Diagnostics.emit(outcome.message + "\n")
+    exit(outcome.status)
+case .forgetDirectTransportSend(let messageID):
+    let outcome = DirectTransportCLI.forget(
+        messageID: messageID, records: SendRecordStore(directory: ClassificationPolicyStore.defaultDirectory))
+    Diagnostics.emit(outcome.message + "\n")
+    exit(outcome.status)
+case .usageError(let message):
+    Diagnostics.emit(message + "\n")
+    exit(64)
 case .version:
     // #303: lets `scripts/release.sh` interrogate the ACTUAL shipped artifact
     // (each slice of the universal binary) instead of separately compiling a

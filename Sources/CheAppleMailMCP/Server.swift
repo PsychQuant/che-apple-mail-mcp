@@ -674,6 +674,20 @@ class CheAppleMailMCPServer {
                 ])
             ),
             Tool(
+                name: SendDraftTool.name,
+                description: SendDraftTool.description,
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "account_name": .object(["type": .string("string"), "description": .string("The account's address as configured in direct-transport.json")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("The account UUID as configured in direct-transport.json; wins over account_name")]),
+                        "draft_id": .object(["type": .string("string"), "description": .string("Numeric local message id of the draft (from list_drafts); its Message-ID is looked up in the server's drafts mailbox")]),
+                        "subject_match": .object(["type": .string("string"), "description": .string("Exact subject of the draft on the server; exactly one draft must match")]),
+                    ]),
+                    "additionalProperties": .bool(false),
+                ])
+            ),
+            Tool(
                 name: "get_email_metadata",
                 description: "Get email metadata (was forwarded, replied, redirected, size). Includes is_draft: true when the message or a copy of it has Mail's draft type (5) or draft flag; false only when it has neither and neither it nor a copy sits in a folder named as drafts; null when that cannot be established, including the AppleScript fallback. A folder name is never evidence of a draft.",
                 inputSchema: .object([
@@ -1994,6 +2008,14 @@ class CheAppleMailMCPServer {
             let accountId = decodeAccountId(arguments, tool: invokedTool)
             return try await mailController.getEmailSource(id: id, mailbox: mailbox, accountName: accountName, accountId: accountId)
 
+        case SendDraftTool.name:
+            return try await SendDraftTool.run(arguments, SendDraftTool.Environment(
+                stateDirectory: ClassificationPolicyStore.defaultDirectory,
+                password: { try DirectTransportCredential.read(address: $0) },
+                openSession: { try await SwiftMailSession.open(account: $0, password: $1) },
+                localMessageID: { [self] row in try localDraftMessageID(row) },
+                now: Date.init))
+
         case "redirect_email":
             let id = try requireMessageId(arguments)
             guard let mailbox = arguments["mailbox"]?.stringValue,
@@ -2545,6 +2567,22 @@ class CheAppleMailMCPServer {
             .map { "\($0.value) x \($0.key.rawValue)" }.joined(separator: "; ")
         let missing = counts.values.reduce(0, +)
         return "search_emails include_message_id: \(missing) of \(total) row(s) have no message_id (\(reasons)); the rows are still returned\n"
+    }
+
+    /// The Message-ID of a local message row, for `send_draft`'s `draft_id` (#742):
+    /// read from its .emlx, as `get_email` reports it. Nil when it has none.
+    private func localDraftMessageID(_ row: Int) throws -> String? {
+        guard let reader = indexReader else {
+            throw SendDraftRefusal(description: "the local mail index is not readable (Full Disk Access), so draft_id cannot be looked up; use subject_match, or grant Full Disk Access. Nothing was submitted")
+        }
+        guard let mailboxURL = try reader.mailboxURL(forMessageId: row),
+              let resolved = EmlxParser.resolveEmlxPathDetailed(rowId: row, mailboxURL: mailboxURL) else {
+            throw SendDraftRefusal(description: "no local message with id \(row) was found; nothing was submitted")
+        }
+        let value = try EmlxParser.readMessageID(atPath: resolved.path)
+        guard !value.isEmpty else { return nil }
+        // The server's envelope reports `<local@domain>`; compare in that form.
+        return SwiftMailSession.canonicalMessageID(value) ?? value
     }
 
     private func withMessageIDs(_ rows: [[String: Any]], for results: [SearchResult]) -> [[String: Any]] {

@@ -80,7 +80,7 @@ final class StdioShutdownTests: XCTestCase {
             // xcrun can select a different installed toolchain (e.g. 6.3 vs 6.2).
             compiler.executableURL = URL(fileURLWithPath: build.compiler)
             compiler.arguments = ["-parse-as-library", "-target", build.target,
-                                  "-sdk", build.sdk, "-I", build.modules.path, source.path]
+                                  "-sdk", build.sdk, "-I", build.modules.path, source.path] + build.moduleMapArguments
                 + objectArguments + ["-lsqlite3", "-o", directory.appendingPathComponent("probe").path]
             compiler.standardOutput = output
             compiler.standardError = output

@@ -1,11 +1,19 @@
 # che-apple-mail-mcp
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![macOS](https://img.shields.io/badge/macOS-13.0%2B-blue)](https://www.apple.com/macos/)
+[![macOS](https://img.shields.io/badge/macOS-26.0%2B-blue)](https://www.apple.com/macos/)
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**The most comprehensive Apple Mail MCP server** - 59 tools with SQLite-powered millisecond search across 250K+ emails.
+**The most comprehensive Apple Mail MCP server** - 60 tools with SQLite-powered millisecond search across 250K+ emails.
+
+An MCP server for your Apple Mail: the accounts set up in Mail, the messages Mail keeps on this Mac, and the mailboxes on your mail servers. It does not always go through the Mail app:
+
+| Path | Used by | Needs |
+|---|---|---|
+| Mail's local store (SQLite and `.emlx`), read directly | reading, searching, exporting | Full Disk Access; data is as fresh as Mail's last sync |
+| The Mail app (AppleScript, its compose window) | most writes: compose, reply, forward, move, flag, delete | Mail running; Automation and, for compose, Accessibility |
+| The mail server directly (IMAP and SMTP) | `send_draft` ([#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)) | an entry in `direct-transport.json` and an app-specific password; Mail need not run, applies no signature, and shows the change after its next sync |
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +23,7 @@
 
 | Feature | Other MCPs | che-apple-mail-mcp |
 |---------|------------|-------------------|
-| Total Tools | ~20 | **59** |
+| Total Tools | ~20 | **60** |
 | Language | Python | **Swift (Native)** |
 | Search Speed | Seconds (AppleScript) | **Milliseconds (SQLite)** |
 | Search Fields | Subject/Sender | **Subject/Sender/Recipient/Date** |
@@ -93,7 +101,7 @@ you these are missing (#353):
 
 | Shipped by the plugin | Present with MCP-only |
 |---|---|
-| All 59 MCP tools | ✅ yes |
+| All 60 MCP tools | ✅ yes |
 | `/archive-mail` + `-migrate` / `-rebuild-threads` / `-repair-synthetic-ids` / `-view` | ❌ the archiving SOP does not exist |
 | `rules/compose-wrapper-free.md` — what the cite-block was, and what a refused compose call means | ⚠️ background: since [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304) the known body-injection trigger has been removed; this rule explains the reported upstream regression FB11734014 and current refusal recipes |
 | `rules/confirmation-triggers.md`, `rules/false-positive-detection.md` | ❌ no confirmation discipline on destructive operations |
@@ -161,7 +169,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## All 59 Tools
+## All 60 Tools
 
 ### Compose signatures
 
@@ -242,7 +250,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 </details>
 
 <details>
-<summary><b>Compose (5)</b></summary>
+<summary><b>Compose (6)</b></summary>
 
 | Tool | Description |
 |------|-------------|
@@ -250,6 +258,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 | `reply_email` | Reply to email. Optional: `cc_additional`, `save_as_draft`, `format` (since v2.4.0). `attachments` is currently refused whenever non-empty: the attach step erased the pasted body and Mail's quote while reporting success ([#534](https://github.com/PsychQuant/che-apple-mail-mcp/issues/534)); save the reply as a draft without it and drag the files in from Mail until [#608](https://github.com/PsychQuant/che-apple-mail-mcp/issues/608). Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0 / #43). The new body is pasted into Mail's native reply ([#218](https://github.com/PsychQuant/che-apple-mail-mcp/issues/218)); a non-`plain` `format` or a missing Accessibility grant FAILS instead of falling back ([#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)) |
 | `forward_email` | Forward email. Optional `body` + `format`. Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0+ / #44). A bodyless forward assigns nothing and needs no Accessibility grant; with a body, same rules as `reply_email` ([#218](https://github.com/PsychQuant/che-apple-mail-mcp/issues/218) / [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)). **Sends** unless `save_as_draft: true`, which saves the forward as a draft through the same paste path (body required for now: a bare forward with `save_as_draft` is refused, [#673](https://github.com/PsychQuant/che-apple-mail-mcp/issues/673)); read the saved draft's To recipients and body back before sending it ([#599](https://github.com/PsychQuant/che-apple-mail-mcp/issues/599)) |
 | `redirect_email` | Redirect email (keeps original sender) |
+| `send_draft` | Send one draft already in the server's drafts mailbox over SMTP, without Mail ([#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)). Not yet run against a real server. Only for accounts in `direct-transport.json`; see "Direct transport (send_draft)" below |
 | `open_mailto` | Open mailto URL |
 
 #### Reply-as-draft example (v2.4.0+)
@@ -435,7 +444,7 @@ Use `make release-signed VERSION=vX.Y.Z` for distribution.
 
 ### Requirements
 
-- macOS 13.0+
+- macOS 26.0+ (v4.x is the last line for macOS 13–15)
 - Xcode Command Line Tools (for the build-it-yourself route below)
 - Apple Mail with at least one account configured
 
@@ -835,6 +844,61 @@ read-time observation, not a durable message identity. Consumer adoption
 (including the archive-mail default exclusion tracked by plugins#127) remains
 explicit.
 
+## Direct transport (send_draft)
+
+> **Not yet run against a real mail server.** Until the result is recorded on
+> [#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742), treat every outcome as unverified.
+
+`send_draft` sends one draft that already exists in the server's drafts mailbox over SMTP, without Mail
+([#729](https://github.com/PsychQuant/che-apple-mail-mcp/issues/729)). It writes no content: the message submitted
+is the draft as the server stores it, with its `Bcc` fields removed, and recipients come from its To, Cc and Bcc.
+It works only for accounts listed in `~/.claude/.mail/direct-transport.json`; any other account is refused, and
+no Mail path is used instead.
+
+### Setup
+
+1. Write `~/.claude/.mail/direct-transport.json`. Every key is required; unknown keys are refused.
+
+   ```json
+   {"accounts": [{
+     "account_id": "<the Mail account UUID from list_accounts>",
+     "address": "you@icloud.com",
+     "smtp": {"host": "smtp.mail.me.com", "port": 587},
+     "imap": {"host": "imap.mail.me.com", "port": 993},
+     "sent_copy": "append",
+     "allowed_from": []
+   }]}
+   ```
+
+   `sent_copy` is `append` when the tool should store the sent copy in the server's sent mailbox, or `provider`
+   when the provider stores it itself. `allowed_from` lists other addresses this account may send as.
+2. Store the password (for iCloud, an app-specific password) in the server's own keychain item, by running the
+   binary in a terminal. The password is read from standard input, without echo, and never printed:
+
+   ```bash
+   ~/bin/CheAppleMailMCP --direct-transport-set-credential you@icloud.com
+   ```
+
+   The item's service is `che-apple-mail-mcp.direct-transport`. No MCP tool can create, change or read it, and the
+   server never reads Mail's passwords. Login uses the full `address` as the user name.
+
+Both connections use TLS before the password is sent: implicit TLS on ports 465 and 993, required STARTTLS on any
+other port, with the certificate verified and TLS 1.2 or later.
+
+### Outcomes
+
+| `outcome` | Meaning | What to do |
+|---|---|---|
+| `submitted` | The server accepted the message. `sent_copy` and `draft_removal` then report `done`, `pending` or `skipped` | A `pending` stage is finished by calling `send_draft` again with the same draft; it is not submitted again |
+| `not_sent` | Refused before the server accepted it | Fix the cause in the reply and call again |
+| `unknown` | Whether the server took the message could not be established (for example the connection ended after it was handed over); the tool is not retrying | Look in the recipients' mail or the sent mailbox. Only if it was not sent, run `--direct-transport-forget '<message-id>'` (quoted: zsh reads the angle brackets as redirections) and call again |
+
+Each submission is recorded by Message-ID in `~/.claude/.mail/direct-transport-sent.json`, so the same draft is never
+submitted twice: an entry whose state is unknown is cleared only by the command-line mode, which refuses while a
+`send_draft` call is running, and a submitted entry cannot be cleared at all. One `send_draft` call runs at a time. A
+pending stage is completed only from the account that submitted the draft and only while the draft on the server is
+byte for byte the one submitted. The SMTP server is contacted only to submit. Mail's local index is not changed; it catches up when Mail next syncs.
+
 ## Development tests
 
 Run `make test` on macOS with Xcode Command Line Tools, Python 3 and `jq` on
@@ -894,7 +958,7 @@ folders or messages are created. Do not commit private account/path fixtures.
 - **Read path**: SQLite (Envelope Index) + `.emlx` file parser, with AppleScript fallback for EWS / unparseable `.emlx`
 - **Write/state path**: AppleScript via `NSAppleScript`
 - **Transport**: stdio
-- **Platform**: macOS 13.0+ (Ventura and later)
+- **Platform**: macOS 26.0+ (Tahoe and later); macOS 13–15 stay on v4.x
 
 ---
 
