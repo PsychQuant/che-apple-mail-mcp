@@ -59,6 +59,19 @@ struct SendRecordStore {
         try withLock { try read().entries[messageID] }
     }
 
+    /// Writes `record` only when there is no entry for its Message-ID, as one
+    /// step under the lock, and returns the entry that was already there
+    /// otherwise. Two calls for the same draft cannot both claim it.
+    func claim(_ record: SendRecord) throws -> SendRecord? {
+        try withLock {
+            var file = try read()
+            if let existing = file.entries[record.messageID] { return existing }
+            file.entries[record.messageID] = record
+            try write(file)
+            return nil
+        }
+    }
+
     func put(_ record: SendRecord) throws {
         try withLock {
             var file = try read()
