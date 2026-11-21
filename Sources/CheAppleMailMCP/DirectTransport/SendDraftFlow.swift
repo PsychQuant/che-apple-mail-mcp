@@ -370,12 +370,13 @@ struct SendDraftFlow {
     /// Whether the message carries the mark Mail writes on the drafts it saves
     /// (#745, #463 S3). Field name and value are compared without regard to
     /// ASCII case, the value after unfolding and trimming.
+    /// `fields` come from `BccRemoval.fields`: names lowercased, values already
+    /// unfolded (a CR or LF cannot remain, the parser refuses a bare one).
     static func carriesMailsDraftMark(_ fields: [(name: String, value: String)]) -> Bool {
         fields.contains { field in
             DirectTransportConfig.equalIgnoringASCIICase(field.name, mailDraftField)
                 && DirectTransportConfig.equalIgnoringASCIICase(
-                    field.value.replacingOccurrences(of: "\r\n", with: "").replacingOccurrences(of: "\n", with: "")
-                        .trimmingCharacters(in: .whitespacesAndNewlines), mailDraftMark)
+                    field.value.trimmingCharacters(in: .whitespaces), mailDraftMark)
         }
     }
 
