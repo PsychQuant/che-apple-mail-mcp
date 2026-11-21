@@ -14,11 +14,37 @@ public enum RunMode: Equatable {
     /// user's face on every session.
     case checkFDAQuiet
     case version       // --version — print AppVersion.current and exit (#303)
+    /// `--direct-transport-set-credential <address>` (#742): store the password
+    /// read from standard input in the server's own keychain item.
+    case setDirectTransportCredential(address: String)
+    /// `--direct-transport-forget <message-id>` (#742): remove an unknown entry
+    /// from the record of sent drafts.
+    case forgetDirectTransportSend(messageID: String)
+    /// A direct-transport flag without its value, or both at once.
+    case usageError(String)
 
     /// Parse from raw `argv` (argv[0] is the binary path; flags follow). `--setup`
     /// wins over `--check-fda` if both are somehow present (GUI is the richer path).
     public static func parse(_ arguments: [String]) -> RunMode {
-        let flags = Set(arguments.dropFirst())
+        let words = Array(arguments.dropFirst())
+        let credential = words.firstIndex(of: "--direct-transport-set-credential")
+        let forget = words.firstIndex(of: "--direct-transport-forget")
+        if credential != nil && forget != nil {
+            return .usageError("--direct-transport-set-credential and --direct-transport-forget cannot be combined")
+        }
+        if let index = credential {
+            guard index + 1 < words.count, !words[index + 1].hasPrefix("--") else {
+                return .usageError("--direct-transport-set-credential needs the account's address")
+            }
+            return .setDirectTransportCredential(address: words[index + 1])
+        }
+        if let index = forget {
+            guard index + 1 < words.count, !words[index + 1].hasPrefix("--") else {
+                return .usageError("--direct-transport-forget needs the Message-ID the result named")
+            }
+            return .forgetDirectTransportSend(messageID: words[index + 1])
+        }
+        let flags = Set(words)
         if flags.contains("--setup") { return .setup }
         if flags.contains("--check-fda") {
             return flags.contains("--quiet") ? .checkFDAQuiet : .checkFDA
