@@ -32,15 +32,25 @@
 
 代價：在 Mail 裡打開這封草稿時，樣子可能與 Mail 自己建的草稿不同；這要等 live 測試才知道。
 
-### 只收純位址
+### 只收純位址，文法寫死
 
-顯示名要處理引號、逗號與 RFC 2047，`send_draft` 的位址檢查也還沒有對顯示名做過完整的 live 驗證。第一版只收純位址（printable ASCII、恰好一個 `@`、沒有位址清單的結構字元、不超過 254 octets）；寄件人的顯示名用 `from_name`，位址一律是帳號的位址。
+顯示名要處理引號、逗號與 RFC 2047，`send_draft` 的位址檢查也還沒有對顯示名做過完整的 live 驗證。第一版只收純位址，而且是 RFC 5321 的一個子集：dot-atom 的 local part（不超過 64 octets）、`@`、至少兩段的網域（每段 1–63 個字母、數字、連字號，不以連字號開頭或結尾），全長不超過 254 octets。不收 quoted local part、網域 literal、非 ASCII。寄件人的顯示名用 `from_name`，位址一律是帳號的位址。
+
+verify 第 1 輪指出先前的規則會收 `a@.example.com` 與過長的 local part；IMAP 存得進去的位址，SMTP 不一定能用。
+
+### 大小上限，組信在取得鎖與憑證之後
+
+內文 5,000,000 octets、主旨 2,000、`from_name` 200、收件人合計 100，在讀設定之前檢查。組信會複製內文好幾次，所以放在取得鎖與讀到憑證之後：被拒絕的呼叫不為一大段內文付成本（verify 第 2 輪）。
 
 ### 三種結果，`unknown` 只看正面觀察
 
-`commandFailed` 與 `appendLimitExceeded` 算 `not_appended`：前者是伺服器對這個指令的明確拒絕，後者在送出前就停下。其餘（連線關閉、逾時、不認得的錯誤）都是 `unknown`。`unknown` 之後若連線還在，以 Message-ID 搜尋一次草稿匣：恰好一封改報 `appended` 並給 UID；多於一封改報 `appended` 但不給 UID；搜尋失敗或沒找到仍是 `unknown`，說明「沒看到不是沒存」（`timeout-outcome-boundary.md`）。
+`commandFailed` 與 `appendLimitExceeded` 算 `not_appended`。依據是釘住版本的 SwiftMail：失敗的指令不會重送（`IMAPConnection+CommandExecution.swift` 的 `runCommandHandler` 直接丟出錯誤）；`commandFailed` 只會來自 APPEND 的 tagged NO／BAD（`AppendHandler`）或送出前的重新登入（`IMAPServer.executeCommand`）；`appendLimitExceeded` 在送出前丟出。這三種都表示草稿沒存。APPEND 之前的連線、登入、找草稿匣失敗也是 `not_appended`（verify 第 1 輪）。其餘（APPEND 送出後的連線關閉、逾時、不認得的錯誤）都是 `unknown`。
+
+`unknown` 之後嘗試一次以 Message-ID 搜尋草稿匣。session 沒有「連線是否還在」的訊號；SwiftMail 預設在指令前發現連線斷了會重連並重新登入，所以搜尋可能在新的連線上成功，也可能失敗。結果：恰好一封改報 `appended` 並給 UID；多於一封改報 `appended` 但不給 UID；搜尋失敗回報「沒能搜尋」，搜尋沒找到回報「沒看到不是沒存」，兩者都仍是 `unknown`（`timeout-outcome-boundary.md`）。命中要逐字比對 Message-ID，因為 IMAP 的標頭搜尋是子字串比對。
 
 一律不再 APPEND：伺服器可能已經存了，再 APPEND 一次就是兩封。
+
+結果裡的每一段文字在工具邊界再遮蔽一次密碼，不依賴各個錯誤來源自己遮蔽（verify 第 2 輪）。
 
 ### 沒有去重紀錄，但共用提交鎖
 

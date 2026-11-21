@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Message-ID and appends it to the mailbox the server marks `\Drafts`, with
   `\Draft` and `\Seen`. Recipients are bare addresses only. The outcome is
   `appended`, `not_appended` (including a failed connection, login or
-  drafts-mailbox lookup before anything was sent) or `unknown`; after `unknown`
+  drafts-mailbox lookup before the APPEND was sent) or `unknown`; after `unknown`
   it tries one search for the Message-ID and never appends again. Calls are not
   de-duplicated. The message is deliberately not in the
   layout Mail gives its own drafts

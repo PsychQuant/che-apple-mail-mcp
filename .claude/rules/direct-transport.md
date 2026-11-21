@@ -49,14 +49,17 @@
 
 ## append_draft（#744）
 
-`append_draft` 經 IMAP 在草稿匣建立一封新草稿。上面第 1、2、3 項照樣適用（帳號、憑證、TLS；它不連 SMTP）。
+`append_draft` 經 IMAP 在草稿匣建立一封新草稿。上面第 1、2、3 項照樣適用（帳號、憑證、TLS；它不連 SMTP）；第 2 項的
+遮蔽在結果邊界再做一次，不依賴各個錯誤來源自己遮蔽。
 另外這幾項同樣不能削弱（封閉列舉，不得依性質相似類推）：
 
 9. **內容由工具自己組，不是 Mail 草稿的版面。** 單一 `text/plain; charset=utf-8`、CRLF；不帶
    `X-Uniform-Type-Identifier` 或任何 `X-Apple-` 欄位、不是 multipart。這封草稿會被 `send_draft` 原樣送出，
    Mail 草稿的空純文字段與草稿標頭會送到收件人手上（#745）。改成 Mail 的版面，就是把 #745 搬進這個工具。
 10. **參數封閉、在開連線前檢查。** 只接受 `account_name`、`account_id`、`to`、`cc`、`bcc`、`subject`、`body`、
-    `from_name`。收件人只收純位址；主旨與 `from_name` 的控制字元、內文的 NUL 一律拒絕：它們會變成標頭注入。
+    `from_name`。收件人只收純位址（規格寫明的文法）；主旨與 `from_name` 的控制字元、內文的 NUL 一律拒絕：它們會變成
+    標頭注入。大小上限（內文 5,000,000、主旨 2,000、`from_name` 200 octets，收件人 100）在組信之前檢查，組信在取得鎖與
+    憑證之後。
 11. **`not_appended` 只來自伺服器的明確拒絕或 APPEND 送出之前。** `IMAPError.commandFailed`（APPEND 的 tagged
     NO／BAD）、`appendLimitExceeded`，以及 APPEND 之前的連線、登入、找草稿匣失敗，算 `not_appended`；APPEND 送出之後的
     連線關閉、逾時、不認得的錯誤都是 `unknown`。
