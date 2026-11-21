@@ -22,6 +22,11 @@ struct AppendDraftResult: Equatable {
     let uid: UInt32?
     let uidValidity: UInt32?
     let notes: [String]
+
+    func adding(notes more: [String]) -> AppendDraftResult {
+        AppendDraftResult(outcome: outcome, messageID: messageID, mailbox: mailbox, uid: uid,
+                          uidValidity: uidValidity, notes: notes + more)
+    }
 }
 
 /// The steps of `append_draft` once the message is built: find the drafts
@@ -232,8 +237,10 @@ enum AppendDraftTool {
             return scrubbed(AppendDraftFlow.notAppendedBeforeAppend(built, mailbox: nil, "\(error)"))
         }
         let result = await AppendDraftFlow(session: session).run(built)
+        // Where the drafts mailbox came from (#748).
+        let lookup = await session.mailboxLookupNotes()
         await session.close()
-        return scrubbed(result)
+        return scrubbed(result.adding(notes: lookup))
     }
 
     /// Why the content cannot be made into a message; nil when it can.

@@ -36,6 +36,10 @@ protocol DirectTransportSession: Sendable {
     func close() async
 }
 
+extension DirectTransportSession {
+    func mailboxLookupNotes() async -> [String] { [] }
+}
+
 struct DraftSummary: Equatable, Sendable {
     let uid: UInt32
     let subject: String
@@ -104,6 +108,11 @@ struct SendDraftResult: Equatable {
     /// True when this call only completed stages of an earlier submission.
     let resumed: Bool
     let notes: [String]
+
+    func adding(notes more: [String]) -> SendDraftResult {
+        SendDraftResult(outcome: outcome, messageID: messageID, serverReply: serverReply, sentCopy: sentCopy,
+                        draftRemoval: draftRemoval, resumed: resumed, notes: notes + more)
+    }
 }
 
 /// The steps of `send_draft`, in the order the spec gives them.

@@ -5,7 +5,8 @@ import Foundation
 ///
 /// The file holds an object with one key, `accounts`, whose value is a list of
 /// entries with exactly these keys: `account_id`, `address`, `smtp`, `imap`,
-/// `sent_copy`, `allowed_from`. It never holds a password: that lives in the
+/// `sent_copy`, `allowed_from`, and optionally `drafts_mailbox` and
+/// `sent_mailbox` (#748). It never holds a password: that lives in the
 /// keychain (`DirectTransportCredential`). A file that exists and cannot be
 /// used is an error, never "not configured", so a typo cannot quietly turn the
 /// feature off or on.
@@ -29,6 +30,10 @@ struct DirectTransportConfig: Equatable {
         let imap: Endpoint
         let sentCopy: SentCopy
         let allowedFrom: [String]
+        /// The exact names of the drafts and sent mailboxes, for a server that
+        /// marks none (#748). Used only when the server reports no such mailbox.
+        var draftsMailbox: String? = nil
+        var sentMailbox: String? = nil
 
         /// Whether `address` may appear in the From field of a draft this account sends.
         /// Only ASCII letter case is ignored: Unicode case folding would let a
@@ -101,11 +106,13 @@ struct DirectTransportConfig: Equatable {
     }
 
     private static let accountKeys: Set<String> = ["account_id", "address", "smtp", "imap", "sent_copy", "allowed_from"]
+    /// May be left out (#748).
+    private static let optionalAccountKeys: Set<String> = ["drafts_mailbox", "sent_mailbox"]
 
     private static func parseAccount(_ item: Any, at index: Int) throws -> Account {
         let place = "accounts[\(index)]"
         guard let entry = item as? [String: Any] else { throw Problem(detail: "\(place) must be an object") }
-        try onlyKeys(entry, accountKeys, in: place)
+        try onlyKeys(entry, accountKeys.union(optionalAccountKeys), in: place)
         for key in accountKeys where entry[key] == nil { throw Problem(detail: "\(place) lacks `\(key)`") }
         let accountID = try nonEmptyString(entry["account_id"], "\(place).account_id")
         guard UUID(uuidString: accountID) != nil else {
@@ -128,7 +135,21 @@ struct DirectTransportConfig: Equatable {
         return Account(accountID: accountID, address: address,
                        smtp: try endpoint(entry["smtp"], "\(place).smtp"),
                        imap: try endpoint(entry["imap"], "\(place).imap"),
-                       sentCopy: sentCopy, allowedFrom: allowedFrom)
+                       sentCopy: sentCopy, allowedFrom: allowedFrom,
+                       draftsMailbox: try mailboxName(entry["drafts_mailbox"], "\(place).drafts_mailbox"),
+                       sentMailbox: try mailboxName(entry["sent_mailbox"], "\(place).sent_mailbox"))
+    }
+
+    /// A mailbox name as the server lists it: not empty, at most 255 bytes of
+    /// UTF-8, and no control character. Nothing is trimmed or folded: the name
+    /// is compared with the server's exactly.
+    private static func mailboxName(_ value: Any?, _ place: String) throws -> String? {
+        guard let value else { return nil }
+        guard let text = value as? String, !text.isEmpty, text.utf8.count <= 255,
+              !text.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) else {
+            throw Problem(detail: "\(place) must be the mailbox's name: a string that is not empty, holds no control character and is at most 255 bytes")
+        }
+        return text
     }
 
     private static func endpoint(_ value: Any?, _ place: String) throws -> Endpoint {

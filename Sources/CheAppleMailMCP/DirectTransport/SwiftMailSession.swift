@@ -16,6 +16,9 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
     private let password: String
     private let imap: IMAPServer
     private var smtp: SMTPServer?
+    private let lookupLock = NSLock()
+    /// Where each mailbox this session looked up came from (#748).
+    private var lookupNotes: [String] = []
 
     private init(account: DirectTransportConfig.Account, password: String, imap: IMAPServer) {
         self.account = account
@@ -111,24 +114,52 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
     }
 
     func draftsMailbox() async throws -> String {
-        try await specialUse(.drafts, named: "\\Drafts", consequence: "nothing was submitted")
+        try await lookUp(.drafts, attribute: .drafts, declared: account.draftsMailbox)
     }
 
     func sentMailbox() async throws -> String {
-        try await specialUse(.sent, named: "\\Sent", consequence: "the sent copy was not stored")
+        try await lookUp(.sent, attribute: .sent, declared: account.sentMailbox)
     }
 
-    /// Only the attribute the server reports counts. SwiftMail's `draftsFolder`
-    /// falls back to matching folder names, which the spec does not allow.
-    private func specialUse(_ attribute: Mailbox.Info.Attributes, named label: String,
-                            consequence: String) async throws -> String {
-        let marked = try await guarded { try await imap.listMailboxes() }.filter { $0.attributes.contains(attribute) }
-        guard marked.count == 1, let only = marked.first else {
-            throw SendDraftRefusal(description: marked.isEmpty
-                ? "the server marks no mailbox \(label); \(consequence)"
-                : "the server marks \(marked.count) mailboxes \(label); \(consequence)")
-        }
-        return only.name
+    func mailboxLookupNotes() async -> [String] { recordedLookupNotes() }
+
+    private func recordedLookupNotes() -> [String] {
+        lookupLock.lock()
+        defer { lookupLock.unlock() }
+        return lookupNotes
+    }
+
+    private func recordLookup(_ note: String) {
+        lookupLock.lock()
+        defer { lookupLock.unlock() }
+        lookupNotes.append(note)
+    }
+
+    /// The decision is `MailboxLookup.resolve`'s (#748). This only supplies what
+    /// the server said. `listSpecialUseMailboxes` is reached only through the
+    /// closure, which `resolve` calls only when the capabilities just fetched
+    /// hold SPECIAL-USE: without that capability SwiftMail guesses from names.
+    private func lookUp(_ role: MailboxLookup.Role, attribute: Mailbox.Info.Attributes,
+                        declared: String?) async throws -> String {
+        let listed = try await guarded { try await imap.listMailboxes() }
+        let advertises = try await guarded { try await imap.fetchCapabilities() }
+            .contains { Self.isSpecialUse(String(describing: $0)) }
+        let imap = self.imap
+        let found = try await MailboxLookup.resolve(
+            role, listed: listed.map(\.name),
+            markedInList: listed.filter { $0.attributes.contains(attribute) }.map(\.name),
+            advertisesSpecialUse: advertises, declared: declared) {
+                try await self.guarded { try await imap.listSpecialUseMailboxes() }
+                    .filter { $0.attributes.contains(attribute) }.map(\.name)
+            }
+        recordLookup(found.note)
+        return found.name
+    }
+
+    /// Whether a capability's text is SPECIAL-USE (RFC 6154). Capability names
+    /// are case-insensitive.
+    static func isSpecialUse(_ capability: String) -> Bool {
+        DirectTransportConfig.equalIgnoringASCIICase(capability, "SPECIAL-USE")
     }
 
     func drafts(withMessageID messageID: String, in mailbox: String) async throws -> [DraftSummary] {

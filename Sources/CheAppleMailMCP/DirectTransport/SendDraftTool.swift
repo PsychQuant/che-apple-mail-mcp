@@ -116,8 +116,10 @@ enum SendDraftTool {
             await session.close()
             throw MailError.operationFailed("send_draft stopped (\(error)); nothing more was done")
         }
+        // Where the mailboxes came from (#748): counts and yes or no, no server text.
+        let lookup = await session.mailboxLookupNotes()
         await session.close()
-        return render(result)
+        return render(result.adding(notes: lookup))
     }
 
     static func render(_ result: SendDraftResult) -> String {
