@@ -78,6 +78,24 @@ final class DirectTransportCLITests: XCTestCase {
         XCTAssertNotNil(try store.entry(for: "<s@x>"))
     }
 
+    func testTheMessageIDMayBeGivenWithoutBracketsOrWithSpaces() throws {
+        let store = records()
+        try store.put(entry("<u@x>", .unknown))
+        try store.put(entry("<v@x>", .unknown))
+        XCTAssertEqual(DirectTransportCLI.forget(messageID: "u@x", records: store).status, 0)
+        XCTAssertEqual(DirectTransportCLI.forget(messageID: " <v@x> ", records: store).status, 0)
+        XCTAssertNil(try store.entry(for: "<u@x>"))
+        XCTAssertNil(try store.entry(for: "<v@x>"))
+    }
+
+    /// The local .emlx value and the server's envelope value meet in one form,
+    /// or a draft_id lookup never matches.
+    func testALocalMessageIDIsPutInTheServersForm() {
+        XCTAssertEqual(SwiftMailSession.canonicalMessageID(" <a.b@x.example> "), "<a.b@x.example>")
+        XCTAssertEqual(SwiftMailSession.canonicalMessageID("a.b@x.example"), "<a.b@x.example>")
+        XCTAssertNil(SwiftMailSession.canonicalMessageID("no-at-sign"))
+    }
+
     func testAnAbsentEntryRemovesNothing() {
         XCTAssertEqual(DirectTransportCLI.forget(messageID: "<none@x>", records: records()).status, 1)
     }

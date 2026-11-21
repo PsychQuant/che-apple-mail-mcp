@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   header; it submits the draft without its Bcc fields, over TLS only (implicit
   on 465/993, required STARTTLS elsewhere). The outcome is `submitted`,
   `not_sent` or `unknown`; an unknown send is not retried and is cleared only by
-  `--direct-transport-forget <message-id>`. After a submission the sent copy
+  `--direct-transport-forget '<message-id>'`. After a submission the sent copy
   and the draft's removal are separate stages that a later call resumes without
   submitting again. Mail's local index is not changed. New dependency: SwiftMail
   1.17.0, pinned by revision.

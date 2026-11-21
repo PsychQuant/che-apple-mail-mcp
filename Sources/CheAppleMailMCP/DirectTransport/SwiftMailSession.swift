@@ -55,6 +55,13 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
         port == 465 || port == 993 ? .implicitTLS : .startTLS
     }
 
+    /// A Message-ID in the form the server's envelope reports (`<local@domain>`),
+    /// so a value read from the local .emlx, or typed by a person, compares equal
+    /// to it. Nil when it has no `@`.
+    static func canonicalMessageID(_ raw: String) -> String? {
+        MessageID(raw)?.description
+    }
+
     func draftsMailbox() async throws -> String { try await specialUse(.drafts, named: "\\Drafts") }
     func sentMailbox() async throws -> String { try await specialUse(.sent, named: "\\Sent") }
 
@@ -154,7 +161,11 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
                     return .unknown(detail: describe(failure))
                 }
             }
-            // SwiftMail throws SMTPError only before the mail transaction starts.
+            // SwiftMail throws SMTPError only before the mail transaction starts:
+            // in the pinned revision every failure from MAIL FROM onward goes
+            // through abortSubmission, which returns an SMTPSendError
+            // (SMTPServer+Send.swift, performSubmission). Re-read that path
+            // before moving the pin.
             if error is SMTPError { return .notAccepted(reply: nil) }
             return .unknown(detail: describe(error))
         }

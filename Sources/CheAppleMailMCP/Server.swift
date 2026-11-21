@@ -2580,7 +2580,9 @@ class CheAppleMailMCPServer {
             throw SendDraftRefusal(description: "no local message with id \(row) was found; nothing was submitted")
         }
         let value = try EmlxParser.readMessageID(atPath: resolved.path)
-        return value.isEmpty ? nil : value
+        guard !value.isEmpty else { return nil }
+        // The server's envelope reports `<local@domain>`; compare in that form.
+        return SwiftMailSession.canonicalMessageID(value) ?? value
     }
 
     private func withMessageIDs(_ rows: [[String: Any]], for results: [SearchResult]) -> [[String: Any]] {

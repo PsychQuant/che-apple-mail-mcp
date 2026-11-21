@@ -42,8 +42,8 @@ enum DirectTransportCLI {
     /// A submitted entry is refused: removing it would let the same draft be
     /// submitted a second time.
     static func forget(messageID: String, records: SendRecordStore) -> Outcome {
-        guard !messageID.isEmpty else {
-            return Outcome(status: 64, message: "--direct-transport-forget needs the Message-ID the result named")
+        guard let messageID = SwiftMailSession.canonicalMessageID(messageID) else {
+            return Outcome(status: 64, message: "--direct-transport-forget needs the Message-ID the result named, such as '<id@example.com>'")
         }
         do {
             guard let entry = try records.entry(for: messageID) else {

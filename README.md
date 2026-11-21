@@ -883,7 +883,7 @@ other port, with the certificate verified and TLS 1.2 or later.
 |---|---|---|
 | `submitted` | The server accepted the message. `sent_copy` and `draft_removal` then report `done`, `pending` or `skipped` | A `pending` stage is finished by calling `send_draft` again with the same draft; it is not submitted again |
 | `not_sent` | Refused before the server accepted it | Fix the cause in the reply and call again |
-| `unknown` | The connection ended after the message was handed over; the tool is not retrying | Look in the recipients' mail or the sent mailbox. Only if it was not sent, run `--direct-transport-forget <message-id>` and call again |
+| `unknown` | The connection ended after the message was handed over; the tool is not retrying | Look in the recipients' mail or the sent mailbox. Only if it was not sent, run `--direct-transport-forget '<message-id>'` (quoted: zsh reads the angle brackets as redirections) and call again |
 
 Each submission is recorded by Message-ID in `~/.claude/.mail/direct-transport-sent.json`, so the same draft is never
 submitted twice: an entry whose state is unknown is cleared only by the command-line mode, and a submitted entry

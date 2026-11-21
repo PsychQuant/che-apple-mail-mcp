@@ -201,7 +201,8 @@ final class SendDraftFlowTests: XCTestCase {
         let (flow, _) = flow(session)
         let text = try await flow.run(.subject("Report")).notes.joined(separator: " ")
         XCTAssertTrue(text.contains("UNKNOWN") && text.contains("NOT retrying"), text)
-        XCTAssertTrue(text.contains("--direct-transport-forget <d1@icloud.example>"), text)
+        // Quoted: unquoted, zsh reads the angle brackets as redirections.
+        XCTAssertTrue(text.contains("--direct-transport-forget '<d1@icloud.example>'"), text)
         for word in ["was sent", "not sent", "has been sent", "delivered"] {
             XCTAssertFalse(text.lowercased().contains(word), word)
         }
