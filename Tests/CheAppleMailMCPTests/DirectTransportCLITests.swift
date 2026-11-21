@@ -106,6 +106,24 @@ final class DirectTransportCLITests: XCTestCase {
         XCTAssertNil(DirectTransportCLI.forgetCommand(for: "<a\u{1B}[2J@x>"))
     }
 
+    /// An attempting entry may belong to a call still talking to the server:
+    /// while any send_draft call holds the submission lock, nothing is forgotten.
+    func testNothingIsForgottenWhileASendDraftCallIsRunning() async throws {
+        let store = records()
+        try store.put(entry("<a@x>", .attempting))
+        try await store.withSubmissionLock {
+            let outcome = DirectTransportCLI.forget(messageID: "<a@x>", records: store)
+            XCTAssertEqual(outcome.status, 75, outcome.message)
+            XCTAssertNotNil(try store.entry(for: "<a@x>"))
+            do {
+                try await store.withSubmissionLock { XCTFail("a second call must not run") }
+                XCTFail("a second call must be refused as busy")
+            } catch is SendRecordStore.Busy {}
+        }
+        XCTAssertEqual(DirectTransportCLI.forget(messageID: "<a@x>", records: store).status, 0,
+                       "once the call has ended the entry can be forgotten")
+    }
+
     func testAnAbsentEntryRemovesNothing() {
         XCTAssertEqual(DirectTransportCLI.forget(messageID: "<none@x>", records: records()).status, 1)
     }

@@ -46,15 +46,15 @@ enum DirectTransportCLI {
             return Outcome(status: 64, message: "--direct-transport-forget needs the Message-ID the result named, such as '<id@example.com>'")
         }
         do {
-            guard let entry = try records.entry(for: messageID) else {
-                return Outcome(status: 1, message: "no entry for \(messageID) in the record of sent drafts; nothing was removed")
-            }
-            switch entry.effectiveState {
-            case .unknown, .attempting:
-                try records.remove(messageID)
+            switch try records.forgetUnknown(messageID) {
+            case .removed:
                 return Outcome(status: 0, message: "removed the unknown entry for \(messageID); a later send_draft call may submit that draft again")
             case .submitted:
                 return Outcome(status: 1, message: "the entry for \(messageID) records a submission the server accepted; it is kept, so the draft cannot be submitted twice")
+            case .absent:
+                return Outcome(status: 1, message: "no entry for \(messageID) in the record of sent drafts; nothing was removed")
+            case .inProgress:
+                return Outcome(status: 75, message: "a send_draft call is running, so the entry may belong to a submission in progress; nothing was removed. Try again when it has finished")
             }
         } catch {
             return Outcome(status: 74, message: "the record of sent drafts could not be read or written (\(error)); nothing was removed")

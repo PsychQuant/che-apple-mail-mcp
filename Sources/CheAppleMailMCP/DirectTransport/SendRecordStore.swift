@@ -25,6 +25,11 @@ struct SendRecord: Codable, Equatable {
     var draftRemoval: Stage
     var updatedAt: Date
     var serverReply: String?
+    /// When the server accepted the message. Set once; later stages change only `updatedAt`.
+    var submittedAt: Date? = nil
+    /// SHA-256 of the draft's bytes as fetched for the submission. A pending stage
+    /// is completed only for a draft with the same bytes.
+    var draftDigest: String? = nil
 
     /// `attempting` read back later is `unknown`: nothing shows the message was
     /// not handed over.
@@ -34,6 +39,7 @@ struct SendRecord: Codable, Equatable {
         case messageID = "message_id", accountID = "account_id", state
         case sentCopy = "sent_copy", draftRemoval = "draft_removal"
         case updatedAt = "updated_at", serverReply = "server_reply"
+        case submittedAt = "submitted_at", draftDigest = "draft_digest"
     }
 }
 
@@ -78,6 +84,63 @@ struct SendRecordStore {
             file.entries[record.messageID] = record
             try write(file)
         }
+    }
+
+    enum ForgetResult: Equatable {
+        case removed
+        case submitted
+        case absent
+        /// A `send_draft` call holds the submission lock: an `attempting` entry may be live.
+        case inProgress
+    }
+
+    /// Removes the entry when its state is unknown, as one step under the record
+    /// lock, and only while no `send_draft` call holds the submission lock. A
+    /// submitted entry is kept.
+    func forgetUnknown(_ messageID: String) throws -> ForgetResult {
+        guard let submission = try acquireSubmissionLock() else { return .inProgress }
+        defer { submission.release() }
+        return try withLock {
+            var file = try read()
+            guard let entry = file.entries[messageID] else { return .absent }
+            if entry.effectiveState == .submitted { return .submitted }
+            file.entries.removeValue(forKey: messageID)
+            try write(file)
+            return .removed
+        }
+    }
+
+    struct Busy: Error, CustomStringConvertible {
+        var description: String { "another send_draft call is running; nothing was submitted. Try again when it has finished" }
+    }
+
+    /// Runs `body` holding the submission lock, which one `send_draft` call at a
+    /// time holds from its first look at the record to its last write. Throws
+    /// `Busy` without waiting when another call holds it. The lock is released
+    /// when the process ends, so an entry left `attempting` by a crash can be forgotten.
+    func withSubmissionLock<T>(_ body: () async throws -> T) async throws -> T {
+        guard let lock = try acquireSubmissionLock() else { throw Busy() }
+        defer { lock.release() }
+        return try await body()
+    }
+
+    private struct SubmissionLock {
+        let fd: Int32
+        func release() { flock(fd, LOCK_UN); close(fd) }
+    }
+
+    /// Nil when another open file description holds it.
+    private func acquireSubmissionLock() throws -> SubmissionLock? {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let path = directory.appendingPathComponent(".\(Self.fileName).submission.lock").path
+        let fd = open(path, O_RDWR | O_CREAT | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else { throw Problem(detail: "its submission lock cannot be opened (errno \(errno))") }
+        if flock(fd, LOCK_EX | LOCK_NB) == 0 { return SubmissionLock(fd: fd) }
+        let reason = errno
+        close(fd)
+        if reason == EWOULDBLOCK { return nil }
+        throw Problem(detail: "its submission lock cannot be taken (errno \(reason))")
     }
 
     func remove(_ messageID: String) throws {
