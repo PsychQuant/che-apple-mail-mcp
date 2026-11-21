@@ -106,8 +106,9 @@ final class ToolAccessTests: XCTestCase {
         }
     }
 
-    func testTheSendingToolSetIsExactlyTheseFour() {
-        XCTAssertEqual(ToolAccess.send.toolNames, ["compose_email", "reply_email", "forward_email", "redirect_email"])
+    func testTheSendingToolSetIsExactlyTheseFive() {
+        XCTAssertEqual(ToolAccess.send.toolNames,
+                       ["compose_email", "reply_email", "forward_email", "redirect_email", "send_draft"])
     }
 
     func testAnnotationsDefinedWithTheToolAreKept() throws {

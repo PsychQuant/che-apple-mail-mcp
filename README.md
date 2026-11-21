@@ -5,7 +5,7 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**The most comprehensive Apple Mail MCP server** - 59 tools with SQLite-powered millisecond search across 250K+ emails.
+**The most comprehensive Apple Mail MCP server** - 60 tools with SQLite-powered millisecond search across 250K+ emails.
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +15,7 @@
 
 | Feature | Other MCPs | che-apple-mail-mcp |
 |---------|------------|-------------------|
-| Total Tools | ~20 | **59** |
+| Total Tools | ~20 | **60** |
 | Language | Python | **Swift (Native)** |
 | Search Speed | Seconds (AppleScript) | **Milliseconds (SQLite)** |
 | Search Fields | Subject/Sender | **Subject/Sender/Recipient/Date** |
@@ -93,7 +93,7 @@ you these are missing (#353):
 
 | Shipped by the plugin | Present with MCP-only |
 |---|---|
-| All 59 MCP tools | ✅ yes |
+| All 60 MCP tools | ✅ yes |
 | `/archive-mail` + `-migrate` / `-rebuild-threads` / `-repair-synthetic-ids` / `-view` | ❌ the archiving SOP does not exist |
 | `rules/compose-wrapper-free.md` — what the cite-block was, and what a refused compose call means | ⚠️ background: since [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304) the known body-injection trigger has been removed; this rule explains the reported upstream regression FB11734014 and current refusal recipes |
 | `rules/confirmation-triggers.md`, `rules/false-positive-detection.md` | ❌ no confirmation discipline on destructive operations |
@@ -161,7 +161,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## All 59 Tools
+## All 60 Tools
 
 ### Compose signatures
 
@@ -242,7 +242,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 </details>
 
 <details>
-<summary><b>Compose (5)</b></summary>
+<summary><b>Compose (6)</b></summary>
 
 | Tool | Description |
 |------|-------------|
@@ -250,6 +250,7 @@ For full details see [CHANGELOG.md](CHANGELOG.md).
 | `reply_email` | Reply to email. Optional: `cc_additional`, `save_as_draft`, `format` (since v2.4.0). `attachments` is currently refused whenever non-empty: the attach step erased the pasted body and Mail's quote while reporting success ([#534](https://github.com/PsychQuant/che-apple-mail-mcp/issues/534)); save the reply as a draft without it and drag the files in from Mail until [#608](https://github.com/PsychQuant/che-apple-mail-mcp/issues/608). Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0 / #43). The new body is pasted into Mail's native reply ([#218](https://github.com/PsychQuant/che-apple-mail-mcp/issues/218)); a non-`plain` `format` or a missing Accessibility grant FAILS instead of falling back ([#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)) |
 | `forward_email` | Forward email. Optional `body` + `format`. Plain mode embeds RFC 3676 `> ` quoted original (since v2.5.0+ / #44). A bodyless forward assigns nothing and needs no Accessibility grant; with a body, same rules as `reply_email` ([#218](https://github.com/PsychQuant/che-apple-mail-mcp/issues/218) / [#304](https://github.com/PsychQuant/che-apple-mail-mcp/issues/304)). **Sends** unless `save_as_draft: true`, which saves the forward as a draft through the same paste path (body required for now: a bare forward with `save_as_draft` is refused, [#673](https://github.com/PsychQuant/che-apple-mail-mcp/issues/673)); read the saved draft's To recipients and body back before sending it ([#599](https://github.com/PsychQuant/che-apple-mail-mcp/issues/599)) |
 | `redirect_email` | Redirect email (keeps original sender) |
+| `send_draft` | Send one draft already in the server's drafts mailbox over SMTP, without Mail ([#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)). Not yet run against a real server. Only for accounts in `direct-transport.json`; see "Direct transport (send_draft)" below |
 | `open_mailto` | Open mailto URL |
 
 #### Reply-as-draft example (v2.4.0+)

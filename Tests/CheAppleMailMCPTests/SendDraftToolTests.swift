@@ -110,7 +110,16 @@ final class SendDraftToolTests: XCTestCase {
         XCTAssertFalse(record.contains("secret-pw"))
     }
 
-    func testARefusalFromTheFlowIsReported_andTheSessionIsClosed() async throws {
+    /// spec-example: direct-transport / The description carries the caveat
+    func testTheListedDescriptionSaysItHasNotRunAgainstARealServer_andNamesTheIssue() throws {
+        let tool = try XCTUnwrap(CheAppleMailMCPServer.defineTools().first { $0.name == "send_draft" })
+        let text = try XCTUnwrap(tool.description)
+        XCTAssertTrue(text.contains("NOT YET RUN AGAINST A REAL MAIL SERVER"), text)
+        XCTAssertTrue(text.contains("#742"), text)
+        XCTAssertEqual(ToolAccess.of("send_draft"), .send)
+    }
+
+    func testARefusalFromTheFlowIsReportedAsTheToolError() async throws {
         let session = SendDraftFlowTests.FakeSession()
         session.drafts = []
         let env = try environment(config: config, session: session)
