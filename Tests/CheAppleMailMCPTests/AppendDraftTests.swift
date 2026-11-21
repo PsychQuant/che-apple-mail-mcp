@@ -161,6 +161,18 @@ final class AppendDraftTests: XCTestCase {
         }
     }
 
+    func testTheAddressGrammarIsTheSubsetTheSpecStates() {
+        for good in ["a@x.example", "o'brien+tag@mail.x.example", "first.last@x-y.example", String(repeating: "a", count: 64) + "@x.example"] {
+            XCTAssertTrue(AppendDraftTool.isBareAddress(good), good)
+        }
+        for bad in ["a@.example.com", "a@example..com", "a@example.com.", "a@-x.example", "a@x-.example", "a@localhost",
+                    ".a@x.example", "a.@x.example", "a..b@x.example", String(repeating: "a", count: 65) + "@x.example",
+                    "\"a b\"@x.example", "a@[192.0.2.1]", "ä@x.example", "a@x.exämple", "a@b@x.example",
+                    "a@" + String(repeating: "x", count: 64) + ".example"] {
+            XCTAssertFalse(AppendDraftTool.isBareAddress(bad), bad)
+        }
+    }
+
     func testABodyWithANULIsRefused() {
         XCTAssertTrue(refusal(body: "a\u{0}b")?.contains("NUL") == true)
     }
@@ -172,14 +184,14 @@ final class AppendDraftTests: XCTestCase {
         smtp: .init(host: "smtp", port: 587), imap: .init(host: "imap", port: 993),
         sentCopy: .append, allowedFrom: [])
 
-    private func run(_ session: FakeSession) async throws -> AppendDraftResult {
-        try await AppendDraftFlow(session: session).run(message())
+    private func run(_ session: FakeSession) async -> AppendDraftResult {
+        await AppendDraftFlow(session: session).run(message())
     }
 
     func testAnAcceptedAppendReportsTheMailboxAndTheUID() async throws {
         let session = FakeSession()
         session.appendDraftOutcome = .appended(uid: 42, uidValidity: 9)
-        let result = try await run(session)
+        let result = await run(session)
         XCTAssertEqual(result.outcome, .appended)
         XCTAssertEqual(result.mailbox, "Drafts")
         XCTAssertEqual(result.uid, 42)
@@ -187,13 +199,14 @@ final class AppendDraftTests: XCTestCase {
         XCTAssertEqual(result.messageID, "<11111111-2222-4333-8444-555555555555@icloud.example>")
         XCTAssertEqual(session.appendedDrafts.count, 1)
         XCTAssertEqual(session.appendedDrafts.first, message().mime, "the bytes appended are the bytes built")
-        XCTAssertTrue(result.notes.contains(SendDraftFlow.localIndexNote))
+        XCTAssertTrue(result.notes.contains(AppendDraftFlow.indexNoteAppended))
+        XCTAssertTrue(result.notes.contains(AppendDraftFlow.notDeduplicatedNote), "a success also says a repeat adds a draft")
     }
 
     func testAnAppendWithoutUIDPLUSIsStillAppended_withNoUID() async throws {
         let session = FakeSession()
         session.appendDraftOutcome = .appended(uid: nil, uidValidity: nil)
-        let result = try await run(session)
+        let result = await run(session)
         XCTAssertEqual(result.outcome, .appended)
         XCTAssertNil(result.uid)
     }
@@ -201,7 +214,7 @@ final class AppendDraftTests: XCTestCase {
     func testARefusedAppendIsNotAppended_andIsNotLookedUp() async throws {
         let session = FakeSession()
         session.appendDraftOutcome = .notAppended(detail: "NO [OVERQUOTA]")
-        let result = try await run(session)
+        let result = await run(session)
         XCTAssertEqual(result.outcome, .notAppended)
         XCTAssertNil(result.uid)
         XCTAssertFalse(session.calls.contains("searchMessageID"))
@@ -212,28 +225,52 @@ final class AppendDraftTests: XCTestCase {
         let session = FakeSession()
         session.appendDraftOutcome = .unknown(detail: "connection closed")
         session.storeDraftDespiteOutcome = true
-        let result = try await run(session)
+        let result = await run(session)
         XCTAssertEqual(result.outcome, .appended)
         XCTAssertEqual(result.uid, 1)
         XCTAssertTrue(result.notes.contains { $0.contains("found it in the drafts mailbox") })
+        XCTAssertFalse(result.notes.contains { $0.contains("reply") && $0.contains("not received") },
+                       "an unrecognised error does not show that no reply arrived")
     }
 
     func testAnUnknownAppendThatIsNotFoundStaysUnknown_andIsNotRetried() async throws {
         let session = FakeSession()
         session.appendDraftOutcome = .unknown(detail: "connection closed")
-        let result = try await run(session)
+        let result = await run(session)
         XCTAssertEqual(result.outcome, .unknown)
         XCTAssertEqual(session.calls.filter { $0.hasPrefix("appendDraft") }.count, 1, "an unknown append is never repeated")
         XCTAssertTrue(result.notes.contains { $0.contains("not evidence") })
         XCTAssertTrue(result.notes.contains { $0.contains("second draft") })
     }
 
-    func testAnUnknownAppendWhoseLookupFailsStaysUnknown() async throws {
+    func testAnUnknownAppendWhoseLookupFailsStaysUnknown_andSaysTheSearchWasNotMade() async throws {
         let session = FakeSession()
         session.appendDraftOutcome = .unknown(detail: "timeout")
         session.searchError = SendDraftFlowTests.Boom()
-        let result = try await run(session)
+        let result = await run(session)
         XCTAssertEqual(result.outcome, .unknown)
+        XCTAssertTrue(result.notes.contains { $0.contains("could not be made") }, "\(result.notes)")
+        XCTAssertFalse(result.notes.contains { $0.contains("did not show it") }, "a failed search is not a search that found nothing")
+        XCTAssertTrue(result.notes.contains(AppendDraftFlow.indexNoteUnknown))
+    }
+
+    func testAHitWhoseMessageIDOnlyContainsOursIsNotEvidence() async throws {
+        let session = FakeSession()
+        session.appendDraftOutcome = .unknown(detail: "timeout")
+        session.nearMissHits = [DraftSummary(uid: 9, subject: "Hello",
+                                             messageID: "<11111111-2222-4333-8444-555555555555@icloud.example.other>")]
+        let result = await run(session)
+        XCTAssertEqual(result.outcome, .unknown, "IMAP's header search matches substrings; only an exact Message-ID counts")
+    }
+
+    func testTheAppendAndTheSearchGoToTheMailboxTheServerMarksDrafts() async throws {
+        let session = FakeSession()
+        session.draftsMailboxName = "[Gmail]/Drafts"
+        session.appendDraftOutcome = .unknown(detail: "timeout")
+        let result = await run(session)
+        XCTAssertEqual(result.mailbox, "[Gmail]/Drafts")
+        XCTAssertTrue(session.calls.contains("appendDraft:[Gmail]/Drafts"), "\(session.calls)")
+        XCTAssertEqual(session.searchedMailboxes, ["[Gmail]/Drafts"])
     }
 
     func testTwoHitsAfterAnUnknownAppendAreNotReadAsOneDraft() async throws {
@@ -244,18 +281,58 @@ final class AppendDraftTests: XCTestCase {
             FetchedDraft(uid: 3, message: Data(), messageID: id, subject: "Hello", from: [], recipients: [], hasInvalidRecipient: false),
             FetchedDraft(uid: 4, message: Data(), messageID: id, subject: "Hello", from: [], recipients: [], hasInvalidRecipient: false),
         ]
-        let result = try await run(session)
+        let result = await run(session)
         XCTAssertEqual(result.outcome, .appended)
         XCTAssertNil(result.uid, "which of the two it is cannot be said")
     }
 
-    func testNoDraftsMailboxStopsBeforeAnythingIsAppended() async {
+    func testNoDraftsMailboxIsNotAppended_withNoMailbox_andNothingIsSent() async {
         let session = FakeSession()
         session.draftsMailboxError = SendDraftRefusal(description: "the server marks no mailbox \\Drafts")
-        do { _ = try await run(session); XCTFail("not refused") } catch {
-            XCTAssertTrue("\(error)".contains("\\Drafts"))
-        }
+        let result = await run(session)
+        XCTAssertEqual(result.outcome, .notAppended)
+        XCTAssertNil(result.mailbox)
+        XCTAssertTrue(result.notes.contains { $0.contains("\\Drafts") })
         XCTAssertTrue(session.appendedDrafts.isEmpty)
+        XCTAssertFalse(session.calls.contains { $0.hasPrefix("appendDraft") })
+    }
+
+    // spec-example: direct-transport / append outcomes
+    func testTheAppendOutcomesExample() async throws {
+        struct Row {
+            let reported: Result<AppendResult, Error>
+            let stored: Bool
+            let alreadyThere: Int
+            let searchFails: Bool
+            let outcome: AppendDraftResult.Outcome
+            let uid: UInt32?
+            let searches: Int
+        }
+        let rows: [(String, Row)] = [
+            ("tagged OK with APPENDUID", Row(reported: .success(AppendResult(uidValidity: UIDValidity(9), uids: [UID(42)])), stored: true, alreadyThere: 0, searchFails: false, outcome: .appended, uid: 42, searches: 0)),
+            ("tagged OK without APPENDUID", Row(reported: .success(AppendResult(uidValidity: nil, uids: [])), stored: true, alreadyThere: 0, searchFails: false, outcome: .appended, uid: nil, searches: 0)),
+            ("tagged NO", Row(reported: .failure(IMAPError.commandFailed("no(OVERQUOTA)")), stored: false, alreadyThere: 0, searchFails: false, outcome: .notAppended, uid: nil, searches: 0)),
+            ("over the size limit", Row(reported: .failure(IMAPError.appendLimitExceeded(10, 5)), stored: false, alreadyThere: 0, searchFails: false, outcome: .notAppended, uid: nil, searches: 0)),
+            ("timeout, one hit", Row(reported: .failure(IMAPError.timeout), stored: true, alreadyThere: 0, searchFails: false, outcome: .appended, uid: 1, searches: 1)),
+            ("timeout, two hits", Row(reported: .failure(IMAPError.timeout), stored: true, alreadyThere: 1, searchFails: false, outcome: .appended, uid: nil, searches: 1)),
+            ("connection closed, the search fails", Row(reported: .failure(IMAPError.connectionFailed("closed")), stored: false, alreadyThere: 0, searchFails: true, outcome: .unknown, uid: nil, searches: 1)),
+            ("timeout, no hit", Row(reported: .failure(IMAPError.timeout), stored: false, alreadyThere: 0, searchFails: false, outcome: .unknown, uid: nil, searches: 1)),
+        ]
+        for (name, row) in rows {
+            let session = FakeSession()
+            session.appendDraftOutcome = SwiftMailSession.classifyAppend(row.reported)
+            if case .appended = session.appendDraftOutcome {} else { session.storeDraftDespiteOutcome = row.stored }
+            if row.searchFails { session.searchError = SendDraftFlowTests.Boom() }
+            for _ in 0..<row.alreadyThere {
+                session.drafts.append(FetchedDraft(uid: 100, message: Data(), messageID: message().messageID, subject: "Hello",
+                                                   from: [], recipients: [], hasInvalidRecipient: false))
+            }
+            let result = await run(session)
+            XCTAssertEqual(result.outcome, row.outcome, name)
+            XCTAssertEqual(result.uid, row.uid, name)
+            XCTAssertEqual(session.calls.filter { $0.hasPrefix("appendDraft") }.count, 1, "\(name): exactly one APPEND")
+            XCTAssertEqual(session.calls.filter { $0 == "searchMessageID" }.count, row.searches, name)
+        }
     }
 
     // MARK: - The tool
@@ -374,6 +451,49 @@ final class AppendDraftTests: XCTestCase {
         XCTAssertTrue(object["uid"] is NSNull)
     }
 
+    func testAConnectionThatFailsIsNotAppended_asAResult() async throws {
+        let dir = try environment(config: config).stateDirectory
+        let env = AppendDraftTool.Environment(
+            stateDirectory: dir, password: { _ in "secret-pw" },
+            openSession: { _, _ in throw SwiftMailSession.Failure(description: "could not log in to the IMAP server imap.example:993 (timeout)") },
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }, newID: { UUID() })
+        let text = try await AppendDraftTool.run(arguments(), env)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        XCTAssertEqual(object["outcome"] as? String, "not_appended")
+        XCTAssertTrue(object["mailbox"] is NSNull)
+        XCTAssertTrue((object["notes"] as? [String])?.contains { $0.contains("could not log in") } == true)
+    }
+
+    func testASecondDirectTransportCallIsRefusedBeforeItConnects() async throws {
+        let opened = Opened()
+        let env = try environment(config: config, opened: opened)
+        try await SendRecordStore(directory: env.stateDirectory).withSubmissionLock {
+            let message = await failure(arguments(), env)
+            XCTAssertTrue(message?.contains("another send_draft or append_draft call is running") == true, message ?? "not refused")
+        }
+        XCTAssertEqual(opened.count, 0)
+    }
+
+    func testADraftAppendedHereIsSentByItsMessageID_withMailClosed() async throws {
+        let session = FakeSession()
+        let env = try environment(config: config, session: session)
+        let appended = try await AppendDraftTool.run(arguments(["to": .array([.string("a@x.example")]),
+                                                                "bcc": .array([.string("hidden@x.example")])]), env)
+        let id = try XCTUnwrap((JSONSerialization.jsonObject(with: Data(appended.utf8)) as? [String: Any])?["message_id"] as? String)
+        let send = SendDraftTool.Environment(
+            stateDirectory: env.stateDirectory, password: { _ in "secret-pw" }, openSession: { _, _ in session },
+            localMessageID: { _ in XCTFail("the local store was read"); return nil }, now: env.now)
+        let sent = try await SendDraftTool.run(["account_id": .string(accountID), "message_id": .string(id)], send)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(sent.utf8)) as? [String: Any])
+        XCTAssertEqual(object["outcome"] as? String, "submitted", sent)
+        XCTAssertEqual(session.submitted.count, 1)
+        let submission = try XCTUnwrap(session.submitted.first)
+        XCTAssertEqual(Set(submission.to), ["a@x.example", "hidden@x.example"])
+        XCTAssertFalse(String(decoding: submission.message, as: UTF8.self).lowercased().contains("\r\nbcc:"),
+                       "the Bcc field does not reach the recipients")
+        XCTAssertEqual(submission.from, "me@icloud.example")
+    }
+
     func testTheDescriptionCarriesTheCaveats() {
         let description = AppendDraftTool.description
         XCTAssertTrue(description.contains("NOT YET RUN AGAINST A REAL MAIL SERVER"))
@@ -382,8 +502,14 @@ final class AppendDraftTests: XCTestCase {
         XCTAssertTrue(description.contains("no Mail path is used instead"))
     }
 
-    func testTheToolIsListedAsPreparingMail_notSending() {
+    func testTheToolIsListedAsPreparingMail_likeCreateDraft_notSending() {
         XCTAssertEqual(ToolAccess.of("append_draft"), .prepareMail)
+        XCTAssertEqual(ToolAccess.of("append_draft"), ToolAccess.of("create_draft"))
+        let hints = ToolAccess.prepareMail.annotations
+        XCTAssertEqual(hints.readOnlyHint, false)
+        XCTAssertEqual(hints.destructiveHint, false)
+        XCTAssertEqual(hints.idempotentHint, false)
+        XCTAssertEqual(hints.openWorldHint, true)
     }
 
     // MARK: - What SwiftMail reports for an APPEND

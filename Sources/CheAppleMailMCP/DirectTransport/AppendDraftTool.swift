@@ -11,13 +11,14 @@ enum AppendOutcome: Equatable, Sendable {
     case unknown(detail: String)
 }
 
-/// The result of one `append_draft` call that reached the server.
+/// The result of one `append_draft` call that passed its checks and tried to reach the server.
 struct AppendDraftResult: Equatable {
     enum Outcome: String { case appended, notAppended = "not_appended", unknown }
 
     let outcome: Outcome
     let messageID: String
-    let mailbox: String
+    /// Nil when the call stopped before the drafts mailbox was known.
+    let mailbox: String?
     let uid: UInt32?
     let uidValidity: UInt32?
     let notes: [String]
@@ -25,12 +26,30 @@ struct AppendDraftResult: Equatable {
 
 /// The steps of `append_draft` once the message is built: find the drafts
 /// mailbox, append once, and after an outcome that could not be established,
-/// look once for the message.
+/// try once to find the message.
 struct AppendDraftFlow {
     let session: DirectTransportSession
 
-    func run(_ built: DraftMessage.Built) async throws -> AppendDraftResult {
-        let mailbox = try await session.draftsMailbox()
+    static let notDeduplicatedNote = "Calls are not de-duplicated: calling append_draft again creates a second draft beside this one."
+    static let indexNoteAppended = "This tool does not change the local mail index; Mail shows the draft when it next synchronises."
+    static let indexNoteUnknown = "This tool does not change the local mail index, so the draft not showing in Mail is not evidence either way until Mail next synchronises."
+    static let indexNoteNotAppended = "This tool does not change the local mail index."
+
+    /// A failure before the APPEND command was sent: nothing was appended.
+    static func notAppendedBeforeAppend(_ built: DraftMessage.Built, mailbox: String?, _ reason: String) -> AppendDraftResult {
+        AppendDraftResult(outcome: .notAppended, messageID: built.messageID, mailbox: mailbox, uid: nil, uidValidity: nil,
+                          notes: ["The APPEND was not sent: \(reason).", indexNoteNotAppended])
+    }
+
+    func run(_ built: DraftMessage.Built) async -> AppendDraftResult {
+        let mailbox: String
+        do {
+            mailbox = try await session.draftsMailbox()
+        } catch let refusal as SendDraftRefusal {
+            return Self.notAppendedBeforeAppend(built, mailbox: nil, refusal.description)
+        } catch {
+            return Self.notAppendedBeforeAppend(built, mailbox: nil, "the drafts mailbox could not be found (\(error))")
+        }
         func result(_ outcome: AppendDraftResult.Outcome, uid: UInt32? = nil, uidValidity: UInt32? = nil,
                     _ notes: [String]) -> AppendDraftResult {
             AppendDraftResult(outcome: outcome, messageID: built.messageID, mailbox: mailbox, uid: uid,
@@ -38,33 +57,45 @@ struct AppendDraftFlow {
         }
         switch await session.appendDraft(built.mime, to: mailbox) {
         case .appended(let uid, let uidValidity):
-            return result(.appended, uid: uid, uidValidity: uidValidity, [SendDraftFlow.localIndexNote])
+            return result(.appended, uid: uid, uidValidity: uidValidity, [Self.indexNoteAppended, Self.notDeduplicatedNote])
         case .notAppended(let detail):
-            return result(.notAppended, ["The server did not store the draft: \(detail)"])
+            return result(.notAppended, ["The server did not store the draft: \(detail).", Self.indexNoteNotAppended])
         case .unknown(let detail):
-            // One look, never a second APPEND. Only a hit is evidence
-            // (`timeout-outcome-boundary.md`): the search can fail, and a server
-            // may not show a message it has just stored.
-            let hits = (try? await session.drafts(withMessageID: built.messageID, in: mailbox))?
-                .filter { SendDraftFlow.same($0.messageID, built.messageID) } ?? []
+            // One attempt at a search, never a second APPEND. Only a hit is
+            // evidence (`timeout-outcome-boundary.md`): a search that fails says
+            // nothing, and a server may not yet show a message it has stored.
+            let determined = "The outcome of the APPEND could not be determined from the command (\(detail))"
+            let hits: [DraftSummary]
+            do {
+                hits = try await session.drafts(withMessageID: built.messageID, in: mailbox)
+                    .filter { SendDraftFlow.same($0.messageID, built.messageID) }
+            } catch {
+                return result(.unknown, [
+                    "\(determined), and the search for it afterwards could not be made (\(error)).",
+                    Self.unknownAdvice(built), Self.indexNoteUnknown,
+                ])
+            }
             if hits.count == 1, let only = hits.first {
                 return result(.appended, uid: only.uid, uidValidity: only.uidValidity, [
-                    "The server's reply to the APPEND was not received (\(detail)); a search then found it in the drafts mailbox.",
-                    SendDraftFlow.localIndexNote,
+                    "\(determined); a search afterwards found it in the drafts mailbox.",
+                    Self.indexNoteAppended, Self.notDeduplicatedNote,
                 ])
             }
             if hits.count > 1 {
                 return result(.appended, [
-                    "The server's reply to the APPEND was not received (\(detail)); a search then found it in the drafts mailbox, \(hits.count) times under this Message-ID, so no UID is reported.",
-                    SendDraftFlow.localIndexNote,
+                    "\(determined); a search afterwards found it in the drafts mailbox \(hits.count) times under this Message-ID, so no UID is reported.",
+                    Self.indexNoteAppended, Self.notDeduplicatedNote,
                 ])
             }
             return result(.unknown, [
-                "Whether the server stored the draft could not be established (\(detail)).",
-                "A search of the drafts mailbox did not show it; that is not evidence that it was not stored.",
-                "This tool is not retrying. A second call would create a second draft if the first was stored: look in the drafts mailbox for \(built.messageID) before calling again.",
+                "\(determined). A search of the drafts mailbox afterwards did not show it; that is not evidence that it was not stored.",
+                Self.unknownAdvice(built), Self.indexNoteUnknown,
             ])
         }
+    }
+
+    static func unknownAdvice(_ built: DraftMessage.Built) -> String {
+        "This tool is not retrying. If the draft was stored, calling again creates a second draft: look in the drafts mailbox for \(built.messageID) before calling again."
     }
 }
 
@@ -76,7 +107,7 @@ enum AppendDraftTool {
     static let argumentNames: Set<String> = ["account_name", "account_id", "to", "cc", "bcc", "subject", "body", "from_name"]
 
     /// Kept here so the test of the caveats reads the same text the server lists.
-    static let description = "Create a new plain-text draft in the server's drafts mailbox over IMAP, without Mail (#744, #729). NOT YET RUN AGAINST A REAL MAIL SERVER: until the result is recorded on issue #744, treat every outcome as unverified, including whether Mail and other clients show the result as an editable draft. Only for accounts listed in the server's direct-transport.json, with a password stored by running the binary with --direct-transport-set-credential <address>; any other account is refused and no Mail path is used instead. Takes account_name or account_id, to, cc and bcc (lists of bare addresses, at least one recipient in all; display names are refused), subject (not empty), body (plain text) and optionally from_name (the sender's display name; the sender's address is always the account's). It accepts no attachment, format, reply or signature argument. The tool builds the whole message itself: one text/plain part in UTF-8 with a new Message-ID, not the layout Mail gives its own drafts, so that send_draft can submit it as stored. Bcc recipients are kept in the draft's Bcc field. outcome is appended (the server completed the command, or a search afterwards found the message; uid is given when the server reports one), not_appended (the server refused, or nothing was sent), or unknown: whether the server stored the draft could not be established, and the tool is NOT retrying. A second call always creates a second draft, so after unknown look in the drafts mailbox for the message_id first. The result carries message_id, which send_draft accepts to send this draft. Mail's local index is not changed and shows the draft when Mail next syncs."
+    static let description = "Create a new plain-text draft in the server's drafts mailbox over IMAP, without Mail (#744, #729). NOT YET RUN AGAINST A REAL MAIL SERVER: until the result is recorded on issue #744, treat every outcome as unverified, including whether Mail and other clients show the result as an editable draft. Only for accounts listed in the server's direct-transport.json, with a password stored by running the binary with --direct-transport-set-credential <address>; any other account is refused and no Mail path is used instead. Takes account_name or account_id, to, cc and bcc (lists of bare addresses, at least one recipient in all; display names are refused), subject (not empty), body (plain text) and optionally from_name (the sender's display name; the sender's address is always the account's). It accepts no attachment, format, reply or signature argument. The tool builds the whole message itself: one text/plain part in UTF-8 with a new Message-ID, not the layout Mail gives its own drafts, so that send_draft can submit it as stored. Bcc recipients are kept in the draft's Bcc field. outcome is appended (the server completed the command, or a search afterwards found the message; uid is given when the server reports one), not_appended (the server refused the command, or the call stopped before the APPEND was sent: the connection, the login or finding the drafts mailbox failed), or unknown: whether the server stored the draft could not be established, and the tool is NOT retrying. Calls are not de-duplicated: a repeated call whose draft is stored creates a second draft beside the first, so after unknown look in the drafts mailbox for the message_id before calling again. The result carries message_id, which send_draft accepts to send this draft. Mail's local index is not changed and shows the draft when Mail next syncs."
 
     struct Environment {
         let stateDirectory: URL
@@ -157,18 +188,10 @@ enum AppendDraftTool {
         do {
             session = try await environment.openSession(account, password)
         } catch {
-            throw MailError.operationFailed("\(error)")
+            // Nothing was sent to the server yet, so this is provably not appended.
+            return render(AppendDraftFlow.notAppendedBeforeAppend(built, mailbox: nil, "\(error)"))
         }
-        let result: AppendDraftResult
-        do {
-            result = try await AppendDraftFlow(session: session).run(built)
-        } catch let refusal as SendDraftRefusal {
-            await session.close()
-            throw MailError.operationFailed("\(refusal.description). Nothing was appended")
-        } catch {
-            await session.close()
-            throw MailError.operationFailed("append_draft stopped before the APPEND (\(error)); nothing was appended")
-        }
+        let result = await AppendDraftFlow(session: session).run(built)
         await session.close()
         return render(result)
     }
@@ -181,7 +204,7 @@ enum AppendDraftTool {
         }
         for (field, list) in [("to", to), ("cc", cc), ("bcc", bcc)] {
             if let bad = list.first(where: { !isBareAddress($0) }) {
-                return "'\(field)' holds \(printable(bad)), which is not a bare address (name@domain in printable ASCII, at most \(DirectDraft.maxAddressOctets) octets); display names are not accepted"
+                return "'\(field)' holds \(printable(bad)), which is not a bare address (a plain local@domain.example in ASCII, at most \(DirectDraft.maxAddressOctets) octets); display names are not accepted"
             }
         }
         guard !subject.isEmpty else { return "append_draft needs a subject that is not empty" }
@@ -191,16 +214,26 @@ enum AppendDraftTool {
         return nil
     }
 
-    /// One `@` between non-empty parts of printable ASCII, without the
-    /// characters that structure an address list or a display name.
+    /// A bare address in the subset of RFC 5321 this tool accepts: a dot-atom
+    /// local part of at most 64 octets, `@`, and a domain of at least two
+    /// dot-separated labels of letters, digits and hyphens (no label empty,
+    /// longer than 63 or starting or ending with a hyphen), at most 254 octets in
+    /// all. No quoted local parts, domain literals or non-ASCII.
     static func isBareAddress(_ text: String) -> Bool {
-        guard text.utf8.count <= DirectDraft.maxAddressOctets, isSimpleAddrSpec(text) else { return false }
-        let structural = Set(",;:<>()[]\"\\".unicodeScalars)
-        guard text.unicodeScalars.allSatisfy({ $0.value >= 0x21 && $0.value <= 0x7E && !structural.contains($0) }) else {
-            return false
-        }
+        guard text.utf8.count <= DirectDraft.maxAddressOctets else { return false }
         let parts = text.split(separator: "@", omittingEmptySubsequences: false)
-        return parts.count == 2 && !parts[0].isEmpty && !parts[1].isEmpty
+        guard parts.count == 2 else { return false }
+        let local = parts[0], domain = parts[1]
+        let atext = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!#$%&'*+-/=?^_`{|}~".unicodeScalars)
+        guard !local.isEmpty, local.utf8.count <= 64,
+              local.split(separator: ".", omittingEmptySubsequences: false)
+                .allSatisfy({ !$0.isEmpty && $0.unicodeScalars.allSatisfy { atext.contains($0) } }) else { return false }
+        let ldh = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-".unicodeScalars)
+        let labels = domain.split(separator: ".", omittingEmptySubsequences: false)
+        return labels.count >= 2 && labels.allSatisfy { label in
+            !label.isEmpty && label.utf8.count <= 63 && label.first != "-" && label.last != "-"
+                && label.unicodeScalars.allSatisfy { ldh.contains($0) }
+        }
     }
 
     private static func hasControlCharacter(_ text: String) -> Bool {
@@ -219,7 +252,7 @@ enum AppendDraftTool {
         let object: [String: Any] = [
             "outcome": result.outcome.rawValue,
             "message_id": result.messageID,
-            "mailbox": result.mailbox,
+            "mailbox": result.mailbox.map { $0 as Any } ?? NSNull(),
             "uid": result.uid.map { Int($0) as Any } ?? NSNull(),
             "uid_validity": result.uidValidity.map { Int($0) as Any } ?? NSNull(),
             "notes": result.notes,

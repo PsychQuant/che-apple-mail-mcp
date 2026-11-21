@@ -74,6 +74,15 @@ final class SendDraftToolTests: XCTestCase {
         }
     }
 
+    func testAMessageIDThatAServerHitOnlyContainsSelectsNothing() async throws {
+        let session = SendDraftFlowTests.FakeSession()
+        session.nearMissHits = [DraftSummary(uid: 9, subject: "Report", messageID: "<d1@icloud.example.other>")]
+        let message = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"),
+                                     "message_id": .string("<d1@icloud.example>")], try environment(config: config, session: session))
+        XCTAssertTrue(message?.contains("no draft") == true, message ?? "a substring hit was selected")
+        XCTAssertTrue(session.submitted.isEmpty)
+    }
+
     func testAMessageIDThatMatchesNoDraftIsRefused() async throws {
         let session = SendDraftFlowTests.FakeSession()
         session.drafts = [draft()]

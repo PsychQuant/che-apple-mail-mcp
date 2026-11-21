@@ -15,7 +15,13 @@ final class SendDraftFlowTests: XCTestCase {
         /// The server stores the draft although the outcome says otherwise.
         var storeDraftDespiteOutcome = false
         var searchError: Error?
+        /// The name `draftsMailbox` answers.
+        var draftsMailboxName = "Drafts"
+        /// Extra hits a Message-ID search returns, as IMAP's substring match would (#744).
+        var nearMissHits: [DraftSummary] = []
         private(set) var appendedDrafts: [Data] = []
+        /// The mailbox of every Message-ID search, in order.
+        private(set) var searchedMailboxes: [String] = []
         var removeError: Error?
         var expungeOne = true
         var draftsMailboxError: Error?
@@ -37,13 +43,15 @@ final class SendDraftFlowTests: XCTestCase {
         func draftsMailbox() async throws -> String {
             note("draftsMailbox")
             if let draftsMailboxError { throw draftsMailboxError }
-            return "Drafts"
+            return draftsMailboxName
         }
         func sentMailbox() async throws -> String { note("sentMailbox"); return "Sent Messages" }
         func drafts(withMessageID messageID: String, in mailbox: String) async throws -> [DraftSummary] {
             note("searchMessageID")
+            lock.withLock { searchedMailboxes.append(mailbox) }
             if let searchError { throw searchError }
             return drafts.filter { $0.messageID == messageID }.map { DraftSummary(uid: $0.uid, subject: $0.subject, messageID: $0.messageID) }
+                + nearMissHits
         }
         func drafts(withSubjectContaining subject: String, in mailbox: String) async throws -> [DraftSummary] {
             note("searchSubject")
@@ -80,12 +88,27 @@ final class SendDraftFlowTests: XCTestCase {
             var stored = storeDraftDespiteOutcome
             if case .appended = appendDraftOutcome { stored = true }
             if stored {
-                let id = (try? BccRemoval.fields(in: message))?.first { $0.name.lowercased() == "message-id" }?
-                    .value.trimmingCharacters(in: .whitespaces)
+                // The envelope a server would report, read from the header.
+                let fields = (try? BccRemoval.fields(in: message)) ?? []
+                func value(_ name: String) -> String? {
+                    fields.first { $0.name.lowercased() == name }?.value.trimmingCharacters(in: .whitespaces)
+                }
+                func addresses(_ name: String) -> [String] {
+                    (value(name) ?? "").split(separator: ",").map { part -> String in
+                        let text = part.trimmingCharacters(in: .whitespaces)
+                        if let open = text.lastIndex(of: "<"), let close = text.lastIndex(of: ">"), open < close {
+                            return String(text[text.index(after: open)..<close])
+                        }
+                        return text
+                    }.filter { !$0.isEmpty }
+                }
+                let draft = FetchedDraft(uid: UInt32(drafts.count + 1), message: message, messageID: value("message-id"),
+                                         subject: value("subject") ?? "", from: addresses("from"),
+                                         recipients: addresses("to") + addresses("cc") + addresses("bcc"),
+                                         hasInvalidRecipient: false)
                 lock.withLock {
                     appendedDrafts.append(message)
-                    drafts.append(FetchedDraft(uid: UInt32(drafts.count + 1), message: message, messageID: id, subject: "",
-                                               from: [], recipients: [], hasInvalidRecipient: false))
+                    drafts.append(draft)
                 }
             }
             return appendDraftOutcome
