@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`send_draft`: send an existing draft over SMTP, without Mail**
+  ([#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742), first
+  stage of [#729](https://github.com/PsychQuant/che-apple-mail-mcp/issues/729)).
+  **Not yet run against a real mail server**; the tool description says so until
+  the result is recorded on #742. Only for accounts listed in
+  `~/.claude/.mail/direct-transport.json`, with a password stored in the
+  server's own keychain item by `--direct-transport-set-credential <address>`
+  (read from standard input; no tool can read or change it, and Mail's
+  passwords are never read). The draft is chosen by `draft_id` or by exact
+  `subject_match` in the server's `\Drafts` mailbox; the tool accepts no body,
+  recipient or attachment argument. Before submitting it checks the Message-ID
+  against a record of sent drafts, the From address, the recipients and the
+  header; it submits the draft without its Bcc fields, over TLS only (implicit
+  on 465/993, required STARTTLS elsewhere). The outcome is `submitted`,
+  `not_sent` or `unknown`; an unknown send is not retried and is cleared only by
+  `--direct-transport-forget '<message-id>'`. After a submission the sent copy
+  and the draft's removal are separate stages that a later call resumes without
+  submitting again, only from the same account and only while the draft is
+  byte for byte the one submitted. One call runs at a time, and the SMTP server
+  is contacted only to submit. Errors and server replies are redacted of the
+  password. Mail's local index is not changed. New dependency: SwiftMail
+  1.17.0, pinned by revision.
+
 - **`search_emails` can return each row's Message-ID**
   ([#682](https://github.com/PsychQuant/che-apple-mail-mcp/issues/682)). The new
   `include_message_id` (boolean, default false) adds `message_id` to every
@@ -82,6 +105,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **BREAKING: requires macOS 26**
+  ([#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)). The
+  minimum system goes from macOS 13 to macOS 26; macOS 13, 14 and 15 stay on
+  v4.x. The cause is a new dependency, `SwiftMail` (SMTP and IMAP, for sending
+  without Mail, #729), which needs macOS 15, and below macOS 26 the release
+  binary would also need `libswiftCompatibilitySpan.dylib`, which macOS 15 does
+  not ship. Nothing else changes in this entry: no tool uses the dependency yet.
+  `Package.resolved` is now under version control, so a release binary can be
+  rebuilt from the same dependency versions (24 packages, up from 7).
 - **`get_mail_log_events` signals the `log` child's whole process group**
   ([#646](https://github.com/PsychQuant/che-apple-mail-mcp/issues/646)).
   The runner now starts `/usr/bin/log` with `posix_spawn` in a process group of

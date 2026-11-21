@@ -45,6 +45,7 @@ enum ToolAccess: CaseIterable {
     /// Can send mail. A sent message cannot be recalled, a retry sends a second
     /// one (#242), and mail leaves for third parties. `reply_email` and
     /// `forward_email` also have a draft mode (#599), but both can send.
+    /// `send_draft` (#742) sends over SMTP, without Mail.
     case send
 
     var annotations: Tool.Annotations {
@@ -92,7 +93,7 @@ enum ToolAccess: CaseIterable {
         case .writeFile:
             return ["save_attachment", "export_emails_markdown", "batch_export_emails_markdown"]
         case .send:
-            return ["compose_email", "reply_email", "forward_email", "redirect_email"]
+            return ["compose_email", "reply_email", "forward_email", "redirect_email", "send_draft"]
         }
     }
 

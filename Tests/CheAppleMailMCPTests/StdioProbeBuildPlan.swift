@@ -9,6 +9,13 @@ struct StdioProbeBuildPlan {
     let modules: URL
     let objects: [String]
     let responseContents: String?
+    /// Module maps of the C modules the app's dependencies import (#742: SwiftMail
+    /// brings swift-atomics and NIO's C shims). The probe compiles with implicit
+    /// modules, so it must be told where each map is, as the app's own compile was.
+    let moduleMaps: [String]
+
+    /// The compiler arguments that hand `moduleMaps` to clang.
+    var moduleMapArguments: [String] { moduleMaps.flatMap { ["-Xcc", "-fmodule-map-file=" + $0] } }
 
     private static func invalid(_ message: String) -> NSError {
         NSError(domain: "StdioProbeBuildPlan", code: 1,
@@ -43,11 +50,17 @@ struct StdioProbeBuildPlan {
             guard lines.count - objects.count == 1, !objects.isEmpty else {
                 throw invalid("Native build must contain exactly one app entry-point object")
             }
+            // The native backend names every C module map on the app's own command line.
+            var maps: [String] = []
+            for index in arguments.indices.dropLast() where arguments[index] == "-Xcc"
+                && arguments[index + 1].hasPrefix("-fmodule-map-file=") {
+                maps.append(String(arguments[index + 1].dropFirst("-fmodule-map-file=".count)))
+            }
             // Preserve the native backend's response-file quoting verbatim.
             return Self(compiler: compiler, target: try argument("-target", in: arguments),
                         sdk: try argument("-sdk", in: arguments),
                         modules: products.appendingPathComponent("Modules"), objects: [],
-                        responseContents: objects.joined(separator: "\n") + "\n")
+                        responseContents: objects.joined(separator: "\n") + "\n", moduleMaps: maps)
         }
 
         let buildData = products.deletingLastPathComponent().deletingLastPathComponent()
@@ -95,11 +108,32 @@ struct StdioProbeBuildPlan {
             }
             // Use structured input paths, not the shell-style LinkFileList:
             // SwiftBuild writes that file as one quoted, space-separated line.
+            let sdk = try argument("-sdk", in: args)
             return Self(compiler: compiler, target: try argument("-target", in: args),
-                        sdk: try argument("-sdk", in: args), modules: products,
-                        objects: objects, responseContents: nil)
+                        sdk: sdk, modules: products,
+                        objects: objects, responseContents: nil,
+                        moduleMaps: try moduleMaps(besides: objects, outside: sdk))
         }
         throw invalid("No SwiftBuild link metadata matches the current app output")
+    }
+
+    /// SwiftBuild compiles with explicit modules and does not put the module maps on a command
+    /// line this test can read, but each object's dependency file (`X.d` next to `X.o`) lists
+    /// every module map that compile read. The SDK's own maps are found without help.
+    static func moduleMaps(besides objects: [String], outside sdk: String) throws -> [String] {
+        var seen = Set<String>(), maps: [String] = []
+        for object in objects {
+            let dependencies = (object as NSString).deletingPathExtension + ".d"
+            guard let text = try? String(contentsOfFile: dependencies, encoding: .utf8) else { continue }
+            // Make-style dependency lists escape a space in a path as "\ ".
+            let paths = text.replacingOccurrences(of: "\\ ", with: "\u{0}")
+                .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\\" })
+                .map { $0.replacingOccurrences(of: "\u{0}", with: " ") }
+            for path in paths where path.hasSuffix(".modulemap") && !path.hasPrefix(sdk) && seen.insert(path).inserted {
+                maps.append(path)
+            }
+        }
+        return maps
     }
 
     /// `realpath` of the deepest existing ancestor, with the rest of the path appended. The output

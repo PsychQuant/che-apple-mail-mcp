@@ -1,11 +1,19 @@
 # che-apple-mail-mcp
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![macOS](https://img.shields.io/badge/macOS-13.0%2B-blue)](https://www.apple.com/macos/)
+[![macOS](https://img.shields.io/badge/macOS-26.0%2B-blue)](https://www.apple.com/macos/)
 [![Swift](https://img.shields.io/badge/Swift-5.9-orange.svg)](https://swift.org/)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-green.svg)](https://modelcontextprotocol.io/)
 
-**最完整的 Apple Mail MCP 伺服器** - 59 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
+**最完整的 Apple Mail MCP 伺服器** - 60 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
+
+這是給你的 Apple Mail 用的 MCP：Mail 裡設好的帳號、Mail 存在這台 Mac 上的信，以及郵件伺服器上的信匣。它不一定經過 Mail 這個 App：
+
+| 路徑 | 用在 | 需要 |
+|---|---|---|
+| 直接讀 Mail 的本機資料（SQLite 與 `.emlx`） | 讀信、搜尋、匯出 | 完全磁碟取用權限；資料新舊取決於 Mail 上次同步 |
+| Mail App（AppleScript、撰寫視窗） | 大部分寫入：撰寫、回覆、轉寄、搬移、標記、刪除 | Mail 開著；自動化權限，撰寫另需輔助使用 |
+| 直接連郵件伺服器（IMAP 與 SMTP） | `send_draft`（[#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)） | `direct-transport.json` 的設定與 App 專用密碼；不需要 Mail 開著、不套用簽名，Mail 要等下次同步才看得到 |
 
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
@@ -15,7 +23,7 @@
 
 | 功能 | 其他 MCP | che-apple-mail-mcp |
 |------|----------|-------------------|
-| 工具總數 | ~20 | **59** |
+| 工具總數 | ~20 | **60** |
 | 開發語言 | Python | **Swift (原生)** |
 | 搜尋速度 | 秒級 (AppleScript) | **毫秒級 (SQLite)** |
 | 搜尋欄位 | 主旨/寄件人 | **主旨/寄件人/收件人/日期** |
@@ -57,7 +65,7 @@ claude plugin install che-apple-mail-mcp@che-apple-mail-mcp
 
 | plugin 提供 | 只裝 MCP |
 |---|---|
-| 全部 59 個 MCP 工具 | ✅ 有 |
+| 全部 60 個 MCP 工具 | ✅ 有 |
 | `/archive-mail` 與 `-migrate` / `-rebuild-threads` / `-repair-synthetic-ids` / `-view` | ❌ 整套歸檔 SOP 不存在 |
 | `rules/compose-wrapper-free.md`——正式信件的 cite-block 紀律 | ❌ **影響最大**：對正式信件產生 `<blockquote type="cite">` 本文是 CRITICAL 缺陷，而這條規則正是防它的 |
 | `rules/confirmation-triggers.md`、`rules/false-positive-detection.md` | ❌ 破壞性操作沒有確認紀律 |
@@ -91,7 +99,7 @@ OneDrive）——同步活動會造成 MCP 連線逾時。
 
 ---
 
-## 全部 59 個工具
+## 全部 60 個工具
 
 ### 新建郵件的簽名
 
@@ -172,7 +180,7 @@ compose_email、create_draft、update_draft 支援 signature 物件：`{"mode":"
 </details>
 
 <details>
-<summary><b>撰寫 (5)</b></summary>
+<summary><b>撰寫 (6)</b></summary>
 
 | 工具 | 說明 |
 |------|------|
@@ -180,6 +188,7 @@ compose_email、create_draft、update_draft 支援 signature 物件：`{"mode":"
 | `reply_email` | 回覆郵件 |
 | `forward_email` | 轉寄郵件 |
 | `redirect_email` | 重導向郵件（保留原始寄件者） |
+| `send_draft` | 經 SMTP 寄出伺服器草稿匣裡已有的一封草稿，不經 Mail（[#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)）。尚未對真實伺服器跑過。只限 `direct-transport.json` 列出的帳號，設定見下方「直接傳送（send_draft）」 |
 | `open_mailto` | 開啟 mailto URL |
 
 </details>
@@ -315,7 +324,7 @@ compose_email、create_draft、update_draft 支援 signature 物件：`{"mode":"
 
 ### 系統需求
 
-- macOS 13.0+
+- macOS 26.0+（macOS 13–15 請停在 v4.x）
 - Xcode 命令列工具
 - Apple Mail 已設定至少一個帳戶
 
@@ -430,6 +439,57 @@ claude
 
 ---
 
+## 直接傳送（send_draft）
+
+> **尚未對真實郵件伺服器跑過。** 在結果記到 [#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)
+> 之前，每一種結果都當成未經驗證。
+
+`send_draft` 經 SMTP 寄出伺服器草稿匣裡已有的一封草稿，不經 Mail（[#729](https://github.com/PsychQuant/che-apple-mail-mcp/issues/729)）。
+它不寫任何內容：送出的就是伺服器存的那份草稿，去掉 `Bcc` 欄位；收件人取自 To、Cc、Bcc。只限
+`~/.claude/.mail/direct-transport.json` 列出的帳號；其他帳號一律拒絕，也不改走 Mail。
+
+### 設定
+
+1. 寫 `~/.claude/.mail/direct-transport.json`。每個欄位都必填，不認得的欄位會被拒絕。
+
+   ```json
+   {"accounts": [{
+     "account_id": "<list_accounts 回報的 Mail 帳號 UUID>",
+     "address": "you@icloud.com",
+     "smtp": {"host": "smtp.mail.me.com", "port": 587},
+     "imap": {"host": "imap.mail.me.com", "port": 993},
+     "sent_copy": "append",
+     "allowed_from": []
+   }]}
+   ```
+
+   `sent_copy` 為 `append` 表示由工具把寄出的副本存進伺服器的寄件備份；為 `provider` 表示供應商自己會存。
+   `allowed_from` 列出這個帳號可以用來寄信的其他位址。
+2. 在終端機執行 binary，把密碼（iCloud 用 App 專用密碼）存進伺服器自己的 keychain 項目。密碼從標準輸入讀、
+   不顯示，也不會印出：
+
+   ```bash
+   ~/bin/CheAppleMailMCP --direct-transport-set-credential you@icloud.com
+   ```
+
+   項目的 service 是 `che-apple-mail-mcp.direct-transport`。沒有任何 MCP 工具能建立、修改或讀出它，伺服器也
+   不讀 Mail 的密碼。登入時以完整的 `address` 當使用者名稱。
+
+兩條連線在送出密碼之前都先建立 TLS：連接埠 465 與 993 用 implicit TLS，其他連接埠一律要求 STARTTLS；
+憑證要驗證，TLS 版本至少 1.2。
+
+### 結果
+
+| `outcome` | 意思 | 怎麼處理 |
+|---|---|---|
+| `submitted` | 伺服器接受了這封信。`sent_copy` 與 `draft_removal` 回報 `done`、`pending` 或 `skipped` | `pending` 的階段，用同一份草稿再呼叫一次 `send_draft` 就會補做，不會再送一次 |
+| `not_sent` | 伺服器接受之前就被拒絕 | 依回覆修正後再呼叫 |
+| `unknown` | 無法確定伺服器有沒有收下（例如信交出去之後連線中斷）；工具不會重試 | 去收件人的信或寄件備份確認。確定沒寄出，才執行 `--direct-transport-forget '<message-id>'`（要加引號，否則 zsh 會把角括號當成重導向）後再呼叫 |
+
+每次提交都以 Message-ID 記在 `~/.claude/.mail/direct-transport-sent.json`，同一份草稿不會送兩次：狀態不明的紀錄
+只能用命令列模式清除（有 `send_draft` 正在執行時不清），已提交的紀錄不能清除。一次只執行一個 `send_draft`。補做
+`pending` 的階段，只在同一個帳號、而且伺服器上的草稿與提交時逐位元組相同時才做。只有提交時才連 SMTP 伺服器。Mail 的本機索引不會改，等 Mail 下次同步才跟上。
+
 ## 疑難排解
 
 | 問題 | 解決方法 |
@@ -446,7 +506,7 @@ claude
 - **框架**：[MCP Swift SDK](https://github.com/modelcontextprotocol/swift-sdk) v0.10.0
 - **自動化**：透過 `NSAppleScript` 執行 AppleScript
 - **傳輸**：stdio
-- **平台**：macOS 13.0+（Ventura 及更新版本）
+- **平台**：macOS 26.0+（Tahoe 及更新版本）；macOS 13–15 停在 v4.x
 
 ---
 
