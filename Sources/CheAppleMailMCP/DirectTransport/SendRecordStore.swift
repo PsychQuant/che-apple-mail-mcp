@@ -30,6 +30,9 @@ struct SendRecord: Codable, Equatable {
     /// SHA-256 of the draft's bytes as fetched for the submission. A pending stage
     /// is completed only for a draft with the same bytes.
     var draftDigest: String? = nil
+    /// The login and IMAP server the draft was submitted from, as
+    /// `address@host:port`. A pending stage is completed only on that server.
+    var server: String? = nil
 
     /// `attempting` read back later is `unknown`: nothing shows the message was
     /// not handed over.
@@ -39,7 +42,7 @@ struct SendRecord: Codable, Equatable {
         case messageID = "message_id", accountID = "account_id", state
         case sentCopy = "sent_copy", draftRemoval = "draft_removal"
         case updatedAt = "updated_at", serverReply = "server_reply"
-        case submittedAt = "submitted_at", draftDigest = "draft_digest"
+        case submittedAt = "submitted_at", draftDigest = "draft_digest", server
     }
 }
 
@@ -134,7 +137,8 @@ struct SendRecordStore {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         let path = directory.appendingPathComponent(".\(Self.fileName).submission.lock").path
-        let fd = open(path, O_RDWR | O_CREAT | O_NOFOLLOW, 0o600)
+        // O_CLOEXEC: a child process must not inherit, and so keep, the lock.
+        let fd = open(path, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw Problem(detail: "its submission lock cannot be opened (errno \(errno))") }
         if flock(fd, LOCK_EX | LOCK_NB) == 0 { return SubmissionLock(fd: fd) }
         let reason = errno
@@ -187,13 +191,19 @@ struct SendRecordStore {
         guard rename(temporary.path, url.path) == 0 else {
             throw Problem(detail: "cannot be replaced (errno \(errno))")
         }
+        // The rename is durable only once the directory is: the claim must survive
+        // a crash before the SMTP transaction it guards.
+        let directoryFD = open(directory.path, O_RDONLY | O_CLOEXEC)
+        guard directoryFD >= 0 else { throw Problem(detail: "its directory cannot be opened to be synchronised (errno \(errno))") }
+        defer { close(directoryFD) }
+        guard fsync(directoryFD) == 0 else { throw Problem(detail: "its directory cannot be synchronised (errno \(errno))") }
     }
 
     private func withLock<T>(_ body: () throws -> T) throws -> T {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
                                                 attributes: [.posixPermissions: 0o700])
         let lockPath = directory.appendingPathComponent(".\(Self.fileName).lock").path
-        let fd = open(lockPath, O_RDWR | O_CREAT | O_NOFOLLOW, 0o600)
+        let fd = open(lockPath, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0o600)
         guard fd >= 0 else { throw Problem(detail: "its lock cannot be opened (errno \(errno))") }
         defer { close(fd) }
         guard flock(fd, LOCK_EX) == 0 else { throw Problem(detail: "cannot be locked (errno \(errno))") }

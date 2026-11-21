@@ -19,6 +19,10 @@ final class SendDraftFlowTests: XCTestCase {
         var fetchOverride: FetchedDraft?
         /// Runs inside submit, after the record is claimed.
         var onSubmit: (() -> Void)?
+        /// Runs after a successful append.
+        var onAppend: (() -> Void)?
+        /// What the sent mailbox holds: every message stored by append.
+        private(set) var sentMailboxContents: [Data] = []
         private(set) var calls: [String] = []
         private(set) var submitted: [(message: Data, from: String, to: [String])] = []
 
@@ -36,7 +40,8 @@ final class SendDraftFlowTests: XCTestCase {
         }
         func drafts(withSubjectContaining subject: String, in mailbox: String) async throws -> [DraftSummary] {
             note("searchSubject")
-            return drafts.filter { $0.subject.contains(subject) }.map { DraftSummary(uid: $0.uid, subject: $0.subject, messageID: $0.messageID) }
+            // IMAP SEARCH SUBJECT "" matches every message; Swift's contains("") is false.
+            return drafts.filter { subject.isEmpty || $0.subject.contains(subject) }.map { DraftSummary(uid: $0.uid, subject: $0.subject, messageID: $0.messageID) }
         }
         func fetchDraft(_ summary: DraftSummary, in mailbox: String) async throws -> FetchedDraft {
             note("fetch")
@@ -60,11 +65,14 @@ final class SendDraftFlowTests: XCTestCase {
         func appendSentCopy(_ message: Data, to mailbox: String) async throws {
             note("append:\(mailbox)")
             if let appendError { throw appendError }
+            lock.withLock { sentMailboxContents.append(message) }
+            onAppend?()
         }
         func canExpungeOneMessage() async -> Bool { expungeOne }
         func removeDraft(_ draft: FetchedDraft, in mailbox: String) async throws {
             note("remove:\(draft.uid)")
             if let removeError { throw removeError }
+            lock.withLock { drafts.removeAll { $0.uid == draft.uid } }
         }
         func close() async {}
     }
@@ -137,6 +145,41 @@ final class SendDraftFlowTests: XCTestCase {
 
     // MARK: - The checks before submission, in order
 
+    /// The checks run in the spec's order, and the SMTP connection is opened
+    /// only after all of them pass.
+    func testTheChecksRunInOrder_beforeAnySMTPConnection() async {
+        let session = FakeSession()
+        session.drafts = [draft(from: ["stranger@x.example"], to: [])]   // fails checks 3 and 4
+        let (flow, _) = flow(session)
+        let message = await refusal { try await flow.run(.subject("Report")) }
+        XCTAssertTrue(message?.contains("stranger@x.example") == true, "check 3 comes first: \(message ?? "not refused")")
+        XCTAssertFalse(session.calls.contains("prepare"))
+    }
+
+    func testAMessageIDOutsidePrintableASCIIIsRefused() async {
+        let session = FakeSession()
+        session.drafts = [draft(id: "<d\u{1}1@icloud.example>")]
+        let (flow, _) = flow(session, localID: nil)
+        let message = await refusal { try await flow.run(.subject("Report")) }
+        XCTAssertTrue(message?.contains("printable ASCII") == true, message ?? "not refused")
+    }
+
+    func testAnEmptySubjectSelectsTheDraftWhoseSubjectIsEmpty() async throws {
+        let session = FakeSession()
+        session.drafts = [draft(subject: "")]
+        let (flow, _) = flow(session)
+        let result = try await flow.run(.subject(""))
+        XCTAssertEqual(result.outcome, .submitted)
+    }
+
+    func testACanonicallyEquivalentSubjectIsNotAnExactMatch() async {
+        let session = FakeSession()
+        session.drafts = [draft(subject: "Cafe\u{0301}")]                // e + combining accent
+        let (flow, _) = flow(session)
+        let message = await refusal { try await flow.run(.subject("Caf\u{00E9}")) }   // precomposed
+        XCTAssertTrue(message?.contains("no draft") == true, message ?? "matched")
+    }
+
     func testTheChecksRefuseBeforeSubmitting() async {
         let cases: [(FetchedDraft, String)] = [
             (draft(id: nil), "no Message-ID"),
@@ -202,6 +245,7 @@ final class SendDraftFlowTests: XCTestCase {
             XCTAssertEqual(result.outcome, outcome, label)
             XCTAssertEqual(try records.entry(for: "<d1@icloud.example>")?.state, entryAfter, label)
             XCTAssertEqual(session.calls.contains("remove:7"), removed, label)
+            XCTAssertEqual(session.drafts.isEmpty, removed, "\(label): the draft on the server")
             if outcome != .submitted {
                 XCTAssertEqual(result.sentCopy, .notAttempted, label)
                 XCTAssertEqual(result.draftRemoval, .notAttempted, label)
@@ -323,6 +367,9 @@ final class SendDraftFlowTests: XCTestCase {
             XCTAssertEqual(result.draftRemoval, row.removal, "row \(index)")
             XCTAssertEqual(session.calls.contains("remove:7"), row.removeAttempted, "row \(index)")
             XCTAssertEqual(session.calls.contains { $0.hasPrefix("append:") }, row.sentCopy == .append, "row \(index)")
+            XCTAssertEqual(session.drafts.isEmpty, row.removal == .done, "row \(index): the draft on the server")
+            // The sent copy is the draft as fetched, Bcc included.
+            XCTAssertEqual(session.sentMailboxContents, row.copy == .done ? [draft().message] : [], "row \(index)")
             XCTAssertTrue(result.notes.contains { $0.contains("does not change the local mail index") }, "row \(index)")
         }
     }
@@ -378,6 +425,53 @@ final class SendDraftFlowTests: XCTestCase {
         XCTAssertTrue(second?.contains("bytes changed") == true, second ?? "not refused")
         XCTAssertEqual(session.calls.filter { $0.hasPrefix("append:") }.count, appendsBefore, "nothing was stored")
         XCTAssertEqual(try records.entry(for: "<d1@icloud.example>")?.sentCopy, .pending)
+    }
+
+    /// The sent copy is stored but the record cannot say so: the draft, the only
+    /// other source of those bytes, is kept.
+    func testTheDraftIsKeptWhenTheStoredCopyCannotBeRecorded() async throws {
+        let session = FakeSession()
+        session.drafts = [draft()]
+        let (flow, records) = flow(session)
+        let dir = records.directory.path
+        session.onAppend = { _ = Darwin.chmod(dir, 0o500) }
+        addTeardownBlock { _ = Darwin.chmod(dir, 0o700) }
+        let result = try await flow.run(.subject("Report"))
+        _ = Darwin.chmod(dir, 0o700)
+        XCTAssertEqual(result.outcome, .submitted)
+        XCTAssertEqual(result.draftRemoval, .pending)
+        XCTAssertFalse(session.calls.contains("remove:7"))
+        XCTAssertFalse(session.drafts.isEmpty)
+    }
+
+    func testAProviderSentCopyStaysSkipped_whenTheAcceptanceCannotBeRecorded() async throws {
+        let session = FakeSession()
+        session.drafts = [draft()]
+        let provider = DirectTransportConfig.Account(accountID: "UUID-I", address: "me@icloud.example",
+                                                     smtp: account.smtp, imap: account.imap, sentCopy: .provider, allowedFrom: [])
+        let (flow, records) = flow(session, account: provider)
+        let dir = records.directory.path
+        session.onSubmit = { _ = Darwin.chmod(dir, 0o500) }
+        addTeardownBlock { _ = Darwin.chmod(dir, 0o700) }
+        let result = try await flow.run(.subject("Report"))
+        _ = Darwin.chmod(dir, 0o700)
+        XCTAssertEqual(result.sentCopy, .skipped)
+    }
+
+    func testAPendingStageIsDoneOnlyOnTheServerItWasSubmittedFrom() async throws {
+        let session = FakeSession()
+        session.drafts = [draft()]
+        session.appendError = Boom()
+        let (flow, records) = flow(session)
+        _ = try await flow.run(.subject("Report"))
+        session.appendError = nil
+        let moved = DirectTransportConfig.Account(accountID: "UUID-I", address: "me@icloud.example",
+                                                  smtp: account.smtp, imap: .init(host: "other-imap", port: 993),
+                                                  sentCopy: .append, allowedFrom: [])
+        let elsewhere = SendDraftFlow(account: moved, session: session, records: records,
+                                      localMessageID: { _ in nil }, now: { Date() })
+        let message = await refusal { try await elsewhere.run(.subject("Report")) }
+        XCTAssertTrue(message?.contains("another account or server") == true, message ?? "not refused")
     }
 
     func testACopyAlreadyInTheSentMailboxIsNotStoredTwice() async throws {

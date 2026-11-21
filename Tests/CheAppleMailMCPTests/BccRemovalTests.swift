@@ -52,6 +52,16 @@ final class BccRemovalTests: XCTestCase {
         }
     }
 
+    func testFieldValuesAreUnfolded_andAddressesCountedOutsideQuotesAndComments() throws {
+        let input = "To: a@x.example,\r\n b@x.example\r\nSubject: s\r\n\r\n"
+        let fields = try BccRemoval.fields(in: Data(input.utf8))
+        XCTAssertEqual(fields.map(\.name), ["to", "subject"])
+        XCTAssertEqual(fields[0].value, " a@x.example, b@x.example")
+        XCTAssertEqual(BccRemoval.addressCount(inFieldValue: fields[0].value), 2)
+        XCTAssertEqual(BccRemoval.addressCount(inFieldValue: #" "x@y" <a@x.example> (z@w)"#), 1)
+        XCTAssertEqual(BccRemoval.addressCount(inFieldValue: #" "say \"hi@\"" <a@x.example>"#), 1)
+    }
+
     func testTheFieldNamesAreListedLowercasedOncePerField() throws {
         let input = "From: me@x.example\r\nTO: a@x.example,\r\n b@x.example\r\nBcc: c@x.example\r\n\r\nTo: not a header"
         XCTAssertEqual(try BccRemoval.fieldNames(in: Data(input.utf8)), ["from", "to", "bcc"])

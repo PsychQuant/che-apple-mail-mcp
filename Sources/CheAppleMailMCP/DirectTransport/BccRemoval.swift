@@ -25,6 +25,41 @@ enum BccRemoval {
         try parse([UInt8](message)).fields.map(\.name)
     }
 
+    /// Each header field as its lowercased name and its unfolded value (the
+    /// bytes after the colon, continuation lines joined), in order.
+    static func fields(in message: Data) throws -> [(name: String, value: String)] {
+        try parse([UInt8](message)).fields.map { field in
+            var bytes: [UInt8] = []
+            for (index, line) in field.lines.enumerated() {
+                if index == 0, let colon = line.firstIndex(of: 0x3A) {
+                    bytes += line[line.index(after: colon)...]
+                } else {
+                    bytes += line
+                }
+            }
+            return (field.name, String(decoding: bytes, as: UTF8.self))
+        }
+    }
+
+    /// How many addresses an address-list field value names: its `@` signs
+    /// outside quoted strings and comments. Not a parser; compared with the
+    /// server's envelope, a difference means the envelope left something out.
+    static func addressCount(inFieldValue value: String) -> Int {
+        var count = 0, depth = 0, quoted = false, escaped = false
+        for scalar in value.unicodeScalars {
+            if escaped { escaped = false; continue }
+            switch scalar {
+            case "\\" where quoted || depth > 0: escaped = true
+            case "\"" where depth == 0: quoted.toggle()
+            case "(" where !quoted: depth += 1
+            case ")" where !quoted && depth > 0: depth -= 1
+            case "@" where !quoted && depth == 0: count += 1
+            default: break
+            }
+        }
+        return count
+    }
+
     static func strip(_ message: Data) throws -> Data {
         let bytes = [UInt8](message)
         let parsed = try parse(bytes)

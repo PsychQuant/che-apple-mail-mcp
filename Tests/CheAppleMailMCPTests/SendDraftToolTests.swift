@@ -91,7 +91,7 @@ final class SendDraftToolTests: XCTestCase {
         let opened = Opened()
         let env = try environment(config: config, password: nil, opened: opened)
         let message = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"), "draft_id": .string("5")], env)
-        XCTAssertTrue(message?.contains("--direct-transport-set-credential me@icloud.example") == true, message ?? "not refused")
+        XCTAssertTrue(message?.contains("--direct-transport-set-credential 'me@icloud.example'") == true, message ?? "not refused")
         XCTAssertEqual(opened.count, 0)
     }
 
@@ -120,6 +120,28 @@ final class SendDraftToolTests: XCTestCase {
         XCTAssertTrue(text.contains("NOT YET RUN AGAINST A REAL MAIL SERVER"), text)
         XCTAssertTrue(text.contains("#742"), text)
         XCTAssertEqual(ToolAccess.of("send_draft"), .send)
+    }
+
+    /// The submission lock covers the whole call: a second call is refused
+    /// before it connects to anything.
+    func testASecondCallIsRefusedBeforeItConnects() async throws {
+        let opened = Opened()
+        let env = try environment(config: config, opened: opened)
+        let records = SendRecordStore(directory: env.stateDirectory)
+        try await records.withSubmissionLock {
+            let message = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"),
+                                         "subject_match": .string("Report")], env)
+            XCTAssertTrue(message?.contains("another send_draft call is running") == true, message ?? "not refused")
+        }
+        XCTAssertEqual(opened.count, 0)
+    }
+
+    func testAccountIDAndNameThatNameDifferentAccountsAreRefused() async throws {
+        let env = try environment(config: config)
+        let message = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"),
+                                     "account_name": .string("someone@else.example"),
+                                     "subject_match": .string("Report")], env)
+        XCTAssertTrue(message?.contains("different accounts") == true, message ?? "not refused")
     }
 
     func testARefusalFromTheFlowIsReportedAsTheToolError() async throws {

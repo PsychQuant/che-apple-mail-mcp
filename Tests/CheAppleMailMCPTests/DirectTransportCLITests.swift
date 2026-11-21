@@ -13,12 +13,15 @@ final class DirectTransportCLITests: XCTestCase {
         XCTAssertEqual(RunMode.parse(["bin", "--direct-transport-forget", "<d1@icloud.example>"]),
                        .forgetDirectTransportSend(messageID: "<d1@icloud.example>"))
         for argv in [["bin", "--direct-transport-set-credential"],
-                     ["bin", "--direct-transport-set-credential", "--setup"],
                      ["bin", "--direct-transport-forget"],
-                     ["bin", "--direct-transport-forget", "x", "--direct-transport-set-credential", "y"]] {
+                     ["bin", "--direct-transport-forget", "x", "--direct-transport-set-credential", "y"],
+                     ["bin", "--version", "--direct-transport-forget", "<a@x>"],
+                     ["bin", "--direct-transport-set-credential", "me@x.example", "--setup"]] {
             guard case .usageError = RunMode.parse(argv) else { return XCTFail("\(argv) should be a usage error") }
         }
         XCTAssertEqual(RunMode.parse(["bin"]), .server, "the default stays the stdio server")
+        XCTAssertEqual(RunMode.parse(["bin", "--direct-transport-forget", "--draft@x.example"]),
+                       .forgetDirectTransportSend(messageID: "--draft@x.example"), "a Message-ID may begin with dashes")
     }
 
     // MARK: credential

@@ -112,12 +112,9 @@ struct SendDraftFlow {
 
     static let localIndexNote = "This tool does not change the local mail index; Mail shows the change when it next synchronises."
 
-    /// One call at a time, from the first look at the record to the last write.
+    /// The caller holds the record's submission lock for the whole call, the
+    /// session's opening and closing included (`SendDraftTool` does).
     func run(_ selector: DraftSelector) async throws -> SendDraftResult {
-        try await records.withSubmissionLock { try await runHoldingTheLock(selector) }
-    }
-
-    private func runHoldingTheLock(_ selector: DraftSelector) async throws -> SendDraftResult {
         let draftsBox = try await session.draftsMailbox()
         var wantedID: String?
         let candidates: [DraftSummary]
@@ -127,9 +124,9 @@ struct SendDraftFlow {
                 throw SendDraftRefusal(description: "the local message \(row) has no Message-ID to find it on the server by; nothing was submitted")
             }
             wantedID = id
-            candidates = try await session.drafts(withMessageID: id, in: draftsBox).filter { $0.messageID == id }
+            candidates = try await session.drafts(withMessageID: id, in: draftsBox).filter { Self.same($0.messageID, id) }
         case .subject(let subject):
-            candidates = try await session.drafts(withSubjectContaining: subject, in: draftsBox).filter { $0.subject == subject }
+            candidates = try await session.drafts(withSubjectContaining: subject, in: draftsBox).filter { Self.same($0.subject, subject) }
         }
         if candidates.isEmpty, let id = wantedID, let finished = try removalAlreadyHappened(id) {
             return finished
@@ -142,8 +139,8 @@ struct SendDraftFlow {
         let draft = try await session.fetchDraft(only, in: draftsBox)
         let stillTheSelection: Bool
         switch selector {
-        case .localRow: stillTheSelection = draft.messageID == wantedID
-        case .subject(let subject): stillTheSelection = draft.subject == subject && draft.messageID == only.messageID
+        case .localRow: stillTheSelection = Self.same(draft.messageID, wantedID)
+        case .subject(let subject): stillTheSelection = Self.same(draft.subject, subject) && Self.same(draft.messageID, only.messageID)
         }
         guard stillTheSelection else {
             throw SendDraftRefusal(description: "the draft fetched is not the one the search found (it changed in between); nothing was submitted")
@@ -152,6 +149,10 @@ struct SendDraftFlow {
         // Check 1: a Message-ID is the key of the record of sent drafts.
         guard let messageID = draft.messageID, !messageID.isEmpty else {
             throw SendDraftRefusal(description: "the draft has no Message-ID, so a second submission could not be prevented; nothing was submitted")
+        }
+        // The Message-ID is printed in commands a person pastes, and keys the record.
+        guard messageID.unicodeScalars.allSatisfy({ $0.value >= 0x21 && $0.value <= 0x7E }) else {
+            throw SendDraftRefusal(description: "the draft's Message-ID holds a character outside printable ASCII; nothing was submitted")
         }
         // Check 2: the record.
         if let existing = try records.entry(for: messageID) {
@@ -162,8 +163,9 @@ struct SendDraftFlow {
                 guard existing.sentCopy == .pending || existing.draftRemoval == .pending else {
                     throw SendDraftRefusal(description: "this draft was already submitted at \(Self.iso(existing.submittedAt ?? existing.updatedAt)); nothing was submitted")
                 }
-                guard DirectTransportConfig.equalIgnoringASCIICase(existing.accountID, account.accountID) else {
-                    throw SendDraftRefusal(description: "this Message-ID was submitted from another account (\(existing.accountID)); its pending stages are done only from that account. Nothing was submitted")
+                guard DirectTransportConfig.equalIgnoringASCIICase(existing.accountID, account.accountID),
+                      existing.server == Self.server(of: account) else {
+                    throw SendDraftRefusal(description: "this Message-ID was submitted from another account or server (\(existing.accountID), \(existing.server ?? "unknown server")); its pending stages are done only there. Nothing was submitted")
                 }
                 guard existing.draftDigest == draft.digest else {
                     throw SendDraftRefusal(description: "the draft on the server is not the one that was submitted (its bytes changed), so its pending stages are not done; nothing was submitted. Delete or store it in Mail")
@@ -205,7 +207,7 @@ struct SendDraftFlow {
         let attempting = SendRecord(messageID: messageID, accountID: account.accountID, state: .attempting,
                                     sentCopy: account.sentCopy == .append ? .pending : .skipped,
                                     draftRemoval: .pending, updatedAt: now(), serverReply: nil,
-                                    submittedAt: nil, draftDigest: draft.digest)
+                                    submittedAt: nil, draftDigest: draft.digest, server: Self.server(of: account))
         if try records.claim(attempting) != nil {
             throw SendDraftRefusal(description: "another call is submitting this draft or has submitted it; nothing was submitted")
         }
@@ -223,7 +225,7 @@ struct SendDraftFlow {
                 // The entry stays `attempting`, which a later call reads as unknown:
                 // the draft is never submitted again, and the stages wait for a person.
                 return SendDraftResult(outcome: .submitted, messageID: messageID, serverReply: reply,
-                                       sentCopy: .pending, draftRemoval: .pending, resumed: false,
+                                       sentCopy: Self.stage(attempting.sentCopy), draftRemoval: .pending, resumed: false,
                                        notes: ["The server accepted the message, but the record of sent drafts could not be updated (\(error)). It still says the send is in progress, so later calls refuse this draft as UNKNOWN and never submit it again; the sent copy and the draft's removal were not attempted. Store and delete the draft in Mail.",
                                                Self.localIndexNote])
             }
@@ -243,7 +245,7 @@ struct SendDraftFlow {
             record.state = .unknown
             record.serverReply = detail
             record.updatedAt = now()
-            var notes = ["The send state is UNKNOWN (\(detail)). The tool is NOT retrying, and a later send_draft for this draft is refused until you \(DirectTransportCLI.forgetInstruction(for: messageID)). Nothing here establishes whether the server took the message: look in the recipients' mail or the sent mailbox before deciding."]
+            var notes = ["The send state is UNKNOWN. The tool is NOT retrying, and a later send_draft for this draft is refused until you \(DirectTransportCLI.forgetInstruction(for: messageID)). Nothing here establishes whether the server took the message: look in the recipients' mail or the sent mailbox before deciding. Transport report, which is not a verdict on delivery: \(detail)"]
             do {
                 try records.put(record)
             } catch {
@@ -261,6 +263,7 @@ struct SendDraftFlow {
     private func removalAlreadyHappened(_ messageID: String) throws -> SendDraftResult? {
         guard var entry = try records.entry(for: messageID), entry.effectiveState == .submitted,
               DirectTransportConfig.equalIgnoringASCIICase(entry.accountID, account.accountID),
+              entry.server == Self.server(of: account),
               entry.sentCopy != .pending, entry.draftRemoval == .pending else { return nil }
         entry.draftRemoval = .done
         entry.updatedAt = now()
@@ -291,7 +294,14 @@ struct SendDraftFlow {
                 notes.append("The sent copy could not be stored (\(error)); call send_draft again for this draft to store it. The message will not be submitted again.")
             }
             record.updatedAt = now()
-            save(record, &notes)
+            // The draft is the only source for a sent copy the record does not show
+            // as stored: it is not removed until the record says so.
+            if !save(record, &notes) && record.sentCopy == .done {
+                notes.append("The draft was therefore left in the drafts mailbox; call send_draft again for it.")
+                notes.append(Self.localIndexNote)
+                return SendDraftResult(outcome: .submitted, messageID: record.messageID, serverReply: record.serverReply,
+                                       sentCopy: .pending, draftRemoval: .pending, resumed: resumed, notes: notes)
+            }
         }
         if record.sentCopy != .pending && record.draftRemoval == .pending {
             if await session.canExpungeOneMessage() {
@@ -314,12 +324,27 @@ struct SendDraftFlow {
     }
 
     /// A stage write that fails is reported, never thrown: the outcome is already known.
-    private func save(_ record: SendRecord, _ notes: inout [String]) {
+    @discardableResult
+    private func save(_ record: SendRecord, _ notes: inout [String]) -> Bool {
         do {
             try records.put(record)
+            return true
         } catch {
             notes.append("The record of sent drafts could not be updated (\(error)); it may report a stage that is done as pending, and a later call then repeats only that stage. The message will not be submitted again.")
+            return false
         }
+    }
+
+    /// The login and server a submission is bound to.
+    static func server(of account: DirectTransportConfig.Account) -> String {
+        "\(account.address.lowercased())@\(account.imap.host.lowercased()):\(account.imap.port)"
+    }
+
+    /// Equal scalar by scalar: Swift's `==` treats canonically equivalent Unicode
+    /// spellings as equal, which is not "exactly".
+    static func same(_ a: String?, _ b: String?) -> Bool {
+        guard let a, let b else { return a == nil && b == nil }
+        return Array(a.unicodeScalars) == Array(b.unicodeScalars)
     }
 
     private static func stage(_ stage: SendRecord.Stage) -> SendDraftResult.StageResult {

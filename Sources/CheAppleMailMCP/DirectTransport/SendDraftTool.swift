@@ -37,7 +37,6 @@ enum SendDraftTool {
             }
             selector = .localRow(row)
         case (nil, let text?):
-            guard !text.isEmpty else { throw MailError.invalidParameter("subject_match must not be empty") }
             selector = .subject(text)
         default:
             throw MailError.invalidParameter("send_draft takes exactly one of draft_id and subject_match")
@@ -56,40 +55,52 @@ enum SendDraftTool {
         } catch let problem as DirectTransportConfig.Problem {
             throw MailError.operationFailed("\(problem). Nothing was submitted")
         }
+        if let id = accountID, !id.isEmpty, let name = accountName, !name.isEmpty,
+           let byID = config.account(accountID: id, accountName: nil),
+           !DirectTransportConfig.equalIgnoringASCIICase(byID.address, name) {
+            throw MailError.invalidParameter("account_id and account_name name different accounts (\(byID.address) and \(name)); give one of them")
+        }
         guard let account = config.account(accountID: accountID, accountName: accountName) else {
             throw MailError.operationFailed("direct transport is not configured for \(accountID ?? accountName ?? "this account"). Nothing was submitted, and no Mail path is used instead")
         }
         let password: String
         do {
             guard let stored = try environment.password(account.address) else {
-                throw MailError.operationFailed("no stored credential for \(account.address): run the server binary with `--direct-transport-set-credential \(account.address)` and type the app-specific password. Nothing was submitted")
+                throw MailError.operationFailed("no stored credential for \(account.address): run the server binary with `--direct-transport-set-credential \(DirectTransportCLI.shellQuoted(account.address))` and type the app-specific password. Nothing was submitted")
             }
             password = stored
         } catch let failure as DirectTransportCredential.Failure {
             throw MailError.operationFailed("\(failure). Nothing was submitted")
         }
 
-        let session: DirectTransportSession
+        let records = SendRecordStore(directory: environment.stateDirectory)
         do {
-            session = try await environment.openSession(account, password)
-        } catch {
-            throw MailError.operationFailed("\(error)")
+            // One call at a time, from opening the session to closing it.
+            return try await records.withSubmissionLock {
+                let session: DirectTransportSession
+                do {
+                    session = try await environment.openSession(account, password)
+                } catch {
+                    throw MailError.operationFailed("\(error)")
+                }
+                let flow = SendDraftFlow(account: account, session: session, records: records,
+                                         localMessageID: environment.localMessageID, now: environment.now)
+                let result: SendDraftResult
+                do {
+                    result = try await flow.run(selector)
+                } catch let refusal as SendDraftRefusal {
+                    await session.close()
+                    throw MailError.operationFailed(refusal.description)
+                } catch {
+                    await session.close()
+                    throw MailError.operationFailed("send_draft stopped (\(error)); nothing more was done")
+                }
+                await session.close()
+                return render(result)
+            }
+        } catch let busy as SendRecordStore.Busy {
+            throw MailError.operationFailed(busy.description)
         }
-        let flow = SendDraftFlow(account: account, session: session,
-                                 records: SendRecordStore(directory: environment.stateDirectory),
-                                 localMessageID: environment.localMessageID, now: environment.now)
-        let result: SendDraftResult
-        do {
-            result = try await flow.run(selector)
-        } catch let refusal as SendDraftRefusal {
-            await session.close()
-            throw MailError.operationFailed(refusal.description)
-        } catch {
-            await session.close()
-            throw MailError.operationFailed("send_draft stopped (\(error)); nothing more was done")
-        }
-        await session.close()
-        return render(result)
     }
 
     static func render(_ result: SendDraftResult) -> String {

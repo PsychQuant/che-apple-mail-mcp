@@ -32,17 +32,19 @@ public enum RunMode: Equatable {
         if credential != nil && forget != nil {
             return .usageError("--direct-transport-set-credential and --direct-transport-forget cannot be combined")
         }
-        if let index = credential {
-            guard index + 1 < words.count, !words[index + 1].hasPrefix("--") else {
-                return .usageError("--direct-transport-set-credential needs the account's address")
+        // These change state, so they run only as the whole command line: a
+        // `--version` or `--setup` that also carries one must not store or forget.
+        if credential != nil {
+            guard words.count == 2, credential == 0 else {
+                return .usageError("--direct-transport-set-credential takes exactly one argument, the account's address, and nothing else")
             }
-            return .setDirectTransportCredential(address: words[index + 1])
+            return .setDirectTransportCredential(address: words[1])
         }
-        if let index = forget {
-            guard index + 1 < words.count, !words[index + 1].hasPrefix("--") else {
-                return .usageError("--direct-transport-forget needs the Message-ID the result named")
+        if forget != nil {
+            guard words.count == 2, forget == 0 else {
+                return .usageError("--direct-transport-forget takes exactly one argument, the Message-ID the result named, and nothing else")
             }
-            return .forgetDirectTransportSend(messageID: words[index + 1])
+            return .forgetDirectTransportSend(messageID: words[1])
         }
         let flags = Set(words)
         if flags.contains("--setup") { return .setup }

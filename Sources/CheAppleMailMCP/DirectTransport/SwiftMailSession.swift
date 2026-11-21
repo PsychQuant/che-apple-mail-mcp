@@ -156,37 +156,77 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
             guard let info = try await imap.fetchMessageInfo(for: id) else {
                 throw SendDraftRefusal(description: "the server returned no envelope for the draft; nothing was submitted")
             }
-            let names = Set((try? BccRemoval.fieldNames(in: message)) ?? [])
+            let fields = (try? BccRemoval.fields(in: message)) ?? []
+            // The Message-ID the record is keyed by must be the one in the bytes submitted.
+            let headerIDs = fields.filter { $0.name == "message-id" }.map(\.value)
+            guard headerIDs.count == 1, let headerID = Self.canonicalMessageID(headerIDs[0]),
+                  headerID == info.messageId?.description else {
+                throw SendDraftRefusal(description: "the draft's Message-ID header is missing, repeated, or not the one the server's envelope reports; nothing was submitted")
+            }
             let invalid: (AddressListEntry) -> Bool = { if case .invalid = $0 { return true } else { return false } }
             let recipientEntries = info.toAddresses + info.ccAddresses + info.bccAddresses
-            let covered = Self.envelopeCoversHeader(
-                fieldNames: names, to: info.toAddresses.mailboxes.count, cc: info.ccAddresses.mailboxes.count,
-                bcc: info.bccAddresses.mailboxes.count)
-            return FetchedDraft(uid: summary.uid, message: message, messageID: info.messageId?.description,
-                                subject: info.subject ?? "",
-                                from: info.fromAddresses.mailboxes.map(\.address),
-                                recipients: recipientEntries.mailboxes.map(\.address),
-                                hasInvalidRecipient: recipientEntries.contains(where: invalid) || !covered,
-                                hasInvalidSender: info.fromAddresses.contains(where: invalid)
-                                    || (names.contains("from") && info.fromAddresses.mailboxes.isEmpty),
-                                uidValidity: summary.uidValidity)
+            let agreement = Self.addressFieldsAgree(
+                fields: fields, from: info.fromAddresses.mailboxes.count, to: info.toAddresses.mailboxes.count,
+                cc: info.ccAddresses.mailboxes.count, bcc: info.bccAddresses.mailboxes.count)
+            let draft = FetchedDraft(uid: summary.uid, message: message, messageID: info.messageId?.description,
+                                     subject: info.subject ?? "",
+                                     from: info.fromAddresses.mailboxes.map(\.address),
+                                     recipients: recipientEntries.mailboxes.map(\.address),
+                                     hasInvalidRecipient: recipientEntries.contains(where: invalid) || !agreement.recipients,
+                                     hasInvalidSender: info.fromAddresses.contains(where: invalid) || !agreement.sender,
+                                     uidValidity: summary.uidValidity)
+            // A server that has the password could put it in what it reports; none
+            // of that text reaches a result or the record.
+            let reported = [draft.messageID ?? "", draft.subject] + draft.from + draft.recipients
+            guard reported.allSatisfy({ redact($0) == $0 }) else {
+                throw SendDraftRefusal(description: "the draft's header holds the account password; nothing was submitted")
+            }
+            return draft
         }
     }
 
-    /// Whether every To, Cc and Bcc field the header holds has at least one
-    /// address in the server's envelope. A field the envelope left empty may
-    /// hold text the server could not parse, which the checks cannot see.
-    static func envelopeCoversHeader(fieldNames: Set<String>, to: Int, cc: Int, bcc: Int) -> Bool {
-        !(fieldNames.contains("to") && to == 0)
-            && !(fieldNames.contains("cc") && cc == 0)
-            && !(fieldNames.contains("bcc") && bcc == 0)
+    /// Whether the header's address fields agree with the server's envelope.
+    /// From, To, Cc and Bcc may each appear at most once (RFC 5322 section 3.6),
+    /// From exactly once; and each field must name as many addresses as the
+    /// envelope reports for it. A difference means the server left out text it
+    /// could not parse, which the checks would otherwise not see.
+    static func addressFieldsAgree(fields: [(name: String, value: String)], from: Int, to: Int, cc: Int, bcc: Int)
+        -> (sender: Bool, recipients: Bool) {
+        func agrees(_ name: String, _ envelope: Int, required: Bool) -> Bool {
+            let values = fields.filter { $0.name == name }.map(\.value)
+            if values.isEmpty { return !required && envelope == 0 }
+            guard values.count == 1 else { return false }
+            let count = BccRemoval.addressCount(inFieldValue: values[0])
+            // A field naming no address is text the checks cannot read, unless it
+            // is blank or an empty group such as `undisclosed-recipients:;`.
+            if count == 0 { return !required && envelope == 0 && Self.isBlankOrEmptyGroup(values[0]) }
+            return count == envelope
+        }
+        return (agrees("from", from, required: true),
+                agrees("to", to, required: false) && agrees("cc", cc, required: false) && agrees("bcc", bcc, required: false))
+    }
+
+    /// Blank, or `display-name:;` with nothing between the colon and the semicolon.
+    static func isBlankOrEmptyGroup(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { return true }
+        guard trimmed.hasSuffix(";"), let colon = trimmed.firstIndex(of: ":") else { return false }
+        return trimmed[trimmed.index(after: colon)..<trimmed.index(before: trimmed.endIndex)]
+            .trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     func sentCopyExists(messageID: String, in mailbox: String) async throws -> Bool {
         try await guarded {
             try await imap.selectMailbox(mailbox)
+            // SEARCH HEADER is a substring search: each hit's own Message-ID must equal it.
             let found: MessageIdentifierSet<UID> = try await imap.search(criteria: [.header("Message-ID", messageID)])
-            return !found.toArray().isEmpty
+            for uid in found.toArray() {
+                guard let info = try await imap.fetchMessageInfo(for: uid) else {
+                    throw Failure(description: "the server found a message in the sent mailbox whose envelope it then did not return")
+                }
+                if info.messageId?.description == messageID { return true }
+            }
+            return false
         }
     }
 

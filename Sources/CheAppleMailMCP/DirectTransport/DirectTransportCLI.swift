@@ -61,6 +61,11 @@ enum DirectTransportCLI {
         }
     }
 
+    /// `text` as one POSIX shell word: single-quoted, each `'` written as `'\''`.
+    static func shellQuoted(_ text: String) -> String {
+        "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
     /// The forget command for a person to paste, with the Message-ID in POSIX
     /// single quotes (each `'` written as `'\''`). The Message-ID comes from the
     /// draft, which anyone can write, so it must not be able to leave its quotes.
@@ -69,7 +74,7 @@ enum DirectTransportCLI {
         guard !messageID.unicodeScalars.contains(where: { $0.properties.generalCategory == .control }) else {
             return nil
         }
-        return "--direct-transport-forget '" + messageID.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        return "--direct-transport-forget " + shellQuoted(messageID)
     }
 
     /// How to clear an unknown entry, as a sentence for a result or a refusal.
@@ -77,7 +82,7 @@ enum DirectTransportCLI {
         if let command = forgetCommand(for: messageID) {
             return "clear the entry by running the server binary with `\(command)`"
         }
-        return "clear the entry for this Message-ID from direct-transport-sent.json by hand (it holds a control character, so no command is printed)"
+        return "clear the entry by running the server binary with --direct-transport-forget and this Message-ID (it holds a control character, so no command is printed for pasting)"
     }
 
     /// One trailing CRLF, LF or CR, as a terminal or `printf '%s\n'` leaves it.

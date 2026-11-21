@@ -71,12 +71,23 @@ final class SubmitOutcomeClassificationTests: XCTestCase {
         XCTAssertFalse(SwiftMailSession.redact("AUTH PLAIN \(authz)", password: password, username: "me@x.example").contains(authz))
     }
 
-    /// A To, Cc or Bcc field the envelope left empty may hold text the server
-    /// could not parse: the draft is then refused.
-    func testAHeaderFieldWithNoEnvelopeAddressIsNotCovered() {
-        XCTAssertTrue(SwiftMailSession.envelopeCoversHeader(fieldNames: ["from", "to"], to: 1, cc: 0, bcc: 0))
-        XCTAssertFalse(SwiftMailSession.envelopeCoversHeader(fieldNames: ["to", "cc"], to: 1, cc: 0, bcc: 0))
-        XCTAssertFalse(SwiftMailSession.envelopeCoversHeader(fieldNames: ["to", "bcc"], to: 1, cc: 0, bcc: 0))
-        XCTAssertTrue(SwiftMailSession.envelopeCoversHeader(fieldNames: ["to", "cc"], to: 1, cc: 2, bcc: 0))
+    /// A field that names more addresses than the envelope reports, or a field
+    /// given twice, may hold text the server could not parse: refused.
+    func testTheHeaderAddressFieldsMustAgreeWithTheEnvelope() throws {
+        func agree(_ header: String, from: Int = 1, to: Int = 1, cc: Int = 0, bcc: Int = 0) throws -> (sender: Bool, recipients: Bool) {
+            let fields = try BccRemoval.fields(in: Data((header + "\r\n").utf8))
+            return SwiftMailSession.addressFieldsAgree(fields: fields, from: from, to: to, cc: cc, bcc: bcc)
+        }
+        let ok = try agree("From: Me <me@x.example>\r\nTo: a@x.example\r\n")
+        XCTAssertTrue(ok.sender && ok.recipients)
+        XCTAssertFalse(try agree("From: me@x.example\r\nTo: a@x.example, b@@x\r\n").recipients, "one address dropped")
+        XCTAssertFalse(try agree("From: me@x.example\r\nTo: a@x.example\r\nTo: b@x.example\r\n").recipients, "To twice")
+        XCTAssertFalse(try agree("From: me@x.example\r\nTo: a@x.example\r\nCc: junk\r\n").recipients, "a Cc the envelope left empty")
+        XCTAssertTrue(try agree("From: me@x.example\r\nTo: undisclosed-recipients:;\r\nBcc: a@x.example\r\n", to: 0, bcc: 1).recipients,
+                      "an empty group is a valid To")
+        XCTAssertFalse(try agree("To: a@x.example\r\n", from: 0).sender, "no From")
+        XCTAssertFalse(try agree("From: me@x.example\r\nFrom: you@x.example\r\nTo: a@x.example\r\n").sender, "From twice")
+        XCTAssertTrue(try agree(#"From: "a@b" (c@d) <me@x.example>"# + "\r\nTo: a@x.example\r\n").sender,
+                      "an @ in a quoted name or a comment is not an address")
     }
 }
