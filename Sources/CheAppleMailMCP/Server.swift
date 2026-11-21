@@ -680,7 +680,7 @@ class CheAppleMailMCPServer {
                     "type": .string("object"),
                     "properties": .object([
                         "account_name": .object(["type": .string("string"), "description": .string("The account's address as configured in direct-transport.json")]),
-                        "account_id": .object(["type": .string("string"), "description": .string("The account UUID as configured in direct-transport.json. With account_name also given, both must name the same account")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("The account UUID as configured in direct-transport.json; used in preference to account_name, except that a call whose account_name names a different configured account is refused")]),
                         "draft_id": .object(["type": .string("string"), "description": .string("Numeric local message id of the draft (from list_drafts); its Message-ID is looked up in the server's drafts mailbox")]),
                         "subject_match": .object(["type": .string("string"), "description": .string("Exact subject of the draft on the server; exactly one draft must match")]),
                         "message_id": .object(["type": .string("string"), "description": .string("The draft's Message-ID, such as <local@domain>, as append_draft returns it; exactly one draft must match")]),
@@ -695,7 +695,7 @@ class CheAppleMailMCPServer {
                     "type": .string("object"),
                     "properties": .object([
                         "account_name": .object(["type": .string("string"), "description": .string("The account's address as configured in direct-transport.json")]),
-                        "account_id": .object(["type": .string("string"), "description": .string("The account UUID as configured in direct-transport.json. With account_name also given, both must name the same account")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("The account UUID as configured in direct-transport.json; used in preference to account_name, except that a call whose account_name names a different configured account is refused")]),
                         "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Bare addresses (name@domain); display names are refused")]),
                         "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Bare addresses")]),
                         "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Bare addresses; kept in the draft's Bcc field, which send_draft removes when it submits")]),

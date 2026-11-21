@@ -74,6 +74,18 @@ final class SendDraftToolTests: XCTestCase {
         }
     }
 
+    func testAMessageIDWhoseDraftChangesBetweenSearchAndFetchIsRefused() async throws {
+        let session = SendDraftFlowTests.FakeSession()
+        session.drafts = [draft()]
+        session.fetchOverride = FetchedDraft(uid: 7, message: Data("From: me@icloud.example\r\nTo: me@icloud.example\r\nSubject: Report\r\n\r\nother".utf8),
+                                             messageID: "<other@icloud.example>", subject: "Report", from: ["me@icloud.example"],
+                                             recipients: ["me@icloud.example"], hasInvalidRecipient: false)
+        let message = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"),
+                                     "message_id": .string("<d1@icloud.example>")], try environment(config: config, session: session))
+        XCTAssertTrue(message?.contains("not the one the search found") == true, message ?? "not refused")
+        XCTAssertTrue(session.submitted.isEmpty)
+    }
+
     func testAMessageIDThatAServerHitOnlyContainsSelectsNothing() async throws {
         let session = SendDraftFlowTests.FakeSession()
         session.nearMissHits = [DraftSummary(uid: 9, subject: "Report", messageID: "<d1@icloud.example.other>")]

@@ -117,6 +117,39 @@ final class AppendDraftTests: XCTestCase {
         XCTAssertEqual(try BccRemoval.fields(in: built.mime).filter { $0.name.lowercased() == "subject" }.count, 1)
     }
 
+    /// The words of a header value that are RFC 2047 `B` encoded words, decoded and joined.
+    private func decodedWords(_ value: String) -> String {
+        let regex = try! NSRegularExpression(pattern: #"=\?utf-8\?B\?([A-Za-z0-9+/=]+)\?="#)
+        var bytes = Data()
+        for match in regex.matches(in: value, range: NSRange(value.startIndex..., in: value)) {
+            if let range = Range(match.range(at: 1), in: value), let data = Data(base64Encoded: String(value[range])) {
+                bytes.append(data)
+            }
+        }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
+    func testTheLongestAcceptedSubjectsAndNamesStayUnderTheLineLimit_andDecodeToThemselves() throws {
+        let unbrokenASCII = String(repeating: "a", count: AppendDraftTool.maxSubjectOctets)
+        let longCJKName = String(repeating: "鄭", count: AppendDraftTool.maxFromNameOctets / 3)
+        let longASCIIName = String(repeating: "n", count: AppendDraftTool.maxFromNameOctets)
+        for (subject, name) in [(unbrokenASCII, longCJKName), (String(repeating: "測", count: 600), longASCIIName)] {
+            let built = message(fromName: name, subject: subject)
+            XCTAssertTrue(headerBlock(built).components(separatedBy: "\r\n").allSatisfy { $0.utf8.count <= 998 })
+            let fields = try BccRemoval.fields(in: built.mime)
+            let subjectValue = try XCTUnwrap(fields.first { $0.name.lowercased() == "subject" }?.value)
+            let unfolded = subjectValue.replacingOccurrences(of: "\r\n", with: "")
+            XCTAssertEqual(unfolded.contains("=?utf-8?B?") ? decodedWords(unfolded) : unfolded.trimmingCharacters(in: .whitespaces), subject)
+            let fromValue = try XCTUnwrap(fields.first { $0.name.lowercased() == "from" }?.value)
+            XCTAssertTrue(fromValue.hasSuffix("<me@icloud.example>"), fromValue)
+            if name.unicodeScalars.allSatisfy({ $0.isASCII }) {
+                XCTAssertTrue(fromValue.contains(name))
+            } else {
+                XCTAssertEqual(decodedWords(fromValue), name)
+            }
+        }
+    }
+
     func testManyRecipientsFoldWithoutSplittingAnAddress() throws {
         let many = (0..<80).map { "recipient-number-\($0)@a-rather-long-domain.example" }
         let built = message(to: many)
@@ -171,6 +204,17 @@ final class AppendDraftTests: XCTestCase {
                     "a@" + String(repeating: "x", count: 64) + ".example"] {
             XCTAssertFalse(AppendDraftTool.isBareAddress(bad), bad)
         }
+    }
+
+    func testTheSizeLimitsAreEnforced() {
+        XCTAssertNil(refusal(subject: String(repeating: "s", count: AppendDraftTool.maxSubjectOctets)))
+        XCTAssertTrue(refusal(subject: String(repeating: "s", count: AppendDraftTool.maxSubjectOctets + 1))?.contains("'subject' is longer") == true)
+        XCTAssertNil(refusal(fromName: String(repeating: "n", count: AppendDraftTool.maxFromNameOctets)))
+        XCTAssertTrue(refusal(fromName: String(repeating: "n", count: AppendDraftTool.maxFromNameOctets + 1))?.contains("'from_name' is longer") == true)
+        XCTAssertTrue(refusal(body: String(repeating: "b", count: AppendDraftTool.maxBodyOctets + 1))?.contains("'body' is longer") == true)
+        let many = (0..<AppendDraftTool.maxRecipients).map { "r\($0)@x.example" }
+        XCTAssertNil(refusal(to: many))
+        XCTAssertTrue(refusal(to: many, bcc: ["one-more@x.example"])?.contains("at most \(AppendDraftTool.maxRecipients) recipients") == true)
     }
 
     func testABodyWithANULIsRefused() {
@@ -240,7 +284,8 @@ final class AppendDraftTests: XCTestCase {
         XCTAssertEqual(result.outcome, .unknown)
         XCTAssertEqual(session.calls.filter { $0.hasPrefix("appendDraft") }.count, 1, "an unknown append is never repeated")
         XCTAssertTrue(result.notes.contains { $0.contains("not evidence") })
-        XCTAssertTrue(result.notes.contains { $0.contains("second draft") })
+        XCTAssertTrue(result.notes.contains { $0.contains("If this draft was stored and a later call also stores one, there are two") },
+                      "the warning is conditional on both calls storing a draft")
     }
 
     func testAnUnknownAppendWhoseLookupFailsStaysUnknown_andSaysTheSearchWasNotMade() async throws {
@@ -472,6 +517,67 @@ final class AppendDraftTests: XCTestCase {
             XCTAssertTrue(message?.contains("another send_draft or append_draft call is running") == true, message ?? "not refused")
         }
         XCTAssertEqual(opened.count, 0)
+    }
+
+    private struct Leak: Error, CustomStringConvertible { var description: String { "server said: bad password secret-pw" } }
+
+    func testThePasswordIsRemovedFromEveryResult_whateverTheErrorSource() async throws {
+        // The connection fails.
+        let dir = try environment(config: config).stateDirectory
+        let failing = AppendDraftTool.Environment(
+            stateDirectory: dir, password: { _ in "secret-pw" }, openSession: { _, _ in throw Leak() },
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }, newID: { UUID() })
+        let first = try await AppendDraftTool.run(arguments(), failing)
+        XCTAssertFalse(first.contains("secret-pw"), first)
+        XCTAssertTrue(first.contains("not_appended"))
+        // Finding the drafts mailbox fails.
+        let noDrafts = FakeSession()
+        noDrafts.draftsMailboxError = Leak()
+        let second = try await AppendDraftTool.run(arguments(), try environment(config: config, session: noDrafts))
+        XCTAssertFalse(second.contains("secret-pw"), second)
+        // The APPEND is unknown and the search fails.
+        let lostSearch = FakeSession()
+        lostSearch.appendDraftOutcome = .unknown(detail: "timeout after secret-pw")
+        lostSearch.searchError = Leak()
+        let third = try await AppendDraftTool.run(arguments(), try environment(config: config, session: lostSearch))
+        XCTAssertFalse(third.contains("secret-pw"), third)
+        XCTAssertTrue(third.contains("could not be made"))
+    }
+
+    func testTheLockIsHeldUntilTheConnectionIsClosed() async throws {
+        let session = FakeSession()
+        let opened = Opened()
+        let env = try environment(config: config, session: session, opened: opened)
+        final class Box: @unchecked Sendable { var message: String? }
+        let box = Box()
+        session.onClose = { [self] in
+            session.onClose = nil
+            box.message = await self.failure(self.arguments(), env)
+        }
+        _ = try await AppendDraftTool.run(arguments(), env)
+        XCTAssertTrue(box.message?.contains("another send_draft or append_draft call is running") == true, box.message ?? "the second call ran")
+        XCTAssertEqual(opened.count, 1, "the second call opened no connection")
+    }
+
+    func testEveryCallHasItsOwnMessageID() async throws {
+        let session = FakeSession()
+        let dir = try environment(config: config).stateDirectory
+        let env = AppendDraftTool.Environment(
+            stateDirectory: dir, password: { _ in "secret-pw" }, openSession: { _, _ in session },
+            now: { Date(timeIntervalSince1970: 1_800_000_000) }, newID: UUID.init)
+        var ids: [String] = []
+        for _ in 0..<2 {
+            let text = try await AppendDraftTool.run(arguments(), env)
+            ids.append(try XCTUnwrap((JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])?["message_id"] as? String))
+        }
+        XCTAssertNotEqual(ids[0], ids[1])
+        XCTAssertEqual(Set(session.drafts.compactMap(\.messageID)), Set(ids), "two drafts, each findable by its own Message-ID")
+    }
+
+    func testAnArgumentNameIsShownWithoutItsControlCharacters() async throws {
+        let message = await failure(arguments(["x\r\ny": .string("v")]), try environment(config: config))
+        XCTAssertTrue(message?.contains("'x??y'") == true, message ?? "not refused")
+        XCTAssertFalse(message?.contains("\r\n") == true)
     }
 
     func testADraftAppendedHereIsSentByItsMessageID_withMailClosed() async throws {

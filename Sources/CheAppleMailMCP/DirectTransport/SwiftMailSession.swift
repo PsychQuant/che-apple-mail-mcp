@@ -307,12 +307,14 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
     }
 
     /// Maps what SwiftMail reports for one APPEND to the three outcomes (#744).
-    /// In the pinned revision `commandFailed` reaches an `append` call only from
-    /// the tagged NO or BAD reply to it (`AppendHandler`) or from a check made
-    /// before the command is sent, and `appendLimitExceeded` is raised before
-    /// anything is sent. A closed connection, a timeout and every error this code
-    /// does not recognise are `unknown`. Re-read `AppendHandler` and
-    /// `IMAPServer+Append.swift` before moving the pin.
+    /// In the pinned revision a failed command is never resent
+    /// (`IMAPConnection+CommandExecution.swift`, `runCommandHandler` rethrows).
+    /// `commandFailed` reaches an `append` call only from the tagged NO or BAD
+    /// reply to the APPEND (`AppendHandler`) or from re-authenticating before the
+    /// command is sent (`IMAPServer.executeCommand`), and `appendLimitExceeded` is
+    /// raised before anything is sent: in each case the draft was not stored. A
+    /// closed connection, a timeout and every error this code does not recognise
+    /// are `unknown`. Re-read those three files before moving the pin.
     static func classifyAppend(_ result: Result<AppendResult, Error>) -> AppendOutcome {
         switch result {
         case .success(let stored):

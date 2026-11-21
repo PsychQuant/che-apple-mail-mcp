@@ -119,7 +119,9 @@ final class SendDraftFlowTests: XCTestCase {
             if let removeError { throw removeError }
             lock.withLock { drafts.removeAll { $0.uid == draft.uid } }
         }
-        func close() async {}
+        /// Runs inside close, which the tools call while they still hold the lock.
+        var onClose: (() async -> Void)?
+        func close() async { await onClose?() }
     }
 
     struct Boom: Error, CustomStringConvertible { var description: String { "boom" } }

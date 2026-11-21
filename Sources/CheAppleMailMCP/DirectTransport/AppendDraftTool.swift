@@ -30,9 +30,9 @@ struct AppendDraftResult: Equatable {
 struct AppendDraftFlow {
     let session: DirectTransportSession
 
-    static let notDeduplicatedNote = "Calls are not de-duplicated: calling append_draft again creates a second draft beside this one."
-    static let indexNoteAppended = "This tool does not change the local mail index; Mail shows the draft when it next synchronises."
-    static let indexNoteUnknown = "This tool does not change the local mail index, so the draft not showing in Mail is not evidence either way until Mail next synchronises."
+    static let notDeduplicatedNote = "Calls are not de-duplicated: if append_draft is called again and that call also stores its draft, there are two drafts."
+    static let indexNoteAppended = "This tool does not change the local mail index; the draft can appear in Mail only after Mail synchronises the drafts mailbox."
+    static let indexNoteUnknown = "This tool does not change the local mail index. Whether the draft shows in Mail, now or after Mail synchronises, does not establish whether it was stored."
     static let indexNoteNotAppended = "This tool does not change the local mail index."
 
     /// A failure before the APPEND command was sent: nothing was appended.
@@ -95,7 +95,7 @@ struct AppendDraftFlow {
     }
 
     static func unknownAdvice(_ built: DraftMessage.Built) -> String {
-        "This tool is not retrying. If the draft was stored, calling again creates a second draft: look in the drafts mailbox for \(built.messageID) before calling again."
+        "This tool is not retrying. If this draft was stored and a later call also stores one, there are two: look in the drafts mailbox for \(built.messageID) on the server before calling again."
     }
 }
 
@@ -105,6 +105,12 @@ struct AppendDraftFlow {
 enum AppendDraftTool {
     static let name = "append_draft"
     static let argumentNames: Set<String> = ["account_name", "account_id", "to", "cc", "bcc", "subject", "body", "from_name"]
+
+    /// Bounds on what a call may carry, checked before anything is built.
+    static let maxBodyOctets = 5_000_000
+    static let maxSubjectOctets = 2_000
+    static let maxFromNameOctets = 200
+    static let maxRecipients = 100
 
     /// Kept here so the test of the caveats reads the same text the server lists.
     static let description = "Create a new plain-text draft in the server's drafts mailbox over IMAP, without Mail (#744, #729). NOT YET RUN AGAINST A REAL MAIL SERVER: until the result is recorded on issue #744, treat every outcome as unverified, including whether Mail and other clients show the result as an editable draft. Only for accounts listed in the server's direct-transport.json, with a password stored by running the binary with --direct-transport-set-credential <address>; any other account is refused and no Mail path is used instead. Takes account_name or account_id, to, cc and bcc (lists of bare addresses, at least one recipient in all; display names are refused), subject (not empty), body (plain text) and optionally from_name (the sender's display name; the sender's address is always the account's). It accepts no attachment, format, reply or signature argument. The tool builds the whole message itself: one text/plain part in UTF-8 with a new Message-ID, not the layout Mail gives its own drafts, so that send_draft can submit it as stored. Bcc recipients are kept in the draft's Bcc field. outcome is appended (the server completed the command, or a search afterwards found the message; uid is given when the server reports one), not_appended (the server refused the command, or the call stopped before the APPEND was sent: the connection, the login or finding the drafts mailbox failed), or unknown: whether the server stored the draft could not be established, and the tool is NOT retrying. Calls are not de-duplicated: a repeated call whose draft is stored creates a second draft beside the first, so after unknown look in the drafts mailbox for the message_id before calling again. The result carries message_id, which send_draft accepts to send this draft. Mail's local index is not changed and shows the draft when Mail next syncs."
@@ -119,7 +125,7 @@ enum AppendDraftTool {
 
     static func run(_ arguments: [String: Value], _ environment: Environment) async throws -> String {
         if let extra = arguments.keys.sorted().first(where: { !argumentNames.contains($0) }) {
-            throw MailError.invalidParameter("append_draft does not accept '\(extra)'; it takes only account_name, account_id, to, cc, bcc, subject, body and from_name")
+            throw MailError.invalidParameter("append_draft does not accept \(printable(extra)); it takes only account_name, account_id, to, cc, bcc, subject, body and from_name")
         }
         let accountName = try string(arguments, "account_name")
         let accountID = try string(arguments, "account_id")
@@ -153,27 +159,35 @@ enum AppendDraftTool {
         if let id = accountID, !id.isEmpty, let name = accountName, !name.isEmpty,
            let byID = config.account(accountID: id, accountName: nil),
            let byName = config.account(accountID: nil, accountName: name), byName != byID {
-            throw MailError.invalidParameter("account_id and account_name name different accounts (\(byID.address) and \(name)); give one of them")
+            throw MailError.invalidParameter("account_id and account_name name different accounts (\(byID.address) and \(printable(name))); give one of them")
         }
         guard let account = config.account(accountID: accountID, accountName: accountName) else {
-            throw MailError.operationFailed("direct transport is not configured for \(accountID ?? accountName ?? "this account"). Nothing was appended, and no Mail path is used instead")
+            throw MailError.operationFailed("direct transport is not configured for \(printable(accountID ?? accountName ?? "this account")). Nothing was appended, and no Mail path is used instead")
         }
 
-        let built = DraftMessage.build(fromName: fromName?.isEmpty == true ? nil : fromName, fromAddress: account.address,
-                                       to: to, cc: cc, bcc: bcc, subject: subject, body: body,
-                                       date: environment.now(), messageIDLocalPart: environment.newID())
+        let content = Content(fromName: fromName?.isEmpty == true ? nil : fromName, to: to, cc: cc, bcc: bcc,
+                              subject: subject, body: body)
         let records = SendRecordStore(directory: environment.stateDirectory)
         do {
             // The lock `send_draft` holds: one direct-transport call at a time.
             return try await records.withSubmissionLock {
-                try await runHoldingTheLock(built, account: account, environment)
+                try await runHoldingTheLock(content, account: account, environment)
             }
         } catch is SendRecordStore.Busy {
             throw MailError.operationFailed("another send_draft or append_draft call is running; nothing was appended. Try again when it has finished")
         }
     }
 
-    private static func runHoldingTheLock(_ built: DraftMessage.Built, account: DirectTransportConfig.Account,
+    struct Content {
+        let fromName: String?
+        let to: [String]
+        let cc: [String]
+        let bcc: [String]
+        let subject: String
+        let body: String
+    }
+
+    private static func runHoldingTheLock(_ content: Content, account: DirectTransportConfig.Account,
                                           _ environment: Environment) async throws -> String {
         let password: String
         do {
@@ -184,23 +198,41 @@ enum AppendDraftTool {
         } catch let failure as DirectTransportCredential.Failure {
             throw MailError.operationFailed("\(failure). Nothing was appended")
         }
+        // Built only once the call holds the lock and has a credential, so a call
+        // that is refused pays nothing for a large body.
+        let built = DraftMessage.build(fromName: content.fromName, fromAddress: account.address, to: content.to,
+                                       cc: content.cc, bcc: content.bcc, subject: content.subject, body: content.body,
+                                       date: environment.now(), messageIDLocalPart: environment.newID())
+        // Every error text below is redacted again here, whatever its source did:
+        // the result is the boundary the password must not cross.
+        func scrubbed(_ result: AppendDraftResult) -> String {
+            render(AppendDraftResult(
+                outcome: result.outcome, messageID: result.messageID, mailbox: result.mailbox, uid: result.uid,
+                uidValidity: result.uidValidity,
+                notes: result.notes.map { SwiftMailSession.redact($0, password: password, username: account.address) }))
+        }
         let session: DirectTransportSession
         do {
             session = try await environment.openSession(account, password)
         } catch {
-            // Nothing was sent to the server yet, so this is provably not appended.
-            return render(AppendDraftFlow.notAppendedBeforeAppend(built, mailbox: nil, "\(error)"))
+            // No APPEND was sent, so this is provably not appended.
+            return scrubbed(AppendDraftFlow.notAppendedBeforeAppend(built, mailbox: nil, "\(error)"))
         }
         let result = await AppendDraftFlow(session: session).run(built)
         await session.close()
-        return render(result)
+        return scrubbed(result)
     }
 
     /// Why the content cannot be made into a message; nil when it can.
     static func refusal(to: [String], cc: [String], bcc: [String], subject: String, body: String,
                         fromName: String?) -> String? {
+        // The recipient checks come first so a long list is refused by count
+        // before every element is parsed.
         guard !(to.isEmpty && cc.isEmpty && bcc.isEmpty) else {
             return "append_draft needs at least one recipient in to, cc or bcc"
+        }
+        guard to.count + cc.count + bcc.count <= maxRecipients else {
+            return "append_draft takes at most \(maxRecipients) recipients in to, cc and bcc together"
         }
         for (field, list) in [("to", to), ("cc", cc), ("bcc", bcc)] {
             if let bad = list.first(where: { !isBareAddress($0) }) {
@@ -208,6 +240,9 @@ enum AppendDraftTool {
             }
         }
         guard !subject.isEmpty else { return "append_draft needs a subject that is not empty" }
+        guard subject.utf8.count <= maxSubjectOctets else { return "'subject' is longer than \(maxSubjectOctets) octets" }
+        if let fromName, fromName.utf8.count > maxFromNameOctets { return "'from_name' is longer than \(maxFromNameOctets) octets" }
+        guard body.utf8.count <= maxBodyOctets else { return "'body' is longer than \(maxBodyOctets) octets" }
         if hasControlCharacter(subject) { return "'subject' holds a control character" }
         if let fromName, hasControlCharacter(fromName) { return "'from_name' holds a control character" }
         if body.unicodeScalars.contains(where: { $0.value == 0 }) { return "'body' holds a NUL character" }
@@ -241,7 +276,7 @@ enum AppendDraftTool {
     }
 
     /// A refused value as it may be shown: cut short, control characters replaced.
-    private static func printable(_ text: String) -> String {
+    static func printable(_ text: String) -> String {
         let shown = String(String.UnicodeScalarView(text.unicodeScalars.prefix(80).map {
             ($0.value < 0x20 || $0.value == 0x7F) ? "?" : $0
         }))
