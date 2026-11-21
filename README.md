@@ -7,6 +7,14 @@
 
 **The most comprehensive Apple Mail MCP server** - 60 tools with SQLite-powered millisecond search across 250K+ emails.
 
+An MCP server for your Apple Mail: the accounts set up in Mail, the messages Mail keeps on this Mac, and the mailboxes on your mail servers. It does not always go through the Mail app:
+
+| Path | Used by | Needs |
+|---|---|---|
+| Mail's local store (SQLite and `.emlx`), read directly | reading, searching, exporting | Full Disk Access; data is as fresh as Mail's last sync |
+| The Mail app (AppleScript, its compose window) | most writes: compose, reply, forward, move, flag, delete | Mail running; Automation and, for compose, Accessibility |
+| The mail server directly (IMAP and SMTP) | `send_draft` ([#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)) | an entry in `direct-transport.json` and an app-specific password; Mail need not run, applies no signature, and shows the change after its next sync |
+
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
 ---

@@ -7,6 +7,14 @@
 
 **最完整的 Apple Mail MCP 伺服器** - 60 個工具，SQLite 驅動的毫秒級搜尋，支援 25 萬封以上郵件。
 
+這是給你的 Apple Mail 用的 MCP：Mail 裡設好的帳號、Mail 存在這台 Mac 上的信，以及郵件伺服器上的信匣。它不一定經過 Mail 這個 App：
+
+| 路徑 | 用在 | 需要 |
+|---|---|---|
+| 直接讀 Mail 的本機資料（SQLite 與 `.emlx`） | 讀信、搜尋、匯出 | 完全磁碟取用權限；資料新舊取決於 Mail 上次同步 |
+| Mail App（AppleScript、撰寫視窗） | 大部分寫入：撰寫、回覆、轉寄、搬移、標記、刪除 | Mail 開著；自動化權限，撰寫另需輔助使用 |
+| 直接連郵件伺服器（IMAP 與 SMTP） | `send_draft`（[#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742)） | `direct-transport.json` 的設定與 App 專用密碼；不需要 Mail 開著、不套用簽名，Mail 要等下次同步才看得到 |
+
 [English](README.md) | [繁體中文](README_zh-TW.md)
 
 ---
