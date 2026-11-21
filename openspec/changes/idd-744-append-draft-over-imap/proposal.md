@@ -16,6 +16,7 @@
 - 回覆與轉寄的草稿（串接標頭、引用原文）、附件、rich text、顯示名收件人、簽名。
 - 修 #745（`send_draft` 送出 Mail 存的草稿時的版面問題）：那是另一個決定，候選做法列在 #745。
 - `create_draft` 的行為不變；`append_draft` 不符條件時不退回任何 Mail 路徑。
+- `message-composition` 規格不變：它管經 Mail 的撰寫路徑（GUI 與本機直接寫入）。`append_draft` 不經 Mail，所以它的契約只放在 `direct-transport`。
 - 去重紀錄：每次呼叫都是新的 Message-ID，重複呼叫的後果是多一封草稿。
 
 ## Capabilities

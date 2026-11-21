@@ -858,12 +858,13 @@ no Mail path is used instead.
 
 `append_draft` ([#744](https://github.com/PsychQuant/che-apple-mail-mcp/issues/744)) creates a new plain-text
 draft in the same accounts' drafts mailbox over IMAP, also without Mail. It has **not yet been run against a
-real mail server** either. It takes `to`, `cc`, `bcc` (bare addresses, at least one in all), `subject`, `body`
+real mail server** either. It takes `to`, `cc`, `bcc` (bare addresses such as `name@example.com`, at least one in all), `subject`, `body`
 and an optional `from_name`, and builds the whole message itself: one `text/plain` part in UTF-8 with a new
 Message-ID. That is not the layout Mail gives its own drafts, so `send_draft` can submit it as stored
 ([#745](https://github.com/PsychQuant/che-apple-mail-mcp/issues/745) describes what goes wrong with a draft
-Mail saved). The result is `appended`, `not_appended` or `unknown`; after `unknown` the tool does not retry,
-and a second call always creates a second draft. It returns `message_id`, which `send_draft` accepts as a third
+Mail saved). The result is `appended`, `not_appended` (the server refused, or the connection, login or
+drafts-mailbox lookup failed before anything was sent) or `unknown`; after `unknown` the tool does not retry.
+Calls are not de-duplicated: a repeated call whose draft is stored creates a second draft beside the first. It returns `message_id`, which `send_draft` accepts as a third
 way to choose the draft, so writing a draft and sending it can both happen with Mail closed.
 
 ### Setup

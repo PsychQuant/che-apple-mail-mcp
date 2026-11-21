@@ -17,8 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as `send_draft`. The tool builds one `text/plain` part in UTF-8 with a new
   Message-ID and appends it to the mailbox the server marks `\Drafts`, with
   `\Draft` and `\Seen`. Recipients are bare addresses only. The outcome is
-  `appended`, `not_appended` or `unknown`; after `unknown` it looks once for the
-  Message-ID and never appends again. The message is deliberately not in the
+  `appended`, `not_appended` (including a failed connection, login or
+  drafts-mailbox lookup before anything was sent) or `unknown`; after `unknown`
+  it tries one search for the Message-ID and never appends again. Calls are not
+  de-duplicated. The message is deliberately not in the
   layout Mail gives its own drafts
   ([#745](https://github.com/PsychQuant/che-apple-mail-mcp/issues/745)).
 - **`send_draft` accepts `message_id`** as a third way to choose the draft, beside

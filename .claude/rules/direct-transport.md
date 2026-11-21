@@ -57,11 +57,12 @@
    Mail 草稿的空純文字段與草稿標頭會送到收件人手上（#745）。改成 Mail 的版面，就是把 #745 搬進這個工具。
 10. **參數封閉、在開連線前檢查。** 只接受 `account_name`、`account_id`、`to`、`cc`、`bcc`、`subject`、`body`、
     `from_name`。收件人只收純位址；主旨與 `from_name` 的控制字元、內文的 NUL 一律拒絕：它們會變成標頭注入。
-11. **`not_appended` 只來自伺服器的明確拒絕或送出前的檢查。** 只有 `IMAPError.commandFailed`（APPEND 的 tagged
-    NO／BAD）與 `appendLimitExceeded` 算 `not_appended`；連線關閉、逾時、不認得的錯誤都是 `unknown`。
-12. **`unknown` 不重試，只看正面觀察。** 同一次呼叫裡絕不 APPEND 第二次；之後只以 Message-ID 搜尋一次，找到才改報
-    `appended`，沒看到不是沒存。沒有去重紀錄：每次都是新的 Message-ID，所以重複呼叫的後果是多一封草稿，說明與結果
-    都要寫明。
+11. **`not_appended` 只來自伺服器的明確拒絕或 APPEND 送出之前。** `IMAPError.commandFailed`（APPEND 的 tagged
+    NO／BAD）、`appendLimitExceeded`，以及 APPEND 之前的連線、登入、找草稿匣失敗，算 `not_appended`；APPEND 送出之後的
+    連線關閉、逾時、不認得的錯誤都是 `unknown`。
+12. **`unknown` 不重試，只看正面觀察。** 同一次呼叫裡絕不 APPEND 第二次；之後只試一次以 Message-ID 搜尋，命中要
+    逐字相同（IMAP 的標頭搜尋是子字串比對），找到才改報 `appended`。搜尋失敗與搜尋沒找到分開回報，兩者都不是「沒存」。
+    沒有去重紀錄：每次都是新的 Message-ID，重複呼叫而草稿也存進去了，就多一封；說明與結果都要寫明。
 13. **與 `send_draft` 共用提交鎖。** 兩個直接傳送的呼叫不同時開連線；`--direct-transport-forget` 在鎖被持有時不清。
 
 ## 與其他規則的關係
@@ -93,8 +94,11 @@
 - 第 9 項：組出的信帶 `X-Uniform-Type-Identifier`、`X-Apple-` 欄位或 multipart，或有不是 CRLF 的換行（`AppendDraftTests`）；
 - 第 10 項：清單以外的參數、型別不對、顯示名收件人、主旨或 `from_name` 的控制字元、內文的 NUL 被接受，或檢查晚於開連線
   （`AppendDraftTests`）；
-- 第 11 項：`classifyAppend` 把 `connectionFailed`、`timeout` 或不認得的錯誤分成 `not_appended`（`AppendDraftTests`）；
-- 第 12 項：`unknown` 之後 APPEND 第二次，或搜尋沒找到卻報成 `not_appended`（`AppendDraftTests`）。
+- 第 11 項：`classifyAppend` 把 `connectionFailed`、`timeout` 或不認得的錯誤分成 `not_appended`，或 APPEND 之前的失敗
+  變成工具錯誤而不是 `not_appended`（`AppendDraftTests`）；
+- 第 12 項：`unknown` 之後 APPEND 第二次、搜尋沒找到卻報成 `not_appended`、只有子字串相符的命中被當成找到、搜尋失敗被說成
+  沒找到（`AppendDraftTests`，`spec-example: direct-transport / append outcomes`）；
+- 第 13 項：鎖被持有時 `append_draft` 照樣開連線（`AppendDraftTests`）。
 
 抓不到的：`SwiftMailSession` 對真實伺服器的行為（APPEND 的旗標與 `APPENDUID` 是否照預期、Mail 與其他用戶端是否把
 `append_draft` 建的草稿當成可編輯的草稿、連線參數是否真的被 SwiftMail 套用、`\Drafts` 屬性是否出現在

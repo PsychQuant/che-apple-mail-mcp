@@ -453,8 +453,8 @@ claude
 純文字草稿，同樣不經 Mail，也**尚未對真實郵件伺服器跑過**。它接受 `to`、`cc`、`bcc`（純位址，合計至少一個）、`subject`、`body`
 與選填的 `from_name`，內容由工具自己組：單一 `text/plain`（UTF-8）、新的 Message-ID。這不是 Mail 自己存草稿的版面，所以
 `send_draft` 可以把它原樣送出（Mail 存的草稿原樣送出會有什麼問題，見
-[#745](https://github.com/PsychQuant/che-apple-mail-mcp/issues/745)）。結果是 `appended`、`not_appended` 或 `unknown`；`unknown`
-之後工具不重試，而再呼叫一次一定會多一封草稿。它回傳 `message_id`，`send_draft` 可以用它選草稿，所以建草稿與寄出都能在
+[#745](https://github.com/PsychQuant/che-apple-mail-mcp/issues/745)）。結果是 `appended`、`not_appended`（伺服器拒絕，或在送出任何內容之前
+連線、登入或找草稿匣就失敗）或 `unknown`；`unknown` 之後工具不重試。呼叫不會去重：再呼叫一次而草稿也存進去了，就會多一封。它回傳 `message_id`，`send_draft` 可以用它選草稿，所以建草稿與寄出都能在
 Mail 關著時完成。
 
 ### 設定
