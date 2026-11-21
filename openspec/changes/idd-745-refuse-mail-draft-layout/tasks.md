@@ -6,12 +6,12 @@
 
 ## 2. 實作（GREEN）
 
-- [x] 2.1 `SendDraftFlow` 第 6 項檢查與 `isInMailsDraftLayout`。
+- [x] 2.1 `SendDraftFlow` 第 6 項檢查與 `carriesMailsDraftMark`（用第 5 項解析出的欄位）。
 
 ## 3. 文件
 
 - [x] 3.1 工具說明、README 兩份、CHANGELOG、manifest（工具說明由測試重產，一行）、規則檔第 5 項。
-- [x] 3.2 verify 第 1 輪：標頭讀不出來時拒絕（不當成沒有標記）；拒絕訊息與 README 照實寫標記，不宣稱檢查了 MIME 結構；測試補草稿原封不動、補做兩個階段且不開 SMTP、沒有標記的 multipart 草稿照常送出。
+- [x] 3.2 verify 第 1、2 輪：標頭解析不了時拒絕、不當成沒有標記（第 2 輪後改為第 5、6 項共用同一次解析，由第 5 項拒絕）；拒絕訊息與 README 照實寫標記，不宣稱檢查了 MIME 結構；測試補草稿原封不動、補做兩個階段且不開 SMTP、沒有標記的 multipart 草稿照常送出。
 
 ## 4. 實際驗證（要維護者同意）
 

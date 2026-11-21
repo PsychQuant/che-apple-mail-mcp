@@ -630,8 +630,20 @@ final class SendDraftFlowTests: XCTestCase {
         XCTAssertEqual(sent.outcome, .submitted, "an unmarked multipart draft with an empty plain part is sent")
     }
 
-    func testAHeaderThatCannotBeReadIsRefused_notTakenAsUnmarked() async throws {
-        XCTAssertThrowsError(try SendDraftFlow.isInMailsDraftLayout(Data("no header separator".utf8)))
+    func testAMarkTheParserCannotReadIsRefused_notTakenAsUnmarked() async throws {
+        // A space before the colon is not a field name (RFC 5322 ftext): the header is
+        // refused by check 5, so the draft is never sent as unmarked.
+        let session = FakeSession()
+        let text = "From: me@icloud.example\r\nTo: me@icloud.example\r\nX-Uniform-Type-Identifier : com.apple.mail-draft\r\nSubject: Report\r\nMessage-ID: <s1@icloud.example>\r\n\r\nbody"
+        session.drafts = [draft(text: text)]
+        let (flow, records) = flow(session)
+        let message = await refusal { try await flow.run(.subject("Report")) }
+        XCTAssertTrue(message?.contains("field name") == true, message ?? "not refused")
+        XCTAssertTrue(message?.contains("nothing was submitted") == true)
+        XCTAssertFalse(session.calls.contains("prepare"), "no SMTP connection")
+        XCTAssertFalse(session.calls.contains("submit"))
+        XCTAssertEqual(session.drafts.map(\.message), [Data(text.utf8)], "the draft is left as it is")
+        XCTAssertNil(try records.entry(for: "<s1@icloud.example>"), "no entry was claimed")
     }
 
     func testAPendingStageOfADraftInMailsLayoutIsStillCompleted() async throws {
