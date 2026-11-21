@@ -1,0 +1,406 @@
+import MCP
+import SwiftMail
+import XCTest
+@testable import CheAppleMailMCP
+
+/// #744 — `append_draft`: the message the tool builds, the three outcomes of
+/// the APPEND, and the tool around them. A stand-in server; no keychain, no
+/// network, no Mail.
+final class AppendDraftTests: XCTestCase {
+
+    private typealias FakeSession = SendDraftFlowTests.FakeSession
+
+    private let accountID = "AAAAAAAA-2222-4333-8444-555555555555"
+    private let config = """
+    {"accounts": [{"account_id": "AAAAAAAA-2222-4333-8444-555555555555", "address": "me@icloud.example",
+      "smtp": {"host": "smtp.example", "port": 587}, "imap": {"host": "imap.example", "port": 993},
+      "sent_copy": "append", "allowed_from": []}]}
+    """
+
+    private let fixedDate = Date(timeIntervalSince1970: 1_800_000_000)
+    private let fixedID = UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
+
+    private func message(fromName: String? = nil, to: [String] = ["a@x.example"], cc: [String] = [],
+                         bcc: [String] = [], subject: String = "Hello", body: String = "Line one\nLine two") -> DraftMessage.Built {
+        DraftMessage.build(fromName: fromName, fromAddress: "me@icloud.example", to: to, cc: cc, bcc: bcc,
+                           subject: subject, body: body, date: fixedDate, messageIDLocalPart: fixedID,
+                           timeZone: TimeZone(secondsFromGMT: 8 * 3600)!)
+    }
+
+    private func text(_ built: DraftMessage.Built) -> String { String(decoding: built.mime, as: UTF8.self) }
+
+    private func headerBlock(_ built: DraftMessage.Built) -> String {
+        text(built).components(separatedBy: "\r\n\r\n").first ?? ""
+    }
+
+    private func bodyBlock(_ built: DraftMessage.Built) -> String {
+        let whole = text(built)
+        guard let range = whole.range(of: "\r\n\r\n") else { return "" }
+        return String(whole[range.upperBound...])
+    }
+
+    // MARK: - The message
+
+    func testEveryLineEndsWithCRLF_andNoBareLineFeedRemains() {
+        let built = message(body: "one\ntwo\r\nthree\rfour")
+        let bytes = [UInt8](built.mime)
+        for (index, byte) in bytes.enumerated() where byte == 0x0A {
+            XCTAssertTrue(index > 0 && bytes[index - 1] == 0x0D, "a line feed without a carriage return at \(index)")
+        }
+        for (index, byte) in bytes.enumerated() where byte == 0x0D {
+            XCTAssertTrue(index + 1 < bytes.count && bytes[index + 1] == 0x0A, "a carriage return without a line feed at \(index)")
+        }
+    }
+
+    func testTheHeadersAreTheOnesASentPlainMessageCarries() throws {
+        let built = message(fromName: "Che", to: ["a@x.example", "b@x.example"], cc: ["c@x.example"], bcc: ["d@x.example"])
+        let fields = try BccRemoval.fields(in: built.mime)
+        let names = fields.map { $0.name.lowercased() }
+        XCTAssertEqual(Set(names), ["from", "to", "cc", "bcc", "subject", "date", "message-id", "mime-version",
+                                    "content-type", "content-transfer-encoding"])
+        XCTAssertEqual(names.count, Set(names).count, "a header appears twice")
+        func value(_ name: String) -> String? { fields.first { $0.name.lowercased() == name }?.value.trimmingCharacters(in: .whitespaces) }
+        XCTAssertEqual(value("from"), "Che <me@icloud.example>")
+        XCTAssertEqual(value("to"), "a@x.example, b@x.example")
+        XCTAssertEqual(value("cc"), "c@x.example")
+        XCTAssertEqual(value("bcc"), "d@x.example")
+        XCTAssertEqual(value("message-id"), "<11111111-2222-4333-8444-555555555555@icloud.example>")
+        XCTAssertEqual(built.messageID, "<11111111-2222-4333-8444-555555555555@icloud.example>")
+        XCTAssertEqual(value("date"), "Fri, 15 Jan 2027 16:00:00 +0800")
+        XCTAssertEqual(value("mime-version"), "1.0")
+    }
+
+    func testEmptyCcAndBccLeaveNoField() throws {
+        let names = try BccRemoval.fields(in: message().mime).map { $0.name.lowercased() }
+        XCTAssertFalse(names.contains("cc"))
+        XCTAssertFalse(names.contains("bcc"))
+    }
+
+    func testTheMessageIsNotInMailsDraftLayout() {
+        let headers = headerBlock(message()).lowercased()
+        XCTAssertFalse(headers.contains("x-uniform-type-identifier"), "the draft marker would reach the recipient (#745)")
+        XCTAssertFalse(headers.contains("x-apple-"))
+        XCTAssertFalse(headers.contains("multipart"))
+        XCTAssertTrue(headers.contains("content-type: text/plain; charset=utf-8"))
+    }
+
+    func testAShortASCIIBodyGoesOutAs7bit_withItsLineEndingsNormalised() {
+        let built = message(body: "one\ntwo\r\nthree")
+        XCTAssertTrue(headerBlock(built).contains("Content-Transfer-Encoding: 7bit"))
+        XCTAssertEqual(bodyBlock(built), "one\r\ntwo\r\nthree\r\n")
+    }
+
+    func testANonASCIIBodyGoesOutAsBase64_inLinesOf76_andDecodesToTheBody() throws {
+        let body = String(repeating: "這是一封測試信。", count: 40) + "\n第二行"
+        let built = message(body: body)
+        XCTAssertTrue(headerBlock(built).contains("Content-Transfer-Encoding: base64"))
+        let lines = bodyBlock(built).components(separatedBy: "\r\n").filter { !$0.isEmpty }
+        XCTAssertTrue(lines.allSatisfy { $0.utf8.count <= 76 })
+        let decoded = try XCTUnwrap(Data(base64Encoded: lines.joined()))
+        XCTAssertEqual(String(decoding: decoded, as: UTF8.self), body.replacingOccurrences(of: "\n", with: "\r\n") + "\r\n")
+    }
+
+    func testAnASCIIBodyWithALineOverTheLimitGoesOutAsBase64() {
+        let built = message(body: String(repeating: "a", count: 1200))
+        XCTAssertTrue(headerBlock(built).contains("Content-Transfer-Encoding: base64"))
+        XCTAssertTrue(text(built).components(separatedBy: "\r\n").allSatisfy { $0.utf8.count <= 998 })
+    }
+
+    func testANonASCIISubjectAndNameAreEncodedWords_andNoHeaderLinePassesTheLimit() throws {
+        let built = message(fromName: "鄭澈", subject: String(repeating: "測試主旨", count: 60))
+        let headers = headerBlock(built)
+        XCTAssertTrue(headers.contains("From: =?utf-8?B?"))
+        XCTAssertTrue(headers.contains("Subject: =?utf-8?B?"))
+        XCTAssertTrue(headers.unicodeScalars.allSatisfy { $0.isASCII })
+        XCTAssertTrue(headers.components(separatedBy: "\r\n").allSatisfy { $0.utf8.count <= 998 })
+        // Still one Subject field once unfolded.
+        XCTAssertEqual(try BccRemoval.fields(in: built.mime).filter { $0.name.lowercased() == "subject" }.count, 1)
+    }
+
+    func testManyRecipientsFoldWithoutSplittingAnAddress() throws {
+        let many = (0..<80).map { "recipient-number-\($0)@a-rather-long-domain.example" }
+        let built = message(to: many)
+        XCTAssertTrue(headerBlock(built).components(separatedBy: "\r\n").allSatisfy { $0.utf8.count <= 998 })
+        let to = try XCTUnwrap(BccRemoval.fields(in: built.mime).first { $0.name.lowercased() == "to" })
+        XCTAssertEqual(BccRemoval.addressList(inFieldValue: to.value), 80)
+    }
+
+    // MARK: - Validation
+
+    private func refusal(to: [String] = ["a@x.example"], cc: [String] = [], bcc: [String] = [],
+                         subject: String = "Hello", body: String = "b", fromName: String? = nil) -> String? {
+        AppendDraftTool.refusal(to: to, cc: cc, bcc: bcc, subject: subject, body: body, fromName: fromName)
+    }
+
+    func testAnAcceptableCallHasNoRefusal() {
+        XCTAssertNil(refusal(to: ["a@x.example"], cc: ["b@x.example"], bcc: ["c@x.example"], fromName: "鄭澈 Che"))
+        XCTAssertNil(refusal(to: [], bcc: ["c@x.example"]), "a draft with only a Bcc recipient is a draft")
+    }
+
+    func testNoRecipientAtAllIsRefused() {
+        XCTAssertTrue(refusal(to: [])?.contains("at least one recipient") == true)
+    }
+
+    func testAnEmptySubjectIsRefused() {
+        XCTAssertTrue(refusal(subject: "")?.contains("subject") == true)
+    }
+
+    func testAControlCharacterInAHeaderValueIsRefused() {
+        for bad in ["Hello\r\nBcc: x@y.example", "Hello\nX: y", "Hello\u{0}", "Hello\u{7F}", "Tab\tbed"] {
+            XCTAssertTrue(refusal(subject: bad)?.contains("control character") == true, bad.debugDescription)
+            XCTAssertTrue(refusal(fromName: bad)?.contains("control character") == true, bad.debugDescription)
+        }
+    }
+
+    func testOnlyBareAddressesAreAccepted() {
+        for bad in ["Name <a@x.example>", "a@x.example, b@x.example", "a@x.example\r\nBcc: z@y.example", "not-an-address",
+                    " a@x.example", String(repeating: "a", count: 250) + "@x.example"] {
+            XCTAssertTrue(refusal(to: [bad])?.contains("bare address") == true, bad.debugDescription)
+            XCTAssertTrue(refusal(cc: [bad])?.contains("bare address") == true, bad.debugDescription)
+            XCTAssertTrue(refusal(bcc: [bad])?.contains("bare address") == true, bad.debugDescription)
+        }
+    }
+
+    func testABodyWithANULIsRefused() {
+        XCTAssertTrue(refusal(body: "a\u{0}b")?.contains("NUL") == true)
+    }
+
+    // MARK: - The flow
+
+    private let account = DirectTransportConfig.Account(
+        accountID: "AAAAAAAA-2222-4333-8444-555555555555", address: "me@icloud.example",
+        smtp: .init(host: "smtp", port: 587), imap: .init(host: "imap", port: 993),
+        sentCopy: .append, allowedFrom: [])
+
+    private func run(_ session: FakeSession) async throws -> AppendDraftResult {
+        try await AppendDraftFlow(session: session).run(message())
+    }
+
+    func testAnAcceptedAppendReportsTheMailboxAndTheUID() async throws {
+        let session = FakeSession()
+        session.appendDraftOutcome = .appended(uid: 42, uidValidity: 9)
+        let result = try await run(session)
+        XCTAssertEqual(result.outcome, .appended)
+        XCTAssertEqual(result.mailbox, "Drafts")
+        XCTAssertEqual(result.uid, 42)
+        XCTAssertEqual(result.uidValidity, 9)
+        XCTAssertEqual(result.messageID, "<11111111-2222-4333-8444-555555555555@icloud.example>")
+        XCTAssertEqual(session.appendedDrafts.count, 1)
+        XCTAssertEqual(session.appendedDrafts.first, message().mime, "the bytes appended are the bytes built")
+        XCTAssertTrue(result.notes.contains(SendDraftFlow.localIndexNote))
+    }
+
+    func testAnAppendWithoutUIDPLUSIsStillAppended_withNoUID() async throws {
+        let session = FakeSession()
+        session.appendDraftOutcome = .appended(uid: nil, uidValidity: nil)
+        let result = try await run(session)
+        XCTAssertEqual(result.outcome, .appended)
+        XCTAssertNil(result.uid)
+    }
+
+    func testARefusedAppendIsNotAppended_andIsNotLookedUp() async throws {
+        let session = FakeSession()
+        session.appendDraftOutcome = .notAppended(detail: "NO [OVERQUOTA]")
+        let result = try await run(session)
+        XCTAssertEqual(result.outcome, .notAppended)
+        XCTAssertNil(result.uid)
+        XCTAssertFalse(session.calls.contains("searchMessageID"))
+        XCTAssertTrue(result.notes.contains { $0.contains("NO [OVERQUOTA]") })
+    }
+
+    func testAnUnknownAppendThatTheServerThenShowsIsAppended_andSaysHowItWasEstablished() async throws {
+        let session = FakeSession()
+        session.appendDraftOutcome = .unknown(detail: "connection closed")
+        session.storeDraftDespiteOutcome = true
+        let result = try await run(session)
+        XCTAssertEqual(result.outcome, .appended)
+        XCTAssertEqual(result.uid, 1)
+        XCTAssertTrue(result.notes.contains { $0.contains("found it in the drafts mailbox") })
+    }
+
+    func testAnUnknownAppendThatIsNotFoundStaysUnknown_andIsNotRetried() async throws {
+        let session = FakeSession()
+        session.appendDraftOutcome = .unknown(detail: "connection closed")
+        let result = try await run(session)
+        XCTAssertEqual(result.outcome, .unknown)
+        XCTAssertEqual(session.calls.filter { $0.hasPrefix("appendDraft") }.count, 1, "an unknown append is never repeated")
+        XCTAssertTrue(result.notes.contains { $0.contains("not evidence") })
+        XCTAssertTrue(result.notes.contains { $0.contains("second draft") })
+    }
+
+    func testAnUnknownAppendWhoseLookupFailsStaysUnknown() async throws {
+        let session = FakeSession()
+        session.appendDraftOutcome = .unknown(detail: "timeout")
+        session.searchError = SendDraftFlowTests.Boom()
+        let result = try await run(session)
+        XCTAssertEqual(result.outcome, .unknown)
+    }
+
+    func testTwoHitsAfterAnUnknownAppendAreNotReadAsOneDraft() async throws {
+        let session = FakeSession()
+        session.appendDraftOutcome = .unknown(detail: "timeout")
+        let id = message().messageID
+        session.drafts = [
+            FetchedDraft(uid: 3, message: Data(), messageID: id, subject: "Hello", from: [], recipients: [], hasInvalidRecipient: false),
+            FetchedDraft(uid: 4, message: Data(), messageID: id, subject: "Hello", from: [], recipients: [], hasInvalidRecipient: false),
+        ]
+        let result = try await run(session)
+        XCTAssertEqual(result.outcome, .appended)
+        XCTAssertNil(result.uid, "which of the two it is cannot be said")
+    }
+
+    func testNoDraftsMailboxStopsBeforeAnythingIsAppended() async {
+        let session = FakeSession()
+        session.draftsMailboxError = SendDraftRefusal(description: "the server marks no mailbox \\Drafts")
+        do { _ = try await run(session); XCTFail("not refused") } catch {
+            XCTAssertTrue("\(error)".contains("\\Drafts"))
+        }
+        XCTAssertTrue(session.appendedDrafts.isEmpty)
+    }
+
+    // MARK: - The tool
+
+    private final class Opened: @unchecked Sendable { var count = 0 }
+
+    private func environment(config text: String?, password: String? = "secret-pw",
+                             session: FakeSession = FakeSession(), opened: Opened = Opened()) throws -> AppendDraftTool.Environment {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("append-tool-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        if let text { try Data(text.utf8).write(to: dir.appendingPathComponent(DirectTransportConfig.fileName)) }
+        return AppendDraftTool.Environment(
+            stateDirectory: dir,
+            password: { _ in password },
+            openSession: { _, _ in opened.count += 1; return session },
+            now: { Date(timeIntervalSince1970: 1_800_000_000) },
+            newID: { UUID(uuidString: "11111111-2222-4333-8444-555555555555")! })
+    }
+
+    private func arguments(_ extra: [String: Value] = [:]) -> [String: Value] {
+        var base: [String: Value] = ["account_id": .string(accountID), "to": .array([.string("a@x.example")]),
+                                     "subject": .string("Hello"), "body": .string("Body")]
+        for (key, value) in extra { base[key] = value }
+        return base
+    }
+
+    private func failure(_ arguments: [String: Value], _ environment: AppendDraftTool.Environment) async -> String? {
+        do { _ = try await AppendDraftTool.run(arguments, environment); return nil } catch {
+            return (error as? LocalizedError)?.errorDescription ?? "\(error)"
+        }
+    }
+
+    func testAnArgumentOutsideTheListIsRefusedByName_beforeAnyConnection() async throws {
+        let opened = Opened()
+        let env = try environment(config: config, opened: opened)
+        for extra in ["attachments", "format", "from_address", "draft_id", "in_reply_to", "save_as_draft"] {
+            let message = await failure(arguments([extra: .string("x")]), env)
+            XCTAssertTrue(message?.contains("'\(extra)'") == true, "\(extra): \(message ?? "not refused")")
+        }
+        XCTAssertEqual(opened.count, 0)
+    }
+
+    func testArgumentsOfTheWrongTypeAreRefusedByName() async throws {
+        let opened = Opened()
+        let env = try environment(config: config, opened: opened)
+        let cases: [(String, Value)] = [
+            ("to", .string("a@x.example")), ("to", .array([.int(1)])), ("to", .null), ("cc", .array([.null])),
+            ("bcc", .string("x")), ("subject", .null), ("subject", .int(3)), ("body", .null), ("from_name", .int(1)),
+            ("account_id", .null),
+        ]
+        for (name, value) in cases {
+            let message = await failure(arguments([name: value]), env)
+            XCTAssertTrue(message?.contains("'\(name)'") == true, "\(name)=\(value): \(message ?? "not refused")")
+        }
+        XCTAssertEqual(opened.count, 0)
+    }
+
+    func testSubjectAndBodyAreRequired() async throws {
+        let env = try environment(config: config)
+        var noSubject = arguments(); noSubject["subject"] = nil
+        var noBody = arguments(); noBody["body"] = nil
+        let first = await failure(noSubject, env)
+        XCTAssertTrue(first?.contains("subject") == true, first ?? "not refused")
+        let second = await failure(noBody, env)
+        XCTAssertTrue(second?.contains("body") == true, second ?? "not refused")
+    }
+
+    func testAnUnconfiguredAccountIsRefused_andNoMailPathIsUsed() async throws {
+        let opened = Opened()
+        let none = await failure(arguments(), try environment(config: nil, opened: opened))
+        XCTAssertTrue(none?.contains("not configured") == true, none ?? "not refused")
+        XCTAssertTrue(none?.contains("Nothing was appended") == true)
+        let other = await failure(arguments(["account_id": .string("BBBBBBBB-2222-4333-8444-555555555555")]),
+                                  try environment(config: config, opened: opened))
+        XCTAssertTrue(other?.contains("not configured") == true, other ?? "not refused")
+        XCTAssertEqual(opened.count, 0)
+    }
+
+    func testNoStoredCredentialNamesTheCommandLineMode_beforeAnyConnection() async throws {
+        let opened = Opened()
+        let message = await failure(arguments(), try environment(config: config, password: nil, opened: opened))
+        XCTAssertTrue(message?.contains("--direct-transport-set-credential") == true, message ?? "not refused")
+        XCTAssertEqual(opened.count, 0)
+    }
+
+    func testAContentRefusalHappensBeforeAnyConnection() async throws {
+        let opened = Opened()
+        let message = await failure(arguments(["to": .array([.string("Name <a@x.example>")])]),
+                                    try environment(config: config, opened: opened))
+        XCTAssertTrue(message?.contains("bare address") == true, message ?? "not refused")
+        XCTAssertEqual(opened.count, 0)
+    }
+
+    func testTheResultIsJSONWithTheOutcomeAndTheMessageID() async throws {
+        let session = FakeSession()
+        session.appendDraftOutcome = .appended(uid: 42, uidValidity: 9)
+        let text = try await AppendDraftTool.run(arguments(["from_name": .string("Che")]), try environment(config: config, session: session))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        XCTAssertEqual(object["outcome"] as? String, "appended")
+        XCTAssertEqual(object["message_id"] as? String, "<11111111-2222-4333-8444-555555555555@icloud.example>")
+        XCTAssertEqual(object["mailbox"] as? String, "Drafts")
+        XCTAssertEqual(object["uid"] as? Int, 42)
+        XCTAssertEqual(object["uid_validity"] as? Int, 9)
+        XCTAssertNotNil(object["notes"] as? [String])
+        let appended = try XCTUnwrap(session.appendedDrafts.first)
+        XCTAssertTrue(String(decoding: appended, as: UTF8.self).contains("From: Che <me@icloud.example>\r\n"))
+    }
+
+    func testAnUnknownOutcomeIsAResult_notAnError_andCarriesNoUID() async throws {
+        let session = FakeSession()
+        session.appendDraftOutcome = .unknown(detail: "connection closed")
+        let text = try await AppendDraftTool.run(arguments(), try environment(config: config, session: session))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        XCTAssertEqual(object["outcome"] as? String, "unknown")
+        XCTAssertTrue(object["uid"] is NSNull)
+    }
+
+    func testTheDescriptionCarriesTheCaveats() {
+        let description = AppendDraftTool.description
+        XCTAssertTrue(description.contains("NOT YET RUN AGAINST A REAL MAIL SERVER"))
+        XCTAssertTrue(description.contains("#744"))
+        XCTAssertTrue(description.contains("second draft"))
+        XCTAssertTrue(description.contains("no Mail path is used instead"))
+    }
+
+    func testTheToolIsListedAsPreparingMail_notSending() {
+        XCTAssertEqual(ToolAccess.of("append_draft"), .prepareMail)
+    }
+
+    // MARK: - What SwiftMail reports for an APPEND
+
+    func testOnlyAServerRefusalOrALocalLimitIsProvablyNotAppended() {
+        func outcome(_ error: Error) -> AppendOutcome { SwiftMailSession.classifyAppend(.failure(error)) }
+        if case .notAppended = outcome(IMAPError.commandFailed("no(...)")) {} else { XCTFail("a tagged NO is a refusal") }
+        if case .notAppended = outcome(IMAPError.appendLimitExceeded(10, 5)) {} else { XCTFail("the size limit is checked before anything is sent") }
+        for error: Error in [IMAPError.connectionFailed("closed"), IMAPError.timeout, SendDraftFlowTests.Boom()] {
+            if case .unknown = outcome(error) {} else { XCTFail("\(error) does not prove the draft was not stored") }
+        }
+    }
+
+    func testASuccessfulAppendCarriesTheServersUID_whenItGivesOne() {
+        let with = SwiftMailSession.classifyAppend(.success(AppendResult(uidValidity: UIDValidity(9), uids: [UID(42)])))
+        XCTAssertEqual(with, .appended(uid: 42, uidValidity: 9))
+        let without = SwiftMailSession.classifyAppend(.success(AppendResult(uidValidity: nil, uids: [])))
+        XCTAssertEqual(without, .appended(uid: nil, uidValidity: nil))
+    }
+}

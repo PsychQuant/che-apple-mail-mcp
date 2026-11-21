@@ -83,7 +83,7 @@ enum ToolAccess: CaseIterable {
         case .fetch:
             return ["check_for_new_mail", "synchronize_account"]
         case .prepareMail:
-            return ["create_draft", "open_mailto"]
+            return ["append_draft", "create_draft", "open_mailto"]
         case .change:
             return ["create_rule", "delete_email", "delete_mailbox", "delete_rule", "enable_rule", "flag_email",
                     "import_mailbox", "mark_as_junk", "mark_read", "move_email", "set_background_color",

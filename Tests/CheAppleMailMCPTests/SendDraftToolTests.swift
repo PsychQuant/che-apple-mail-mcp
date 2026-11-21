@@ -54,6 +54,50 @@ final class SendDraftToolTests: XCTestCase {
         XCTAssertEqual(opened.count, 0)
     }
 
+    // MARK: - #744, choosing the draft by its Message-ID
+
+    func testAMessageIDSelectsTheDraft_withoutReadingTheLocalStore() async throws {
+        let session = SendDraftFlowTests.FakeSession()
+        session.drafts = [draft()]
+        var base = try environment(config: config, session: session)
+        base = SendDraftTool.Environment(stateDirectory: base.stateDirectory, password: base.password,
+                                         openSession: base.openSession,
+                                         localMessageID: { _ in XCTFail("the local store was read"); return nil },
+                                         now: base.now)
+        for form in ["<d1@icloud.example>", "d1@icloud.example"] {
+            session.drafts = [draft()]
+            let text = try await SendDraftTool.run(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"),
+                                                    "message_id": .string(form)], base)
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+            XCTAssertEqual(object["message_id"] as? String, "<d1@icloud.example>", form)
+            try SendRecordStore(directory: base.stateDirectory).remove("<d1@icloud.example>")
+        }
+    }
+
+    func testAMessageIDThatMatchesNoDraftIsRefused() async throws {
+        let session = SendDraftFlowTests.FakeSession()
+        session.drafts = [draft()]
+        let message = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"),
+                                     "message_id": .string("<other@icloud.example>")], try environment(config: config, session: session))
+        XCTAssertTrue(message?.contains("no draft") == true, message ?? "not refused")
+    }
+
+    func testAMessageIDBesideAnotherSelector_orMalformed_isRefusedBeforeAnyConnection() async throws {
+        let opened = Opened()
+        let env = try environment(config: config, opened: opened)
+        let both = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"),
+                                  "message_id": .string("<d1@icloud.example>"), "subject_match": .string("Report")], env)
+        XCTAssertTrue(both?.contains("exactly one of") == true, both ?? "not refused")
+        for bad in ["no-at-sign", "<a b@icloud.example>", "<d1@icloud.example>\r\nX: y", ""] {
+            let message = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"), "message_id": .string(bad)], env)
+            XCTAssertTrue(message?.contains("message_id must be") == true, "\(bad.debugDescription): \(message ?? "not refused")")
+        }
+        let nulled = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"), "message_id": .null,
+                                    "subject_match": .string("Report")], env)
+        XCTAssertTrue(nulled?.contains("'message_id' must be a string") == true, nulled ?? "a null selector was accepted")
+        XCTAssertEqual(opened.count, 0)
+    }
+
     func testExactlyOneSelectorIsRequired() async throws {
         let env = try environment(config: config)
         for arguments: [String: Value] in [
@@ -61,7 +105,7 @@ final class SendDraftToolTests: XCTestCase {
             ["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"), "draft_id": .string("5"), "subject_match": .string("Report")],
         ] {
             let message = await failure(arguments, env)
-            XCTAssertTrue(message?.contains("exactly one of draft_id and subject_match") == true, message ?? "not refused")
+            XCTAssertTrue(message?.contains("exactly one of draft_id, subject_match and message_id") == true, message ?? "not refused")
         }
         let nulled = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"),
                                     "draft_id": .null, "subject_match": .string("Report")], env)

@@ -10,6 +10,12 @@ final class SendDraftFlowTests: XCTestCase {
         var drafts: [FetchedDraft] = []
         var submitOutcome: SubmitOutcome = .accepted(reply: "250 2.0.0 OK")
         var appendError: Error?
+        /// What `appendDraft` answers (#744).
+        var appendDraftOutcome: AppendOutcome = .appended(uid: 1, uidValidity: 1)
+        /// The server stores the draft although the outcome says otherwise.
+        var storeDraftDespiteOutcome = false
+        var searchError: Error?
+        private(set) var appendedDrafts: [Data] = []
         var removeError: Error?
         var expungeOne = true
         var draftsMailboxError: Error?
@@ -36,6 +42,7 @@ final class SendDraftFlowTests: XCTestCase {
         func sentMailbox() async throws -> String { note("sentMailbox"); return "Sent Messages" }
         func drafts(withMessageID messageID: String, in mailbox: String) async throws -> [DraftSummary] {
             note("searchMessageID")
+            if let searchError { throw searchError }
             return drafts.filter { $0.messageID == messageID }.map { DraftSummary(uid: $0.uid, subject: $0.subject, messageID: $0.messageID) }
         }
         func drafts(withSubjectContaining subject: String, in mailbox: String) async throws -> [DraftSummary] {
@@ -67,6 +74,21 @@ final class SendDraftFlowTests: XCTestCase {
             if let appendError { throw appendError }
             lock.withLock { sentMailboxContents.append(message) }
             onAppend?()
+        }
+        func appendDraft(_ message: Data, to mailbox: String) async -> AppendOutcome {
+            note("appendDraft:\(mailbox)")
+            var stored = storeDraftDespiteOutcome
+            if case .appended = appendDraftOutcome { stored = true }
+            if stored {
+                let id = (try? BccRemoval.fields(in: message))?.first { $0.name.lowercased() == "message-id" }?
+                    .value.trimmingCharacters(in: .whitespaces)
+                lock.withLock {
+                    appendedDrafts.append(message)
+                    drafts.append(FetchedDraft(uid: UInt32(drafts.count + 1), message: message, messageID: id, subject: "",
+                                               from: [], recipients: [], hasInvalidRecipient: false))
+                }
+            }
+            return appendDraftOutcome
         }
         func canExpungeOneMessage() async -> Bool { expungeOne }
         func removeDraft(_ draft: FetchedDraft, in mailbox: String) async throws {
