@@ -446,9 +446,10 @@ claude
 > 之前，每一種結果都當成未經驗證。
 
 `send_draft` 經 SMTP 寄出伺服器草稿匣裡已有的一封草稿，不經 Mail（[#729](https://github.com/PsychQuant/che-apple-mail-mcp/issues/729)）。
-它不寫任何內容：送出的就是伺服器存的那份草稿，去掉 `Bcc` 欄位；收件人取自 To、Cc、Bcc。Mail 存的草稿一律拒絕
-（[#745](https://github.com/PsychQuant/che-apple-mail-mcp/issues/745)）：Mail 存草稿的版面（空的純文字段、草稿專用標頭）
-是它寄出時會重組的，原樣送出就會把那個版面送到收件人手上。請用 `append_draft` 建草稿，或在 Mail 裡寄。只限
+它不寫任何內容：送出的就是伺服器存的那份草稿，去掉 `Bcc` 欄位；收件人取自 To、Cc、Bcc。帶 `X-Uniform-Type-Identifier: com.apple.mail-draft`
+（Mail 存草稿時寫的標記）的草稿一律拒絕（[#745](https://github.com/PsychQuant/che-apple-mail-mcp/issues/745)）：Mail 用一種
+寄出時會重組的版面存這類草稿（比對過的草稿是空的純文字段、內文在 HTML、草稿專用標頭），而這個工具原樣送出草稿。只檢查這個標記，
+不檢查 MIME 結構。請用 `append_draft` 建草稿，或在 Mail 裡寄。只限
 `~/.claude/.mail/direct-transport.json` 列出的帳號；其他帳號一律拒絕，也不改走 Mail。
 
 `append_draft`（[#744](https://github.com/PsychQuant/che-apple-mail-mcp/issues/744)）經 IMAP 在同一批帳號的草稿匣建立一封新的

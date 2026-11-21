@@ -205,8 +205,15 @@ struct SendDraftFlow {
         // draft-only headers) is not what Mail sends, and this tool writes no
         // content. Only Mail's own mark counts: inferring the layout from the
         // MIME structure would refuse other clients' ordinary messages.
-        if Self.isInMailsDraftLayout(draft.message) {
-            throw SendDraftRefusal(description: "the draft is in Mail's draft layout (\(Self.mailDraftField): \(Self.mailDraftMark)): Mail rebuilds such a draft when it sends it, and this tool sends drafts as stored, so the recipients would receive an empty plain-text part and draft-only headers. Create the draft with append_draft, which stores it in the form it is sent, or send this one from Mail. Nothing was submitted")
+        let marked: Bool
+        do {
+            marked = try Self.isInMailsDraftLayout(draft.message)
+        } catch {
+            // Fail closed: a header that cannot be read cannot be shown to be unmarked.
+            throw SendDraftRefusal(description: "the draft's header could not be read to check for Mail's draft mark (\(error)); nothing was submitted")
+        }
+        if marked {
+            throw SendDraftRefusal(description: "the draft carries \(Self.mailDraftField): \(Self.mailDraftMark), the mark Mail writes on the drafts it saves. Mail stores such a draft in a layout it rebuilds when it sends it (in the drafts compared for #745: an empty plain-text part, the body in HTML and draft-only headers), and this tool sends a draft as stored, so it does not send it. Create the draft with append_draft, which stores it in the form it is sent, or send this one from Mail. Nothing was submitted")
         }
 
         // The SMTP connection is opened only now, so a call that only completes
@@ -366,9 +373,8 @@ struct SendDraftFlow {
     /// Whether the message carries the mark Mail writes on the drafts it saves
     /// (#745, #463 S3). Field name and value are compared without regard to
     /// ASCII case, the value after unfolding and trimming.
-    static func isInMailsDraftLayout(_ message: Data) -> Bool {
-        guard let fields = try? BccRemoval.fields(in: message) else { return false }
-        return fields.contains { field in
+    static func isInMailsDraftLayout(_ message: Data) throws -> Bool {
+        try BccRemoval.fields(in: message).contains { field in
             DirectTransportConfig.equalIgnoringASCIICase(field.name.trimmingCharacters(in: .whitespaces), mailDraftField)
                 && DirectTransportConfig.equalIgnoringASCIICase(
                     field.value.replacingOccurrences(of: "\r\n", with: "").replacingOccurrences(of: "\n", with: "")

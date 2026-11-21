@@ -595,11 +595,14 @@ final class SendDraftFlowTests: XCTestCase {
         session.drafts = [draft(text: mailDraftText)]
         let (flow, records) = flow(session)
         let message = await refusal { try await flow.run(.subject("Report")) }
-        XCTAssertTrue(message?.contains("Mail's draft layout") == true, message ?? "not refused")
+        XCTAssertTrue(message?.contains("X-Uniform-Type-Identifier: com.apple.mail-draft") == true, message ?? "not refused")
         XCTAssertTrue(message?.contains("append_draft") == true, "it says how to make a draft that can be sent")
+        XCTAssertTrue(message?.contains("send this one from Mail") == true)
         XCTAssertTrue(message?.contains("Nothing was submitted") == true)
         XCTAssertFalse(session.calls.contains("prepare"), "no SMTP connection")
         XCTAssertFalse(session.calls.contains("submit"))
+        XCTAssertFalse(session.calls.contains { $0.hasPrefix("remove") || $0.hasPrefix("append") }, "the draft is left as it is")
+        XCTAssertEqual(session.drafts.map(\.message), [Data(mailDraftText.utf8)])
         XCTAssertNil(try records.entry(for: "<d1@icloud.example>"), "no entry was claimed")
     }
 
@@ -609,13 +612,25 @@ final class SendDraftFlowTests: XCTestCase {
             session.drafts = [draft(text: "From: me@icloud.example\r\nTo: me@icloud.example\r\n\(header)\r\nSubject: Report\r\n\r\nbody")]
             let (flow, _) = flow(session)
             let message = await refusal { try await flow.run(.subject("Report")) }
-            XCTAssertTrue(message?.contains("Mail's draft layout") == true, "\(header.debugDescription): \(message ?? "not refused")")
+            XCTAssertTrue(message?.contains("com.apple.mail-draft") == true, "\(header.debugDescription): \(message ?? "not refused")")
         }
         let other = FakeSession()
         other.drafts = [draft(text: "From: me@icloud.example\r\nTo: me@icloud.example\r\nX-Uniform-Type-Identifier: com.apple.mail-message\r\nSubject: Report\r\n\r\nbody")]
-        let (flow, _) = flow(other)
-        let result = try await flow.run(.subject("Report"))
+        let (otherFlow, _) = flow(other)
+        let result = try await otherFlow.run(.subject("Report"))
         XCTAssertEqual(result.outcome, .submitted, "another value of the field is not Mail's draft mark")
+
+        // The layout alone, without the mark, is not refused: the check does not infer it from the MIME structure.
+        let unmarked = FakeSession()
+        unmarked.drafts = [draft(text: mailDraftText.replacingOccurrences(of: "X-Uniform-Type-Identifier: com.apple.mail-draft\r\n", with: "")
+            + "--B\r\nContent-Type: text/html\r\n\r\n<p>body</p>\r\n")]
+        let (plain, _) = flow(unmarked)
+        let sent = try await plain.run(.subject("Report"))
+        XCTAssertEqual(sent.outcome, .submitted, "an unmarked multipart draft with an empty plain part is sent")
+    }
+
+    func testAHeaderThatCannotBeReadIsRefused_notTakenAsUnmarked() async throws {
+        XCTAssertThrowsError(try SendDraftFlow.isInMailsDraftLayout(Data("no header separator".utf8)))
     }
 
     func testAPendingStageOfADraftInMailsLayoutIsStillCompleted() async throws {
@@ -630,7 +645,9 @@ final class SendDraftFlowTests: XCTestCase {
         let result = try await flow.run(.subject("Report"))
         XCTAssertTrue(result.resumed)
         XCTAssertEqual(result.sentCopy, .done)
+        XCTAssertEqual(result.draftRemoval, .done)
         XCTAssertFalse(session.calls.contains("submit"))
+        XCTAssertFalse(session.calls.contains("prepare"), "completing the stages needs no SMTP connection")
     }
 
     func testAClaimedDraftIsNotSubmittedASecondTime() async throws {
