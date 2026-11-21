@@ -586,6 +586,53 @@ final class SendDraftFlowTests: XCTestCase {
 
     /// Two calls for the same draft cannot both submit it: the record is claimed
     /// in one step before the transaction.
+    // MARK: - #745, a draft in Mail's draft layout
+
+    private let mailDraftText = "Subject: Report\r\nMime-Version: 1.0 (Mac OS X Mail 16.0)\r\nContent-Type: multipart/alternative;\r\n\tboundary=\"B\"\r\nFrom: me@icloud.example\r\nMessage-Id: <d1@icloud.example>\r\nX-Uniform-Type-Identifier: com.apple.mail-draft\r\nTo: me@icloud.example\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\n\r\n--B--\r\n"
+
+    func testADraftInMailsDraftLayoutIsRefused_beforeTheRecordOrAnySMTPConnection() async throws {
+        let session = FakeSession()
+        session.drafts = [draft(text: mailDraftText)]
+        let (flow, records) = flow(session)
+        let message = await refusal { try await flow.run(.subject("Report")) }
+        XCTAssertTrue(message?.contains("Mail's draft layout") == true, message ?? "not refused")
+        XCTAssertTrue(message?.contains("append_draft") == true, "it says how to make a draft that can be sent")
+        XCTAssertTrue(message?.contains("Nothing was submitted") == true)
+        XCTAssertFalse(session.calls.contains("prepare"), "no SMTP connection")
+        XCTAssertFalse(session.calls.contains("submit"))
+        XCTAssertNil(try records.entry(for: "<d1@icloud.example>"), "no entry was claimed")
+    }
+
+    func testTheMarkIsRecognisedWithoutRegardToCaseOrSpace_andOnlyThatValueIsRefused() async throws {
+        for header in ["x-uniform-type-identifier:   COM.APPLE.MAIL-DRAFT  ", "X-Uniform-Type-Identifier:\r\n com.apple.mail-draft"] {
+            let session = FakeSession()
+            session.drafts = [draft(text: "From: me@icloud.example\r\nTo: me@icloud.example\r\n\(header)\r\nSubject: Report\r\n\r\nbody")]
+            let (flow, _) = flow(session)
+            let message = await refusal { try await flow.run(.subject("Report")) }
+            XCTAssertTrue(message?.contains("Mail's draft layout") == true, "\(header.debugDescription): \(message ?? "not refused")")
+        }
+        let other = FakeSession()
+        other.drafts = [draft(text: "From: me@icloud.example\r\nTo: me@icloud.example\r\nX-Uniform-Type-Identifier: com.apple.mail-message\r\nSubject: Report\r\n\r\nbody")]
+        let (flow, _) = flow(other)
+        let result = try await flow.run(.subject("Report"))
+        XCTAssertEqual(result.outcome, .submitted, "another value of the field is not Mail's draft mark")
+    }
+
+    func testAPendingStageOfADraftInMailsLayoutIsStillCompleted() async throws {
+        // Submitted before the check existed: its pending stages must not be stranded.
+        let session = FakeSession()
+        let stored = draft(text: mailDraftText)
+        session.drafts = [stored]
+        let (flow, records) = flow(session)
+        try records.put(SendRecord(messageID: "<d1@icloud.example>", accountID: account.accountID, state: .submitted,
+                                   sentCopy: .pending, draftRemoval: .pending, updatedAt: Date(), serverReply: "250 OK",
+                                   submittedAt: Date(), draftDigest: stored.digest, server: SendDraftFlow.server(of: account)))
+        let result = try await flow.run(.subject("Report"))
+        XCTAssertTrue(result.resumed)
+        XCTAssertEqual(result.sentCopy, .done)
+        XCTAssertFalse(session.calls.contains("submit"))
+    }
+
     func testAClaimedDraftIsNotSubmittedASecondTime() async throws {
         let session = FakeSession()
         session.drafts = [draft()]

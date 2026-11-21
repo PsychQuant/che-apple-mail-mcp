@@ -200,6 +200,14 @@ struct SendDraftFlow {
         } catch {
             throw SendDraftRefusal(description: "\(error); nothing was submitted")
         }
+        // Check 6 (#745): not a draft in Mail's draft layout. Mail rebuilds a
+        // draft when it sends it; the stored form (an empty plain-text part,
+        // draft-only headers) is not what Mail sends, and this tool writes no
+        // content. Only Mail's own mark counts: inferring the layout from the
+        // MIME structure would refuse other clients' ordinary messages.
+        if Self.isInMailsDraftLayout(draft.message) {
+            throw SendDraftRefusal(description: "the draft is in Mail's draft layout (\(Self.mailDraftField): \(Self.mailDraftMark)): Mail rebuilds such a draft when it sends it, and this tool sends drafts as stored, so the recipients would receive an empty plain-text part and draft-only headers. Create the draft with append_draft, which stores it in the form it is sent, or send this one from Mail. Nothing was submitted")
+        }
 
         // The SMTP connection is opened only now, so a call that only completes
         // stages never needs it; a failure here is before the transaction.
@@ -352,6 +360,22 @@ struct SendDraftFlow {
     }
 
     /// The login and server a submission is bound to.
+    static let mailDraftField = "X-Uniform-Type-Identifier"
+    static let mailDraftMark = "com.apple.mail-draft"
+
+    /// Whether the message carries the mark Mail writes on the drafts it saves
+    /// (#745, #463 S3). Field name and value are compared without regard to
+    /// ASCII case, the value after unfolding and trimming.
+    static func isInMailsDraftLayout(_ message: Data) -> Bool {
+        guard let fields = try? BccRemoval.fields(in: message) else { return false }
+        return fields.contains { field in
+            DirectTransportConfig.equalIgnoringASCIICase(field.name.trimmingCharacters(in: .whitespaces), mailDraftField)
+                && DirectTransportConfig.equalIgnoringASCIICase(
+                    field.value.replacingOccurrences(of: "\r\n", with: "").replacingOccurrences(of: "\n", with: "")
+                        .trimmingCharacters(in: .whitespacesAndNewlines), mailDraftMark)
+        }
+    }
+
     static func server(of account: DirectTransportConfig.Account) -> String {
         // The login exactly as it is sent; host names are not case-sensitive.
         "\(account.address)@\(account.imap.host.lowercased()):\(account.imap.port)"
