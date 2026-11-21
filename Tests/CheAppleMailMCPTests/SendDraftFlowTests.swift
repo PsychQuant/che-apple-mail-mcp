@@ -584,8 +584,6 @@ final class SendDraftFlowTests: XCTestCase {
         XCTAssertTrue(message?.contains("From") == true, message ?? "not refused")
     }
 
-    /// Two calls for the same draft cannot both submit it: the record is claimed
-    /// in one step before the transaction.
     // MARK: - #745, a draft in Mail's draft layout
 
     private let mailDraftText = "Subject: Report\r\nMime-Version: 1.0 (Mac OS X Mail 16.0)\r\nContent-Type: multipart/alternative;\r\n\tboundary=\"B\"\r\nFrom: me@icloud.example\r\nMessage-Id: <d1@icloud.example>\r\nX-Uniform-Type-Identifier: com.apple.mail-draft\r\nTo: me@icloud.example\r\n\r\n--B\r\nContent-Type: text/plain\r\n\r\n\r\n--B--\r\n"
@@ -622,8 +620,11 @@ final class SendDraftFlowTests: XCTestCase {
 
         // The layout alone, without the mark, is not refused: the check does not infer it from the MIME structure.
         let unmarked = FakeSession()
-        unmarked.drafts = [draft(text: mailDraftText.replacingOccurrences(of: "X-Uniform-Type-Identifier: com.apple.mail-draft\r\n", with: "")
-            + "--B\r\nContent-Type: text/html\r\n\r\n<p>body</p>\r\n")]
+        let layout = mailDraftText
+            .replacingOccurrences(of: "X-Uniform-Type-Identifier: com.apple.mail-draft\r\n", with: "")
+            .replacingOccurrences(of: "--B--\r\n", with: "--B\r\nContent-Type: text/html\r\n\r\n<p>body</p>\r\n--B--\r\n")
+        XCTAssertTrue(layout.contains("<p>body</p>\r\n--B--"), "the HTML part is inside the multipart body")
+        unmarked.drafts = [draft(text: layout)]
         let (plain, _) = flow(unmarked)
         let sent = try await plain.run(.subject("Report"))
         XCTAssertEqual(sent.outcome, .submitted, "an unmarked multipart draft with an empty plain part is sent")
@@ -648,8 +649,12 @@ final class SendDraftFlowTests: XCTestCase {
         XCTAssertEqual(result.draftRemoval, .done)
         XCTAssertFalse(session.calls.contains("submit"))
         XCTAssertFalse(session.calls.contains("prepare"), "completing the stages needs no SMTP connection")
+        XCTAssertEqual(session.sentMailboxContents.count, 1, "the sent copy was stored")
+        XCTAssertTrue(session.drafts.isEmpty, "the draft was removed")
     }
 
+    /// Two calls for the same draft cannot both submit it: the record is claimed
+    /// in one step before the transaction.
     func testAClaimedDraftIsNotSubmittedASecondTime() async throws {
         let session = FakeSession()
         session.drafts = [draft()]

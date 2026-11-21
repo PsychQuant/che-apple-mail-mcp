@@ -10,12 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`send_draft` refuses a draft Mail saved**
-  ([#745](https://github.com/PsychQuant/che-apple-mail-mcp/issues/745)). Mail
-  stores a draft in a layout it rebuilds when it sends it (an empty plain-text
-  part, the body in HTML, draft-only headers such as
-  `X-Uniform-Type-Identifier: com.apple.mail-draft`). `send_draft` sends drafts
-  as stored, so it now refuses one carrying that mark before connecting to the
-  SMTP server; make the draft with `append_draft`, or send it from Mail. Pending
+  ([#745](https://github.com/PsychQuant/che-apple-mail-mcp/issues/745)). The
+  Mail draft compared for #745 had an empty plain-text part, the body in HTML
+  and draft-only headers such as `X-Uniform-Type-Identifier: com.apple.mail-draft`,
+  while a message Mail sent was a single plain-text part. `send_draft` sends
+  drafts as stored, so a new submission of a draft carrying that mark is now
+  refused before connecting to the SMTP server (only the mark is checked); make the draft with `append_draft`, or send it from Mail. Pending
   stages of a draft submitted earlier are still completed.
 - **`append_draft`: create a draft on the mail server over IMAP, without Mail**
   ([#744](https://github.com/PsychQuant/che-apple-mail-mcp/issues/744), second

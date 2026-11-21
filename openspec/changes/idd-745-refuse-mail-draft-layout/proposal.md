@@ -1,6 +1,6 @@
 ## Why
 
-`send_draft`（#742）把伺服器上的草稿原樣送出，只去掉 Bcc。Mail 存的草稿是 `multipart/alternative`、純文字段是空的、帶草稿專用標頭（`X-Uniform-Type-Identifier: com.apple.mail-draft` 等）；Mail 寄出時會重組成另一個形狀（#745 的唯讀比對）。原樣送出，收件人會收到空的純文字段與草稿標頭。
+`send_draft`（#742）把伺服器上的草稿原樣送出，只去掉 Bcc。#745 唯讀比對過的那封 Mail 草稿是 `multipart/alternative`、純文字段是空的、帶草稿專用標頭（`X-Uniform-Type-Identifier: com.apple.mail-draft` 等），而同一版 Mail 寄出的信是單一純文字段（比對的是兩封不同的信）。原樣送出，收件人會收到空的純文字段與草稿標頭。
 
 ## What Changes
 
