@@ -63,6 +63,9 @@ final class SendDraftToolTests: XCTestCase {
             let message = await failure(arguments, env)
             XCTAssertTrue(message?.contains("exactly one of draft_id and subject_match") == true, message ?? "not refused")
         }
+        let nulled = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"),
+                                    "draft_id": .null, "subject_match": .string("Report")], env)
+        XCTAssertTrue(nulled?.contains("'draft_id' must be a string") == true, nulled ?? "a null selector was accepted")
         let bad = await failure(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"), "draft_id": .string("abc")], env)
         XCTAssertTrue(bad?.contains("numeric") == true, bad ?? "not refused")
     }

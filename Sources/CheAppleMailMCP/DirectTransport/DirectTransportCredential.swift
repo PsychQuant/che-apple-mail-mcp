@@ -32,16 +32,18 @@ enum DirectTransportCredential {
         return text
     }
 
-    /// Creates or replaces the item for `address`.
+    /// Creates or replaces the item for `address`. An existing item is updated in
+    /// place, so a failure leaves the old password working rather than none.
     static func store(address: String, password: String) throws {
         let match: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: address,
         ]
-        let deleted = SecItemDelete(match as CFDictionary)
-        guard deleted == errSecSuccess || deleted == errSecItemNotFound else {
-            throw Failure(description: "the existing keychain item for \(address) could not be replaced (OSStatus \(deleted))")
+        let updated = SecItemUpdate(match as CFDictionary, [kSecValueData as String: Data(password.utf8)] as CFDictionary)
+        if updated == errSecSuccess { return }
+        guard updated == errSecItemNotFound else {
+            throw Failure(description: "the existing keychain item for \(address) could not be replaced (OSStatus \(updated)); it is unchanged")
         }
         var add = match
         add[kSecValueData as String] = Data(password.utf8)

@@ -93,7 +93,8 @@ enum DirectTransportCLI {
         if isatty(STDIN_FILENO) == 1 {
             var buffer = [CChar](repeating: 0, count: 1024)
             defer { buffer.withUnsafeMutableBufferPointer { _ = memset($0.baseAddress, 0, $0.count) } }
-            guard readpassphrase("Password (not shown): ", &buffer, buffer.count, RPP_REQUIRE_TTY) != nil else {
+            // RPP_STDIN: standard input itself, with echo off, not whatever /dev/tty is.
+            guard readpassphrase("Password (not shown): ", &buffer, buffer.count, RPP_STDIN) != nil else {
                 return nil
             }
             return String(cString: buffer)
