@@ -680,10 +680,30 @@ class CheAppleMailMCPServer {
                     "type": .string("object"),
                     "properties": .object([
                         "account_name": .object(["type": .string("string"), "description": .string("The account's address as configured in direct-transport.json")]),
-                        "account_id": .object(["type": .string("string"), "description": .string("The account UUID as configured in direct-transport.json; wins over account_name")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("The account UUID as configured in direct-transport.json; used in preference to account_name, except that a call whose account_name names a different configured account is refused")]),
                         "draft_id": .object(["type": .string("string"), "description": .string("Numeric local message id of the draft (from list_drafts); its Message-ID is looked up in the server's drafts mailbox")]),
                         "subject_match": .object(["type": .string("string"), "description": .string("Exact subject of the draft on the server; exactly one draft must match")]),
+                        "message_id": .object(["type": .string("string"), "description": .string("The draft's Message-ID, such as <local@domain>, as append_draft returns it; exactly one draft must match")]),
                     ]),
+                    "additionalProperties": .bool(false),
+                ])
+            ),
+            Tool(
+                name: AppendDraftTool.name,
+                description: AppendDraftTool.description,
+                inputSchema: .object([
+                    "type": .string("object"),
+                    "properties": .object([
+                        "account_name": .object(["type": .string("string"), "description": .string("The account's address as configured in direct-transport.json")]),
+                        "account_id": .object(["type": .string("string"), "description": .string("The account UUID as configured in direct-transport.json; used in preference to account_name, except that a call whose account_name names a different configured account is refused")]),
+                        "to": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Bare addresses (name@domain); display names are refused")]),
+                        "cc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Bare addresses")]),
+                        "bcc": .object(["type": .string("array"), "items": .object(["type": .string("string")]), "description": .string("Bare addresses; kept in the draft's Bcc field, which send_draft removes when it submits")]),
+                        "subject": .object(["type": .string("string"), "description": .string("Subject, not empty")]),
+                        "body": .object(["type": .string("string"), "description": .string("Plain text body")]),
+                        "from_name": .object(["type": .string("string"), "description": .string("Optional display name for the sender; the address is always the account's")]),
+                    ]),
+                    "required": .array([.string("subject"), .string("body")]),
                     "additionalProperties": .bool(false),
                 ])
             ),
@@ -2015,6 +2035,14 @@ class CheAppleMailMCPServer {
                 openSession: { try await SwiftMailSession.open(account: $0, password: $1) },
                 localMessageID: { [self] row in try localDraftMessageID(row) },
                 now: Date.init))
+
+        case AppendDraftTool.name:
+            return try await AppendDraftTool.run(arguments, AppendDraftTool.Environment(
+                stateDirectory: ClassificationPolicyStore.defaultDirectory,
+                password: { try DirectTransportCredential.read(address: $0) },
+                openSession: { try await SwiftMailSession.open(account: $0, password: $1) },
+                now: Date.init,
+                newID: UUID.init))
 
         case "redirect_email":
             let id = try requireMessageId(arguments)

@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`append_draft`: create a draft on the mail server over IMAP, without Mail**
+  ([#744](https://github.com/PsychQuant/che-apple-mail-mcp/issues/744), second
+  stage of [#729](https://github.com/PsychQuant/che-apple-mail-mcp/issues/729)).
+  **Not yet run against a real mail server**; the tool description says so until
+  the result is recorded on #744. Same accounts, credential and connection rules
+  as `send_draft`. The tool builds one `text/plain` part in UTF-8 with a new
+  Message-ID and appends it to the mailbox the server marks `\Drafts`, with
+  `\Draft` and `\Seen`. Recipients are bare addresses only. The outcome is
+  `appended`, `not_appended` (including a failed connection, login or
+  drafts-mailbox lookup before the APPEND was sent) or `unknown`; after `unknown`
+  it tries one search for the Message-ID and never appends again. Calls are not
+  de-duplicated. The message is deliberately not in the
+  layout Mail gives its own drafts
+  ([#745](https://github.com/PsychQuant/che-apple-mail-mcp/issues/745)).
+- **`send_draft` accepts `message_id`** as a third way to choose the draft, beside
+  `draft_id` and `subject_match`, so a draft made by `append_draft` can be sent
+  while Mail is closed (#744).
 - **`send_draft`: send an existing draft over SMTP, without Mail**
   ([#742](https://github.com/PsychQuant/che-apple-mail-mcp/issues/742), first
   stage of [#729](https://github.com/PsychQuant/che-apple-mail-mcp/issues/729)).

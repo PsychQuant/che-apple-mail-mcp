@@ -8,7 +8,7 @@ GUI 流程或草稿刪除逾時之後，Mail 端已接受的 Apple Event 有沒�
 
 範圍：本檔管的是交給 Mail 的 Apple Event。`send_draft`（#742）不經 Mail，它的 `not_sent` 只來自 SMTP 伺服器在
 接受之前對這一筆交易的明確答覆，其餘一律 `unknown`；那是 `direct-transport.md` 第 7 條的規則，不是下面
-第 3 條的例外，也不得拿來在 GUI 路徑上加判決。
+第 3 條的例外，也不得拿來在 GUI 路徑上加判決。`append_draft`（#744）的 `not_appended` 同理，是該檔第 11 條。
 
 1. **只有正面觀察算證據。** 逾時後可以被當作觀察的來源只有兩個：
    - `search_emails`（讀 Envelope Index）回傳一列符合的資料；

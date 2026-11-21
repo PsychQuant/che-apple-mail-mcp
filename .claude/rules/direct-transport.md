@@ -1,4 +1,4 @@
-# 直接傳送（send_draft）：不經 Mail 寫到伺服器，以這八項保證為準（#742）
+# 直接傳送（send_draft、append_draft）：不經 Mail 寫到伺服器，以這些保證為準（#742、#744）
 
 ## 規則
 
@@ -23,8 +23,8 @@
 3. **送密碼之前一定先有 TLS。** 465 與 993 用 implicit TLS，其他連接埠一律要求 STARTTLS（伺服器不提供就失敗）；
    憑證完整驗證、TLS 至少 1.2。不得用 `.automatic` 或 `.plainText`（#742 的 commit 安全審查抓過一次）。SMTP 只在
    檢查都通過、寫佔位之前才連線登入；只補做提交後階段的呼叫不連 SMTP。
-4. **參數封閉，不能寫內容。** 只接受 `account_name`、`account_id`、`draft_id`、`subject_match`；其他參數一律
-   具名拒絕。送出的就是伺服器存的草稿去掉 Bcc 欄位，工具不改寫任何一個字。
+4. **參數封閉，不能寫內容。** 只接受 `account_name`、`account_id`、`draft_id`、`subject_match`、`message_id`
+   （#744；三個選擇器恰好給一個）；其他參數一律具名拒絕。送出的就是伺服器存的草稿去掉 Bcc 欄位，工具不改寫任何一個字。
 5. **提交前的檢查每次照跑。** 規格列的五項（Message-ID、已寄出紀錄、寄件人、收件人、標頭可去 Bcc）依序以
    **當下**的草稿與紀錄檢查；先前的結果不能取代。UID 只在草稿匣的 UIDVALIDITY 沒變時使用；搜尋到卻取不到
    envelope 的候選讓整個呼叫失敗（略過它會讓兩封看起來像一封）；標頭有 To／Cc／Bcc／From 欄位而 envelope 沒有
@@ -47,6 +47,27 @@
    移除草稿只在寄件副本不再 `pending`、且伺服器支援 UIDPLUS 時，以 UID 移除那一封，不得用會清掉其他已刪除郵件的
    `EXPUNGE`。
 
+## append_draft（#744）
+
+`append_draft` 經 IMAP 在草稿匣建立一封新草稿。上面第 1、2、3 項照樣適用（帳號、憑證、TLS；它不連 SMTP）；第 2 項的
+遮蔽在結果邊界再做一次，不依賴各個錯誤來源自己遮蔽。
+另外這幾項同樣不能削弱（封閉列舉，不得依性質相似類推）：
+
+9. **內容由工具自己組，不是 Mail 草稿的版面。** 單一 `text/plain; charset=utf-8`、CRLF；不帶
+   `X-Uniform-Type-Identifier` 或任何 `X-Apple-` 欄位、不是 multipart。這封草稿會被 `send_draft` 原樣送出，
+   Mail 草稿的空純文字段與草稿標頭會送到收件人手上（#745）。改成 Mail 的版面，就是把 #745 搬進這個工具。
+10. **參數封閉、在開連線前檢查。** 只接受 `account_name`、`account_id`、`to`、`cc`、`bcc`、`subject`、`body`、
+    `from_name`。收件人只收純位址（規格寫明的文法）；主旨與 `from_name` 的控制字元、內文的 NUL 一律拒絕：它們會變成
+    標頭注入。大小上限（內文 5,000,000、主旨 2,000、`from_name` 200 octets，收件人 100）在組信之前檢查，組信在取得鎖與
+    憑證之後。
+11. **`not_appended` 只來自伺服器的明確拒絕或 APPEND 送出之前。** `IMAPError.commandFailed`（APPEND 的 tagged
+    NO／BAD）、`appendLimitExceeded`，以及 APPEND 之前的連線、登入、找草稿匣失敗，算 `not_appended`；APPEND 送出之後的
+    連線關閉、逾時、不認得的錯誤都是 `unknown`。
+12. **`unknown` 不重試，只看正面觀察。** 同一次呼叫裡絕不 APPEND 第二次；之後只試一次以 Message-ID 搜尋，命中要
+    逐字相同（IMAP 的標頭搜尋是子字串比對），找到才改報 `appended`。搜尋失敗與搜尋沒找到分開回報，兩者都不是「沒存」。
+    沒有去重紀錄：每次都是新的 Message-ID，重複呼叫而草稿也存進去了，就多一封；說明與結果都要寫明。
+13. **與 `send_draft` 共用提交鎖。** 兩個直接傳送的呼叫不同時開連線；`--direct-transport-forget` 在鎖被持有時不清。
+
 ## 與其他規則的關係
 
 - `r-must-direct-db.md`：那裡的「C/U/D 唯一例外」講的是寫進 Mail **本機** store（Envelope Index、`.emlx`）。
@@ -55,7 +76,7 @@
 - `timeout-outcome-boundary.md`：那裡禁止的 sent／not-sent 判決，前提是交給 Mail 的 Apple Event 沒有任何
   關聯標記可查。SMTP 的 `not_sent` 是伺服器對這一筆交易的直接答覆，第 7 條把它限縮在 SwiftMail 能證明的情況；
   這不是那份封閉列舉的例外，也不得拿來在 GUI 路徑上加判決。
-- `deferred-live-verification.md`：`send_draft` 還沒對真實伺服器跑過。在結果記到 #742 之前，#742 保持 OPEN 並
+- `deferred-live-verification.md`：`send_draft` 與 `append_draft` 都還沒對真實伺服器跑過（後者追蹤在 #744，規則相同）。在結果記到 #742 之前，#742 保持 OPEN 並
   貼 `blocked-on-setup`，工具說明保留「NOT YET RUN AGAINST A REAL MAIL SERVER」那一句（`SendDraftToolTests` 釘住）。
   live 測試只能寄給維護者自己（`CLAUDE.md` 的測試收件人規則）。
 
@@ -72,9 +93,18 @@
 - 第 8 項：補做不核對帳號或草稿位元組、寄件備份已有同一份仍再存、只補做時連了 SMTP（`SendDraftFlowTests`）；
 - 第 2 項：遮蔽漏掉某一種密碼形式，或先截斷再遮蔽（`SubmitOutcomeClassificationTests`）；
 - 第 7 項：`classify` 把 `ambiguous` 或不認得的錯誤分成 `not_sent`（`SubmitOutcomeClassificationTests`）；
-- 說明的 caveat 被拿掉（`SendDraftToolTests`）。
+- 說明的 caveat 被拿掉（`SendDraftToolTests`、`AppendDraftTests`）；
+- 第 9 項：組出的信帶 `X-Uniform-Type-Identifier`、`X-Apple-` 欄位或 multipart，或有不是 CRLF 的換行（`AppendDraftTests`）；
+- 第 10 項：清單以外的參數、型別不對、顯示名收件人、主旨或 `from_name` 的控制字元、內文的 NUL 被接受，或檢查晚於開連線
+  （`AppendDraftTests`）；
+- 第 11 項：`classifyAppend` 把 `connectionFailed`、`timeout` 或不認得的錯誤分成 `not_appended`，或 APPEND 之前的失敗
+  變成工具錯誤而不是 `not_appended`（`AppendDraftTests`）；
+- 第 12 項：`unknown` 之後 APPEND 第二次、搜尋沒找到卻報成 `not_appended`、只有子字串相符的命中被當成找到、搜尋失敗被說成
+  沒找到（`AppendDraftTests`，`spec-example: direct-transport / append outcomes`）；
+- 第 13 項：鎖被持有時 `append_draft` 照樣開連線（`AppendDraftTests`）。
 
-抓不到的：`SwiftMailSession` 對真實伺服器的行為（連線參數是否真的被 SwiftMail 套用、`\Drafts` 屬性是否出現在
+抓不到的：`SwiftMailSession` 對真實伺服器的行為（APPEND 的旗標與 `APPENDUID` 是否照預期、Mail 與其他用戶端是否把
+`append_draft` 建的草稿當成可編輯的草稿、連線參數是否真的被 SwiftMail 套用、`\Drafts` 屬性是否出現在
 `LIST` 的結果、UIDPLUS 與 UIDVALIDITY 的判斷、envelope 與標頭的對照）都沒有測試，只能靠 live 測試；把
 `minimumTLSVersion` 或 `certificateVerificationPolicy` 改鬆、把 keychain 改回 `SecItemUpdate`，都不會讓測試轉紅。
 審查時要自己讀 diff。

@@ -291,6 +291,45 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
         }
     }
 
+    func appendDraft(_ message: Data, to mailbox: String) async -> AppendOutcome {
+        let result: Result<AppendResult, Error>
+        do {
+            result = .success(try await imap.append(rawMessage: message, to: mailbox, flags: [.draft, .seen],
+                                                    internalDate: Date()))
+        } catch {
+            result = .failure(error)
+        }
+        switch Self.classifyAppend(result) {
+        case .appended(let uid, let uidValidity): return .appended(uid: uid, uidValidity: uidValidity)
+        case .notAppended(let detail): return .notAppended(detail: Self.clip(redact(detail)))
+        case .unknown(let detail): return .unknown(detail: Self.clip(redact(detail)))
+        }
+    }
+
+    /// Maps what SwiftMail reports for one APPEND to the three outcomes (#744).
+    /// In the pinned revision a failed command is never resent
+    /// (`IMAPConnection+CommandExecution.swift`, `runCommandHandler` rethrows).
+    /// `commandFailed` reaches an `append` call only from the tagged NO or BAD
+    /// reply to the APPEND (`AppendHandler`) or from re-authenticating before the
+    /// command is sent (`IMAPServer.executeCommand`), and `appendLimitExceeded` is
+    /// raised before anything is sent: in each case the draft was not stored. A
+    /// closed connection, a timeout and every error this code does not recognise
+    /// are `unknown`. Re-read those three files before moving the pin.
+    static func classifyAppend(_ result: Result<AppendResult, Error>) -> AppendOutcome {
+        switch result {
+        case .success(let stored):
+            return .appended(uid: stored.firstUID?.value, uidValidity: stored.uidValidity?.value)
+        case .failure(let error):
+            if let failure = error as? IMAPError {
+                switch failure {
+                case .commandFailed, .appendLimitExceeded: return .notAppended(detail: describe(failure))
+                default: return .unknown(detail: describe(failure))
+                }
+            }
+            return .unknown(detail: describe(error))
+        }
+    }
+
     func canExpungeOneMessage() async -> Bool { await imap.supportsUIDPlus }
 
     func removeDraft(_ draft: FetchedDraft, in mailbox: String) async throws {

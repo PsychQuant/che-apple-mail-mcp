@@ -6,10 +6,12 @@ import MCP
 /// through `Environment`, so the tests run it without a keychain or a network.
 enum SendDraftTool {
     static let name = "send_draft"
-    static let argumentNames: Set<String> = ["account_name", "account_id", "draft_id", "subject_match"]
+    static let argumentNames: Set<String> = ["account_name", "account_id", "draft_id", "subject_match", "message_id"]
+    /// A header line's limit (RFC 5322 §2.1.1), as a bound on a `message_id` argument.
+    static let maxMessageIDOctets = 998
 
     /// Kept here so the test of the caveat reads the same text the server lists.
-    static let description = "Send one draft that already exists in the server's drafts mailbox, over SMTP, without Mail (#742, #729). NOT YET RUN AGAINST A REAL MAIL SERVER: until the result is recorded on issue #742, treat every outcome as unverified. Only for accounts listed in the server's direct-transport.json, with a password stored by running the binary with --direct-transport-set-credential <address>; any other account is refused and no Mail path is used instead. Takes exactly one of draft_id (the local id; its Message-ID is looked up on the server) and subject_match (exact subject), plus account_name or account_id; it accepts no body, recipient or attachment argument and cannot write content. Before submitting it checks: the draft has a Message-ID not already in the record of sent drafts; From is the account's address or an allowed alias; at least one recipient; no unparseable address. The message submitted is the draft as stored with its Bcc fields removed; recipients come from To, Cc and Bcc. outcome is submitted (the server accepted it: then sent_copy and draft_removal report done, pending or skipped, and a later call with the same draft resumes them without resubmitting), not_sent (refused before acceptance), or unknown: whether the server took the message could not be established (for example the connection ended after the message was handed over, or an error the tool does not recognise), and the tool is NOT retrying; look in the recipients' mail or the sent mailbox before deciding, and only if it was not sent clear the record with --direct-transport-forget '<message-id>' (quoted, as the result prints it). Mail's local index is not changed and catches up when Mail next syncs."
+    static let description = "Send one draft that already exists in the server's drafts mailbox, over SMTP, without Mail (#742, #729). NOT YET RUN AGAINST A REAL MAIL SERVER: until the result is recorded on issue #742, treat every outcome as unverified. Only for accounts listed in the server's direct-transport.json, with a password stored by running the binary with --direct-transport-set-credential <address>; any other account is refused and no Mail path is used instead. Takes exactly one of draft_id (the local id; its Message-ID is looked up on the server), subject_match (exact subject) and message_id (the draft's Message-ID, as append_draft returns it), plus account_name or account_id; it accepts no body, recipient or attachment argument and cannot write content. Before submitting it checks: the draft has a Message-ID not already in the record of sent drafts; From is the account's address or an allowed alias; at least one recipient; no unparseable address. The message submitted is the draft as stored with its Bcc fields removed; recipients come from To, Cc and Bcc. outcome is submitted (the server accepted it: then sent_copy and draft_removal report done, pending or skipped, and a later call with the same draft resumes them without resubmitting), not_sent (refused before acceptance), or unknown: whether the server took the message could not be established (for example the connection ended after the message was handed over, or an error the tool does not recognise), and the tool is NOT retrying; look in the recipients' mail or the sent mailbox before deciding, and only if it was not sent clear the record with --direct-transport-forget '<message-id>' (quoted, as the result prints it). Mail's local index is not changed and catches up when Mail next syncs."
 
     struct Environment {
         let stateDirectory: URL
@@ -23,23 +25,32 @@ enum SendDraftTool {
         // The argument list is closed, so nothing a caller passes can write content,
         // and a misspelt argument is refused instead of ignored (#677).
         if let extra = arguments.keys.sorted().first(where: { !argumentNames.contains($0) }) {
-            throw MailError.invalidParameter("send_draft does not accept '\(extra)'; it takes only account_name, account_id, draft_id and subject_match, and cannot write content")
+            throw MailError.invalidParameter("send_draft does not accept '\(extra)'; it takes only account_name, account_id, draft_id, subject_match and message_id, and cannot write content")
         }
         let accountName = try stringArgument(arguments, "account_name")
         let accountID = try stringArgument(arguments, "account_id")
         let draftID = try stringArgument(arguments, "draft_id")
         let subject = try stringArgument(arguments, "subject_match")
+        let messageID = try stringArgument(arguments, "message_id")
         let selector: DraftSelector
-        switch (draftID, subject) {
-        case (let id?, nil):
+        switch (draftID, subject, messageID) {
+        case (let id?, nil, nil):
             guard let row = Int(id), row > 0 else {
                 throw MailError.invalidParameter("draft_id must be a numeric message id (got: '\(id)')")
             }
             selector = .localRow(row)
-        case (nil, let text?):
+        case (nil, let text?, nil):
             selector = .subject(text)
+        case (nil, nil, let raw?):
+            // The form the record and the server comparison use; printable ASCII
+            // only, as the flow requires of any Message-ID it will key a record by.
+            guard raw.utf8.count <= maxMessageIDOctets, raw.unicodeScalars.allSatisfy({ $0.value >= 0x21 && $0.value <= 0x7E }),
+                  let canonical = SwiftMailSession.canonicalMessageID(raw) else {
+                throw MailError.invalidParameter("message_id must be a Message-ID such as <local@domain>, in printable ASCII without spaces, at most \(maxMessageIDOctets) octets")
+            }
+            selector = .messageID(canonical)
         default:
-            throw MailError.invalidParameter("send_draft takes exactly one of draft_id and subject_match")
+            throw MailError.invalidParameter("send_draft takes exactly one of draft_id, subject_match and message_id")
         }
         guard (accountName?.isEmpty == false) || (accountID?.isEmpty == false) else {
             throw MailError.invalidParameter("send_draft needs account_name or account_id")

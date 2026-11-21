@@ -25,6 +25,9 @@ protocol DirectTransportSession: Sendable {
     /// Never throws: every failure is classified into the outcome.
     func submit(_ message: Data, from sender: String, to recipients: [String]) async -> SubmitOutcome
     func appendSentCopy(_ message: Data, to mailbox: String) async throws
+    /// Stores a new message in the drafts mailbox with `\Draft` and `\Seen`
+    /// (#744). Never throws: every failure is classified into the outcome.
+    func appendDraft(_ message: Data, to mailbox: String) async -> AppendOutcome
     /// Whether the server can expunge one message by its UID (UIDPLUS).
     func canExpungeOneMessage() async -> Bool
     /// Marks the one message deleted and expunges that message only. Throws when
@@ -78,6 +81,8 @@ enum DraftSelector: Equatable {
     /// A local message row id; its Message-ID is read from the local store.
     case localRow(Int)
     case subject(String)
+    /// A Message-ID in the form `<local@domain>`, as `append_draft` returns it (#744).
+    case messageID(String)
 }
 
 /// Why `send_draft` did not start a submission. Nothing was submitted for any of these.
@@ -125,6 +130,9 @@ struct SendDraftFlow {
             }
             wantedID = id
             candidates = try await session.drafts(withMessageID: id, in: draftsBox).filter { Self.same($0.messageID, id) }
+        case .messageID(let id):
+            wantedID = id
+            candidates = try await session.drafts(withMessageID: id, in: draftsBox).filter { Self.same($0.messageID, id) }
         case .subject(let subject):
             candidates = try await session.drafts(withSubjectContaining: subject, in: draftsBox).filter { Self.same($0.subject, subject) }
         }
@@ -139,7 +147,7 @@ struct SendDraftFlow {
         let draft = try await session.fetchDraft(only, in: draftsBox)
         let stillTheSelection: Bool
         switch selector {
-        case .localRow: stillTheSelection = Self.same(draft.messageID, wantedID)
+        case .localRow, .messageID: stillTheSelection = Self.same(draft.messageID, wantedID)
         case .subject(let subject): stillTheSelection = Self.same(draft.subject, subject) && Self.same(draft.messageID, only.messageID)
         }
         guard stillTheSelection else {
