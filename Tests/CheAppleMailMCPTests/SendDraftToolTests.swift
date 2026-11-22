@@ -165,12 +165,12 @@ final class SendDraftToolTests: XCTestCase {
     func testTheSessionsMailboxNotesReachTheResult() async throws {
         let session = SendDraftFlowTests.FakeSession()
         session.drafts = [draft()]
-        session.lookupNotes = ["The drafts mailbox is the one `drafts_mailbox` names in direct-transport.json."]
+        session.recordsLookupNotes = true
         let env = try environment(config: config, session: session, opened: Opened())
         let text = try await SendDraftTool.run(["account_id": .string("AAAAAAAA-2222-4333-8444-555555555555"), "subject_match": .string("Report")], env)
         let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
         let notes = try XCTUnwrap(object["notes"] as? [String])
-        XCTAssertTrue(notes.contains(session.lookupNotes[0]), "\(notes)")
+        XCTAssertTrue(notes.contains("drafts lookup note") && notes.contains("sent lookup note"), "both lookups: \(notes)")
     }
 
     func testASentDraftReturnsTheOutcomeAndStages_andThePasswordAppearsNowhere() async throws {

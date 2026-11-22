@@ -23,9 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the configured name cannot be used either, the refusal says how many
   mailboxes were listed and whether `SPECIAL-USE` is advertised; results note
   how each mailbox was found. When the sent and drafts mailboxes are the same
-  mailbox (`INBOX` compared without regard to case), the sent copy stays
-  pending and the draft is kept. A marked mailbox that cannot be selected, or
-  capabilities that cannot be read, refuse the call.
+  mailbox (compared without regard to ASCII case), the sent copy stays
+  pending and the draft is kept. A pending removal is done only in the drafts
+  mailbox the draft was submitted from. When the drafts mailbox is looked up,
+  a marked mailbox that cannot be selected, capabilities that cannot be read,
+  or a failed special-use request refuse the call; when the sent mailbox is
+  looked up after submission, they leave the sent copy pending.
 
 ### Added
 

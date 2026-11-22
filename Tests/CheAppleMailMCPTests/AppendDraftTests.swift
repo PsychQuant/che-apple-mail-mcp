@@ -423,12 +423,12 @@ final class AppendDraftTests: XCTestCase {
     func testTheSessionsMailboxNotesReachTheResult() async throws {
         for outcome: AppendOutcome in [.appended(uid: 3, uidValidity: 9), .notAppended(detail: "NO [OVERQUOTA]")] {
             let session = FakeSession()
-            session.lookupNotes = ["The drafts mailbox is the one `drafts_mailbox` names in direct-transport.json."]
+            session.recordsLookupNotes = true
             session.appendDraftOutcome = outcome
             let text = try await AppendDraftTool.run(arguments(), try environment(config: config, session: session))
             let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
             let notes = try XCTUnwrap(object["notes"] as? [String])
-            XCTAssertTrue(notes.contains(session.lookupNotes[0]), "\(outcome): \(notes)")
+            XCTAssertTrue(notes.contains("drafts lookup note"), "\(outcome): \(notes)")
         }
     }
 

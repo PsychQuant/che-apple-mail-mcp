@@ -33,6 +33,11 @@ struct SendRecord: Codable, Equatable {
     /// The login and IMAP server the draft was submitted from, as
     /// `address@host:port`. A pending stage is completed only on that server.
     var server: String? = nil
+    /// The drafts mailbox the draft was submitted from (#748). A pending removal
+    /// is done, or inferred from the draft's absence, only in that mailbox: the
+    /// sent copy has the same Message-ID and bytes. Nil in an entry written
+    /// before #748, which is resumed as before.
+    var draftsMailbox: String? = nil
 
     /// `attempting` read back later is `unknown`: nothing shows the message was
     /// not handed over.
@@ -43,6 +48,7 @@ struct SendRecord: Codable, Equatable {
         case sentCopy = "sent_copy", draftRemoval = "draft_removal"
         case updatedAt = "updated_at", serverReply = "server_reply"
         case submittedAt = "submitted_at", draftDigest = "draft_digest", server
+        case draftsMailbox = "drafts_mailbox"
     }
 }
 

@@ -150,7 +150,7 @@ struct SendDraftFlow {
         case .subject(let subject):
             candidates = try await session.drafts(withSubjectContaining: subject, in: draftsBox).filter { Self.same($0.subject, subject) }
         }
-        if candidates.isEmpty, let id = wantedID, let finished = try removalAlreadyHappened(id) {
+        if candidates.isEmpty, let id = wantedID, let finished = try removalAlreadyHappened(id, draftsBox: draftsBox) {
             return finished
         }
         guard candidates.count == 1, let only = candidates.first else {
@@ -188,6 +188,9 @@ struct SendDraftFlow {
                 guard DirectTransportConfig.equalIgnoringASCIICase(existing.accountID, account.accountID),
                       Self.same(existing.server, Self.server(of: account)) else {
                     throw SendDraftRefusal(description: "this Message-ID was submitted from another account or server (\(existing.accountID), \(existing.server ?? "unknown server")); its pending stages are done only there. Nothing was submitted")
+                }
+                guard Self.sameDraftsMailbox(existing, draftsBox) else {
+                    throw SendDraftRefusal(description: "the drafts mailbox found now is not the one this draft was submitted from, so its pending stages are not done there (a sent copy has the same Message-ID and bytes as the draft). Nothing was submitted or removed; set `drafts_mailbox` back, or finish in Mail")
                 }
                 guard existing.draftDigest == draft.digest else {
                     throw SendDraftRefusal(description: "the draft on the server is not the one that was submitted (its bytes changed), so its pending stages are not done; nothing was submitted. Delete or store it in Mail")
@@ -242,7 +245,8 @@ struct SendDraftFlow {
         let attempting = SendRecord(messageID: messageID, accountID: account.accountID, state: .attempting,
                                     sentCopy: account.sentCopy == .append ? .pending : .skipped,
                                     draftRemoval: .pending, updatedAt: now(), serverReply: nil,
-                                    submittedAt: nil, draftDigest: draft.digest, server: Self.server(of: account))
+                                    submittedAt: nil, draftDigest: draft.digest, server: Self.server(of: account),
+                                    draftsMailbox: draftsBox)
         let existing: SendRecord?
         do {
             existing = try records.claim(attempting)
@@ -303,8 +307,9 @@ struct SendDraftFlow {
     /// A draft chosen by its local row is gone from the server, and its entry says
     /// only the removal is pending: the removal happened after all (its reply or
     /// the write after it was lost). Records it as done.
-    private func removalAlreadyHappened(_ messageID: String) throws -> SendDraftResult? {
+    private func removalAlreadyHappened(_ messageID: String, draftsBox: String) throws -> SendDraftResult? {
         guard var entry = try records.entry(for: messageID), entry.effectiveState == .submitted,
+              Self.sameDraftsMailbox(entry, draftsBox),
               DirectTransportConfig.equalIgnoringASCIICase(entry.accountID, account.accountID),
               Self.same(entry.server, Self.server(of: account)),
               entry.sentCopy != .pending, entry.draftRemoval == .pending else { return nil }
@@ -315,6 +320,13 @@ struct SendDraftFlow {
         return SendDraftResult(outcome: .submitted, messageID: messageID, serverReply: entry.serverReply,
                                sentCopy: Self.stage(entry.sentCopy), draftRemoval: .done, resumed: true,
                                notes: notes + [Self.localIndexNote])
+    }
+
+    /// Whether `draftsBox` is the drafts mailbox the entry was submitted from
+    /// (#748). An entry written before #748 has none and is resumed as before.
+    static func sameDraftsMailbox(_ entry: SendRecord, _ draftsBox: String) -> Bool {
+        guard let recorded = entry.draftsMailbox else { return true }
+        return MailboxLookup.sameName(recorded, draftsBox)
     }
 
     /// The stages after a submission, in order; a failed stage stays pending and

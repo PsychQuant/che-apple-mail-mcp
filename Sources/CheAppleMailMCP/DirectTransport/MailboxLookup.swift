@@ -53,21 +53,15 @@ enum MailboxLookup {
         a.unicodeScalars.elementsEqual(b.unicodeScalars)
     }
 
-    /// Whether two names the server gave name one mailbox: equal scalar by
-    /// scalar once a leading `INBOX`, which IMAP treats without regard to
-    /// letter case (RFC 3501 5.1), is put in one case. Only for comparing two
-    /// names that both came from the server; a configured name is matched by
-    /// `sameName` alone.
+    /// Whether two names the server gave may name one mailbox, for the guard
+    /// that keeps a draft from counting as its own sent copy. Equal ignoring
+    /// ASCII letter case, or scalar by scalar: IMAP treats `INBOX` without
+    /// regard to case and some servers treat every name so. Matching too much
+    /// only leaves the stages pending; missing a match can lose the only copy.
+    /// A server alias spelled differently is not caught. Configured names are
+    /// matched by `sameName` alone.
     static func sameMailbox(_ a: String, _ b: String) -> Bool {
-        sameName(normalizedInbox(a), normalizedInbox(b))
-    }
-
-    private static func normalizedInbox(_ name: String) -> String {
-        let scalars = Array(name.unicodeScalars)
-        guard scalars.count >= 5,
-              DirectTransportConfig.equalIgnoringASCIICase(String(String.UnicodeScalarView(scalars[0..<5])), "INBOX") else { return name }
-        if scalars.count > 5, CharacterSet.alphanumerics.contains(scalars[5]) { return name }
-        return "INBOX" + String(String.UnicodeScalarView(scalars[5...]))
+        sameName(a, b) || DirectTransportConfig.equalIgnoringASCIICase(a, b)
     }
 
     struct Found: Equatable, Sendable {
@@ -94,7 +88,7 @@ enum MailboxLookup {
         let count = "it lists \(listed.count) \(listed.count == 1 ? "mailbox" : "mailboxes")"
         func disagreement(with name: String) -> String {
             guard let declared, !sameName(declared, name) else { return "" }
-            return " `\(role.configurationKey)` in direct-transport.json names another mailbox; the server's mark was used."
+            return " `\(role.configurationKey)` in direct-transport.json does not exactly match the name the server gave; the server's mark was used."
         }
         /// Rules 1 to 3: a mark decides, and a mark the call cannot use is
         /// refused rather than passed over for the configured name.
@@ -121,13 +115,21 @@ enum MailboxLookup {
         } catch {
             // Fail closed: without the capabilities it cannot be known whether
             // the server would mark a mailbox when asked (#748 round 2).
-            throw SendDraftRefusal(description: "the server marks no mailbox \(attribute) in its mailbox list (\(count)), and its capabilities could not be read (\(error)), so the configured name is not used either; \(role.consequence)")
+            throw SendDraftRefusal(description: "the server marks no mailbox \(attribute) in its mailbox list (\(count)), and its capabilities could not be read, so the configured name is not used either; \(role.consequence)")
         }
-        if advertises,
-           let only = try decide(try await markedOnRequest(), "\(count) and advertises SPECIAL-USE") {
+        if advertises {
+            let marked: [Listed]
+            do {
+                marked = try await markedOnRequest()
+            } catch {
+                // Fail closed, with what is known and no server text (#748 round 3).
+                throw SendDraftRefusal(description: "the server marks no mailbox \(attribute) in its mailbox list (\(count) and advertises SPECIAL-USE), and the request for its special-use mailboxes failed, so the configured name is not used either; \(role.consequence)")
+            }
+            if let only = try decide(marked, "\(count) and advertises SPECIAL-USE") {
             return Found(name: only.name, source: .explicitRequest,
                          note: "The \(role.noun) is the one the server marks \(attribute) when asked for its special-use mailboxes (it advertises SPECIAL-USE; its plain mailbox list marked none)."
-                            + disagreement(with: only.name))
+                                + disagreement(with: only.name))
+            }
         }
 
         let seen = "\(count) and \(advertises ? "advertises SPECIAL-USE" : "does not advertise SPECIAL-USE")"

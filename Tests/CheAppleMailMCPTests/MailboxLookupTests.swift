@@ -90,19 +90,6 @@ final class MailboxLookupTests: XCTestCase {
         XCTAssertTrue(text.contains("marks 2 mailboxes \\Drafts"), text)
     }
 
-    func testAFailureWhileAskingIsHandedOn() async {
-        struct Broken: Error {}
-        do {
-            _ = try await MailboxLookup.resolve(.drafts, listed: listed.map { .init(name: $0, selectable: true) },
-                                                markedInList: [], declared: "Drafts",
-                                                advertisesSpecialUse: { true }) { throw Broken() }
-            XCTFail("expected the failure")
-        } catch is Broken {
-        } catch {
-            XCTFail("unexpected \(error)")
-        }
-    }
-
     // MARK: Row 4 — the name in direct-transport.json
 
     func testTheConfiguredNameIsUsedWhenTheServerMarksNone() async throws {
@@ -150,17 +137,17 @@ final class MailboxLookupTests: XCTestCase {
         XCTAssertEqual(plain.name, "Drafts")
         XCTAssertEqual(plain.source, .plainList)
         XCTAssertTrue(plain.note.contains("`drafts_mailbox`"), plain.note)
-        XCTAssertTrue(plain.note.contains("another mailbox"), plain.note)
+        XCTAssertTrue(plain.note.contains("does not exactly match"), plain.note)
         XCTAssertFalse(plain.note.contains("Archive"), plain.note)
 
         let requested = try await resolve(advertises: true, onRequest: ["Drafts"], declared: "Archive")
         XCTAssertEqual(requested.name, "Drafts")
-        XCTAssertTrue(requested.note.contains("another mailbox"), requested.note)
+        XCTAssertTrue(requested.note.contains("does not exactly match"), requested.note)
     }
 
     func testAConfiguredNameThatAgreesWithTheServerAddsNothing() async throws {
         let found = try await resolve(marked: ["Drafts"], declared: "Drafts")
-        XCTAssertFalse(found.note.contains("another mailbox"), found.note)
+        XCTAssertFalse(found.note.contains("does not exactly match"), found.note)
     }
 
     // MARK: The sent mailbox
@@ -183,13 +170,17 @@ final class MailboxLookupTests: XCTestCase {
     func testADecisivePlainListNeverAsksForCapabilities() async throws {
         struct Broken: Error {}
         for marked in [["Drafts"], ["Drafts", "Archive"]] {
+            let capabilities = Asked()
+            _ = try? await resolve(marked: marked, capabilities: capabilities)
+            XCTAssertEqual(capabilities.times, 0, "\(marked)")
             do {
                 let found = try await MailboxLookup.resolve(.drafts, listed: listed.map { .init(name: $0, selectable: true) },
                                                             markedInList: marked.map { .init(name: $0, selectable: true) }, declared: nil,
                                                             advertisesSpecialUse: { throw Broken() }) { throw Broken() }
                 XCTAssertEqual(found.name, "Drafts")
-            } catch is SendDraftRefusal {
+            } catch let refusal as SendDraftRefusal {
                 XCTAssertEqual(marked.count, 2)
+                XCTAssertTrue(refusal.description.contains("marks 2 mailboxes"), refusal.description)
             } catch {
                 XCTFail("the capabilities were asked for: \(error)")
             }
@@ -214,7 +205,7 @@ final class MailboxLookupTests: XCTestCase {
 
     func testAServerMarkThatDiffersOnlyInScalarsFromTheKeyIsReportedAsADisagreement() async throws {
         let found = try await resolve(marked: ["Entwu\u{0308}rfe"], declared: "Entw\u{00FC}rfe")
-        XCTAssertTrue(found.note.contains("another mailbox"), found.note)
+        XCTAssertTrue(found.note.contains("does not exactly match"), found.note)
     }
 
     func testTwoListedMailboxesWithTheConfiguredNameAreRefusedAsAmbiguous() async {
@@ -234,14 +225,15 @@ final class MailboxLookupTests: XCTestCase {
     // MARK: Round 2 of the review
 
     func testCapabilitiesThatCannotBeReadRefuseTheCall_evenWithAListedConfiguredName() async {
-        struct Broken: Error, CustomStringConvertible { var description: String { "CAPABILITY timed out" } }
+        struct Broken: Error, CustomStringConvertible { var description: String { "CAPABILITY timed out: IMAP4rev1 SPECIAL-USE Drafts" } }
         do {
             _ = try await MailboxLookup.resolve(.drafts, listed: listed.map { .init(name: $0, selectable: true) },
                                                 markedInList: [], declared: "Drafts",
                                                 advertisesSpecialUse: { throw Broken() }) { [] }
             XCTFail("expected a refusal")
         } catch let refusal as SendDraftRefusal {
-            XCTAssertTrue(refusal.description.contains("capabilities could not be read (CAPABILITY timed out)"), refusal.description)
+            XCTAssertTrue(refusal.description.contains("capabilities could not be read"), refusal.description)
+            XCTAssertFalse(refusal.description.contains("timed out"), "no server or library text: \(refusal.description)")
             XCTAssertTrue(refusal.description.contains("lists 5 mailboxes"), refusal.description)
             XCTAssertTrue(refusal.description.contains("nothing was submitted"), refusal.description)
         } catch {
@@ -267,14 +259,30 @@ final class MailboxLookupTests: XCTestCase {
         }
     }
 
-    func testTwoServerNamesForInboxInDifferentCaseAreOneMailbox_otherNamesStayCaseSensitive() {
+    func testTheSameMailboxGuardIgnoresASCIICase_soItErrsTowardKeepingTheDraft() {
+        // Over-matching only leaves the stages pending; missing a match can lose the only copy.
         XCTAssertTrue(MailboxLookup.sameMailbox("INBOX", "Inbox"))
-        XCTAssertTrue(MailboxLookup.sameMailbox("INBOX.Sent", "inbox.Sent"))
-        XCTAssertTrue(MailboxLookup.sameMailbox("INBOX/Drafts", "Inbox/Drafts"))
-        XCTAssertFalse(MailboxLookup.sameMailbox("INBOX.Sent", "Inbox.sent"), "only the INBOX part ignores case")
-        XCTAssertFalse(MailboxLookup.sameMailbox("Inboxes", "INBOXES"), "a name that only starts with the letters is not INBOX")
-        XCTAssertFalse(MailboxLookup.sameMailbox("Drafts", "drafts"))
+        XCTAssertTrue(MailboxLookup.sameMailbox("INBOX.Sent", "inbox.sent"))
+        XCTAssertTrue(MailboxLookup.sameMailbox("Drafts", "drafts"))
         XCTAssertTrue(MailboxLookup.sameMailbox("Entwu\u{0308}rfe", "Entwu\u{0308}rfe"))
-        XCTAssertFalse(MailboxLookup.sameMailbox("Entw\u{00FC}rfe", "Entwu\u{0308}rfe"))
+        XCTAssertFalse(MailboxLookup.sameMailbox("Drafts", "Sent Messages"))
+        XCTAssertFalse(MailboxLookup.sameMailbox("Entw\u{00FC}rfe", "Entwu\u{0308}rfe"), "not canonical equivalence")
     }
+
+    func testAFailedSpecialUseRequestRefusesWithWhatIsKnown_andNoFallback() async {
+        struct Broken: Error, CustomStringConvertible { var description: String { "NO LIST failed for \"Brouillons\"" } }
+        do {
+            _ = try await MailboxLookup.resolve(.drafts, listed: listed.map { .init(name: $0, selectable: true) },
+                                                markedInList: [], declared: "Drafts",
+                                                advertisesSpecialUse: { true }) { throw Broken() }
+            XCTFail("expected a refusal")
+        } catch let refusal as SendDraftRefusal {
+            XCTAssertTrue(refusal.description.contains("lists 5 mailboxes and advertises SPECIAL-USE"), refusal.description)
+            XCTAssertTrue(refusal.description.contains("request for its special-use mailboxes failed"), refusal.description)
+            XCTAssertFalse(refusal.description.contains("Brouillons"), "no server text: \(refusal.description)")
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
 }

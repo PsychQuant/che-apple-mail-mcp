@@ -4,8 +4,9 @@
 - [x] 1.2 `direct-transport.json` 的 `drafts_mailbox`、`sent_mailbox`：可省略、原樣保留、不合格的值以欄位名拒絕。
 - [x] 1.3 `SwiftMailSession`：登入後取能力清單；只有宣告 `SPECIAL-USE` 時才呼叫 SwiftMail 的 special-use 查詢。
 - [x] 1.4 兩個工具的結果附上信匣來源的 note（protocol requirement，經 protocol 呼叫也拿得到）。
-- [x] 1.5 寄件備份匣與草稿匣是同一個信匣時（`INBOX` 不分大小寫），寄件副本留 pending、草稿不移除。
+- [x] 1.5 寄件備份匣與草稿匣是同一個信匣時（不分 ASCII 大小寫），寄件副本留 pending、草稿不移除。
 - [x] 1.6 伺服器標的信匣若是 `\Noselect` 就拒絕，不改用設定的名稱；能力清單讀不到就拒絕（第 2 輪 verify）。
+- [x] 1.7 已寄出紀錄記下送出時的草稿匣；只剩收尾時，草稿匣不是那一個就拒絕，也不把「找不到草稿」當成已移除；同信匣的檢查改成不分 ASCII 大小寫；特殊用途查詢失敗也拒絕；拒絕訊息不帶伺服器或程式庫的錯誤文字（第 3 輪 verify）。
 
 ## 2. 文件
 
