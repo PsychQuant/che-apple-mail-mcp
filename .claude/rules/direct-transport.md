@@ -53,7 +53,7 @@
    （`MailboxLookup`）：一般 `LIST` 的標記；伺服器宣告 `SPECIAL-USE` 時以 `RETURN (SPECIAL-USE)` 再問一次；仍沒有才用
    `direct-transport.json` 裡維護者寫的 `drafts_mailbox`／`sent_mailbox`（伺服器要列出完全同名的那一個）；都沒有就拒絕。
    名稱只在維護者自己寫進設定檔時才算數。伺服器沒宣告 `SPECIAL-USE` 時**不得**呼叫 SwiftMail 的
-   `listSpecialUseMailboxes()`：它在那種情況會用信匣名稱推測。能力清單只在一般清單沒有標記時才取，取不到不能推翻伺服器已經給的標記。設定的名稱逐個 scalar 比對（不是 Swift 的 `==`），用伺服器列出的那個寫法。寄件備份匣與草稿匣是同一個時，寄件副本留 pending、草稿不刪。2026-11-22 的 iCloud：登入前的能力清單沒有 `SPECIAL-USE`、一般 `LIST` 沒有標 `\Drafts`；登入後的情形還沒觀察到。
+   `listSpecialUseMailboxes()`：它在那種情況會用信匣名稱推測。能力清單只在一般清單沒有標記時才取，取不到不能推翻伺服器已經給的標記。設定的名稱逐個 scalar 比對（不是 Swift 的 `==`），用伺服器列出的那個寫法。伺服器標的信匣若是 `\Noselect` 就拒絕，不改用設定的名稱；能力清單讀不到也拒絕。寄件備份匣與草稿匣是同一個時（比較時 `INBOX` 不分大小寫），寄件副本留 pending、草稿不刪。2026-11-22 的 iCloud：登入前的能力清單沒有 `SPECIAL-USE`、一般 `LIST` 沒有標 `\Drafts`；登入後的情形還沒觀察到。
    拒絕與結果的 notes 只寫數量與「有／沒有宣告」，不寫信匣名稱或能力清單。
 
 ## append_draft（#744）
@@ -118,7 +118,6 @@
 抓不到的：`SwiftMailSession` 對真實伺服器的行為（APPEND 的旗標與 `APPENDUID` 是否照預期、Mail 與其他用戶端是否把
 `append_draft` 建的草稿當成可編輯的草稿、連線參數是否真的被 SwiftMail 套用、UIDPLUS 與 UIDVALIDITY 的判斷、envelope 與標頭的對照）都沒有測試，只能靠 live 測試；把
 `minimumTLSVersion` 或 `certificateVerificationPolicy` 改鬆、把 keychain 改回 `SecItemUpdate`，都不會讓測試轉紅。
-審查時要自己讀 diff。
 
 ## 為什麼
 

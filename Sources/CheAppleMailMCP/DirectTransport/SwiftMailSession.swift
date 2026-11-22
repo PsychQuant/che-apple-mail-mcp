@@ -144,8 +144,8 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
         let listed = try await guarded { try await imap.listMailboxes() }
         let imap = self.imap
         let found = try await MailboxLookup.resolve(
-            role, listed: listed.map { .init(name: $0.name, selectable: !$0.attributes.contains(.noSelect)) },
-            markedInList: listed.filter { $0.attributes.contains(attribute) }.map(\.name),
+            role, listed: listed.map(Self.listed),
+            markedInList: listed.filter { $0.attributes.contains(attribute) }.map(Self.listed),
             declared: declared,
             advertisesSpecialUse: {
                 // Fetched after login: the capabilities a server gives before
@@ -155,10 +155,14 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
             },
             markedOnRequest: {
                 try await self.guarded { try await imap.listSpecialUseMailboxes() }
-                    .filter { $0.attributes.contains(attribute) }.map(\.name)
+                    .filter { $0.attributes.contains(attribute) }.map(Self.listed)
             })
         recordLookup(found.note)
         return found.name
+    }
+
+    private static func listed(_ info: Mailbox.Info) -> MailboxLookup.Listed {
+        MailboxLookup.Listed(name: info.name, selectable: !info.attributes.contains(.noSelect))
     }
 
     /// Whether a capability's text is SPECIAL-USE (RFC 6154). Capability names

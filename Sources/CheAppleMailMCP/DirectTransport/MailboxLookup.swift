@@ -53,6 +53,23 @@ enum MailboxLookup {
         a.unicodeScalars.elementsEqual(b.unicodeScalars)
     }
 
+    /// Whether two names the server gave name one mailbox: equal scalar by
+    /// scalar once a leading `INBOX`, which IMAP treats without regard to
+    /// letter case (RFC 3501 5.1), is put in one case. Only for comparing two
+    /// names that both came from the server; a configured name is matched by
+    /// `sameName` alone.
+    static func sameMailbox(_ a: String, _ b: String) -> Bool {
+        sameName(normalizedInbox(a), normalizedInbox(b))
+    }
+
+    private static func normalizedInbox(_ name: String) -> String {
+        let scalars = Array(name.unicodeScalars)
+        guard scalars.count >= 5,
+              DirectTransportConfig.equalIgnoringASCIICase(String(String.UnicodeScalarView(scalars[0..<5])), "INBOX") else { return name }
+        if scalars.count > 5, CharacterSet.alphanumerics.contains(scalars[5]) { return name }
+        return "INBOX" + String(String.UnicodeScalarView(scalars[5...]))
+    }
+
     struct Found: Equatable, Sendable {
         let name: String
         let source: Source
@@ -70,37 +87,50 @@ enum MailboxLookup {
     ///   - markedOnRequest: asks the server for its special-use mailboxes and
     ///     returns the names marked with the role's attribute. Called at most
     ///     once, and only when the server advertises SPECIAL-USE.
-    static func resolve(_ role: Role, listed: [Listed], markedInList: [String], declared: String?,
+    static func resolve(_ role: Role, listed: [Listed], markedInList: [Listed], declared: String?,
                         advertisesSpecialUse: @Sendable () async throws -> Bool,
-                        markedOnRequest: @Sendable () async throws -> [String]) async throws -> Found {
+                        markedOnRequest: @Sendable () async throws -> [Listed]) async throws -> Found {
         let attribute = role.attribute
-        func tooMany(_ count: Int) -> SendDraftRefusal {
-            SendDraftRefusal(description: "the server marks \(count) mailboxes \(attribute); \(role.consequence)")
-        }
+        let count = "it lists \(listed.count) \(listed.count == 1 ? "mailbox" : "mailboxes")"
         func disagreement(with name: String) -> String {
             guard let declared, !sameName(declared, name) else { return "" }
             return " `\(role.configurationKey)` in direct-transport.json names another mailbox; the server's mark was used."
         }
-
-        if markedInList.count > 1 { throw tooMany(markedInList.count) }
-        if let only = markedInList.first {
-            return Found(name: only, source: .plainList,
-                         note: "The \(role.noun) is the one the server marks \(attribute) in its mailbox list."
-                            + disagreement(with: only))
-        }
-
-        let advertises = try await advertisesSpecialUse()
-        if advertises {
-            let marked = try await markedOnRequest()
-            if marked.count > 1 { throw tooMany(marked.count) }
-            if let only = marked.first {
-                return Found(name: only, source: .explicitRequest,
-                             note: "The \(role.noun) is the one the server marks \(attribute) when asked for its special-use mailboxes (it advertises SPECIAL-USE; its plain mailbox list marked none)."
-                                + disagreement(with: only))
+        /// Rules 1 to 3: a mark decides, and a mark the call cannot use is
+        /// refused rather than passed over for the configured name.
+        func decide(_ marked: [Listed], _ context: String) throws -> Listed? {
+            if marked.count > 1 {
+                throw SendDraftRefusal(description: "the server marks \(marked.count) mailboxes \(attribute) (\(context)); \(role.consequence)")
             }
+            guard let only = marked.first else { return nil }
+            guard only.selectable else {
+                throw SendDraftRefusal(description: "the mailbox the server marks \(attribute) cannot be selected (the server marks it \\Noselect; \(context)); \(role.consequence)")
+            }
+            return only
         }
 
-        let seen = "it lists \(listed.count) \(listed.count == 1 ? "mailbox" : "mailboxes") and \(advertises ? "advertises SPECIAL-USE" : "does not advertise SPECIAL-USE")"
+        if let only = try decide(markedInList, "\(count); SPECIAL-USE was not checked") {
+            return Found(name: only.name, source: .plainList,
+                         note: "The \(role.noun) is the one the server marks \(attribute) in its mailbox list."
+                            + disagreement(with: only.name))
+        }
+
+        let advertises: Bool
+        do {
+            advertises = try await advertisesSpecialUse()
+        } catch {
+            // Fail closed: without the capabilities it cannot be known whether
+            // the server would mark a mailbox when asked (#748 round 2).
+            throw SendDraftRefusal(description: "the server marks no mailbox \(attribute) in its mailbox list (\(count)), and its capabilities could not be read (\(error)), so the configured name is not used either; \(role.consequence)")
+        }
+        if advertises,
+           let only = try decide(try await markedOnRequest(), "\(count) and advertises SPECIAL-USE") {
+            return Found(name: only.name, source: .explicitRequest,
+                         note: "The \(role.noun) is the one the server marks \(attribute) when asked for its special-use mailboxes (it advertises SPECIAL-USE; its plain mailbox list marked none)."
+                            + disagreement(with: only.name))
+        }
+
+        let seen = "\(count) and \(advertises ? "advertises SPECIAL-USE" : "does not advertise SPECIAL-USE")"
         let key = "`\(role.configurationKey)`"
         guard let declared else {
             throw SendDraftRefusal(description: "the server marks no mailbox \(attribute) (\(seen)), and direct-transport.json names none for this account: add \(key) with the mailbox's exact name; \(role.consequence)")

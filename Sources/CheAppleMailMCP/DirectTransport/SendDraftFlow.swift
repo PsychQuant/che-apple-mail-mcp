@@ -328,8 +328,8 @@ struct SendDraftFlow {
                 let sentBox = try await session.sentMailbox()
                 // One mailbox for both roles (#748): the draft itself would count
                 // as the sent copy and could then be removed, the only copy left.
-                if MailboxLookup.sameName(sentBox, draftsBox) {
-                    throw SendDraftRefusal(description: "the sent mailbox and the drafts mailbox are the same mailbox, so a sent copy cannot be told apart from the draft; set `sent_mailbox` to another mailbox, or `sent_copy` to provider. The draft was kept")
+                if MailboxLookup.sameMailbox(sentBox, draftsBox) {
+                    throw SendDraftRefusal(description: "the sent mailbox and the drafts mailbox are the same mailbox, so a sent copy cannot be told apart from the draft. The draft was kept. When one of them came from `drafts_mailbox` or `sent_mailbox` in direct-transport.json, correct that key; when the server marks both, the server's marks have to be corrected. Use `sent_copy: provider` only if the provider is known to keep a copy of what is sent")
                 }
                 // A copy stored by an earlier attempt whose reply was lost is not stored twice.
                 if try await session.sentCopyExists(messageID: record.messageID, in: sentBox) {

@@ -19,10 +19,10 @@ final class MailboxLookupTests: XCTestCase {
                          onRequest: [String] = [], declared: String? = nil, listed: [MailboxLookup.Listed]? = nil,
                          asked: Asked = Asked(), capabilities: Asked = Asked()) async throws -> MailboxLookup.Found {
         try await MailboxLookup.resolve(role, listed: listed ?? self.listed.map { .init(name: $0, selectable: true) },
-                                        markedInList: marked, declared: declared,
+                                        markedInList: marked.map { .init(name: $0, selectable: true) }, declared: declared,
                                         advertisesSpecialUse: { capabilities.note(); return advertises }) {
             asked.note()
-            return onRequest
+            return onRequest.map { .init(name: $0, selectable: true) }
         }
     }
 
@@ -57,6 +57,7 @@ final class MailboxLookupTests: XCTestCase {
         let text = await refusal { try await self.resolve(marked: ["Drafts", "Archive"], advertises: true,
                                                          declared: "Drafts", asked: asked) }
         XCTAssertTrue(text.contains("marks 2 mailboxes \\Drafts"), text)
+        XCTAssertTrue(text.contains("lists 5 mailboxes; SPECIAL-USE was not checked"), text)
         XCTAssertTrue(text.contains("nothing was submitted"), text)
         XCTAssertEqual(asked.times, 0)
     }
@@ -110,7 +111,7 @@ final class MailboxLookupTests: XCTestCase {
             XCTAssertEqual(found.name, "Drafts")
             XCTAssertEqual(found.source, .configuration)
             XCTAssertTrue(found.note.contains("drafts_mailbox"), found.note)
-            XCTAssertTrue(found.note.contains(advertises ? "advertises SPECIAL-USE" : "does not advertise SPECIAL-USE"),
+            XCTAssertTrue(found.note.contains(advertises ? "mailboxes and advertises SPECIAL-USE" : "mailboxes and does not advertise SPECIAL-USE"),
                           found.note)
             XCTAssertTrue(found.note.contains("5 mailboxes"), found.note)
         }
@@ -133,7 +134,7 @@ final class MailboxLookupTests: XCTestCase {
             let text = await refusal { try await self.resolve(advertises: advertises) }
             XCTAssertTrue(text.contains("marks no mailbox \\Drafts"), text)
             XCTAssertTrue(text.contains("lists 5 mailboxes"), text)
-            XCTAssertTrue(text.contains(advertises ? "advertises SPECIAL-USE" : "does not advertise SPECIAL-USE"), text)
+            XCTAssertTrue(text.contains(advertises ? "mailboxes and advertises SPECIAL-USE" : "mailboxes and does not advertise SPECIAL-USE"), text)
             XCTAssertTrue(text.contains("`drafts_mailbox`"), text)
             XCTAssertTrue(text.contains("nothing was submitted"), text)
             for name in ["Sent Messages", "Deleted Messages", "Archive"] {
@@ -184,7 +185,7 @@ final class MailboxLookupTests: XCTestCase {
         for marked in [["Drafts"], ["Drafts", "Archive"]] {
             do {
                 let found = try await MailboxLookup.resolve(.drafts, listed: listed.map { .init(name: $0, selectable: true) },
-                                                            markedInList: marked, declared: nil,
+                                                            markedInList: marked.map { .init(name: $0, selectable: true) }, declared: nil,
                                                             advertisesSpecialUse: { throw Broken() }) { throw Broken() }
                 XCTAssertEqual(found.name, "Drafts")
             } catch is SendDraftRefusal {
@@ -228,5 +229,52 @@ final class MailboxLookupTests: XCTestCase {
         let text = await refusal { try await self.resolve(declared: "Brouillons", listed: placeholder) }
         XCTAssertTrue(text.contains("cannot be selected"), text)
         XCTAssertFalse(text.contains("Brouillons"), text)
+    }
+
+    // MARK: Round 2 of the review
+
+    func testCapabilitiesThatCannotBeReadRefuseTheCall_evenWithAListedConfiguredName() async {
+        struct Broken: Error, CustomStringConvertible { var description: String { "CAPABILITY timed out" } }
+        do {
+            _ = try await MailboxLookup.resolve(.drafts, listed: listed.map { .init(name: $0, selectable: true) },
+                                                markedInList: [], declared: "Drafts",
+                                                advertisesSpecialUse: { throw Broken() }) { [] }
+            XCTFail("expected a refusal")
+        } catch let refusal as SendDraftRefusal {
+            XCTAssertTrue(refusal.description.contains("capabilities could not be read (CAPABILITY timed out)"), refusal.description)
+            XCTAssertTrue(refusal.description.contains("lists 5 mailboxes"), refusal.description)
+            XCTAssertTrue(refusal.description.contains("nothing was submitted"), refusal.description)
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
+    func testAServerMarkThatCannotBeSelectedIsRefused_withoutFallingBackToTheConfiguredName() async {
+        let placeholder = MailboxLookup.Listed(name: "Brouillons", selectable: false)
+        let usable = listed.map { MailboxLookup.Listed(name: $0, selectable: true) }
+        for viaRequest in [false, true] {
+            do {
+                _ = try await MailboxLookup.resolve(.drafts, listed: usable + [placeholder],
+                                                    markedInList: viaRequest ? [] : [placeholder], declared: "Drafts",
+                                                    advertisesSpecialUse: { true }) { [placeholder] }
+                XCTFail("expected a refusal (viaRequest: \(viaRequest))")
+            } catch let refusal as SendDraftRefusal {
+                XCTAssertTrue(refusal.description.contains("cannot be selected"), refusal.description)
+                XCTAssertFalse(refusal.description.contains("Brouillons"), refusal.description)
+            } catch {
+                XCTFail("unexpected \(error)")
+            }
+        }
+    }
+
+    func testTwoServerNamesForInboxInDifferentCaseAreOneMailbox_otherNamesStayCaseSensitive() {
+        XCTAssertTrue(MailboxLookup.sameMailbox("INBOX", "Inbox"))
+        XCTAssertTrue(MailboxLookup.sameMailbox("INBOX.Sent", "inbox.Sent"))
+        XCTAssertTrue(MailboxLookup.sameMailbox("INBOX/Drafts", "Inbox/Drafts"))
+        XCTAssertFalse(MailboxLookup.sameMailbox("INBOX.Sent", "Inbox.sent"), "only the INBOX part ignores case")
+        XCTAssertFalse(MailboxLookup.sameMailbox("Inboxes", "INBOXES"), "a name that only starts with the letters is not INBOX")
+        XCTAssertFalse(MailboxLookup.sameMailbox("Drafts", "drafts"))
+        XCTAssertTrue(MailboxLookup.sameMailbox("Entwu\u{0308}rfe", "Entwu\u{0308}rfe"))
+        XCTAssertFalse(MailboxLookup.sameMailbox("Entw\u{00FC}rfe", "Entwu\u{0308}rfe"))
     }
 }

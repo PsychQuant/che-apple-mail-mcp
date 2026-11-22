@@ -673,9 +673,10 @@ final class SendDraftFlowTests: XCTestCase {
     /// #748: when the sent mailbox and the drafts mailbox are one mailbox, the
     /// draft itself would count as the sent copy and could then be removed.
     func testWhenTheSentMailboxIsTheDraftsMailboxTheDraftIsKept() async throws {
-        do {
+        for (drafts, sent) in [("Drafts", "Drafts"), ("INBOX", "Inbox")] {
             let session = FakeSession()
-            session.sentMailboxName = session.draftsMailboxName
+            session.draftsMailboxName = drafts
+            session.sentMailboxName = sent
             session.sentHasCopy = true
             session.drafts = [draft()]
             let (flow, _) = flow(session)

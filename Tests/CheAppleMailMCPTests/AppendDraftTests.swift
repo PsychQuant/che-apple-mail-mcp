@@ -419,16 +419,16 @@ final class AppendDraftTests: XCTestCase {
     private final class Opened: @unchecked Sendable { var count = 0 }
 
     /// #748: the session's note on how the drafts mailbox was found reaches the
-    /// result, also when the mailbox was not found.
+    /// result, also when the APPEND that follows is refused.
     func testTheSessionsMailboxNotesReachTheResult() async throws {
-        for found in [true, false] {
+        for outcome: AppendOutcome in [.appended(uid: 3, uidValidity: 9), .notAppended(detail: "NO [OVERQUOTA]")] {
             let session = FakeSession()
             session.lookupNotes = ["The drafts mailbox is the one `drafts_mailbox` names in direct-transport.json."]
-            if !found { session.draftsMailboxError = SendDraftRefusal(description: "the server marks no mailbox \\Drafts; nothing was submitted") }
+            session.appendDraftOutcome = outcome
             let text = try await AppendDraftTool.run(arguments(), try environment(config: config, session: session))
             let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
             let notes = try XCTUnwrap(object["notes"] as? [String])
-            XCTAssertTrue(notes.contains(session.lookupNotes[0]), "found=\(found): \(notes)")
+            XCTAssertTrue(notes.contains(session.lookupNotes[0]), "\(outcome): \(notes)")
         }
     }
 
