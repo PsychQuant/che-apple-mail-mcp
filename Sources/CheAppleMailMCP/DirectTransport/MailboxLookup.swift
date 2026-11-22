@@ -55,13 +55,14 @@ enum MailboxLookup {
 
     /// Whether two names the server gave may name one mailbox, for the guard
     /// that keeps a draft from counting as its own sent copy. Equal ignoring
-    /// ASCII letter case, or scalar by scalar: IMAP treats `INBOX` without
+    /// ASCII letter case, canonically equivalent (Swift's `==`), or scalar by
+    /// scalar: IMAP treats `INBOX` without
     /// regard to case and some servers treat every name so. Matching too much
     /// only leaves the stages pending; missing a match can lose the only copy.
     /// A server alias spelled differently is not caught. Configured names are
     /// matched by `sameName` alone.
     static func sameMailbox(_ a: String, _ b: String) -> Bool {
-        sameName(a, b) || DirectTransportConfig.equalIgnoringASCIICase(a, b)
+        a == b || sameName(a, b) || DirectTransportConfig.equalIgnoringASCIICase(a, b)
     }
 
     struct Found: Equatable, Sendable {

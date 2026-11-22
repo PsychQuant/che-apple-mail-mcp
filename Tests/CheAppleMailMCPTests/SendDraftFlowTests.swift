@@ -666,7 +666,8 @@ final class SendDraftFlowTests: XCTestCase {
         let (flow, records) = flow(session)
         try records.put(SendRecord(messageID: "<d1@icloud.example>", accountID: account.accountID, state: .submitted,
                                    sentCopy: .pending, draftRemoval: .pending, updatedAt: Date(), serverReply: "250 OK",
-                                   submittedAt: Date(), draftDigest: stored.digest, server: SendDraftFlow.server(of: account)))
+                                   submittedAt: Date(), draftDigest: stored.digest, server: SendDraftFlow.server(of: account),
+                                   draftsMailbox: "Drafts"))
         let result = try await flow.run(.subject("Report"))
         XCTAssertTrue(result.resumed)
         XCTAssertEqual(result.sentCopy, .done)
@@ -732,6 +733,20 @@ final class SendDraftFlowTests: XCTestCase {
             XCTAssertEqual(result != nil, removed, box)
             XCTAssertEqual(try records.entry(for: "<d1@icloud.example>")?.draftRemoval, removed ? .done : .pending, box)
         }
+    }
+
+    func testARecordThatDoesNotSayItsDraftsMailboxIsNotResumed() async throws {
+        let session = FakeSession()
+        let stored = draft()
+        session.drafts = [stored]
+        let (flow, records) = flow(session)
+        try records.put(SendRecord(messageID: "<d1@icloud.example>", accountID: account.accountID, state: .submitted,
+                                   sentCopy: .done, draftRemoval: .pending, updatedAt: Date(), serverReply: "250 OK",
+                                   submittedAt: Date(), draftDigest: stored.digest, server: SendDraftFlow.server(of: account)))
+        let message = await refusal { try await flow.run(.subject("Report")) }
+        XCTAssertTrue(message?.contains("does not say which one") == true, message ?? "not refused")
+        XCTAssertFalse(session.calls.contains { $0.hasPrefix("remove") })
+        XCTAssertEqual(session.drafts.count, 1)
     }
 
     func testANewSubmissionRecordsItsDraftsMailbox() async throws {

@@ -13,6 +13,7 @@
 
 - 用信匣名稱推測（`Drafts`、`Sent Messages`…）。名稱只在維護者自己寫進設定檔時才算數。SwiftMail 的 special-use 查詢在伺服器沒宣告時會用名稱推測，所以那種伺服器不會被那樣問。
 - 其他供應商的實測。只在 iCloud 上跑。
+- 以伺服器給的身分（UIDVALIDITY、UID、MAILBOXID）認信匣；信匣改名、別名、`\NonExistent`、收尾時換 `sent_mailbox`：見 #750。線上實際送出的指令：見 #749。
 
 ## Capabilities
 

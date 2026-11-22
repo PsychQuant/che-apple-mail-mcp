@@ -226,10 +226,12 @@ final class MailboxLookupTests: XCTestCase {
 
     func testCapabilitiesThatCannotBeReadRefuseTheCall_evenWithAListedConfiguredName() async {
         struct Broken: Error, CustomStringConvertible { var description: String { "CAPABILITY timed out: IMAP4rev1 SPECIAL-USE Drafts" } }
+        let asked = Asked()
+        defer { XCTAssertEqual(asked.times, 0, "no special-use request after the capabilities failed") }
         do {
             _ = try await MailboxLookup.resolve(.drafts, listed: listed.map { .init(name: $0, selectable: true) },
                                                 markedInList: [], declared: "Drafts",
-                                                advertisesSpecialUse: { throw Broken() }) { [] }
+                                                advertisesSpecialUse: { throw Broken() }) { asked.note(); return [] }
             XCTFail("expected a refusal")
         } catch let refusal as SendDraftRefusal {
             XCTAssertTrue(refusal.description.contains("capabilities could not be read"), refusal.description)
@@ -245,10 +247,15 @@ final class MailboxLookupTests: XCTestCase {
         let placeholder = MailboxLookup.Listed(name: "Brouillons", selectable: false)
         let usable = listed.map { MailboxLookup.Listed(name: $0, selectable: true) }
         for viaRequest in [false, true] {
+            let capabilities = Asked(), requests = Asked()
+            defer {
+                XCTAssertEqual(capabilities.times, viaRequest ? 1 : 0, "viaRequest: \(viaRequest)")
+                XCTAssertEqual(requests.times, viaRequest ? 1 : 0, "viaRequest: \(viaRequest)")
+            }
             do {
                 _ = try await MailboxLookup.resolve(.drafts, listed: usable + [placeholder],
                                                     markedInList: viaRequest ? [] : [placeholder], declared: "Drafts",
-                                                    advertisesSpecialUse: { true }) { [placeholder] }
+                                                    advertisesSpecialUse: { capabilities.note(); return true }) { requests.note(); return [placeholder] }
                 XCTFail("expected a refusal (viaRequest: \(viaRequest))")
             } catch let refusal as SendDraftRefusal {
                 XCTAssertTrue(refusal.description.contains("cannot be selected"), refusal.description)
@@ -266,7 +273,8 @@ final class MailboxLookupTests: XCTestCase {
         XCTAssertTrue(MailboxLookup.sameMailbox("Drafts", "drafts"))
         XCTAssertTrue(MailboxLookup.sameMailbox("Entwu\u{0308}rfe", "Entwu\u{0308}rfe"))
         XCTAssertFalse(MailboxLookup.sameMailbox("Drafts", "Sent Messages"))
-        XCTAssertFalse(MailboxLookup.sameMailbox("Entw\u{00FC}rfe", "Entwu\u{0308}rfe"), "not canonical equivalence")
+        XCTAssertTrue(MailboxLookup.sameMailbox("Entw\u{00FC}rfe", "Entwu\u{0308}rfe"), "a server may normalise; the guard errs toward keeping")
+        XCTAssertFalse(MailboxLookup.sameName("Entw\u{00FC}rfe", "Entwu\u{0308}rfe"), "configured names still match scalar by scalar")
     }
 
     func testAFailedSpecialUseRequestRefusesWithWhatIsKnown_andNoFallback() async {

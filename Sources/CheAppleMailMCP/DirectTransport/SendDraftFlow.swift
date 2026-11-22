@@ -190,7 +190,7 @@ struct SendDraftFlow {
                     throw SendDraftRefusal(description: "this Message-ID was submitted from another account or server (\(existing.accountID), \(existing.server ?? "unknown server")); its pending stages are done only there. Nothing was submitted")
                 }
                 guard Self.sameDraftsMailbox(existing, draftsBox) else {
-                    throw SendDraftRefusal(description: "the drafts mailbox found now is not the one this draft was submitted from, so its pending stages are not done there (a sent copy has the same Message-ID and bytes as the draft). Nothing was submitted or removed; set `drafts_mailbox` back, or finish in Mail")
+                    throw SendDraftRefusal(description: "the drafts mailbox found now is not the one this draft was submitted from, or the record does not say which one that was, so its pending stages are not done here (a sent copy has the same Message-ID and bytes as the draft). Nothing was submitted or removed; set `drafts_mailbox` back, or finish in Mail")
                 }
                 guard existing.draftDigest == draft.digest else {
                     throw SendDraftRefusal(description: "the draft on the server is not the one that was submitted (its bytes changed), so its pending stages are not done; nothing was submitted. Delete or store it in Mail")
@@ -323,9 +323,11 @@ struct SendDraftFlow {
     }
 
     /// Whether `draftsBox` is the drafts mailbox the entry was submitted from
-    /// (#748). An entry written before #748 has none and is resumed as before.
+    /// (#748). An entry that does not record one (written before #748) is not
+    /// resumed: its origin cannot be shown, and a sent copy has the same
+    /// Message-ID and bytes as the draft.
     static func sameDraftsMailbox(_ entry: SendRecord, _ draftsBox: String) -> Bool {
-        guard let recorded = entry.draftsMailbox else { return true }
+        guard let recorded = entry.draftsMailbox else { return false }
         return MailboxLookup.sameName(recorded, draftsBox)
     }
 
@@ -341,7 +343,7 @@ struct SendDraftFlow {
                 // One mailbox for both roles (#748): the draft itself would count
                 // as the sent copy and could then be removed, the only copy left.
                 if MailboxLookup.sameMailbox(sentBox, draftsBox) {
-                    throw SendDraftRefusal(description: "the sent mailbox and the drafts mailbox are the same mailbox, so a sent copy cannot be told apart from the draft. The draft was kept. When one of them came from `drafts_mailbox` or `sent_mailbox` in direct-transport.json, correct that key; when the server marks both, the server's marks have to be corrected. Use `sent_copy: provider` only if the provider is known to keep a copy of what is sent")
+                    throw SendDraftRefusal(description: "the sent mailbox and the drafts mailbox may be the same mailbox (their names are equal ignoring letter case or Unicode normalisation), so a sent copy could not be told apart from the draft. The draft was kept as a precaution. When one of them came from `drafts_mailbox` or `sent_mailbox` in direct-transport.json, correct that key; when the server marks both, the server's marks have to be corrected. Use `sent_copy: provider` only if the provider is known to keep a copy of what is sent")
                 }
                 // A copy stored by an earlier attempt whose reply was lost is not stored twice.
                 if try await session.sentCopyExists(messageID: record.messageID, in: sentBox) {
