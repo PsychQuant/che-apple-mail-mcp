@@ -11,11 +11,11 @@
 
 ## 2. 文件
 
-- [ ] 2.1 README（兩份）、CHANGELOG、`.claude/rules/direct-transport.md`、兩個工具的說明、`mcpb/manifest.json`。
+- [x] 2.1 README（兩份）、CHANGELOG、`.claude/rules/direct-transport.md`、兩個工具的說明、`mcpb/manifest.json`。
 
 ## 3. 驗證
 
-- [ ] 3.1 全套測試、跨模型驗證、本機 CI 閘門。
+- [x] 3.1 全套測試、跨模型驗證、本機 CI 閘門。
 
 ## 4. 實際驗證（要維護者同意）
 
