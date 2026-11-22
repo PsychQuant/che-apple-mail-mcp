@@ -175,17 +175,25 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
     }
 
     func drafts(withMessageID messageID: String, in mailbox: String) async throws -> [DraftSummary] {
-        try await summaries(matching: [.header("Message-ID", Self.searchTerm(for: messageID))], in: mailbox)
+        try await summaries(matching: [Self.messageIDCriterion(for: messageID)], in: mailbox)
     }
 
-    /// The Message-ID without its angle brackets: header search is a substring
-    /// search, and a header written without brackets would not hold them.
-    /// Hits are then compared in full.
-    static func searchTerm(for messageID: String) -> String {
-        var term = Substring(messageID)
-        if term.hasPrefix("<") { term = term.dropFirst() }
-        if term.hasSuffix(">") { term = term.dropLast() }
-        return String(term)
+    /// The Message-ID with its angle brackets, then without them (#752). iCloud's
+    /// HEADER search on Message-ID matches only the full value with its brackets
+    /// (measured 2026-11-22: the value without them found nothing); a server that
+    /// searches substrings needs the value without them to find a header written
+    /// without brackets. Hits are then compared in full.
+    static func messageIDSearchTerms(for messageID: String) -> [String] {
+        var bare = Substring(messageID)
+        if bare.hasPrefix("<") { bare = bare.dropFirst() }
+        if bare.hasSuffix(">") { bare = bare.dropLast() }
+        return ["<\(bare)>", String(bare)]
+    }
+
+    /// Both terms in one command: `OR HEADER Message-ID <with> HEADER Message-ID <without>`.
+    static func messageIDCriterion(for messageID: String) -> SearchCriteria {
+        let terms = messageIDSearchTerms(for: messageID)
+        return .or(.header("Message-ID", terms[0]), .header("Message-ID", terms[1]))
     }
 
     func drafts(withSubjectContaining subject: String, in mailbox: String) async throws -> [DraftSummary] {
@@ -286,7 +294,7 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
         try await guarded {
             try await imap.selectMailbox(mailbox)
             // SEARCH HEADER is a substring search: each hit's own Message-ID must equal it.
-            let found: MessageIdentifierSet<UID> = try await imap.search(criteria: [.header("Message-ID", Self.searchTerm(for: messageID))])
+            let found: MessageIdentifierSet<UID> = try await imap.search(criteria: [Self.messageIDCriterion(for: messageID)])
             for uid in found.toArray() {
                 guard let info = try await imap.fetchMessageInfo(for: uid) else {
                     throw Failure(description: "the server found a message in the sent mailbox whose envelope it then did not return")
@@ -389,6 +397,15 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
         try? await imap.disconnect()
     }
 
+    /// The reply as the server sent it. SwiftMail's `message` is the whole reply
+    /// line, code included (#752: results showed `250 250 2.0.0 Ok`); the code is
+    /// added only when the text does not already start with it.
+    static func replyText(code: Int, message: String) -> String {
+        let prefix = String(code)
+        if message == prefix || message.hasPrefix(prefix + " ") || message.hasPrefix(prefix + "-") { return message }
+        return message.isEmpty ? prefix : "\(prefix) \(message)"
+    }
+
     /// Maps what SwiftMail reports for one submission to the three outcomes.
     /// Only the cases SwiftMail documents as provably not accepted become
     /// `notAccepted`; everything else, including errors this code does not
@@ -396,7 +413,7 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
     static func classify(_ result: Result<SMTPSendResult, Error>) -> SubmitOutcome {
         switch result {
         case .success(let sent):
-            return .accepted(reply: "\(sent.response.code) \(sent.response.message)")
+            return .accepted(reply: replyText(code: sent.response.code, message: sent.response.message))
         case .failure(let error):
             if let failure = error as? SMTPSendError {
                 let reply = failure.response.map { "\($0.code) \($0.message)" }

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`send_draft` finds a draft by `message_id` on iCloud**
+  ([#752](https://github.com/PsychQuant/che-apple-mail-mcp/issues/752)).
+  iCloud's `HEADER Message-ID` search matches only the whole value with its
+  angle brackets (measured 2026-11-22); the tools searched without them, so a
+  draft made by `append_draft` could not be sent by its `message_id`, the
+  check for an existing sent copy could never find one, and `append_draft`'s
+  search after an `unknown` outcome could never confirm the draft. Every
+  Message-ID search now asks for both forms in one `OR` and compares each hit
+  in full, as before. The `server_reply` in `send_draft` results no longer
+  repeats the reply code (`250 250 2.0.0 Ok`).
 - **`send_draft` and `append_draft` can use a server that does not mark its
   drafts and sent mailboxes, when `direct-transport.json` names them** ([#748](https://github.com/PsychQuant/che-apple-mail-mcp/issues/748)).
   The first run against iCloud stopped at "the server marks no mailbox

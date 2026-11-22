@@ -24,5 +24,5 @@
 
 - [x] 1.8 遮蔽在結果邊界（三條錯誤路徑）、鎖持有到關閉連線、每次呼叫不同的 Message-ID、最長可接受的標頭、大小上限、`message_id` 取信後的身分檢查（verify 第 2 輪）。
 - [x] 1.9 結果裡伺服器給的信匣名稱也遮蔽、全是換行的內文一次掃完、每個 encoded word 各自是合法 UTF-8 且不超過 75 字元、原始清單的收件人數、`message_id` 長度上限（verify 第 3 輪）。
-- [ ] 4.1 草稿 A，Mail 全程關著：`append_draft`（只寄給自己），記下結果、伺服器回覆、是否回報 UID；在任何用戶端打開之前，以 IMAP 讀回它的旗標，確認有 `\Draft` 與 `\Seen`；接著用回傳的 `message_id` 以 `send_draft` 寄出，讀收到那封信的原始內容。
-- [ ] 4.2 草稿 B：`append_draft` 之後在 Mail 與另一個用戶端打開，看是否列為可編輯的草稿；Mail 同步後本機索引是否出現它。用完刪掉。
+- [x] 4.1 草稿 A，Mail 全程關著：`append_draft`（只寄給自己），記下結果、伺服器回覆、是否回報 UID；在任何用戶端打開之前，以 IMAP 讀回它的旗標，確認有 `\Draft` 與 `\Seen`；接著用回傳的 `message_id` 以 `send_draft` 寄出，讀收到那封信的原始內容。（2026-11-22，iCloud，#752 的分支 binary：`appended`、UID 203；寄出前 IMAP 讀回旗標為 `\Draft`、`\Seen`；`send_draft` 以 `message_id` 找到並寄出，`submitted`、寄件副本 `done`、草稿移除 `done`；收到的原始內容與送出的一致，寄件備份匣只有一份。紀錄在 #744。）
+- [~] 4.2 草稿 B：`append_draft` 之後在 Mail 與另一個用戶端打開，看是否列為可編輯的草稿；Mail 同步後本機索引是否出現它。用完刪掉。 — 2026-11-22：Mail 同步後本機索引出現它，維護者在 Mail 裡打開並編輯，可編輯；Mail 存回時改成自己的版面（新 Message-ID、草稿標記、內文在 HTML），之後 send_draft 照 #745 拒絕。另一個用戶端沒有測，維護者沒有要求。已刪除。

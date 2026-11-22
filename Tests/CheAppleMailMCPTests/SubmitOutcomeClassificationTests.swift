@@ -24,6 +24,9 @@ final class SubmitOutcomeClassificationTests: XCTestCase {
     func testAFinal2xxIsAccepted_withTheReply() {
         let outcome = SwiftMailSession.classify(.success(SMTPSendResult(response: SMTPResponse(code: 250, message: "2.0.0 OK queued"))))
         XCTAssertEqual(outcome, .accepted(reply: "250 2.0.0 OK queued"))
+        // As SwiftMail reports a real reply: the message holds the code (#752).
+        let real = SwiftMailSession.classify(.success(SMTPSendResult(response: SMTPResponse(code: 250, message: "250 2.0.0 Ok: queued as X"))))
+        XCTAssertEqual(real, .accepted(reply: "250 2.0.0 Ok: queued as X"))
     }
 
     func testProvablyNotAcceptedCasesAreNotSent() {
@@ -67,9 +70,29 @@ final class SubmitOutcomeClassificationTests: XCTestCase {
         XCTAssertFalse(SwiftMailSession.containsPassword("<d1@x>", password: pw, username: "me@x.example"))
     }
 
-    func testTheSearchTermIsTheMessageIDWithoutBrackets() {
-        XCTAssertEqual(SwiftMailSession.searchTerm(for: "<a.b@x.example>"), "a.b@x.example")
-        XCTAssertEqual(SwiftMailSession.searchTerm(for: "a.b@x.example"), "a.b@x.example")
+    /// #752: iCloud's HEADER search on Message-ID matches only the full value
+    /// with its angle brackets (2026-11-22), while a substring search needs the
+    /// value without them to find a header written without brackets. Both are
+    /// asked for in one command.
+    func testTheMessageIDIsSearchedWithAndWithoutItsBrackets() {
+        for given in ["<a.b@x.example>", "a.b@x.example"] {
+            XCTAssertEqual(SwiftMailSession.messageIDSearchTerms(for: given), ["<a.b@x.example>", "a.b@x.example"], given)
+        }
+        guard case .or(.header(let firstName, let first), .header(let secondName, let second))
+                = SwiftMailSession.messageIDCriterion(for: "<a.b@x.example>") else {
+            return XCTFail("expected OR of two HEADER Message-ID searches")
+        }
+        XCTAssertEqual([firstName, secondName], ["Message-ID", "Message-ID"])
+        XCTAssertEqual([first, second], ["<a.b@x.example>", "a.b@x.example"])
+    }
+
+    /// #752: SwiftMail's reply text already starts with the code.
+    func testTheServerReplyCarriesItsCodeOnce() {
+        XCTAssertEqual(SwiftMailSession.replyText(code: 250, message: "250 2.0.0 Ok: queued as 6BD1"), "250 2.0.0 Ok: queued as 6BD1")
+        XCTAssertEqual(SwiftMailSession.replyText(code: 250, message: "2.0.0 OK queued"), "250 2.0.0 OK queued")
+        XCTAssertEqual(SwiftMailSession.replyText(code: 250, message: "250"), "250")
+        XCTAssertEqual(SwiftMailSession.replyText(code: 250, message: ""), "250")
+        XCTAssertEqual(SwiftMailSession.replyText(code: 250, message: "2500 odd"), "250 2500 odd", "a longer number is not the code")
     }
 
     func testThePasswordIsRedactedBeforeTheTextIsCut_andInItsQuotedAndAuthzidForms() {
