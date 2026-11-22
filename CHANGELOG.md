@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-11-23
+
 ### Fixed
 
 - **`send_draft` finds a draft by `message_id` on iCloud**
@@ -169,7 +171,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   v4.x. The cause is a new dependency, `SwiftMail` (SMTP and IMAP, for sending
   without Mail, #729), which needs macOS 15, and below macOS 26 the release
   binary would also need `libswiftCompatibilitySpan.dylib`, which macOS 15 does
-  not ship. Nothing else changes in this entry: no tool uses the dependency yet.
+  not ship. The tools that use it are `send_draft` and `append_draft`.
   `Package.resolved` is now under version control, so a release binary can be
   rebuilt from the same dependency versions (24 packages, up from 7).
 - **`get_mail_log_events` signals the `log` child's whole process group**
