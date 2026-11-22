@@ -5,10 +5,15 @@ import Foundation
 /// implements it; tests use a stand-in, so every branch of the flow runs
 /// without a network.
 protocol DirectTransportSession: Sendable {
-    /// The mailbox the server marks `\Drafts`. Throws when it marks none or more than one.
+    /// The drafts mailbox, found as `MailboxLookup` decides (#748). Throws when
+    /// it is not found.
     func draftsMailbox() async throws -> String
-    /// The mailbox the server marks `\Sent`. Throws when it marks none or more than one.
+    /// The sent mailbox, found the same way.
     func sentMailbox() async throws -> String
+    /// One sentence for each mailbox looked up so far, saying how it was found.
+    /// A protocol requirement, so a call through `DirectTransportSession` reaches
+    /// the session's own notes; the extension's default serves test doubles.
+    func mailboxLookupNotes() async -> [String]
     /// Drafts whose Message-ID header equals `messageID`.
     func drafts(withMessageID messageID: String, in mailbox: String) async throws -> [DraftSummary]
     /// Drafts whose subject contains `subject` (the server's search is a
@@ -321,6 +326,11 @@ struct SendDraftFlow {
         if record.sentCopy == .pending {
             do {
                 let sentBox = try await session.sentMailbox()
+                // One mailbox for both roles (#748): the draft itself would count
+                // as the sent copy and could then be removed, the only copy left.
+                if MailboxLookup.sameName(sentBox, draftsBox) {
+                    throw SendDraftRefusal(description: "the sent mailbox and the drafts mailbox are the same mailbox, so a sent copy cannot be told apart from the draft; set `sent_mailbox` to another mailbox, or `sent_copy` to provider. The draft was kept")
+                }
                 // A copy stored by an earlier attempt whose reply was lost is not stored twice.
                 if try await session.sentCopyExists(messageID: record.messageID, in: sentBox) {
                     notes.append("A message with this Message-ID was already in the sent mailbox, so no second copy was stored.")

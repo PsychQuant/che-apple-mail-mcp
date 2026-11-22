@@ -53,7 +53,7 @@
    （`MailboxLookup`）：一般 `LIST` 的標記；伺服器宣告 `SPECIAL-USE` 時以 `RETURN (SPECIAL-USE)` 再問一次；仍沒有才用
    `direct-transport.json` 裡維護者寫的 `drafts_mailbox`／`sent_mailbox`（伺服器要列出完全同名的那一個）；都沒有就拒絕。
    名稱只在維護者自己寫進設定檔時才算數。伺服器沒宣告 `SPECIAL-USE` 時**不得**呼叫 SwiftMail 的
-   `listSpecialUseMailboxes()`：它在那種情況會用信匣名稱推測（2026-11-22 的 iCloud 就是這種伺服器）。
+   `listSpecialUseMailboxes()`：它在那種情況會用信匣名稱推測。能力清單只在一般清單沒有標記時才取，取不到不能推翻伺服器已經給的標記。設定的名稱逐個 scalar 比對（不是 Swift 的 `==`），用伺服器列出的那個寫法。寄件備份匣與草稿匣是同一個時，寄件副本留 pending、草稿不刪。2026-11-22 的 iCloud：登入前的能力清單沒有 `SPECIAL-USE`、一般 `LIST` 沒有標 `\Drafts`；登入後的情形還沒觀察到。
    拒絕與結果的 notes 只寫數量與「有／沒有宣告」，不寫信匣名稱或能力清單。
 
 ## append_draft（#744）
@@ -104,8 +104,8 @@
 - 第 7 項：`classify` 把 `ambiguous` 或不認得的錯誤分成 `not_sent`（`SubmitOutcomeClassificationTests`）；
 - 說明的 caveat 被拿掉（`SendDraftToolTests`、`AppendDraftTests`）；
 - 第 14 項：決策表的任何一列被改、伺服器沒宣告 `SPECIAL-USE` 時仍去問、設定的名稱只差大小寫也被接受、拒絕裡出現信匣名稱
-  （`MailboxLookupTests`）；設定檔的兩個欄位被修剪或接受空字串、控制字元（`DirectTransportConfigTests`）。`SwiftMailSession`
-  真的只在能力清單有 `SPECIAL-USE` 時才呼叫那個查詢，沒有測試：那段要對伺服器才跑得到，審查時要讀 `lookUp`；
+  （`MailboxLookupTests`）；寄件備份匣等於草稿匣時仍搜尋或移除草稿（`SendDraftFlowTests`）；notes 沒有送到結果（`SendDraftToolTests`、`AppendDraftTests`）；設定檔的兩個欄位被修剪或接受空字串、控制字元（`DirectTransportConfigTests`）。`SwiftMailSession`
+  對真實伺服器的部分沒有測試：能力清單裡的 `SPECIAL-USE` 是否被認出、SwiftMail 的查詢送出的是不是 `RETURN (SPECIAL-USE)`，都要 live 才驗得到；
 - 第 9 項：組出的信帶 `X-Uniform-Type-Identifier`、`X-Apple-` 欄位或 multipart，或有不是 CRLF 的換行（`AppendDraftTests`）；
 - 第 10 項：清單以外的參數、型別不對、顯示名收件人、主旨或 `from_name` 的控制字元、內文的 NUL 被接受，或檢查晚於開連線
   （`AppendDraftTests`）；

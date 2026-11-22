@@ -6,11 +6,11 @@
 
 1. The server's mailbox list (`LIST` without return options) marks exactly one mailbox with the attribute: that mailbox.
 2. That list marks more than one: the call SHALL be refused.
-3. That list marks none and the server's capabilities, fetched after login, hold `SPECIAL-USE`: the server SHALL be asked once more with `LIST` and the return option `SPECIAL-USE`. Exactly one mailbox marked: that mailbox. More than one: the call SHALL be refused. None: the next rule applies. A server whose capabilities do not hold `SPECIAL-USE` SHALL NOT be asked this way.
-4. The account's entry in `direct-transport.json` holds the key: the mailbox of that name, when the server's mailbox list holds exactly one mailbox whose name equals it scalar by scalar; otherwise the call SHALL be refused.
+3. That list marks none and the server's capabilities, fetched after login and only at this point (so that a failure to fetch them cannot override rules 1 and 2), hold `SPECIAL-USE`: the server SHALL be asked once more with `LIST` and the return option `SPECIAL-USE`. Exactly one mailbox marked: that mailbox. More than one: the call SHALL be refused. None: the next rule applies. A server whose capabilities do not hold `SPECIAL-USE` SHALL NOT be asked this way.
+4. The account's entry in `direct-transport.json` holds the key: the mailbox the server lists under that name, when the server's mailbox list holds exactly one mailbox whose name equals it scalar by scalar (not by Unicode canonical equivalence) and the server does not mark that mailbox `\Noselect`; otherwise the call SHALL be refused, saying whether no mailbox, more than one, or one that cannot be selected was found. The name used afterwards SHALL be the one the server listed.
 5. Otherwise the call SHALL be refused.
 
-A mailbox SHALL NOT be chosen because of what it is called, except by rule 4, where the name is the one the maintainer wrote. A refusal under rules 4 and 5 SHALL say how many mailboxes the server listed, whether its capabilities hold `SPECIAL-USE`, and which key to add or correct; no refusal SHALL contain a mailbox name or the server's capability list. When a mailbox is found, the result SHALL carry a note saying which rule found it; when rule 1 or 3 found it and the key names a different mailbox, the note SHALL say that the server's mark was used. A refusal when the sent mailbox is looked for SHALL NOT change a `submitted` outcome: the sent copy stage SHALL be pending, as for any failure of that stage.
+A mailbox SHALL NOT be chosen because of what it is called, except by rule 4, where the name is the one the maintainer wrote. A refusal under rules 4 and 5 SHALL say how many mailboxes the server listed, whether its capabilities hold `SPECIAL-USE`, and which key to add or correct; a refusal under rules 2 and 3 SHALL say how many mailboxes the server marked. No refusal or note built by these rules SHALL contain a mailbox name or the server's capability list; an error the server or the IMAP library returns while listing passes through the same redaction as every other server text. When a mailbox is found, the result SHALL carry a note saying which rule found it; when rule 1 or 3 found it and the key names a different mailbox, the note SHALL say that the server's mark was used. A refusal when the sent mailbox is looked for SHALL NOT change a `submitted` outcome: the sent copy stage SHALL be pending, as for any failure of that stage. When the sent mailbox found is the drafts mailbox (the names equal scalar by scalar), the sent copy stage SHALL fail in the same way before any search of the sent mailbox, and the draft SHALL NOT be removed: the draft would otherwise count as its own sent copy and could be expunged as the only stored copy.
 
 #### Scenario: A server whose plain list marks no mailbox
 
@@ -27,6 +27,11 @@ A mailbox SHALL NOT be chosen because of what it is called, except by rule 4, wh
 - **WHEN** the server marks no mailbox `\Drafts` and `drafts_mailbox` is `drafts` while the server lists `Drafts`
 - **THEN** the call is refused saying the name must match exactly, and the refusal does not contain either name
 
+#### Scenario: The sent mailbox is the drafts mailbox
+
+- **WHEN** a draft is submitted with `sent_copy: append` and the sent mailbox found is the drafts mailbox
+- **THEN** the result is `submitted` with the sent copy pending and the draft's removal pending, the sent mailbox is not searched, and the draft stays in the drafts mailbox
+
 ##### Example: which mailbox is used
 
 | Plain list marks | SPECIAL-USE advertised | Asked again marks | Key | Result |
@@ -37,7 +42,7 @@ A mailbox SHALL NOT be chosen because of what it is called, except by rule 4, wh
 | none | yes | two | any | refused |
 | none | yes | none | a listed name | the named one |
 | none | no | not asked | a listed name | the named one |
-| none | any | none or not asked | a name not listed | refused |
+| none | any | none or not asked | a name not listed, listed twice, or `\Noselect` | refused |
 | none | any | none or not asked | absent | refused |
 
 ## MODIFIED Requirements

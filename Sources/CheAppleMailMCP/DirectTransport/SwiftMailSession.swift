@@ -142,16 +142,21 @@ final class SwiftMailSession: DirectTransportSession, @unchecked Sendable {
     private func lookUp(_ role: MailboxLookup.Role, attribute: Mailbox.Info.Attributes,
                         declared: String?) async throws -> String {
         let listed = try await guarded { try await imap.listMailboxes() }
-        let advertises = try await guarded { try await imap.fetchCapabilities() }
-            .contains { Self.isSpecialUse(String(describing: $0)) }
         let imap = self.imap
         let found = try await MailboxLookup.resolve(
-            role, listed: listed.map(\.name),
+            role, listed: listed.map { .init(name: $0.name, selectable: !$0.attributes.contains(.noSelect)) },
             markedInList: listed.filter { $0.attributes.contains(attribute) }.map(\.name),
-            advertisesSpecialUse: advertises, declared: declared) {
+            declared: declared,
+            advertisesSpecialUse: {
+                // Fetched after login: the capabilities a server gives before
+                // login can differ. `fetchCapabilities` also updates the set
+                // SwiftMail's special-use listing reads, so the two agree.
+                try await self.guarded { try await imap.fetchCapabilities() }.contains { Self.isSpecialUse($0.name) }
+            },
+            markedOnRequest: {
                 try await self.guarded { try await imap.listSpecialUseMailboxes() }
                     .filter { $0.attributes.contains(attribute) }.map(\.name)
-            }
+            })
         recordLookup(found.note)
         return found.name
     }

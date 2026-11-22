@@ -16,10 +16,11 @@ final class MailboxLookupTests: XCTestCase {
     }
 
     private func resolve(_ role: MailboxLookup.Role = .drafts, marked: [String] = [], advertises: Bool = false,
-                         onRequest: [String] = [], declared: String? = nil,
-                         asked: Asked = Asked()) async throws -> MailboxLookup.Found {
-        try await MailboxLookup.resolve(role, listed: listed, markedInList: marked,
-                                        advertisesSpecialUse: advertises, declared: declared) {
+                         onRequest: [String] = [], declared: String? = nil, listed: [MailboxLookup.Listed]? = nil,
+                         asked: Asked = Asked(), capabilities: Asked = Asked()) async throws -> MailboxLookup.Found {
+        try await MailboxLookup.resolve(role, listed: listed ?? self.listed.map { .init(name: $0, selectable: true) },
+                                        markedInList: marked, declared: declared,
+                                        advertisesSpecialUse: { capabilities.note(); return advertises }) {
             asked.note()
             return onRequest
         }
@@ -91,8 +92,9 @@ final class MailboxLookupTests: XCTestCase {
     func testAFailureWhileAskingIsHandedOn() async {
         struct Broken: Error {}
         do {
-            _ = try await MailboxLookup.resolve(.drafts, listed: listed, markedInList: [],
-                                                advertisesSpecialUse: true, declared: "Drafts") { throw Broken() }
+            _ = try await MailboxLookup.resolve(.drafts, listed: listed.map { .init(name: $0, selectable: true) },
+                                                markedInList: [], declared: "Drafts",
+                                                advertisesSpecialUse: { true }) { throw Broken() }
             XCTFail("expected the failure")
         } catch is Broken {
         } catch {
@@ -173,5 +175,58 @@ final class MailboxLookupTests: XCTestCase {
         XCTAssertTrue(text.contains("`sent_mailbox`"), text)
         XCTAssertTrue(text.contains("the sent copy was not stored"), text)
         XCTAssertFalse(text.contains("nothing was submitted"), text)
+    }
+
+    // MARK: Round 1 of the review
+
+    func testADecisivePlainListNeverAsksForCapabilities() async throws {
+        struct Broken: Error {}
+        for marked in [["Drafts"], ["Drafts", "Archive"]] {
+            do {
+                let found = try await MailboxLookup.resolve(.drafts, listed: listed.map { .init(name: $0, selectable: true) },
+                                                            markedInList: marked, declared: nil,
+                                                            advertisesSpecialUse: { throw Broken() }) { throw Broken() }
+                XCTAssertEqual(found.name, "Drafts")
+            } catch is SendDraftRefusal {
+                XCTAssertEqual(marked.count, 2)
+            } catch {
+                XCTFail("the capabilities were asked for: \(error)")
+            }
+        }
+    }
+
+    func testCapabilitiesAreAskedForOnceAtMost() async throws {
+        let capabilities = Asked()
+        _ = try? await resolve(advertises: true, onRequest: [], declared: "Drafts", capabilities: capabilities)
+        XCTAssertEqual(capabilities.times, 1)
+    }
+
+    func testTheConfiguredNameIsComparedScalarByScalar_andTheServersSpellingIsUsed() async throws {
+        let composed = "Entw\u{00FC}rfe", decomposed = "Entwu\u{0308}rfe"
+        XCTAssertEqual(composed, decomposed, "Swift's == would treat them as one name")
+        let onServer: [MailboxLookup.Listed] = [.init(name: decomposed, selectable: true), .init(name: "INBOX", selectable: true)]
+        let text = await refusal { try await self.resolve(declared: composed, listed: onServer) }
+        XCTAssertTrue(text.contains("does not list"), text)
+        let found = try await resolve(declared: decomposed, listed: onServer)
+        XCTAssertTrue(found.name.unicodeScalars.elementsEqual(decomposed.unicodeScalars))
+    }
+
+    func testAServerMarkThatDiffersOnlyInScalarsFromTheKeyIsReportedAsADisagreement() async throws {
+        let found = try await resolve(marked: ["Entwu\u{0308}rfe"], declared: "Entw\u{00FC}rfe")
+        XCTAssertTrue(found.note.contains("another mailbox"), found.note)
+    }
+
+    func testTwoListedMailboxesWithTheConfiguredNameAreRefusedAsAmbiguous() async {
+        let twice: [MailboxLookup.Listed] = [.init(name: "Drafts", selectable: true), .init(name: "Drafts", selectable: true)]
+        let text = await refusal { try await self.resolve(declared: "Drafts", listed: twice) }
+        XCTAssertTrue(text.contains("more than one"), text)
+        XCTAssertFalse(text.contains("does not list"), text)
+    }
+
+    func testAConfiguredNameThatCannotBeSelectedIsRefused() async {
+        let placeholder: [MailboxLookup.Listed] = [.init(name: "Brouillons", selectable: false)]
+        let text = await refusal { try await self.resolve(declared: "Brouillons", listed: placeholder) }
+        XCTAssertTrue(text.contains("cannot be selected"), text)
+        XCTAssertFalse(text.contains("Brouillons"), text)
     }
 }

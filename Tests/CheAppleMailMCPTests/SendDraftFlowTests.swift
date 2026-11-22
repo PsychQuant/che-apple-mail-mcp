@@ -45,7 +45,12 @@ final class SendDraftFlowTests: XCTestCase {
             if let draftsMailboxError { throw draftsMailboxError }
             return draftsMailboxName
         }
-        func sentMailbox() async throws -> String { note("sentMailbox"); return "Sent Messages" }
+        /// What `mailboxLookupNotes` answers (#748).
+        var lookupNotes: [String] = []
+        func mailboxLookupNotes() async -> [String] { lookupNotes }
+        /// The name `sentMailbox` answers (#748).
+        var sentMailboxName = "Sent Messages"
+        func sentMailbox() async throws -> String { note("sentMailbox"); return sentMailboxName }
         func drafts(withMessageID messageID: String, in mailbox: String) async throws -> [DraftSummary] {
             note("searchMessageID")
             lock.withLock { searchedMailboxes.append(mailbox) }
@@ -663,6 +668,26 @@ final class SendDraftFlowTests: XCTestCase {
         XCTAssertFalse(session.calls.contains("prepare"), "completing the stages needs no SMTP connection")
         XCTAssertEqual(session.sentMailboxContents.count, 1, "the sent copy was stored")
         XCTAssertTrue(session.drafts.isEmpty, "the draft was removed")
+    }
+
+    /// #748: when the sent mailbox and the drafts mailbox are one mailbox, the
+    /// draft itself would count as the sent copy and could then be removed.
+    func testWhenTheSentMailboxIsTheDraftsMailboxTheDraftIsKept() async throws {
+        do {
+            let session = FakeSession()
+            session.sentMailboxName = session.draftsMailboxName
+            session.sentHasCopy = true
+            session.drafts = [draft()]
+            let (flow, _) = flow(session)
+            let result = try await flow.run(.subject("Report"))
+            XCTAssertEqual(result.outcome, .submitted)
+            XCTAssertEqual(result.sentCopy, .pending)
+            XCTAssertEqual(result.draftRemoval, .pending)
+            XCTAssertFalse(session.calls.contains("sentLookup"), "the draft must not be taken for the sent copy")
+            XCTAssertFalse(session.calls.contains { $0.hasPrefix("remove") })
+            XCTAssertEqual(session.drafts.count, 1, "the only stored copy is kept")
+            XCTAssertTrue(result.notes.contains { $0.contains("same mailbox") }, "\(result.notes)")
+        }
     }
 
     /// Two calls for the same draft cannot both submit it: the record is claimed

@@ -11,8 +11,12 @@ import Foundation
 ///    server is asked for its special-use mailboxes. Exactly one marked: that
 ///    one. More than one: refused. None: continue.
 /// 4. `direct-transport.json` names a mailbox for the account: it is used when
-///    the server lists a mailbox with exactly that name, and refused otherwise.
+///    the server lists exactly one mailbox whose name is that name scalar by
+///    scalar and that mailbox can be selected; refused otherwise.
 /// 5. Otherwise: refused, saying what was seen.
+///
+/// The capabilities are asked for only when rules 1 and 2 did not decide, so a
+/// failure to fetch them cannot override a mark the server already gave.
 ///
 /// A mailbox is never chosen by what it is called on the server: the name in
 /// row 4 is the maintainer's statement, not a guess. A server that does not
@@ -36,6 +40,19 @@ enum MailboxLookup {
         case plainList, explicitRequest, configuration
     }
 
+    /// A mailbox as the plain list gave it.
+    struct Listed: Equatable, Sendable {
+        let name: String
+        /// False when the server marks it `\\Noselect` (a hierarchy placeholder).
+        let selectable: Bool
+    }
+
+    /// Names compared scalar by scalar, not by Unicode canonical equivalence
+    /// (Swift's `==`): IMAP mailbox names are opaque to the server.
+    static func sameName(_ a: String, _ b: String) -> Bool {
+        a.unicodeScalars.elementsEqual(b.unicodeScalars)
+    }
+
     struct Found: Equatable, Sendable {
         let name: String
         let source: Source
@@ -44,21 +61,24 @@ enum MailboxLookup {
     }
 
     /// - Parameters:
-    ///   - listed: the names of every mailbox the plain list returned.
+    ///   - listed: every mailbox the plain list returned.
     ///   - markedInList: the names the plain list marked with the role's attribute.
     ///   - declared: the name `direct-transport.json` gives for the role, if any.
+    ///   - advertisesSpecialUse: fetches the capabilities after login and says
+    ///     whether they hold SPECIAL-USE. Called at most once, and only when the
+    ///     plain list marked none.
     ///   - markedOnRequest: asks the server for its special-use mailboxes and
     ///     returns the names marked with the role's attribute. Called at most
     ///     once, and only when the server advertises SPECIAL-USE.
-    static func resolve(_ role: Role, listed: [String], markedInList: [String], advertisesSpecialUse: Bool,
-                        declared: String?,
+    static func resolve(_ role: Role, listed: [Listed], markedInList: [String], declared: String?,
+                        advertisesSpecialUse: @Sendable () async throws -> Bool,
                         markedOnRequest: @Sendable () async throws -> [String]) async throws -> Found {
         let attribute = role.attribute
         func tooMany(_ count: Int) -> SendDraftRefusal {
             SendDraftRefusal(description: "the server marks \(count) mailboxes \(attribute); \(role.consequence)")
         }
         func disagreement(with name: String) -> String {
-            guard let declared, declared != name else { return "" }
+            guard let declared, !sameName(declared, name) else { return "" }
             return " `\(role.configurationKey)` in direct-transport.json names another mailbox; the server's mark was used."
         }
 
@@ -69,7 +89,8 @@ enum MailboxLookup {
                             + disagreement(with: only))
         }
 
-        if advertisesSpecialUse {
+        let advertises = try await advertisesSpecialUse()
+        if advertises {
             let marked = try await markedOnRequest()
             if marked.count > 1 { throw tooMany(marked.count) }
             if let only = marked.first {
@@ -79,14 +100,22 @@ enum MailboxLookup {
             }
         }
 
-        let seen = "it lists \(listed.count) mailboxes and \(advertisesSpecialUse ? "advertises SPECIAL-USE" : "does not advertise SPECIAL-USE")"
+        let seen = "it lists \(listed.count) \(listed.count == 1 ? "mailbox" : "mailboxes") and \(advertises ? "advertises SPECIAL-USE" : "does not advertise SPECIAL-USE")"
+        let key = "`\(role.configurationKey)`"
         guard let declared else {
-            throw SendDraftRefusal(description: "the server marks no mailbox \(attribute) (\(seen)), and direct-transport.json names none for this account: add `\(role.configurationKey)` with the mailbox's exact name; \(role.consequence)")
+            throw SendDraftRefusal(description: "the server marks no mailbox \(attribute) (\(seen)), and direct-transport.json names none for this account: add \(key) with the mailbox's exact name; \(role.consequence)")
         }
-        guard listed.filter({ $0 == declared }).count == 1 else {
-            throw SendDraftRefusal(description: "the server marks no mailbox \(attribute) (\(seen)), and it does not list the mailbox `\(role.configurationKey)` names in direct-transport.json (the name must match exactly, letter case included); \(role.consequence)")
+        let matches = listed.filter { sameName($0.name, declared) }
+        guard !matches.isEmpty else {
+            throw SendDraftRefusal(description: "the server marks no mailbox \(attribute) (\(seen)), and it does not list the mailbox \(key) names in direct-transport.json (the name must match exactly, letter case and accents included); \(role.consequence)")
         }
-        return Found(name: declared, source: .configuration,
-                     note: "The server marks no mailbox \(attribute) (\(seen)), so the \(role.noun) is the one `\(role.configurationKey)` names in direct-transport.json.")
+        guard matches.count == 1, let match = matches.first else {
+            throw SendDraftRefusal(description: "the server marks no mailbox \(attribute) (\(seen)), and it lists more than one mailbox with the name \(key) gives; \(role.consequence)")
+        }
+        guard match.selectable else {
+            throw SendDraftRefusal(description: "the server marks no mailbox \(attribute) (\(seen)), and the mailbox \(key) names cannot be selected (the server marks it \\Noselect); \(role.consequence)")
+        }
+        return Found(name: match.name, source: .configuration,
+                     note: "The server marks no mailbox \(attribute) (\(seen)), so the \(role.noun) is the one \(key) names in direct-transport.json.")
     }
 }

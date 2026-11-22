@@ -12,14 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`send_draft` and `append_draft` find the drafts and sent mailboxes on a
   server that does not mark them** ([#748](https://github.com/PsychQuant/che-apple-mail-mcp/issues/748)).
   The first run against iCloud stopped at "the server marks no mailbox
-  \Drafts": the plain mailbox list marked neither `\Drafts` nor `\Sent`, and
-  the server did not advertise `SPECIAL-USE` before login. The tools now try,
+  \Drafts": the plain mailbox list marked no `\Drafts`, and the server did not
+  advertise `SPECIAL-USE` before login (what it advertises after login was not
+  observed). The tools now try,
   in order: the plain list's mark; when the server advertises `SPECIAL-USE`, a
   `LIST ... RETURN (SPECIAL-USE)`; the exact name given by the new optional
   `drafts_mailbox` / `sent_mailbox` keys in `direct-transport.json`, if the
   server lists that mailbox. A mailbox is never chosen by guessing from its
-  name. Refusals say how many mailboxes were listed and whether `SPECIAL-USE`
-  is advertised; results note how each mailbox was found.
+  name, and a configured name must match the server's scalar by scalar. When
+  the configured name cannot be used either, the refusal says how many
+  mailboxes were listed and whether `SPECIAL-USE` is advertised; results note
+  how each mailbox was found. When the sent and drafts mailboxes are the same
+  mailbox, the sent copy stays pending and the draft is kept.
 
 ### Added
 
