@@ -10,4 +10,4 @@
 
 ## 3. 實際驗證（要維護者說「測」）
 
-- [ ] 3.1 #744 task 4.1：Mail 關著，`append_draft` 建草稿，再用回傳的 `message_id` 以 `send_draft` 寄出（只寄給自己）。
+- [x] 3.1 #744 task 4.1：Mail 關著，`append_draft` 建草稿，再用回傳的 `message_id` 以 `send_draft` 寄出（只寄給自己）。（2026-11-22 通過，`server_reply` 為 `250 2.0.0 Ok: queued as …`，代碼不再重複。）
