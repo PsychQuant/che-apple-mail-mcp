@@ -418,6 +418,20 @@ final class AppendDraftTests: XCTestCase {
 
     private final class Opened: @unchecked Sendable { var count = 0 }
 
+    /// #748: the session's note on how the drafts mailbox was found reaches the
+    /// result, also when the APPEND that follows is refused.
+    func testTheSessionsMailboxNotesReachTheResult() async throws {
+        for outcome: AppendOutcome in [.appended(uid: 3, uidValidity: 9), .notAppended(detail: "NO [OVERQUOTA]")] {
+            let session = FakeSession()
+            session.recordsLookupNotes = true
+            session.appendDraftOutcome = outcome
+            let text = try await AppendDraftTool.run(arguments(), try environment(config: config, session: session))
+            let object = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+            let notes = try XCTUnwrap(object["notes"] as? [String])
+            XCTAssertTrue(notes.contains("drafts lookup note"), "\(outcome): \(notes)")
+        }
+    }
+
     private func environment(config text: String?, password: String? = "secret-pw",
                              session: FakeSession = FakeSession(), opened: Opened = Opened()) throws -> AppendDraftTool.Environment {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("append-tool-\(UUID().uuidString)")

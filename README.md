@@ -874,7 +874,7 @@ way to choose the draft, so writing a draft and sending it can both happen with 
 
 ### Setup
 
-1. Write `~/.claude/.mail/direct-transport.json`. Every key is required; unknown keys are refused.
+1. Write `~/.claude/.mail/direct-transport.json`. Every key below is required; unknown keys are refused.
 
    ```json
    {"accounts": [{
@@ -889,6 +889,13 @@ way to choose the draft, so writing a draft and sending it can both happen with 
 
    `sent_copy` is `append` when the tool should store the sent copy in the server's sent mailbox, or `provider`
    when the provider stores it itself. `allowed_from` lists other addresses this account may send as.
+
+   Two optional keys, `drafts_mailbox` and `sent_mailbox`, give the exact names of those mailboxes for a server
+   that does not mark them ([#748](https://github.com/PsychQuant/che-apple-mail-mcp/issues/748)). The tools use
+   the mailbox the server marks `\Drafts` or `\Sent` in its mailbox list; when it marks none and advertises
+   `SPECIAL-USE`, they ask it once more; only when it still marks none do they use the name written here, and
+   only if the server lists a mailbox with exactly that name (letter case included). A mailbox is never chosen by
+   guessing from its name. Each result's notes say which way each mailbox was found.
 2. Store the password (for iCloud, an app-specific password) in the server's own keychain item, by running the
    binary in a terminal. The password is read from standard input, without echo, and never printed:
 

@@ -43,9 +43,21 @@ final class SendDraftFlowTests: XCTestCase {
         func draftsMailbox() async throws -> String {
             note("draftsMailbox")
             if let draftsMailboxError { throw draftsMailboxError }
+            if recordsLookupNotes { lock.withLock { lookupNotes.append("drafts lookup note") } }
             return draftsMailboxName
         }
-        func sentMailbox() async throws -> String { note("sentMailbox"); return "Sent Messages" }
+        /// When set, each successful mailbox lookup records a note naming the
+        /// role, as `SwiftMailSession` does (#748).
+        var recordsLookupNotes = false
+        private(set) var lookupNotes: [String] = []
+        func mailboxLookupNotes() async -> [String] { lock.withLock { lookupNotes } }
+        /// The name `sentMailbox` answers (#748).
+        var sentMailboxName = "Sent Messages"
+        func sentMailbox() async throws -> String {
+            note("sentMailbox")
+            if recordsLookupNotes { lock.withLock { lookupNotes.append("sent lookup note") } }
+            return sentMailboxName
+        }
         func drafts(withMessageID messageID: String, in mailbox: String) async throws -> [DraftSummary] {
             note("searchMessageID")
             lock.withLock { searchedMailboxes.append(mailbox) }
@@ -654,7 +666,8 @@ final class SendDraftFlowTests: XCTestCase {
         let (flow, records) = flow(session)
         try records.put(SendRecord(messageID: "<d1@icloud.example>", accountID: account.accountID, state: .submitted,
                                    sentCopy: .pending, draftRemoval: .pending, updatedAt: Date(), serverReply: "250 OK",
-                                   submittedAt: Date(), draftDigest: stored.digest, server: SendDraftFlow.server(of: account)))
+                                   submittedAt: Date(), draftDigest: stored.digest, server: SendDraftFlow.server(of: account),
+                                   draftsMailbox: "Drafts"))
         let result = try await flow.run(.subject("Report"))
         XCTAssertTrue(result.resumed)
         XCTAssertEqual(result.sentCopy, .done)
@@ -663,6 +676,86 @@ final class SendDraftFlowTests: XCTestCase {
         XCTAssertFalse(session.calls.contains("prepare"), "completing the stages needs no SMTP connection")
         XCTAssertEqual(session.sentMailboxContents.count, 1, "the sent copy was stored")
         XCTAssertTrue(session.drafts.isEmpty, "the draft was removed")
+    }
+
+    /// #748: when the sent mailbox and the drafts mailbox are one mailbox, the
+    /// draft itself would count as the sent copy and could then be removed.
+    func testWhenTheSentMailboxIsTheDraftsMailboxTheDraftIsKept() async throws {
+        for (drafts, sent) in [("Drafts", "Drafts"), ("INBOX", "Inbox")] {
+            let session = FakeSession()
+            session.draftsMailboxName = drafts
+            session.sentMailboxName = sent
+            session.sentHasCopy = true
+            session.drafts = [draft()]
+            let (flow, _) = flow(session)
+            let result = try await flow.run(.subject("Report"))
+            XCTAssertEqual(result.outcome, .submitted)
+            XCTAssertEqual(result.sentCopy, .pending)
+            XCTAssertEqual(result.draftRemoval, .pending)
+            XCTAssertFalse(session.calls.contains("sentLookup"), "the draft must not be taken for the sent copy")
+            XCTAssertFalse(session.calls.contains { $0.hasPrefix("remove") })
+            XCTAssertEqual(session.drafts.count, 1, "the only stored copy is kept")
+            XCTAssertTrue(result.notes.contains { $0.contains("same mailbox") }, "\(result.notes)")
+        }
+    }
+
+    /// #748 round 3: a removal-only resume, or "the draft is gone so it was
+    /// removed", is done only in the drafts mailbox the draft was submitted
+    /// from; the sent copy has the same Message-ID and bytes.
+    func testAPendingRemovalIsNotDoneInAnotherDraftsMailbox() async throws {
+        let session = FakeSession()
+        let stored = draft()
+        session.drafts = [stored]
+        session.draftsMailboxName = "Sent Messages"   // drafts_mailbox now points at the former sent mailbox
+        let (flow, records) = flow(session)
+        try records.put(SendRecord(messageID: "<d1@icloud.example>", accountID: account.accountID, state: .submitted,
+                                   sentCopy: .done, draftRemoval: .pending, updatedAt: Date(), serverReply: "250 OK",
+                                   submittedAt: Date(), draftDigest: stored.digest, server: SendDraftFlow.server(of: account),
+                                   draftsMailbox: "Drafts"))
+        let message = await refusal { try await flow.run(.subject("Report")) }
+        XCTAssertTrue(message?.contains("drafts mailbox") == true, message ?? "not refused")
+        XCTAssertFalse(session.calls.contains { $0.hasPrefix("remove") })
+        XCTAssertEqual(session.drafts.count, 1)
+        XCTAssertEqual(try records.entry(for: "<d1@icloud.example>")?.draftRemoval, .pending)
+    }
+
+    func testADraftMissingFromAnotherDraftsMailboxIsNotRecordedAsRemoved() async throws {
+        for (box, removed) in [("Sent Messages", false), ("Drafts", true)] {
+            let session = FakeSession()
+            session.drafts = []
+            session.draftsMailboxName = box
+            let (flow, records) = flow(session)
+            try records.put(SendRecord(messageID: "<d1@icloud.example>", accountID: account.accountID, state: .submitted,
+                                       sentCopy: .done, draftRemoval: .pending, updatedAt: Date(), serverReply: "250 OK",
+                                       submittedAt: Date(), draftDigest: "x", server: SendDraftFlow.server(of: account),
+                                       draftsMailbox: "Drafts"))
+            let result = try? await flow.run(.localRow(1))
+            XCTAssertEqual(result != nil, removed, box)
+            XCTAssertEqual(try records.entry(for: "<d1@icloud.example>")?.draftRemoval, removed ? .done : .pending, box)
+        }
+    }
+
+    func testARecordThatDoesNotSayItsDraftsMailboxIsNotResumed() async throws {
+        let session = FakeSession()
+        let stored = draft()
+        session.drafts = [stored]
+        let (flow, records) = flow(session)
+        try records.put(SendRecord(messageID: "<d1@icloud.example>", accountID: account.accountID, state: .submitted,
+                                   sentCopy: .done, draftRemoval: .pending, updatedAt: Date(), serverReply: "250 OK",
+                                   submittedAt: Date(), draftDigest: stored.digest, server: SendDraftFlow.server(of: account)))
+        let message = await refusal { try await flow.run(.subject("Report")) }
+        XCTAssertTrue(message?.contains("does not say which one") == true, message ?? "not refused")
+        XCTAssertFalse(session.calls.contains { $0.hasPrefix("remove") })
+        XCTAssertEqual(session.drafts.count, 1)
+    }
+
+    func testANewSubmissionRecordsItsDraftsMailbox() async throws {
+        let session = FakeSession()
+        session.drafts = [draft()]
+        session.expungeOne = false   // keep removal pending so the entry stays readable
+        let (flow, records) = flow(session)
+        _ = try await flow.run(.subject("Report"))
+        XCTAssertEqual(try records.entry(for: "<d1@icloud.example>")?.draftsMailbox, "Drafts")
     }
 
     /// Two calls for the same draft cannot both submit it: the record is claimed

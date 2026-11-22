@@ -47,6 +47,15 @@
    移除草稿只在寄件副本不再 `pending`、且伺服器支援 UIDPLUS 時，以 UID 移除那一封，不得用會清掉其他已刪除郵件的
    `EXPUNGE`。
 
+## 找草稿匣與寄件備份匣（#748，兩個工具共用）
+
+14. **不憑信匣名稱挑信匣。** 草稿匣與寄件備份匣照規格〈The drafts and sent mailboxes are found in a fixed order〉的五條依序找
+   （`MailboxLookup`）：一般 `LIST` 的標記；伺服器宣告 `SPECIAL-USE` 時以 `RETURN (SPECIAL-USE)` 再問一次；仍沒有才用
+   `direct-transport.json` 裡維護者寫的 `drafts_mailbox`／`sent_mailbox`（伺服器要列出完全同名的那一個）；都沒有就拒絕。
+   名稱只在維護者自己寫進設定檔時才算數。伺服器沒宣告 `SPECIAL-USE` 時**不得**呼叫 SwiftMail 的
+   `listSpecialUseMailboxes()`：它在那種情況會用信匣名稱推測。能力清單只在一般清單沒有標記時才取，取不到不能推翻伺服器已經給的標記。設定的名稱逐個 scalar 比對（不是 Swift 的 `==`），用伺服器列出的那個寫法。伺服器標的信匣若是 `\Noselect` 就拒絕，不改用設定的名稱；能力清單讀不到也拒絕。寄件備份匣與草稿匣可能是同一個時（名稱相同、Unicode 正規化等價或只差 ASCII 大小寫都算，寧可多判，多判只會讓階段留 pending），寄件副本留 pending、草稿不刪。已寄出紀錄記下送出時的草稿匣，只剩收尾時草稿匣換了、或紀錄沒記草稿匣，就拒絕，不把「找不到草稿」當成已移除：寄件副本與草稿的 Message-ID、位元組都一樣。2026-11-22 的 iCloud：登入前的能力清單沒有 `SPECIAL-USE`、一般 `LIST` 沒有標 `\Drafts`；登入後的情形還沒觀察到。
+   拒絕與結果的 notes 只寫數量與「有／沒有宣告」，不寫信匣名稱或能力清單。
+
 ## append_draft（#744）
 
 `append_draft` 經 IMAP 在草稿匣建立一封新草稿。上面第 1、2、3 項照樣適用（帳號、憑證、TLS；它不連 SMTP）；第 2 項的
@@ -94,6 +103,9 @@
 - 第 2 項：遮蔽漏掉某一種密碼形式，或先截斷再遮蔽（`SubmitOutcomeClassificationTests`）；
 - 第 7 項：`classify` 把 `ambiguous` 或不認得的錯誤分成 `not_sent`（`SubmitOutcomeClassificationTests`）；
 - 說明的 caveat 被拿掉（`SendDraftToolTests`、`AppendDraftTests`）；
+- 第 14 項：決策表的任何一列被改、伺服器沒宣告 `SPECIAL-USE` 時仍去問、設定的名稱只差大小寫也被接受、拒絕裡出現信匣名稱
+  （`MailboxLookupTests`）；寄件備份匣等於草稿匣時仍搜尋或移除草稿（`SendDraftFlowTests`）；notes 沒有送到結果（`SendDraftToolTests`、`AppendDraftTests`）；設定檔的兩個欄位被修剪或接受空字串、控制字元（`DirectTransportConfigTests`）。`SwiftMailSession`
+  對真實伺服器的部分沒有測試：能力清單裡的 `SPECIAL-USE` 是否被認出、SwiftMail 的查詢送出的是不是 `RETURN (SPECIAL-USE)`，都要 live 才驗得到；
 - 第 9 項：組出的信帶 `X-Uniform-Type-Identifier`、`X-Apple-` 欄位或 multipart，或有不是 CRLF 的換行（`AppendDraftTests`）；
 - 第 10 項：清單以外的參數、型別不對、顯示名收件人、主旨或 `from_name` 的控制字元、內文的 NUL 被接受，或檢查晚於開連線
   （`AppendDraftTests`）；
@@ -104,10 +116,8 @@
 - 第 13 項：鎖被持有時 `append_draft` 照樣開連線（`AppendDraftTests`）。
 
 抓不到的：`SwiftMailSession` 對真實伺服器的行為（APPEND 的旗標與 `APPENDUID` 是否照預期、Mail 與其他用戶端是否把
-`append_draft` 建的草稿當成可編輯的草稿、連線參數是否真的被 SwiftMail 套用、`\Drafts` 屬性是否出現在
-`LIST` 的結果、UIDPLUS 與 UIDVALIDITY 的判斷、envelope 與標頭的對照）都沒有測試，只能靠 live 測試；把
+`append_draft` 建的草稿當成可編輯的草稿、連線參數是否真的被 SwiftMail 套用、UIDPLUS 與 UIDVALIDITY 的判斷、envelope 與標頭的對照）都沒有測試，只能靠 live 測試；把
 `minimumTLSVersion` 或 `certificateVerificationPolicy` 改鬆、把 keychain 改回 `SecItemUpdate`，都不會讓測試轉紅。
-審查時要自己讀 diff。
 
 ## 為什麼
 

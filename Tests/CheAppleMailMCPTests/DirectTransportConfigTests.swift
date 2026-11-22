@@ -96,4 +96,36 @@ final class DirectTransportConfigTests: XCTestCase {
             XCTAssertTrue("\(error)".contains("AAAAAAAA-2222-4333-8444-555555555555"), "\(error)")
         }
     }
+
+    // MARK: #748 — the optional mailbox names
+
+    private func account(adding extra: String) -> String {
+        valid.replacingOccurrences(of: #""allowed_from": ["alias@icloud.example"]"#,
+                                   with: #""allowed_from": ["alias@icloud.example"]"# + extra)
+    }
+
+    func testTheMailboxNamesAreOptional_andReadExactlyAsWritten() throws {
+        let without = try XCTUnwrap(try DirectTransportConfig.load(from: try file(valid))).accounts[0]
+        XCTAssertNil(without.draftsMailbox)
+        XCTAssertNil(without.sentMailbox)
+
+        let text = account(adding: #", "drafts_mailbox": "Drafts", "sent_mailbox": " Sent Messages ""#)
+        let with = try XCTUnwrap(try DirectTransportConfig.load(from: try file(text))).accounts[0]
+        XCTAssertEqual(with.draftsMailbox, "Drafts")
+        XCTAssertEqual(with.sentMailbox, " Sent Messages ", "nothing is trimmed: the name is compared with the server's exactly")
+    }
+
+    func testAMailboxNameThatCannotBeANameIsRefusedNamingTheKey() throws {
+        let long = String(repeating: "a", count: 256)
+        for (key, value) in [("drafts_mailbox", #""""#), ("drafts_mailbox", "7"), ("drafts_mailbox", "null"),
+                             ("sent_mailbox", #""a\u0000b""#), ("sent_mailbox", #""line\nbreak""#),
+                             ("sent_mailbox", "\"\(long)\"")] {
+            let text = account(adding: ", \"\(key)\": \(value)")
+            XCTAssertThrowsError(try DirectTransportConfig.load(from: try file(text)), "\(key): \(value)") { error in
+                XCTAssertTrue("\(error)".contains(key), "\(error)")
+            }
+        }
+        let fits = account(adding: ", \"drafts_mailbox\": \"\(String(repeating: "a", count: 255))\"")
+        XCTAssertNoThrow(try DirectTransportConfig.load(from: try file(fits)))
+    }
 }

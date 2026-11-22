@@ -5,10 +5,15 @@ import Foundation
 /// implements it; tests use a stand-in, so every branch of the flow runs
 /// without a network.
 protocol DirectTransportSession: Sendable {
-    /// The mailbox the server marks `\Drafts`. Throws when it marks none or more than one.
+    /// The drafts mailbox, found as `MailboxLookup` decides (#748). Throws when
+    /// it is not found.
     func draftsMailbox() async throws -> String
-    /// The mailbox the server marks `\Sent`. Throws when it marks none or more than one.
+    /// The sent mailbox, found the same way.
     func sentMailbox() async throws -> String
+    /// One sentence for each mailbox looked up so far, saying how it was found.
+    /// A protocol requirement, so a call through `DirectTransportSession` reaches
+    /// the session's own notes; the extension's default serves test doubles.
+    func mailboxLookupNotes() async -> [String]
     /// Drafts whose Message-ID header equals `messageID`.
     func drafts(withMessageID messageID: String, in mailbox: String) async throws -> [DraftSummary]
     /// Drafts whose subject contains `subject` (the server's search is a
@@ -34,6 +39,10 @@ protocol DirectTransportSession: Sendable {
     /// the mailbox's UIDVALIDITY is no longer the draft's.
     func removeDraft(_ draft: FetchedDraft, in mailbox: String) async throws
     func close() async
+}
+
+extension DirectTransportSession {
+    func mailboxLookupNotes() async -> [String] { [] }
 }
 
 struct DraftSummary: Equatable, Sendable {
@@ -104,6 +113,11 @@ struct SendDraftResult: Equatable {
     /// True when this call only completed stages of an earlier submission.
     let resumed: Bool
     let notes: [String]
+
+    func adding(notes more: [String]) -> SendDraftResult {
+        SendDraftResult(outcome: outcome, messageID: messageID, serverReply: serverReply, sentCopy: sentCopy,
+                        draftRemoval: draftRemoval, resumed: resumed, notes: notes + more)
+    }
 }
 
 /// The steps of `send_draft`, in the order the spec gives them.
@@ -136,7 +150,7 @@ struct SendDraftFlow {
         case .subject(let subject):
             candidates = try await session.drafts(withSubjectContaining: subject, in: draftsBox).filter { Self.same($0.subject, subject) }
         }
-        if candidates.isEmpty, let id = wantedID, let finished = try removalAlreadyHappened(id) {
+        if candidates.isEmpty, let id = wantedID, let finished = try removalAlreadyHappened(id, draftsBox: draftsBox) {
             return finished
         }
         guard candidates.count == 1, let only = candidates.first else {
@@ -174,6 +188,9 @@ struct SendDraftFlow {
                 guard DirectTransportConfig.equalIgnoringASCIICase(existing.accountID, account.accountID),
                       Self.same(existing.server, Self.server(of: account)) else {
                     throw SendDraftRefusal(description: "this Message-ID was submitted from another account or server (\(existing.accountID), \(existing.server ?? "unknown server")); its pending stages are done only there. Nothing was submitted")
+                }
+                guard Self.sameDraftsMailbox(existing, draftsBox) else {
+                    throw SendDraftRefusal(description: "the drafts mailbox found now is not the one this draft was submitted from, or the record does not say which one that was, so its pending stages are not done here (a sent copy has the same Message-ID and bytes as the draft). Nothing was submitted or removed; set `drafts_mailbox` back, or finish in Mail")
                 }
                 guard existing.draftDigest == draft.digest else {
                     throw SendDraftRefusal(description: "the draft on the server is not the one that was submitted (its bytes changed), so its pending stages are not done; nothing was submitted. Delete or store it in Mail")
@@ -228,7 +245,8 @@ struct SendDraftFlow {
         let attempting = SendRecord(messageID: messageID, accountID: account.accountID, state: .attempting,
                                     sentCopy: account.sentCopy == .append ? .pending : .skipped,
                                     draftRemoval: .pending, updatedAt: now(), serverReply: nil,
-                                    submittedAt: nil, draftDigest: draft.digest, server: Self.server(of: account))
+                                    submittedAt: nil, draftDigest: draft.digest, server: Self.server(of: account),
+                                    draftsMailbox: draftsBox)
         let existing: SendRecord?
         do {
             existing = try records.claim(attempting)
@@ -289,8 +307,9 @@ struct SendDraftFlow {
     /// A draft chosen by its local row is gone from the server, and its entry says
     /// only the removal is pending: the removal happened after all (its reply or
     /// the write after it was lost). Records it as done.
-    private func removalAlreadyHappened(_ messageID: String) throws -> SendDraftResult? {
+    private func removalAlreadyHappened(_ messageID: String, draftsBox: String) throws -> SendDraftResult? {
         guard var entry = try records.entry(for: messageID), entry.effectiveState == .submitted,
+              Self.sameDraftsMailbox(entry, draftsBox),
               DirectTransportConfig.equalIgnoringASCIICase(entry.accountID, account.accountID),
               Self.same(entry.server, Self.server(of: account)),
               entry.sentCopy != .pending, entry.draftRemoval == .pending else { return nil }
@@ -303,6 +322,15 @@ struct SendDraftFlow {
                                notes: notes + [Self.localIndexNote])
     }
 
+    /// Whether `draftsBox` is the drafts mailbox the entry was submitted from
+    /// (#748). An entry that does not record one (written before #748) is not
+    /// resumed: its origin cannot be shown, and a sent copy has the same
+    /// Message-ID and bytes as the draft.
+    static func sameDraftsMailbox(_ entry: SendRecord, _ draftsBox: String) -> Bool {
+        guard let recorded = entry.draftsMailbox else { return false }
+        return MailboxLookup.sameName(recorded, draftsBox)
+    }
+
     /// The stages after a submission, in order; a failed stage stays pending and
     /// the ones after it are not attempted.
     private func finishStages(_ start: SendRecord, draft: FetchedDraft, draftsBox: String,
@@ -312,6 +340,11 @@ struct SendDraftFlow {
         if record.sentCopy == .pending {
             do {
                 let sentBox = try await session.sentMailbox()
+                // One mailbox for both roles (#748): the draft itself would count
+                // as the sent copy and could then be removed, the only copy left.
+                if MailboxLookup.sameMailbox(sentBox, draftsBox) {
+                    throw SendDraftRefusal(description: "the sent mailbox and the drafts mailbox may be the same mailbox (their names are equal ignoring letter case or Unicode normalisation), so a sent copy could not be told apart from the draft. The draft was kept as a precaution. When one of them came from `drafts_mailbox` or `sent_mailbox` in direct-transport.json, correct that key; when the server marks both, the server's marks have to be corrected. Use `sent_copy: provider` only if the provider is known to keep a copy of what is sent")
+                }
                 // A copy stored by an earlier attempt whose reply was lost is not stored twice.
                 if try await session.sentCopyExists(messageID: record.messageID, in: sentBox) {
                     notes.append("A message with this Message-ID was already in the sent mailbox, so no second copy was stored.")

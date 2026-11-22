@@ -22,6 +22,11 @@ struct AppendDraftResult: Equatable {
     let uid: UInt32?
     let uidValidity: UInt32?
     let notes: [String]
+
+    func adding(notes more: [String]) -> AppendDraftResult {
+        AppendDraftResult(outcome: outcome, messageID: messageID, mailbox: mailbox, uid: uid,
+                          uidValidity: uidValidity, notes: notes + more)
+    }
 }
 
 /// The steps of `append_draft` once the message is built: find the drafts
@@ -115,7 +120,7 @@ enum AppendDraftTool {
     static let maxRecipients = 100
 
     /// Kept here so the test of the caveats reads the same text the server lists.
-    static let description = "Create a new plain-text draft in the server's drafts mailbox over IMAP, without Mail (#744, #729). NOT YET RUN AGAINST A REAL MAIL SERVER: until the result is recorded on issue #744, treat every outcome as unverified, including whether Mail and other clients show the result as an editable draft. Only for accounts listed in the server's direct-transport.json, with a password stored by running the binary with --direct-transport-set-credential <address>; any other account is refused and no Mail path is used instead. Takes account_name or account_id, to, cc and bcc (lists of bare addresses, at least one recipient in all; display names are refused), subject (not empty), body (plain text) and optionally from_name (the sender's display name; the sender's address is always the account's). It accepts no attachment, format, reply or signature argument. The tool builds the whole message itself: one text/plain part in UTF-8 with a new Message-ID, not the layout Mail gives its own drafts, so that send_draft can submit it as stored. Bcc recipients are kept in the draft's Bcc field. outcome is appended (the server completed the command, or a search afterwards found the message; uid is given when the server reports one), not_appended (the server refused the command, or the call stopped before the APPEND was sent: the connection, the login or finding the drafts mailbox failed), or unknown: whether the server stored the draft could not be established, and the tool is NOT retrying. Calls are not de-duplicated: if two calls both store their drafts, there are two drafts, so after unknown look in the drafts mailbox for the message_id before calling again. The result carries message_id, which send_draft accepts to send this draft. Mail's local index is not changed and shows the draft when Mail next syncs."
+    static let description = "Create a new plain-text draft in the server's drafts mailbox over IMAP, without Mail (#744, #729). NOT YET RUN AGAINST A REAL MAIL SERVER: until the result is recorded on issue #744, treat every outcome as unverified, including whether Mail and other clients show the result as an editable draft. Only for accounts listed in the server's direct-transport.json, with a password stored by running the binary with --direct-transport-set-credential <address>; any other account is refused and no Mail path is used instead. Takes account_name or account_id, to, cc and bcc (lists of bare addresses, at least one recipient in all; display names are refused), subject (not empty), body (plain text) and optionally from_name (the sender's display name; the sender's address is always the account's). It accepts no attachment, format, reply or signature argument. The tool builds the whole message itself: one text/plain part in UTF-8 with a new Message-ID, not the layout Mail gives its own drafts, so that send_draft can submit it as stored. Bcc recipients are kept in the draft's Bcc field. outcome is appended (the server completed the command, or a search afterwards found the message; uid is given when the server reports one), not_appended (the server refused the command, or the call stopped before the APPEND was sent: the connection, the login or finding the drafts mailbox failed), or unknown: whether the server stored the draft could not be established, and the tool is NOT retrying. Calls are not de-duplicated: if two calls both store their drafts, there are two drafts, so after unknown look in the drafts mailbox for the message_id before calling again. The result carries message_id, which send_draft accepts to send this draft. Mail's local index is not changed and shows the draft when Mail next syncs. The drafts mailbox is the one the server marks \\Drafts (asking for its special-use mailboxes when it advertises SPECIAL-USE); for a server that marks no drafts mailbox, set drafts_mailbox in direct-transport.json to its exact name. A mailbox is never chosen by guessing from its name."
 
     struct Environment {
         let stateDirectory: URL
@@ -232,8 +237,10 @@ enum AppendDraftTool {
             return scrubbed(AppendDraftFlow.notAppendedBeforeAppend(built, mailbox: nil, "\(error)"))
         }
         let result = await AppendDraftFlow(session: session).run(built)
+        // Where the drafts mailbox came from (#748).
+        let lookup = await session.mailboxLookupNotes()
         await session.close()
-        return scrubbed(result)
+        return scrubbed(result.adding(notes: lookup))
     }
 
     /// Why the content cannot be made into a message; nil when it can.

@@ -462,7 +462,7 @@ Mail 關著時完成。
 
 ### 設定
 
-1. 寫 `~/.claude/.mail/direct-transport.json`。每個欄位都必填，不認得的欄位會被拒絕。
+1. 寫 `~/.claude/.mail/direct-transport.json`。下面每個欄位都必填，不認得的欄位會被拒絕。
 
    ```json
    {"accounts": [{
@@ -477,6 +477,11 @@ Mail 關著時完成。
 
    `sent_copy` 為 `append` 表示由工具把寄出的副本存進伺服器的寄件備份；為 `provider` 表示供應商自己會存。
    `allowed_from` 列出這個帳號可以用來寄信的其他位址。
+
+   另有兩個可省略的欄位 `drafts_mailbox`、`sent_mailbox`，給不標示這兩個信匣的伺服器寫上它們的確切名稱
+   （[#748](https://github.com/PsychQuant/che-apple-mail-mcp/issues/748)）。工具先用伺服器在信匣清單裡標為 `\Drafts`、`\Sent`
+   的信匣；沒有標、但伺服器宣告 `SPECIAL-USE` 時再明確問一次；仍沒有才用這裡寫的名稱，而且伺服器要列出完全同名
+   （含大小寫）的信匣。工具不會憑信匣名稱去猜。結果的 notes 會說明每個信匣是怎麼找到的。
 2. 在終端機執行 binary，把密碼（iCloud 用 App 專用密碼）存進伺服器自己的 keychain 項目。密碼從標準輸入讀、
    不顯示，也不會印出：
 
