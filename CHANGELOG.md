@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`send_draft` and `append_draft` find the drafts and sent mailboxes on a
+  server that does not mark them** ([#748](https://github.com/PsychQuant/che-apple-mail-mcp/issues/748)).
+  The first run against iCloud stopped at "the server marks no mailbox
+  \Drafts": the plain mailbox list marked neither `\Drafts` nor `\Sent`, and
+  the server did not advertise `SPECIAL-USE` before login. The tools now try,
+  in order: the plain list's mark; when the server advertises `SPECIAL-USE`, a
+  `LIST ... RETURN (SPECIAL-USE)`; the exact name given by the new optional
+  `drafts_mailbox` / `sent_mailbox` keys in `direct-transport.json`, if the
+  server lists that mailbox. A mailbox is never chosen by guessing from its
+  name. Refusals say how many mailboxes were listed and whether `SPECIAL-USE`
+  is advertised; results note how each mailbox was found.
+
 ### Added
 
 - **`send_draft` refuses a draft Mail saved**
