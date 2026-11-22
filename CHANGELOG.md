@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The opt-in direct write takes Cc and display-name recipients**
+  ([#756](https://github.com/PsychQuant/che-apple-mail-mcp/issues/756)).
+  With `CHE_MAIL_EXPERIMENTAL_DIRECT_DRAFT=1`, `create_draft` now writes a draft
+  with `cc`, or with `Name <addr>` recipients in `to` and `cc`, straight into
+  Mail's store instead of taking the GUI path. It writes them the way Mail
+  stores its own drafts, checked against the maintainer's store:
+  - `Cc:` comes after `Date:`, and `To:` stays last;
+  - a recipient list folds only between mailboxes;
+  - Cc rows are `recipients.type` 1, with `position` continuing after To;
+  - a name is stored decoded and unquoted in `addresses.comment`.
+
+  A display name containing CR, LF or NUL is refused, because it would end the
+  header line. `bcc` gets its own reason (`bcc is not written directly`;
+  timing code `not_attempted:bcc`, replacing `not_attempted:ccOrBcc`) and keeps
+  the GUI path, as do an empty subject and a missing `from_address`. Reversing
+  a committed direct write now also deletes the `addresses` rows it created,
+  when nothing in the store refers to them.
+
 ## [5.0.0] - 2026-11-23
 
 ### Fixed

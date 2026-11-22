@@ -37,10 +37,10 @@ final class DirectDraftPathTests: XCTestCase {
 
     func testIneligibleCallNamesTheReasonBeforeTouchingAnything() async {
         let outcome = await DirectDraftPath(controller: MailController.shared, reader: nil, enabled: true)
-            .attempt(to: ["a@example.org"], subject: "S", body: "B", cc: ["c@example.org"], bcc: nil,
+            .attempt(to: ["a@example.org"], subject: "S", body: "B", cc: nil, bcc: ["c@example.org"],
                      attachments: nil, format: .plain, fromAddress: "me@example.org")
-        XCTAssertEqual(outcome, .notAttempted(.ineligible(.ccOrBcc)))
-        XCTAssertEqual(outcome.timingCode, "not_attempted:ccOrBcc")
+        XCTAssertEqual(outcome, .notAttempted(.ineligible(.bcc)))
+        XCTAssertEqual(outcome.timingCode, "not_attempted:bcc")
     }
 
     func testANamedSignatureTakesTheGuiPathBeforeTouchingAnything() async {
@@ -97,7 +97,7 @@ final class DirectDraftPathTests: XCTestCase {
 
     func testIneligibleCodesMatchTheSpecList() {
         let cases: [(DirectDraft.Ineligible, String)] = [
-            (.format, "format"), (.attachments, "attachments"), (.ccOrBcc, "ccOrBcc"),
+            (.format, "format"), (.attachments, "attachments"), (.bcc, "bcc"),
             (.noRecipient, "noRecipient"), (.displayName, "displayName"),
             (.unsupportedAddress, "unsupportedAddress"), (.emptySubject, "emptySubject"),
             (.missingFromAddress, "missingFromAddress"), (.fromNotBare, "fromNotBare"),
@@ -138,28 +138,28 @@ final class DirectDraftPathTests: XCTestCase {
 
     // MARK: - #475 Direct-write path marks
 
-    private func directSegments(enabled: Bool, cc: [String]?, from: String? = "me@example.org")
+    private func directSegments(enabled: Bool, bcc: [String]?, from: String? = "me@example.org")
         async -> [ComposeTiming.Segment] {
         let run = ComposeTiming.Run()
         _ = await ComposeTiming.$currentRun.withValue(run) {
             await DirectDraftPath(controller: MailController.shared, reader: nil, enabled: enabled)
-                .attempt(to: ["a@example.org"], subject: "S", body: "B", cc: cc, bcc: nil,
+                .attempt(to: ["a@example.org"], subject: "S", body: "B", cc: nil, bcc: bcc,
                          attachments: nil, format: .plain, fromAddress: from)
         }
         return run.collected
     }
 
     func testFlagOffRecordsNoDirectRows() async {
-        let segments = await directSegments(enabled: false, cc: nil)
+        let segments = await directSegments(enabled: false, bcc: nil)
         XCTAssertTrue(segments.isEmpty, "with the flag off the direct path leaves no trace in the CSV")
     }
 
     func testIneligibleCallRecordsExactlyEnterAndReturned() async {
-        let segments = await directSegments(enabled: true, cc: ["c@example.org"])
+        let segments = await directSegments(enabled: true, bcc: ["c@example.org"])
         XCTAssertEqual(segments.count, 1)
         guard let segment = segments.first else { return XCTFail("no direct segment recorded") }
         XCTAssertEqual(segment.path, "direct")
-        XCTAssertEqual(segment.outcome, "not_attempted:ccOrBcc")
+        XCTAssertEqual(segment.outcome, "not_attempted:bcc")
         XCTAssertEqual(segment.marks.map(\.label), ["enter", "returned"])
         XCTAssertTrue(segment.marks.allSatisfy { $0.source == "swift" })
         XCTAssertEqual(segment.config["from_address_set"], "true")
@@ -167,7 +167,7 @@ final class DirectDraftPathTests: XCTestCase {
     }
 
     func testMissingFromAddressIsRecordedAsNotSet() async {
-        let segments = await directSegments(enabled: true, cc: nil, from: nil)
+        let segments = await directSegments(enabled: true, bcc: nil, from: nil)
         XCTAssertEqual(segments.first?.outcome, "not_attempted:missingFromAddress")
         XCTAssertEqual(segments.first?.config["from_address_set"], "false")
     }
@@ -176,9 +176,9 @@ final class DirectDraftPathTests: XCTestCase {
         // Timing off: no run context; the attempt must still behave exactly as before.
         XCTAssertNil(ComposeTiming.currentRun)
         let outcome = await DirectDraftPath(controller: MailController.shared, reader: nil, enabled: true)
-            .attempt(to: ["a@example.org"], subject: "S", body: "B", cc: ["c@example.org"], bcc: nil,
+            .attempt(to: ["a@example.org"], subject: "S", body: "B", cc: nil, bcc: ["c@example.org"],
                      attachments: nil, format: .plain, fromAddress: "me@example.org")
-        XCTAssertEqual(outcome, .notAttempted(.ineligible(.ccOrBcc)))
+        XCTAssertEqual(outcome, .notAttempted(.ineligible(.bcc)))
     }
 
     // MARK: - #475 One run per create_draft call
@@ -288,8 +288,8 @@ final class DirectDraftPathTests: XCTestCase {
     }
 
     func testFallbackNoteFormat() {
-        XCTAssertEqual(DirectDraftPath.fallbackNote("cc/bcc are not written directly"),
-                       " [experimental direct-write not used: cc/bcc are not written directly — GUI path]")
+        XCTAssertEqual(DirectDraftPath.fallbackNote("bcc is not written directly"),
+                       " [experimental direct-write not used: bcc is not written directly — GUI path]")
     }
 
     /// #497: the upload-confirmation poll interval. Below 50 ms the 10-second

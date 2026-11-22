@@ -14,11 +14,26 @@ import SQLite3
 /// subjects and global-data cleanup.
 public final class DraftStoreWriter {
 
+    /// One recipient of a direct-written draft (#756). `kind` is the
+    /// `recipients.type` Mail uses: 0 for To, 1 for Cc. `name` goes to
+    /// `addresses.comment` decoded and unquoted, as Mail stores it.
+    public struct Recipient: Equatable {
+        public enum Kind: Int64 { case to = 0, cc = 1 }
+        public let address: String
+        public let name: String?
+        public let kind: Kind
+        public init(address: String, name: String?, kind: Kind) {
+            self.address = address; self.name = name; self.kind = kind
+        }
+    }
+
     public struct Draft {
         public let mailboxRowId: Int64
         public let mailboxURL: String
         public let senderAddressRowId: Int64
-        public let toAddresses: [String]
+        /// To entries first, then Cc entries: `position` is their index in this list.
+        public let recipients: [Recipient]
+        public var toAddresses: [String] { recipients.filter { $0.kind == .to }.map(\.address) }
         public let subject: String
         public let messageIdHash: Int64
         public let messageIdHeader: String
@@ -27,13 +42,20 @@ public final class DraftStoreWriter {
         public let flags: Int64
         public let date: Date
 
-        public init(mailboxRowId: Int64, mailboxURL: String, senderAddressRowId: Int64, toAddresses: [String],
+        public init(mailboxRowId: Int64, mailboxURL: String, senderAddressRowId: Int64, recipients: [Recipient],
                     subject: String, messageIdHash: Int64, messageIdHeader: String, documentUUID: UUID,
                     size: Int, flags: Int64, date: Date) {
             self.mailboxRowId = mailboxRowId; self.mailboxURL = mailboxURL
-            self.senderAddressRowId = senderAddressRowId; self.toAddresses = toAddresses
+            self.senderAddressRowId = senderAddressRowId; self.recipients = recipients
             self.subject = subject; self.messageIdHash = messageIdHash; self.messageIdHeader = messageIdHeader
             self.documentUUID = documentUUID; self.size = size; self.flags = flags; self.date = date
+        }
+
+        /// The To-only form used before #756.
+        public init(mailboxRowId: Int64, mailboxURL: String, senderAddressRowId: Int64, toAddresses: [String],
+                    subject: String, messageIdHash: Int64, messageIdHeader: String, documentUUID: UUID,
+                    size: Int, flags: Int64, date: Date) {
+            self.init(mailboxRowId: mailboxRowId, mailboxURL: mailboxURL, senderAddressRowId: senderAddressRowId, recipients: toAddresses.map { Recipient(address: $0, name: nil, kind: .to) }, subject: subject, messageIdHash: messageIdHash, messageIdHeader: messageIdHeader, documentUUID: documentUUID, size: size, flags: flags, date: date)
         }
     }
 
@@ -47,13 +69,17 @@ public final class DraftStoreWriter {
         /// The directory levels this insert created for `emlxPath`, shallowest first; `rollback`
         /// removes them again while they are empty (#503).
         public let createdDirectories: [String]
+        /// `addresses` rows this insert created (#756); a reversal deletes those nothing refers to.
+        public let createdAddressRowIds: [Int64]
 
         init(messageRowId: Int64, conversationId: Int64, globalDataRowId: Int64, actionRowId: Int64,
-             messageIdHash: Int64, emlxPath: String, createdDirectories: [String] = []) {
+             messageIdHash: Int64, emlxPath: String, createdDirectories: [String] = [],
+             createdAddressRowIds: [Int64] = []) {
             self.messageRowId = messageRowId; self.conversationId = conversationId
             self.globalDataRowId = globalDataRowId; self.actionRowId = actionRowId
             self.messageIdHash = messageIdHash; self.emlxPath = emlxPath
             self.createdDirectories = createdDirectories
+            self.createdAddressRowIds = createdAddressRowIds
         }
     }
 
@@ -216,13 +242,20 @@ public final class DraftStoreWriter {
         do {
             guard let url = try scalarText("SELECT url FROM mailboxes WHERE ROWID = \(d.mailboxRowId)"),
                   url == d.mailboxURL, url.hasPrefix("imap://") else { throw WriteError.unexpectedMailbox }
-            var toIds: [Int64] = []
-            for addr in d.toAddresses {
-                try run("INSERT OR IGNORE INTO addresses(address, comment) VALUES (?, '')", [.text(addr)])
-                guard let id = try scalarInt("SELECT ROWID FROM addresses WHERE address = ? AND comment = ''", [.text(addr)]) else {
+            // #756: one row per (address, name); a row this insert creates is
+            // recorded so a reversal can delete it again.
+            var recipientIds: [Int64] = []
+            var createdAddresses: [Int64] = []
+            for r in d.recipients {
+                let comment = r.name ?? ""
+                try run("INSERT OR IGNORE INTO addresses(address, comment) VALUES (?, ?)", [.text(r.address), .text(comment)])
+                let createdNow = sqlite3_changes(db) == 1
+                guard let id = try scalarInt("SELECT ROWID FROM addresses WHERE address = ? AND comment = ?",
+                                             [.text(r.address), .text(comment)]) else {
                     throw WriteError.sql("recipient address row missing")
                 }
-                toIds.append(id)
+                if createdNow, !createdAddresses.contains(id) { createdAddresses.append(id) }
+                recipientIds.append(id)
             }
             try run("INSERT INTO conversations(flags, sync_key) VALUES (0, NULL)")
             let cid = sqlite3_last_insert_rowid(db)
@@ -250,9 +283,10 @@ public final class DraftStoreWriter {
             try placementHook?(.filePlaced(placed!))
             try run("INSERT INTO conversation_id_message_id(conversation_id, message_id, date_sent) VALUES (?, ?, ?)",
                     [.int(cid), .int(d.messageIdHash), .int(now)])
-            for (position, id) in toIds.enumerated() {
-                try run("INSERT INTO recipients(message, address, type, position) VALUES (?, ?, 0, ?)",
-                        [.int(mid), .int(id), .int(Int64(position))])
+            // Mail numbers `position` across types: the Cc entries continue after To (#756).
+            for (position, (r, id)) in zip(d.recipients, recipientIds).enumerated() {
+                try run("INSERT INTO recipients(message, address, type, position) VALUES (?, ?, ?, ?)",
+                        [.int(mid), .int(id), .int(r.kind.rawValue), .int(Int64(position))])
             }
             try run("INSERT INTO searchable_messages(message_id, message, transaction_id, message_body_indexed, reindex_type) VALUES (?, ?, 1, 1, 0)",
                     [.int(mid), .int(mid)])
@@ -267,7 +301,8 @@ public final class DraftStoreWriter {
             try run("UPDATE properties SET value = ? WHERE key = 'WriteTransactionGeneration'", [.int(wtg + 1)])
             try exec("COMMIT")
             return Inserted(messageRowId: mid, conversationId: cid, globalDataRowId: gid, actionRowId: aid,
-                            messageIdHash: d.messageIdHash, emlxPath: placed!, createdDirectories: created)
+                            messageIdHash: d.messageIdHash, emlxPath: placed!, createdDirectories: created,
+                            createdAddressRowIds: createdAddresses)
         } catch {
             _ = try? exec("ROLLBACK")
             if let p = placed { try? FileManager.default.removeItem(atPath: p) }
@@ -293,6 +328,20 @@ public final class DraftStoreWriter {
                     [.int(ins.conversationId), .int(ins.messageIdHash)])
             try run("DELETE FROM messages WHERE ROWID = ?", [.int(ins.messageRowId)])
             try run("DELETE FROM conversations WHERE conversation_id = ?", [.int(ins.conversationId)])
+            // #756: the addresses rows this insert created, unless something in the
+            // store now refers to them (Mail fills sender_addresses and
+            // business_addresses itself; tables absent from this store are skipped).
+            if !ins.createdAddressRowIds.isEmpty {
+                var refs = ["SELECT 1 FROM recipients WHERE address = ?1", "SELECT 1 FROM messages WHERE sender = ?1"]
+                for table in ["sender_addresses", "business_addresses"]
+                where ((try scalarInt("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = '\(table)'")) ?? 0) > 0 {
+                    refs.append("SELECT 1 FROM \(table) WHERE address = ?1")
+                }
+                let unused = refs.map { "NOT EXISTS (\($0))" }.joined(separator: " AND ")
+                for row in ins.createdAddressRowIds {
+                    try run("DELETE FROM addresses WHERE ROWID = ?1 AND \(unused)", [.int(row)])
+                }
+            }
             try exec("COMMIT")
         } catch {
             _ = try? exec("ROLLBACK")

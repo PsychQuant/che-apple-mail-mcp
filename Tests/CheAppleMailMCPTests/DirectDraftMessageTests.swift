@@ -27,9 +27,13 @@ final class DirectDraftMessageTests: XCTestCase {
         XCTAssertEqual(check(enabled: false), .disabled)
         XCTAssertEqual(check(format: .html), .format)
         XCTAssertEqual(check(attachments: ["/tmp/x.pdf"]), .attachments)
-        XCTAssertEqual(check(cc: ["c@example.org"]), .ccOrBcc)
-        XCTAssertEqual(check(bcc: ["c@example.org"]), .ccOrBcc)
-        XCTAssertEqual(check(to: ["Ann <a@example.org>"]), .displayName)
+        // #756: Cc and display names are written directly; Bcc keeps its own reason.
+        XCTAssertNil(check(cc: ["c@example.org"]))
+        XCTAssertNil(check(to: ["Ann <a@example.org>"]))
+        XCTAssertEqual(check(bcc: ["c@example.org"]), .bcc)
+        XCTAssertEqual(check(cc: ["c@example.org", "not an address"]), .unsupportedAddress)
+        XCTAssertEqual(check(to: ["Ann\r <a@example.org>"]), .displayName)
+        XCTAssertEqual(check(to: ["\"An\u{0}n\" <a@example.org>"]), .displayName)
         XCTAssertEqual(check(to: []), .noRecipient)
         XCTAssertEqual(check(subject: ""), .emptySubject)
         XCTAssertEqual(check(from: nil), .missingFromAddress)
@@ -54,8 +58,8 @@ final class DirectDraftMessageTests: XCTestCase {
     private let boundary = UUID(uuidString: "9685C001-8FB1-45DF-BCD1-AD7AB5F8542C")!
 
     private func build(subject: String = "Hello", body: String = "Line one", name: String? = "Me Example",
-                       to: [String] = ["a@example.org", "b@example.org"]) -> DirectDraft.Message {
-        DirectDraft.buildMessage(fromName: name, fromAddress: "me@example.org", to: to,
+                       to: [String] = ["a@example.org", "b@example.org"], cc: [String] = []) -> DirectDraft.Message {
+        DirectDraft.buildMessage(fromName: name, fromAddress: "me@example.org", to: to, cc: cc,
                                  subject: subject, body: body, date: date, documentUUID: doc,
                                  messageIdLocalPart: local, boundary: boundary,
                                  mailVersion: "16.0 (3901.200.41)",
@@ -81,6 +85,57 @@ final class DirectDraftMessageTests: XCTestCase {
         XCTAssertTrue(header.contains("From: Me Example <me@example.org>"))
         XCTAssertTrue(header.contains("To: a@example.org, b@example.org"))
         XCTAssertFalse(s.contains("\r"), ".emlx stores LF line endings")
+    }
+
+    // MARK: - Cc and display names (#756)
+
+    private func headerBlock(_ m: DirectDraft.Message) -> String {
+        let s = text(m); return String(s[..<s.range(of: "\n\n")!.lowerBound])
+    }
+
+    // spec-example: message-composition / one named To and two Cc
+    func testOneNamedToAndTwoCcAreWrittenAsMailWritesThem() {
+        let header = headerBlock(build(to: ["\"Doe, Jane\" <jane@example.test>"],
+                                       cc: ["a@example.test", "陳小明 <b@example.test>"]))
+        let lines = header.components(separatedBy: "\n")
+        let names = lines.filter { !$0.hasPrefix("\t") && !$0.hasPrefix(" ") }
+            .map { String($0.split(separator: ":", maxSplits: 1)[0]) }
+        XCTAssertEqual(names, ["Subject", "Mime-Version", "Content-Type", "X-Apple-Base-Url",
+                               "X-Universally-Unique-Identifier", "X-Apple-Mail-Remote-Attachments", "From",
+                               "X-Apple-Windows-Friendly", "Date", "Cc", "X-Apple-Mail-Signature", "Message-Id",
+                               "X-Uniform-Type-Identifier", "To"], "Cc after Date, To last, as in Mail's drafts")
+        XCTAssertEqual(lines.last, "To: \"Doe, Jane\" <jane@example.test>")
+        let encoded = DirectDraft.encodedWords("陳小明")
+        XCTAssertTrue(header.contains("Cc: a@example.test, \(encoded) <b@example.test>"), header)
+    }
+
+    // spec-example: message-composition / a long Cc list folds between mailboxes only
+    func testALongCcListFoldsBetweenMailboxesOnly() {
+        let cc = (1...12).map { "\(String(repeating: "長名字", count: 10))\($0) <person\($0)@example.test>" }
+        let header = headerBlock(build(cc: cc))
+        let ccLines = header.components(separatedBy: "\n")
+            .drop { !$0.hasPrefix("Cc:") }
+            .prefix { $0.hasPrefix("Cc:") || $0.hasPrefix(" ") || $0.hasPrefix("\t") }
+        XCTAssertGreaterThan(ccLines.count, 1, "the list is too long for one line")
+        for line in ccLines {
+            XCTAssertLessThanOrEqual(line.utf8.count, DirectDraft.maxLineOctets, line)
+            // Remove every complete RFC 2047 word; a fragment left behind means one was split.
+            let rest = line.replacingOccurrences(of: #"=\?[^?\s]+\?[BbQq]\?[^?\s]*\?="#, with: "", options: .regularExpression)
+            XCTAssertFalse(rest.contains("=?"), "an encoded word was split across lines: \(line)")
+            XCTAssertEqual(line.filter { $0 == "\"" }.count % 2, 0, "a quoted string was split: \(line)")
+            XCTAssertFalse(line.trimmingCharacters(in: .whitespaces).isEmpty, "a continuation line must not be blank")
+        }
+        for n in 1...12 { XCTAssertTrue(header.contains("<person\(n)@example.test>"), "mailbox \(n) is missing") }
+    }
+
+    // spec-example: message-composition / a name with a newline goes to the GUI path
+    func testANameWithANewlineGoesToTheGuiPath() {
+        XCTAssertEqual(check(cc: ["Eve\nBcc: x@example.test <e@example.test>"]), .displayName)
+    }
+
+    func testPlainToListsKeepTheirOneLineLayout() {
+        XCTAssertTrue(headerBlock(build()).hasSuffix("\nTo: a@example.org, b@example.org"),
+                      "calls that were eligible before #756 build the same header")
     }
 
     func testAsciiBodyIsSevenBitHtmlWithAnEmptyPlainPart() {
