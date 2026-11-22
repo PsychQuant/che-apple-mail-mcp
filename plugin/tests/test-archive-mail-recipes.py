@@ -763,7 +763,7 @@ class ArchiveDropSetSopTests(unittest.TestCase):
 
     def test_the_changelog_no_longer_promises_a_stop_and_its_claim_is_true(self):
         changelog = (DOCUMENT.parents[1] / "CHANGELOG.md").read_text()
-        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [", changelog.index("## [Unreleased]") + 5)]
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [4.0.0]")]  # entries since 4.0.0 (#761)
         entry = next(line for line in unreleased.split("\n") if "[#594]" in line)
         self.assertNotIn("confirm", entry)
         self.assertNotIn("stops and asks", entry)
@@ -876,7 +876,7 @@ class ArchiveSkipDraftsSopTests(unittest.TestCase):
 
     def test_the_changelog_does_not_promise_a_subtraction(self):
         changelog = (DOCUMENT.parents[1] / "CHANGELOG.md").read_text()
-        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [", changelog.index("## [Unreleased]") + 5)]
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [4.0.0]")]  # entries since 4.0.0 (#761)
         entry = next(line for line in unreleased.split("\n") if "[#580]" in line)
         self.assertNotIn("subtract", entry.replace("subtracting skipped drafts can count one mail twice", ""))
         self.assertNotIn("undecidable", entry)
@@ -922,7 +922,7 @@ class ArchiveSkipDraftsSopTests(unittest.TestCase):
 
     def test_the_changelog_states_the_fallback_residual(self):
         changelog = (DOCUMENT.parents[1] / "CHANGELOG.md").read_text()
-        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [", changelog.index("## [Unreleased]") + 5)]
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [4.0.0]")]  # entries since 4.0.0 (#761)
         entry = next(line for line in unreleased.split("\n") if "[#580]" in line)
         self.assertIn("a draft outside a Drafts-named mailbox can be archived, as it could before", entry)
         self.assertIn("A whole-batch failure still archives mail", entry)
@@ -1037,7 +1037,7 @@ class ArchiveThreadOrderSopTests(unittest.TestCase):
 
     def test_the_changelog_states_the_order_change_and_what_readers_do(self):
         changelog = (DOCUMENT.parents[1] / "CHANGELOG.md").read_text()
-        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [", changelog.index("## [Unreleased]") + 5)]
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [4.0.0]")]  # entries since 4.0.0 (#761)
         entry = next(line for line in unreleased.split("\n") if "[#556]" in line)
         self.assertIn("`messages` stays in arrival order", entry)
         self.assertIn("the option to insert an earlier mail at its place is gone", entry)
@@ -1442,7 +1442,7 @@ class ArchiveWatermarkTests(unittest.TestCase):
 
     def test_the_changelog_says_where_the_refusal_lives_and_that_it_is_a_behaviour_change(self):
         changelog = (DOCUMENT.parents[1] / "CHANGELOG.md").read_text()
-        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [", changelog.index("## [Unreleased]") + 5)]
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [4.0.0]")]  # entries since 4.0.0 (#761)
         entry = next(line for line in unreleased.split("\n") if "[#600]" in line and line.startswith("- `/archive-mail` Step 4.1"))
         self.assertIn("checked in Step 1.6, before Step 3 searches", entry)
         self.assertIn("**Behaviour change**", entry)
@@ -1451,7 +1451,7 @@ class ArchiveWatermarkTests(unittest.TestCase):
 
     def test_the_older_changelog_entry_no_longer_describes_the_string_comparison(self):
         changelog = (DOCUMENT.parents[1] / "CHANGELOG.md").read_text()
-        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [", changelog.index("## [Unreleased]") + 5)]
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [4.0.0]")]  # entries since 4.0.0 (#761)
         self.assertNotIn("compares `last_archived` as a string", unreleased)
         self.assertNotIn("timestamped on or before the value", unreleased)
         entry = next(line for line in unreleased.split("\n") if "[#545]" in line)
@@ -1699,7 +1699,7 @@ class ArchiveScanSopTests(unittest.TestCase):
 
     def test_the_changelog_says_which_branch_uses_the_scan_audit(self):
         changelog = (DOCUMENT.parents[1] / "CHANGELOG.md").read_text()
-        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [", changelog.index("## [Unreleased]") + 5)]
+        unreleased = changelog[changelog.index("## [Unreleased]"):changelog.index("\n## [4.0.0]")]  # entries since 4.0.0 (#761)
         entry = next(line for line in unreleased.split("\n") if "`archive-mail-scan-recipe`" in line)
         self.assertIn("the `index` / `both` branch keeps auditing every index entry", entry)
         self.assertNotIn("lists and the date audit.", entry)
