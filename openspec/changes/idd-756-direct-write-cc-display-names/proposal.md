@@ -12,7 +12,7 @@ Mail 自己存的草稿可以當範本：Cc 的資料列形狀、標頭位置、
   - 名字存在 `addresses.comment`，存的是解碼後、不加引號的名字。
 - `To:`／`Cc:` 只在信箱與信箱之間折疊，不切開編碼字串或引號字串。
 - 名字含 CR、LF、NUL 時拒絕。這些字元會讓標頭提早結束，所以算資格不符，不做跳脫。
-- 還原一筆已提交的寫入時，刪掉這次新建、且沒有被任何 `recipients` 或 `messages.sender` 引用的 `addresses` 列（維護者 2026-11-23 的決定，Decision comment 7082383020）。
+- 還原一筆已提交的寫入時，刪掉這次新建、且沒有被 store 裡任何資料引用的 `addresses` 列（維護者 2026-11-23 的決定，Decision comment 7082383020）。
 - Bcc 改成獨立的拒絕理由（`bcc is not written directly`），照舊走 GUI 路徑。
 
 ## Non-Goals
@@ -31,10 +31,11 @@ Mail 自己存的草稿可以當範本：Cc 的資料列形狀、標頭位置、
 ### Modified Capabilities
 
 - `message-composition`：Requirement "Direct-write draft path" 的資格清單、收件人的寫法、還原範圍。
+- `compose-timing`：Requirement "Direct-write path marks" 的結果代碼 `ccOrBcc` 改為 `bcc`。
 
 ## Impact
 
-- Affected specs: `message-composition`
+- Affected specs: `message-composition`、`compose-timing`
 - Affected code:
   - `Sources/CheAppleMailMCP/DirectDraft/DirectDraft.swift`
   - `Sources/CheAppleMailMCP/DirectDraft/DirectDraftPath.swift`

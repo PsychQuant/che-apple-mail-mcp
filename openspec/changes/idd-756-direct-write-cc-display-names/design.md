@@ -36,7 +36,7 @@
 
 ### 還原清掉這次新建的 `addresses` 列
 
-`insert` 在每次 `INSERT OR IGNORE INTO addresses` 之後看 `sqlite3_changes()`，等於 1 就記下這列的 ROWID，放進 `Inserted`。`rollback()` 在它自己的交易裡，刪掉其中沒有被任何 `recipients.address` 或 `messages.sender` 引用的列。`subjects` 與更早的殘留不動，留給 #628。交易失敗時，原本的 `ROLLBACK` 本來就會撤掉這些列。
+`insert` 在每次 `INSERT OR IGNORE INTO addresses` 之後看 `sqlite3_changes()`，等於 1 就記下這列的 ROWID，放進 `Inserted`。`rollback()` 在它自己的交易裡，刪掉其中沒有被任何東西引用的列：`recipients.address`、`messages.sender`，以及表存在時的 `sender_addresses.address`、`business_addresses.address`（這兩張由 Mail 自己填，store 裡分別有 2,202、20,420 列；只查前兩張的話，可能刪到 Mail 已經拿去用的列）。`subjects` 與更早的殘留不動，留給 #628。交易失敗時，原本的 `ROLLBACK` 本來就會撤掉這些列。
 
 ## Risks / Trade-offs
 

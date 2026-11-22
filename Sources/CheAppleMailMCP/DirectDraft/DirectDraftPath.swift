@@ -288,12 +288,12 @@ struct DirectDraftPath {
 
         let now = Date()
         let message = DirectDraft.buildMessage(
-            fromName: sender.displayName.isEmpty ? nil : sender.displayName, fromAddress: from, to: to,
+            fromName: sender.displayName.isEmpty ? nil : sender.displayName, fromAddress: from, to: to, cc: cc ?? [],
             subject: subject, body: body, date: now, documentUUID: UUID(), messageIdLocalPart: UUID(),
             boundary: UUID(), mailVersion: "\(version.short) (\(version.build))")
         let draft = DraftStoreWriter.Draft(
             mailboxRowId: mailbox.rowId, mailboxURL: mailbox.url, senderAddressRowId: sender.rowId,
-            toAddresses: to, subject: subject, messageIdHash: DirectDraft.messageIdHash(message.messageIdNoBrackets),
+            recipients: DirectDraft.recipients(to: to, cc: cc ?? []), subject: subject, messageIdHash: DirectDraft.messageIdHash(message.messageIdNoBrackets),
             messageIdHeader: "<\(message.messageIdNoBrackets)>", documentUUID: UUID(), size: message.size,
             flags: DirectDraft.draftFlags, date: now)
         let inserted: DraftStoreWriter.Inserted

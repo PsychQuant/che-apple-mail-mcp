@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import MailSQLite
 
 /// #472 — pure parts of the EXPERIMENTAL direct-draft path.
 ///
@@ -21,7 +22,7 @@ enum DirectDraft {
     // MARK: - Eligibility (closed list — anything else takes the GUI path)
 
     enum Ineligible: Equatable {
-        case disabled, format, attachments, ccOrBcc, noRecipient, displayName, unsupportedAddress,
+        case disabled, format, attachments, bcc, noRecipient, displayName, unsupportedAddress,
              emptySubject, missingFromAddress, fromNotBare, signature
 
         var reason: String {
@@ -29,9 +30,9 @@ enum DirectDraft {
             case .disabled: return "\(DirectDraft.envKey) is not set"
             case .format: return "only plain text is written directly"
             case .attachments: return "attachments are not written directly"
-            case .ccOrBcc: return "cc/bcc are not written directly"
+            case .bcc: return "bcc is not written directly"
             case .noRecipient: return "no To recipient"
-            case .displayName: return "display-name recipients are not written directly"
+            case .displayName: return "a display name with a line break or NUL is not written directly"
             case .unsupportedAddress: return "a recipient is not a plain addr-spec of at most 254 octets"
             case .emptySubject: return "empty subject"
             case .missingFromAddress: return "from_address is required to pick the account"
@@ -47,11 +48,14 @@ enum DirectDraft {
         guard enabled else { return .disabled }
         guard format == .plain else { return .format }
         guard attachments.isEmpty else { return .attachments }
-        guard cc.isEmpty, bcc.isEmpty else { return .ccOrBcc }
+        // #756: how Mail stores Bcc in a draft it saves has not been observed.
+        guard bcc.isEmpty else { return .bcc }
         guard !to.isEmpty else { return .noRecipient }
-        for raw in to {
+        for raw in to + cc {
             let parsed = parseRecipient(raw)
-            if parsed.name != nil || raw.trimmingCharacters(in: .whitespaces) != parsed.address {
+            // A name with CR, LF or NUL would end the header line (header injection):
+            // refused, not escaped (#756).
+            if let name = parsed.name, name.unicodeScalars.contains(where: { $0 == "\r" || $0 == "\n" || $0 == "\0" }) {
                 return .displayName
             }
             // Folding cannot split an address, so its length is bounded here (#622).
@@ -84,6 +88,34 @@ enum DirectDraft {
 
     // MARK: - MIME
 
+    /// The draft's recipients in the order both the headers and the store rows
+    /// use: To entries, then Cc entries (#756). Names come back decoded and
+    /// unquoted, as `addresses.comment` holds them.
+    static func recipients(to: [String], cc: [String]) -> [DraftStoreWriter.Recipient] {
+        func entry(_ raw: String, _ kind: DraftStoreWriter.Recipient.Kind) -> DraftStoreWriter.Recipient {
+            let parsed = parseRecipient(raw)
+            return .init(address: parsed.address, name: (parsed.name?.isEmpty ?? true) ? nil : parsed.name, kind: kind)
+        }
+        return to.map { entry($0, .to) } + cc.map { entry($0, .cc) }
+    }
+
+    /// `To:` or `Cc:` for a mailbox list (#756). When every mailbox is one line
+    /// and the joined line fits, it stays one line (the layout every call
+    /// before #756 had); otherwise each mailbox after the first goes on its own
+    /// continuation line, as Mail writes Cc. Breaks fall only between
+    /// mailboxes, so no encoded word or quoted string is split.
+    static func mailboxListHeader(_ field: String, _ entries: [DraftStoreWriter.Recipient]) -> String {
+        let boxes = entries.map { e -> String in
+            let box = formatMailbox(name: e.name, address: e.address)
+            // A quoted ASCII name too long for one line goes out as encoded words instead.
+            guard box.utf8.count + field.utf8.count + 3 > maxLineOctets, let name = e.name else { return box }
+            return "\(encodedWords(name)) <\(e.address)>"
+        }
+        let oneLine = "\(field): " + boxes.joined(separator: ", ")
+        if !boxes.contains(where: { $0.contains("\n") }), oneLine.utf8.count <= maxLineOctets { return oneLine }
+        return "\(field): " + boxes.joined(separator: ",\n ")
+    }
+
     struct Message {
         let mime: Data
         let messageIdNoBrackets: String
@@ -102,9 +134,12 @@ enum DirectDraft {
     /// Non-ASCII goes out as UTF-8: RFC 2047 encoded words in headers,
     /// quoted-printable in the body. An ASCII body with a line over
     /// `maxLineOctets` goes out as quoted-printable too (#588).
-    static func buildMessage(fromName: String?, fromAddress: String, to: [String], subject: String, body: String,
+    static func buildMessage(fromName: String?, fromAddress: String, to: [String], cc: [String] = [],
+                             subject: String, body: String,
                              date: Date, documentUUID: UUID, messageIdLocalPart: UUID, boundary: UUID,
                              mailVersion: String, timeZone: TimeZone = .current) -> Message {
+        let entries = recipients(to: to, cc: cc)
+        let toEntries = entries.filter { $0.kind == .to }, ccEntries = entries.filter { $0.kind == .cc }
         let domain = fromAddress.split(separator: "@").last.map(String.init) ?? "localhost"
         let messageId = "\(messageIdLocalPart.uuidString)@\(domain)"
         let marker = "Apple-Mail=_\(boundary.uuidString)"
@@ -121,10 +156,11 @@ enum DirectDraft {
             "From: \(formatMailbox(name: fromName, address: fromAddress))",
             "X-Apple-Windows-Friendly: 1",
             "Date: \(rfc5322Date(date, timeZone: timeZone))",
+        ] + (ccEntries.isEmpty ? [] : [mailboxListHeader("Cc", ccEntries)]) + [
             "X-Apple-Mail-Signature: ",
             "Message-Id: <\(messageId)>",
             "X-Uniform-Type-Identifier: com.apple.mail-draft",
-            foldedHeaderLine("To: \(to.map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: ", "))"),
+            mailboxListHeader("To", toEntries),
         ]
 
         let html = "<html><head></head><body dir=\"auto\" style=\"overflow-wrap: break-word; "

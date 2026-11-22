@@ -12,7 +12,7 @@
 - [ ] 2.1 `DirectDraft.eligibility`：第 3 項只看 `bcc`；To 與 Cc 的每個條目都過地址檢查，名字含 CR、LF、NUL 判為 display-name 理由；新增 `Ineligible.bcc`（訊息 `bcc is not written directly`）。
 - [ ] 2.2 `DirectDraft.buildMessage`：改收一份依序的收件人清單；`Cc:` 放在 `Date:` 之後；每個信箱用 `formatMailbox`；新增 `foldedMailboxList`，只在信箱之間斷行。
 - [ ] 2.3 `DraftStoreWriter.Draft` 與 `insert`：收件人清單取代 `toAddresses`；`addresses` 以 (address, comment) 查找或新建，記下新建的 ROWID；`recipients` 寫入 type 與跨 type 的 position。
-- [ ] 2.4 `DraftStoreWriter.rollback`：在同一個交易裡，刪掉記下的、沒有被 `recipients` 或 `messages.sender` 引用的 `addresses` 列。
+- [ ] 2.4 `DraftStoreWriter.rollback`：在同一個交易裡，刪掉記下的、沒有被 `recipients.address`、`messages.sender`，以及表存在時的 `sender_addresses.address`、`business_addresses.address` 引用的 `addresses` 列。
 - [ ] 2.5 `DirectDraftPath`：在 `timer.mark("inserted")` 之前把 To、Cc 與名字組成清單交給 `Draft`；凍結段與 `ensureRead` 不動，仍只有一處 `writer.insert(`。
 
 ## 3. 文件與驗證

@@ -96,6 +96,103 @@ final class DraftStoreWriterTests: XCTestCase {
             documentUUID: UUID(), size: 1234, flags: 8_623_685_697, date: Date(timeIntervalSince1970: 1_791_083_098))
     }
 
+    private func execSQL(_ path: String, _ sql: String) {
+        var db: OpaquePointer?
+        defer { sqlite3_close(db) }
+        XCTAssertEqual(sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil), SQLITE_OK)
+        XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK, String(cString: sqlite3_errmsg(db)))
+    }
+
+    private func draft(_ f: (mailbox: Int64, url: String, sender: Int64, root: URL),
+                       recipients: [DraftStoreWriter.Recipient]) -> DraftStoreWriter.Draft {
+        DraftStoreWriter.Draft(
+            mailboxRowId: f.mailbox, mailboxURL: f.url, senderAddressRowId: f.sender, recipients: recipients,
+            subject: "[idd-756-test] writer \(UUID().uuidString)",
+            messageIdHash: 1_571_834_967_991_756_001, messageIdHeader: "<0E5F3C1A-1111-4222-8333-944455557560@example.org>",
+            documentUUID: UUID(), size: 1234, flags: 8_623_685_697, date: Date(timeIntervalSince1970: 1_791_083_098))
+    }
+
+    // spec-example: message-composition / one named To and two Cc
+    func testCcAndNamedRecipientsGetTypedRowsAndTheirNames() throws {
+        let db = try snapshot()
+        let f = try fixture(db)
+        let original = EnvelopeIndexReader.mailStoragePathOverride
+        EnvelopeIndexReader.mailStoragePathOverride = f.root.path
+        defer { EnvelopeIndexReader.mailStoragePathOverride = original; try? FileManager.default.removeItem(at: f.root) }
+        let tag = UUID().uuidString.prefix(8).lowercased()
+        let jane = "jane-\(tag)@example.test", a = "a-\(tag)@example.test", b = "b-\(tag)@example.test"
+        let writer = try DraftStoreWriter(databasePath: db)
+        let ins = try writer.insert(draft(f, recipients: [
+            .init(address: jane, name: "Doe, Jane", kind: .to),
+            .init(address: a, name: nil, kind: .cc),
+            .init(address: b, name: "陳小明", kind: .cc),
+        ]), emlx: Data("1234      \nfake".utf8))
+        defer { try? writer.rollback(ins) }
+
+        let rows = """
+            SELECT group_concat(r.type || ':' || r.position || ':' || a.address || ':' || a.comment, '|')
+            FROM (SELECT * FROM recipients WHERE message = \(ins.messageRowId) ORDER BY position) r
+            JOIN addresses a ON a.ROWID = r.address
+            """
+        XCTAssertEqual(text(db, rows), "0:0:\(jane):Doe, Jane|1:1:\(a):|1:2:\(b):陳小明")
+        XCTAssertEqual(ins.createdAddressRowIds.count, 3, "all three (address, name) pairs were new")
+    }
+
+    // spec-example: message-composition / reversal deletes the new name row and keeps the old one
+    func testReversalDeletesTheNewNameRowAndKeepsTheOldOne() throws {
+        let db = try snapshot()
+        let f = try fixture(db)
+        let original = EnvelopeIndexReader.mailStoragePathOverride
+        EnvelopeIndexReader.mailStoragePathOverride = f.root.path
+        defer { EnvelopeIndexReader.mailStoragePathOverride = original; try? FileManager.default.removeItem(at: f.root) }
+        let a = "a-\(UUID().uuidString.prefix(8).lowercased())@example.test"
+        let other = try XCTUnwrap(scalar(db, "SELECT ROWID FROM messages WHERE mailbox = \(f.mailbox) LIMIT 1"))
+        // Another message already uses (a, '').
+        execSQL(db, "INSERT INTO addresses(address, comment) VALUES ('\(a)', '')")
+        let old = try XCTUnwrap(scalar(db, "SELECT ROWID FROM addresses WHERE address = '\(a)' AND comment = ''"))
+        execSQL(db, "INSERT INTO recipients(message, address, type, position) VALUES (\(other), \(old), 1, 975600)")
+        defer {
+            execSQL(db, "DELETE FROM recipients WHERE message = \(other) AND position = 975600")
+            execSQL(db, "DELETE FROM addresses WHERE ROWID = \(old)")
+        }
+
+        let writer = try DraftStoreWriter(databasePath: db)
+        let ins = try writer.insert(draft(f, recipients: [
+            .init(address: a, name: "Anna", kind: .to),
+            .init(address: a, name: nil, kind: .cc),
+        ]), emlx: Data("1234      \nfake".utf8))
+        let anna = try XCTUnwrap(scalar(db, "SELECT ROWID FROM addresses WHERE address = '\(a)' AND comment = 'Anna'"))
+        XCTAssertEqual(ins.createdAddressRowIds, [anna], "only the new (address, name) row is recorded")
+
+        try writer.rollback(ins)
+        XCTAssertNil(scalar(db, "SELECT ROWID FROM addresses WHERE address = '\(a)' AND comment = 'Anna'"),
+                     "the row this write created is gone")
+        XCTAssertEqual(scalar(db, "SELECT ROWID FROM addresses WHERE address = '\(a)' AND comment = ''"), old,
+                       "the row another message uses stays")
+    }
+
+    func testReversalKeepsACreatedRowThatMailHasStartedToUse() throws {
+        let db = try snapshot()
+        let f = try fixture(db)
+        let original = EnvelopeIndexReader.mailStoragePathOverride
+        EnvelopeIndexReader.mailStoragePathOverride = f.root.path
+        defer { EnvelopeIndexReader.mailStoragePathOverride = original; try? FileManager.default.removeItem(at: f.root) }
+        let a = "kept-\(UUID().uuidString.prefix(8).lowercased())@example.test"
+        let writer = try DraftStoreWriter(databasePath: db)
+        let ins = try writer.insert(draft(f, recipients: [.init(address: a, name: "Kept", kind: .to)]),
+                                    emlx: Data("1234      \nfake".utf8))
+        let row = try XCTUnwrap(ins.createdAddressRowIds.first)
+        let other = try XCTUnwrap(scalar(db, "SELECT ROWID FROM messages WHERE mailbox = \(f.mailbox) AND ROWID <> \(ins.messageRowId) LIMIT 1"))
+        // Between the write and its reversal, another message starts to use the new row.
+        execSQL(db, "INSERT INTO recipients(message, address, type, position) VALUES (\(other), \(row), 1, 975601)")
+        defer {
+            execSQL(db, "DELETE FROM recipients WHERE message = \(other) AND position = 975601")
+            execSQL(db, "DELETE FROM addresses WHERE ROWID = \(row)")
+        }
+        try writer.rollback(ins)
+        XCTAssertEqual(scalar(db, "SELECT ROWID FROM addresses WHERE ROWID = \(row)"), row, "a row in use is never deleted")
+    }
+
     func testInsertWritesEveryRowAndTheFileThenRollbackRestoresAll() throws {
         let db = try snapshot()
         let f = try fixture(db)
